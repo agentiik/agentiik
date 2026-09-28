@@ -2,6 +2,8 @@ package driver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/exec"
@@ -534,4 +536,75 @@ func TestARealPullByDigestIsTheDriversOwnAndMeasured(t *testing.T) {
 	if pulled <= 0 {
 		t.Errorf("image_pull_ms is %d for an image the driver pulled, which reads as an image the host already held", pulled)
 	}
+}
+
+// TestARealContainerFindsWhatItsStepsFilesPlace holds the step's files against the daemon: a glob
+// relocated into a directory keeping each path below its prefix, a file relocated with a mode, a
+// mode given to files where they are under /agk/repo, which is a file bound over one inside a
+// read-only bind, and a file of the tree written like an expression, which arrives as it was
+// committed.
+func TestARealContainerFindsWhatItsStepsFilesPlace(t *testing.T) {
+	d, image := realDriver(t)
+
+	const template = "region: ${{ inputs.region }}\nkey: ${{ secrets.billing }}\n"
+	repo := t.TempDir()
+	for path, content := range map[string]string{
+		"sql/orders.sql":        "select 1;\n",
+		"sql/2026/q1.sql":       "select 2;\n",
+		"sql/README.md":         "# queries\n",
+		"scripts/run.sh":        "#!/bin/sh\necho ran\n",
+		"certs/internal-ca.pem": "-----BEGIN CERTIFICATE-----\n",
+		"config/template.yaml":  template,
+	} {
+		name := filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.cfg.Repo = func(context.Context, string, string, string) (string, error) { return repo, nil }
+
+	sum := sha256Hex([]byte(template))
+	task := graph.Task{
+		ID:        agk.NewTaskID("01JMZ8V1P9C4", "load", 1, agk.Shard{}),
+		Run:       "01JMZ8V1P9C4",
+		Namespace: "finance",
+		Step:      "load",
+		Attempt:   1,
+		Image:     image,
+		Files: []graph.FileSelector{
+			{From: "./sql/**"},
+			{From: "./sql/**/*.sql", To: "/docker-entrypoint-initdb.d", Mode: "0444"},
+			{From: "scripts/*.sh", Mode: "0755"},
+			{From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem", Mode: "0600"},
+		},
+		Script: []string{
+			`test "$(cat /docker-entrypoint-initdb.d/orders.sql)" = "select 1;"`,
+			`test "$(cat /docker-entrypoint-initdb.d/2026/q1.sql)" = "select 2;"`,
+			`test ! -e /docker-entrypoint-initdb.d/README.md`,
+			`test "$(stat -c %a /docker-entrypoint-initdb.d/orders.sql)" = 444`,
+			`test "$(stat -c %a /agk/repo/scripts/run.sh)" = 755`,
+			`test "$(/agk/repo/scripts/run.sh)" = ran`,
+			`test "$(stat -c %a /etc/ssl/certs/internal-ca.pem)" = 600`,
+			`test "$(cat /etc/ssl/certs/internal-ca.pem)" = "-----BEGIN CERTIFICATE-----"`,
+			`echo "` + sum + `  /agk/repo/config/template.yaml" | sha256sum -c -`,
+			`printf '{"meta":{"run_id":"%s","step":"%s","port":"out","attempt":1,"count":0,"produced_at":"2026-01-01T00:00:00Z"},"items":[]}' "$AGK_RUN_ID" "$AGK_STEP" > /agk/out/ports/out.json`,
+		},
+		Outputs: []agk.Port{"out"},
+		Network: graph.NetworkNone,
+	}
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the step's files were not what it found: %s with exit code %d", result.State, result.ExitCode)
+	}
+}
+
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }

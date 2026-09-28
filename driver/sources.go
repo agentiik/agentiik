@@ -46,6 +46,21 @@ type Sources struct {
 	// Repo is the path of the workflow repository tree the runner laid out for this task
 	// from the files its redemption names, which is bound read-only at /agk/repo.
 	Repo string
+
+	// Placed are the files the redemption placed somewhere of their own, which the long form
+	// of the step's files asks for, each laid out on the host by the runner. Nil is a
+	// redemption that placed nothing, and the driver then places what the step's files ask
+	// for from Repo itself, as it does for agk run --local.
+	Placed []Placed
+}
+
+// Placed is one file a long form of a step's files puts somewhere of its own: where its bytes are
+// on the host, where the container finds it, and the mode it takes, as the selector or the tree
+// wrote it. An empty mode keeps the permissions the file has on the host.
+type Placed struct {
+	Source string
+	To     string
+	Mode   string
 }
 
 // sourcesKey is the context key Sources travels under. It is a type of this package's own,

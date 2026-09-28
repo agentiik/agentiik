@@ -40,6 +40,17 @@ func laptop() Policy {
 // would have been given, with the working directory removed when the test ends.
 func prepared(t *testing.T, task graph.Task, secrets Secrets, repo string) (*given, *workdir) {
 	t.Helper()
+	g, w, err := preparing(t, context.Background(), task, secrets, repo)
+	if err != nil {
+		t.Fatalf("prepare: %s", err)
+	}
+	return g, w
+}
+
+// preparing is prepared with the context a task's sources travel on, answering what prepare
+// answered.
+func preparing(t *testing.T, ctx context.Context, task graph.Task, secrets Secrets, repo string) (*given, *workdir, error) {
+	t.Helper()
 	store, err := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
 	if err != nil {
 		t.Fatalf("opening a store: %s", err)
@@ -54,11 +65,8 @@ func prepared(t *testing.T, task graph.Task, secrets Secrets, repo string) (*giv
 	t.Cleanup(func() { w.remove() })
 
 	run := agk.Run{ID: "01JMZ8V1P9C4", Workflow: "finance/monthly-invoicing@a3f9c1e", Namespace: "finance", Commit: "a3f9c1e"}
-	g, err := prepare(context.Background(), task, w, laptop(), store, run, repo, secrets)
-	if err != nil {
-		t.Fatalf("prepare: %s", err)
-	}
-	return g, w
+	g, err := prepare(ctx, task, w, laptop(), store, run, repo, secrets)
+	return g, w, err
 }
 
 // mountAt finds what was bound at one path in the container.
@@ -177,27 +185,63 @@ func TestTheRepositoryTreeIsMountedReadOnly(t *testing.T) {
 	}
 }
 
+// aRepository lays out a working tree of files, each with its mode, and answers its directory.
+func aRepository(t *testing.T, files map[string]os.FileMode) string {
+	t.Helper()
+	repo := t.TempDir()
+	for path, mode := range files {
+		name := filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte("the bytes of "+path+" ${{ inputs.region }}\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(name, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repo
+}
+
+// placedAs reads a file the container would find under a bind, with its mode.
+func placedAs(t *testing.T, source string) (string, os.FileMode) {
+	t.Helper()
+	b, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatalf("the placed file: %s", err)
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b), info.Mode().Perm()
+}
+
 // The long form of a selector "relocates a path to wherever a tool insists on finding
 // it", which for a tool that will only read /etc/ssl/certs/internal-ca.pem is the only
-// way it reads it at all.
+// way it reads it at all, and "mode applies to every file it places".
 func TestASelectorRelocatesAPathWhereATheToolInsistsOnIt(t *testing.T) {
-	repo := t.TempDir()
+	repo := aRepository(t, map[string]os.FileMode{"certs/internal-ca.pem": 0o644, "sql/orders.sql": 0o644})
 	task := graph.Task{
 		Step:    "load",
 		Attempt: 1,
 		Files: []graph.FileSelector{
 			{From: "./sql/**"},
-			{From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem", Mode: "0444"},
+			{From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem", Mode: "0400"},
 		},
 	}
-	g, _ := prepared(t, task, nil, repo)
+	g, w := prepared(t, task, nil, repo)
 
 	m := mountAt(t, g, "/etc/ssl/certs/internal-ca.pem")
-	if m.Source != filepath.Join(repo, "certs", "internal-ca.pem") {
-		t.Fatalf("the relocated path is bound from %s", m.Source)
+	if !strings.HasPrefix(m.Source, w.Root+string(os.PathSeparator)) {
+		t.Fatalf("the relocated path is bound from %s, and a placed file is a copy of the task's own", m.Source)
 	}
 	if !m.ReadOnly {
 		t.Fatalf("a relocated path from the repository is writable")
+	}
+	if got, mode := placedAs(t, m.Source); got != "the bytes of certs/internal-ca.pem ${{ inputs.region }}\n" || mode != 0o400 {
+		t.Errorf("the relocated file reads %q with the mode %o", got, mode)
 	}
 	// The short form narrows and does not relocate, so it mounts nothing of its
 	// own: the whole tree is already there and narrowing "is never a permission
@@ -206,6 +250,144 @@ func TestASelectorRelocatesAPathWhereATheToolInsistsOnIt(t *testing.T) {
 		if strings.Contains(mount.Target, "sql") {
 			t.Fatalf("a short form selector mounted something at %s", mount.Target)
 		}
+	}
+}
+
+// "A directory or a glob relocated there keeps each file's path below the directory, or below
+// the glob's segments before its first wildcard, and mode applies to every file it places." The
+// directory is bound once, holding what the glob selects and nothing else.
+func TestAGlobIsRelocatedIntoADirectoryKeepingEachPathBelowItsPrefix(t *testing.T) {
+	repo := aRepository(t, map[string]os.FileMode{
+		"sql/orders.sql":  0o644,
+		"sql/2026/q1.sql": 0o644,
+		"sql/README.md":   0o644,
+		"agentiik.yaml":   0o644,
+	})
+	task := graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{
+		{From: "./sql/**/*.sql", To: "/docker-entrypoint-initdb.d", Mode: "0444"},
+	}}
+	g, _ := prepared(t, task, nil, repo)
+
+	m := mountAt(t, g, "/docker-entrypoint-initdb.d")
+	if !m.ReadOnly {
+		t.Error("the relocated directory is writable")
+	}
+	var found []string
+	filepath.WalkDir(m.Source, func(at string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(m.Source, at)
+		info, _ := d.Info()
+		switch {
+		case d.IsDir() && info.Mode().Perm() != placedDirMode:
+			t.Errorf("the directory %s is %o, and a remapped container has to enter it", rel, info.Mode().Perm())
+		case !d.IsDir():
+			found = append(found, filepath.ToSlash(rel))
+			if info.Mode().Perm() != 0o444 {
+				t.Errorf("%s is %o, want 0444", rel, info.Mode().Perm())
+			}
+		}
+		return nil
+	})
+	if got := strings.Join(found, ", "); got != "2026/q1.sql, orders.sql" {
+		t.Errorf("the directory holds %s", got)
+	}
+	if n := countMounts(t, g, "/docker-entrypoint-initdb.d"); n != 1 {
+		t.Errorf("the directory is bound %d times", n)
+	}
+	for _, mount := range g.Mounts {
+		if strings.HasPrefix(mount.Target, "/docker-entrypoint-initdb.d/") {
+			t.Errorf("a file of the relocated directory is bound on its own at %s", mount.Target)
+		}
+	}
+}
+
+// countMounts is how many binds target one path.
+func countMounts(t *testing.T, g *given, target string) int {
+	t.Helper()
+	n := 0
+	for _, m := range g.Mounts {
+		if m.Target == target {
+			n++
+		}
+	}
+	return n
+}
+
+// A long form with a mode and no to leaves each file where it is under /agk/repo, with the mode
+// asked for, which is a copy of its own bound over the tree's.
+func TestAModeWithoutToIsGivenToEachFileWhereItIs(t *testing.T) {
+	repo := aRepository(t, map[string]os.FileMode{"scripts/a.sh": 0o644, "scripts/b.sh": 0o644, "scripts/c.py": 0o644})
+	task := graph.Task{Step: "build", Attempt: 1, Files: []graph.FileSelector{{From: "scripts/*.sh", Mode: "0755"}}}
+	g, _ := prepared(t, task, nil, repo)
+
+	for _, name := range []string{"a.sh", "b.sh"} {
+		m := mountAt(t, g, RepoDir+"/scripts/"+name)
+		if got, mode := placedAs(t, m.Source); got != "the bytes of scripts/"+name+" ${{ inputs.region }}\n" || mode != 0o755 || !m.ReadOnly {
+			t.Errorf("%s reads %q with the mode %o, read-only %v", name, got, mode, m.ReadOnly)
+		}
+	}
+	for _, mount := range g.Mounts {
+		if strings.HasSuffix(mount.Target, "c.py") {
+			t.Errorf("a file the glob does not select is bound at %s", mount.Target)
+		}
+	}
+}
+
+// What the runner laid out for the files its redemption placed is what is placed: a narrowed tree
+// does not hold a file relocated out of it, and the step's files are not read against it again.
+func TestWhatTheRedemptionPlacedIsWhatIsBound(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "a7e1875a")
+	if err := os.WriteFile(source, []byte("-----BEGIN PRIVATE KEY-----\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	task := graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{{From: "./keys/**", To: "/etc/app/keys", Mode: "0600"}}}
+	ctx := WithSources(context.Background(), Sources{Placed: []Placed{{Source: source, To: "/etc/app/keys/tls/server.key", Mode: "0600"}}})
+	g, w, err := preparing(t, ctx, task, nil, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := mountAt(t, g, "/etc/app/keys")
+	if got, mode := placedAs(t, filepath.Join(m.Source, "tls", "server.key")); got != "-----BEGIN PRIVATE KEY-----\n" || mode != 0o600 {
+		t.Errorf("the key reads %q with the mode %o", got, mode)
+	}
+	if !strings.HasPrefix(m.Source, w.Root) {
+		t.Errorf("the key is bound from %s, outside the task's working directory", m.Source)
+	}
+}
+
+// Two different files placed on one path leave one of them unread, and a file placed where
+// another is placed below it cannot be both: each is the workflow's to fix, and refused before any
+// container exists.
+func TestFilesPlacedOnOnePathAreRefused(t *testing.T) {
+	repo := aRepository(t, map[string]os.FileMode{"a/x.pem": 0o644, "b/x.pem": 0o644, "c/d/y.pem": 0o644})
+	for name, c := range map[string]struct {
+		files []graph.FileSelector
+		says  string
+	}{
+		"two files on one path": {
+			[]graph.FileSelector{{From: "a/x.pem", To: "/etc/x.pem"}, {From: "b/x.pem", To: "/etc/x.pem"}},
+			"two files are placed at /etc/x.pem",
+		},
+		"a file with another below it": {
+			[]graph.FileSelector{{From: "a/x.pem", To: "/etc/x"}, {From: "c/**", To: "/etc/x"}},
+			"placed as a file",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := preparing(t, context.Background(), graph.Task{Step: "load", Attempt: 1, Files: c.files}, nil, repo)
+			var f *Fault
+			if !errors.As(err, &f) || f.Charge != ChargeBrick || !strings.Contains(err.Error(), c.says) {
+				t.Errorf("preparing answered %v", err)
+			}
+		})
+	}
+	// The same file twice, by two selectors, is one file.
+	if _, _, err := preparing(t, context.Background(), graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{
+		{From: "a/x.pem", To: "/etc/x.pem"}, {From: "a/*.pem", To: "/etc"},
+	}}, nil, repo); err != nil {
+		t.Errorf("one file placed twice on one path is refused: %v", err)
 	}
 }
 

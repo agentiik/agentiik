@@ -319,6 +319,14 @@ func TestOnlyTheOutputTreeIsBoundWritable(t *testing.T) {
 
 	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 0, nil })
 
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "certs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "certs", "ca.pem"), []byte("-----BEGIN CERTIFICATE-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.cfg.Repo = func(context.Context, string, string, string) (string, error) { return repo, nil }
 	task := taskWithASecret(ref)
 	task.Files = []graph.FileSelector{{From: "certs/ca.pem", To: "/etc/ssl/certs/internal-ca.pem"}}
 	if _, err := r.Run(t.Context(), task); err != nil {
