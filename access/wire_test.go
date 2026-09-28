@@ -81,8 +81,8 @@ func TestTheScopeGrammarsAreTheWiresOwn(t *testing.T) {
 }
 
 // A principal is read on the wire's three forms, pattern for pattern: a login is a namespace's name
-// and never operator or installation, a group is group:NAME and a service account NS/NAME, both on the namespace
-// grammar.
+// and never operator or installation, a group is group:NAME and a service account NS/NAME, both on
+// the namespace grammar.
 func TestThePrincipalGrammarsAreTheWiresOwn(t *testing.T) {
 	defs := wireDefs(t)
 	forms := defs["principalRef"].OneOf

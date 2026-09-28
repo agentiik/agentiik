@@ -184,10 +184,10 @@ const BootstrapOperator = "operator"
 
 // principalRef refuses a principal no grant can name, on the wire's three forms: a login, which is
 // held to the namespace grammar and its reserved words since each user's personal namespace is
-// named after it, and is never operator or installation; group:NAME for a group; and NS/NAME for a service account,
-// whose namespace is never a reserved word either. Each name is bounded as every name is.
-// The forms cannot be taken for one another, since a login holds neither a colon nor a slash. A
-// word reserved late names a principal still, as it names a namespace still
+// named after it, and is never operator or installation; group:NAME for a group; and NS/NAME for a
+// service account, whose namespace is never a reserved word either. Each name is bounded as every
+// name is. The forms cannot be taken for one another, since a login holds neither a colon nor a
+// slash. A word reserved late names a principal still, as it names a namespace still
 // (agk.LateReservations): it is refused where a name is given, which is not here.
 //
 // Resolve matches a principal by its exact string, so a grant written for one spelled wrongly is a
