@@ -11,7 +11,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### API
 
-- A workflow its first push creates is a repository whose default branch is unborn and protected, as a repository created from v0.4.0 is.
+- A workflow its first push creates is a repository whose default branch is unborn and unprotected, as every repository is until an owner protects it.
 - A push naming a port or a workflow output past 250 characters (`agk.PortMaxBytes`), in the entry point, a file it includes or a manifest it carries, is refused with 422 before any of its tree is stored (`version.BuildNew`).
 - A push naming a secret its namespace does not declare is refused with 422 before any of its tree is stored, naming the secret and the steps that mount it, once the pusher holds `secret:use`.
 

@@ -345,12 +345,13 @@ func TestAnInstallationOfV030KeepsItsWorkflowsAsEmptyRepositories(t *testing.T) 
 		t.Errorf("a tree push moved the refs to %+v", r.Refs)
 	}
 
-	// A workflow a push creates from now on is a repository created from v0.4.0: protected.
+	// A workflow a push creates from now on is a repository created from v0.4.0: unprotected, as
+	// every repository is until an owner protects it.
 	weekly := pushNaming(t, strings.Replace(theWorkflow, "name: monthly-invoicing", "name: weekly-invoicing", 1))
 	if code, answer := cl.do("PUT", "/api/v1/finance/workflows/weekly-invoicing/versions/"+theCommit, theToken, weekly); code != http.StatusOK {
 		t.Fatalf("the push creating a workflow answered %d: %v", code, answer)
 	}
-	if r := repository("weekly-invoicing"); r.DefaultBranch != "main" || !slices.Equal(r.Refs, []db.Ref{{Name: "refs/heads/main", Protected: true}}) {
+	if r := repository("weekly-invoicing"); r.DefaultBranch != "main" || !slices.Equal(r.Refs, []db.Ref{{Name: "refs/heads/main"}}) {
 		t.Errorf("a workflow a push created after the upgrade is the repository %+v", r)
 	}
 }

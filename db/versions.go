@@ -145,10 +145,10 @@ type Saved struct {
 // case and is not a request to change anything about the workflow itself.
 //
 // A workflow it records is a repository created from v0.4.0, empty until its first git push: its
-// default branch is recorded unborn, and protected, as a repository created from v0.4.0 is unless
-// created otherwise, so that pushing to it takes grant:manage from the first push on. A branch no
-// push could create, which only an API call written by hand names, is given no row, as the
-// migration gives none: no push can move it, and it is unborn and unprotected either way.
+// default branch is recorded unborn and unprotected, as every repository is until an owner protects
+// it, so that whoever holds workflow:write pushes to it as they did before v0.4.0. A branch no push
+// could create, which only an API call written by hand names, is given no row, as the migration
+// gives none: no push can move it, and it is unborn and unprotected either way.
 func (n *NS) SaveWorkflow(ctx context.Context, name, branch string) error {
 	if branch == "" {
 		branch = "main"
@@ -165,7 +165,7 @@ func (n *NS) SaveWorkflow(ctx context.Context, name, branch string) error {
 		return nil
 	}
 	if _, err := n.tx.Exec(ctx,
-		`insert into workflow_refs (namespace, workflow, ref, protected) values ($1, $2, $3, true)`,
+		`insert into workflow_refs (namespace, workflow, ref, protected) values ($1, $2, $3, false)`,
 		n.namespace, name, head); err != nil {
 		return fmt.Errorf("db: the default branch of workflow %s could not be recorded: %w", name, err)
 	}

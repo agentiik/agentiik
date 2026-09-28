@@ -101,7 +101,7 @@ func refNamed(r Repository, name string) (Ref, bool) {
 }
 
 // A workflow its first push records is an empty repository: a key of its own, its default branch
-// unborn and protected, as a repository created from v0.4.0 is, and no pack. Recording it again
+// unborn and unprotected, as every repository is until an owner protects it, and no pack. Recording it again
 // changes none of it, and a default branch no push could create is given no row.
 func TestAWorkflowRecordedIsAnEmptyRepositoryWithItsDefaultBranchUnborn(t *testing.T) {
 	pool, _ := repositories(t)
@@ -109,7 +109,7 @@ func TestAWorkflowRecordedIsAnEmptyRepositoryWithItsDefaultBranchUnborn(t *testi
 	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(r.Key) || r.DefaultBranch != "main" || len(r.Packs) != 0 {
 		t.Errorf("the repository reads as key %q, default branch %q, packs %v", r.Key, r.DefaultBranch, r.Packs)
 	}
-	if len(r.Refs) != 1 || r.Refs[0] != (Ref{Name: "refs/heads/main", Protected: true}) {
+	if len(r.Refs) != 1 || r.Refs[0] != (Ref{Name: "refs/heads/main"}) {
 		t.Errorf("the refs of an empty repository read as %+v", r.Refs)
 	}
 	if other := repositoryOf(t, pool, "team-ops", "nightly"); other.Key == r.Key {
@@ -164,7 +164,7 @@ func TestARefMovesOnlyFromWhereThePushFoundIt(t *testing.T) {
 		t.Fatalf("the first push to an unborn default branch answered %v", err)
 	}
 	main, _ := refNamed(repositoryOf(t, pool, "finance", "nightly"), "refs/heads/main")
-	if !sameRefs([]Ref{main}, []Ref{{Name: "refs/heads/main", Commit: c1, Protected: true, MovedBy: "alice", MovedAt: at}}) {
+	if !sameRefs([]Ref{main}, []Ref{{Name: "refs/heads/main", Commit: c1, MovedBy: "alice", MovedAt: at}}) {
 		t.Errorf("the default branch born reads as %+v", main)
 	}
 	for _, stale := range []RefUpdate{
@@ -186,7 +186,7 @@ func TestARefMovesOnlyFromWhereThePushFoundIt(t *testing.T) {
 	want := []Ref{
 		{Name: "refs/heads/Zeta", Commit: c3, MovedBy: "bob", MovedAt: at},
 		{Name: "refs/heads/feature", Commit: c3, MovedBy: "bob", MovedAt: at},
-		{Name: "refs/heads/main", Commit: c2, Protected: true, MovedBy: "bob", MovedAt: at},
+		{Name: "refs/heads/main", Commit: c2, MovedBy: "bob", MovedAt: at},
 		{Name: "refs/tags/v1", Commit: c1, Tag: tagObject, MovedBy: "bob", MovedAt: at},
 	}
 	if !sameRefs(r.Refs, want) {
