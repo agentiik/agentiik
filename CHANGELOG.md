@@ -6,7 +6,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Repository
 
-- Package `repo` reads and writes git on the standard library alone, for the repositories the API is to serve: SHA-1 object IDs; commits, trees and tags held to `git fsck --strict`, each refusal naming git's own check (`hasDotgit`, `treeNotSorted`); packs of version 2, their deltas resolved against the pack or, in a thin pack, the repository, at most 50 deep and with 64 MiB of bases held, and written back whole so that an entry is copied into a fetch as it is stored; indexes of version 2, the same bytes `git index-pack` writes; pkt-line with side-band; and a tree as an `fs.FS`, read as it is walked. Its readers are fuzzed from what git writes.
+- Package `repo` reads and writes git on the standard library alone, for the repositories the API is to serve: SHA-1 object IDs; commits, trees and tags held to git's own checks of each object, a refusal naming the check as git does (`hasDotgit`, `treeNotSorted`); packs of version 2, their deltas resolved against the pack or, in a thin pack, the repository, and written back whole so that an entry is copied into a fetch as it is stored; indexes of version 2, the same bytes `git index-pack` writes; pkt-line with side-band; and a tree as an `fs.FS`, read as it is walked. A push is bounded in what it sends, holds and unpacks, each bound a constant with its reason. Its readers are fuzzed from what git writes.
 
 ### Tests
 

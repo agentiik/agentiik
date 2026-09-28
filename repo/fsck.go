@@ -41,10 +41,12 @@ func refuse(t Type, check, format string, a ...any) *ObjectError {
 	return &ObjectError{Type: t, Check: check, Reason: fmt.Sprintf(format, a...)}
 }
 
-// The checks, under the names git gives them (git help fsck, FSCK MESSAGES). Every one of them is
-// an error under --strict, which is what a server that stores other people's history must hold it
-// to: the objects are served to every clone, and a clone that sets transfer.fsckObjects refuses
-// the lot for one of them.
+// The checks, under the names git gives them (git help fsck, FSCK MESSAGES). Every one of them but
+// badFilemode is an error under --strict, which is what a server that stores other people's history
+// must hold it to: the objects are served to every clone, and a clone that sets
+// transfer.fsckObjects refuses the lot for one of them. badFilemode, which git fsck reports and
+// lets by, is refused as git hash-object refuses it: a mode other than the five is read by a
+// checkout as one of them, and so is a second spelling of a tree.
 const (
 	checkBadTree                 = "badTree"
 	checkBadFilemode             = "badFilemode"

@@ -19,14 +19,15 @@
 //
 // # What is read, and how strictly
 //
-// Commits, trees and tags are held to git fsck --strict, and a refusal names git's own check,
-// treeNotSorted or hasDotgit, so that it reads the same here as on the pusher's clone. That covers
-// what a checkout would trip over: an entry named .git on any filesystem, its NTFS and HFS+
-// spellings included, a .gitmodules that is not a file, entries out of order or twice, and modes
-// other than git's five. Two spellings git's fsck lets by are refused as well, since git never
-// writes them and each is a second spelling of one object: upper-case hexadecimal in an ID, and a
-// date with spaces before it. So are the short names NTFS may give .git past GIT~1, and a
-// .gitmodules that is a directory or a submodule, which git fsck finds only once a clone reads it.
+// Commits, trees and tags are held to the checks git fsck --strict makes of each object, and a
+// refusal names git's own check, treeNotSorted or hasDotgit, so that it reads the same here as on
+// the pusher's clone. That covers what a checkout would trip over: an entry named .git on any
+// filesystem, its NTFS and HFS+ spellings included, a .gitmodules that is not a file, entries out
+// of order or twice. Some objects git fsck lets by are refused as well: modes other than git's
+// five, which it only reports; upper-case hexadecimal in an ID and a date with spaces before it,
+// which git never writes and which are second spellings of one object; the short names NTFS may
+// give .git past GIT~1; and a .gitmodules that is a directory or a submodule, which git fsck finds
+// only once a clone reads it.
 //
 // A pack is read in two passes. The first reads every entry's header and zlib stream, inflating
 // each to the size it gives and checking its checksum, hashes every object sent whole, and checks
@@ -45,10 +46,12 @@
 //   - Pack version 2 and index version 2, which are what git writes. Pack version 3, index
 //     version 1, multi-pack indexes, bitmaps and reverse indexes are not read.
 //   - Writing deltas. A fetch copies whole objects; making deltas for it is for later.
-//   - The content of .gitmodules and .gitattributes, which git fsck parses to vet the submodules
-//     and attributes a checkout would act on. Their names and modes are checked and their text is
-//     not: the server checks nothing out, and a version holding a submodule is to be refused at
-//     the push whatever .gitmodules says.
+//   - The content of .gitmodules and .gitattributes, which git fsck reads once it has read every
+//     object, to vet the submodules and attributes a checkout would act on: gitmodulesUrl,
+//     gitattributesLineLength and the rest. Their names and modes are checked, and their text is
+//     not, so a history carrying a .gitmodules git refuses is accepted and served, and a clone
+//     that sets transfer.fsckObjects refuses it. Only a pushed tip becomes a version and is held
+//     to the version's rules, which refuse a submodule; a commit before it is not.
 //   - The protocols themselves. upload-pack and receive-pack, their capabilities, negotiation and
 //     reports, are the smart HTTP routes' to speak, over this package's packets and packs.
 //
