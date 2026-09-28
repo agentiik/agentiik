@@ -47,11 +47,17 @@ type Holding struct {
 func (f *Fixture) Holds(as Asker, lapsed bool) Holding {
 	switch as.holding {
 	case "carol":
-		// finance's record names carol its owner, and her personal namespace is hers: nothing in
-		// hr, where she holds no grant, although she administers the installation.
-		return Holding{Admin: true, Opens: true, Owns: []string{"carol", Finance}, Permissions: map[string][]string{
+		// finance's record names carol its owner, her personal namespace is hers, and so is each
+		// namespace the bootstrap token handed her: nothing in hr, where she holds no grant,
+		// although she administers the installation.
+		h := Holding{Admin: true, Opens: true, Owns: []string{"carol", Finance}, Permissions: map[string][]string{
 			"carol": owner, Finance: owner,
 		}}
+		for _, namespace := range f.Handed {
+			h.Owns = append(h.Owns, namespace)
+			h.Permissions[namespace] = owner
+		}
+		return h
 	case "carol for finance":
 		// A token narrowed to finance holds there what carol holds, and carries none of an
 		// administrator's powers, which pass through a token only where its scope does not

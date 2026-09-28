@@ -413,7 +413,10 @@ func (f *Fixture) lists(t testing.TB, as Asker, h Holding, lapsed bool) {
 			accounts = append(accounts, NightlySync)
 		}
 	}
-	f.listed(t, as, "/api/v1/service-accounts", "service_accounts", func(e map[string]any) string { return fmt.Sprint(e["namespace"], "/", e["name"]) }, accounts, false)
+	// A namespace handed to carol may hold service accounts, and their tokens, that the fixture did
+	// not make, so her listings of both are held to include what it knows of.
+	handed := slices.ContainsFunc(h.Owns, func(namespace string) bool { return slices.Contains(f.Handed, namespace) })
+	f.listed(t, as, "/api/v1/service-accounts", "service_accounts", func(e map[string]any) string { return fmt.Sprint(e["namespace"], "/", e["name"]) }, accounts, handed)
 
 	// The tokens it may revoke, those "still accepted": its own, and the service accounts' of the
 	// namespaces it owns, finance/nightly-sync's being the fixture's one, none revoked and none
@@ -429,7 +432,7 @@ func (f *Fixture) lists(t testing.TB, as Asker, h Holding, lapsed bool) {
 			}
 		}
 	}
-	f.listed(t, as, "/api/v1/auth/tokens", "tokens", func(e map[string]any) string { return fmt.Sprint(e["id"]) }, tokens, false)
+	f.listed(t, as, "/api/v1/auth/tokens", "tokens", func(e map[string]any) string { return fmt.Sprint(e["id"]) }, tokens, handed)
 
 	// The grants and denies written at each scope it holds grant:manage on, "leaving out those
 	// expired": a namespace's own, and a workflow's with its namespace's before them. Those the

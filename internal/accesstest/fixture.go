@@ -193,6 +193,11 @@ type Fixture struct {
 	// lapsing token end.
 	Lapse time.Time
 
+	// Handed are the namespaces the installation had before the fixture whose record named no
+	// owner, such as the one init made: the bootstrap token handed each to carol, as owner, when
+	// it created her.
+	Handed []string
+
 	// Runs are the first run started of each workflow that has one, by NS/workflow, and started
 	// every run the fixture started, a run of a version naming a secret among them.
 	Runs    map[string]string
@@ -257,7 +262,15 @@ func Build(t testing.TB, in Installation) *Fixture {
 	f.Nobody = Asker{Name: "nobody", holding: "nobody"}
 	f.Bootstrap = Asker{Name: "the bootstrap token", Principal: "operator", Bearer: in.Bootstrap, holding: "nobody"}
 
-	// carol, made an administrator by the bootstrap token, which her first sign-in ends.
+	// carol, made an administrator by the bootstrap token, which her first sign-in ends, and handed
+	// by it the namespaces no record names an owner of.
+	var had api.NamespaceList
+	decode(t, f.must(t, "GET", "/api/v1/namespaces", f.Bootstrap, nil, http.StatusOK), &had)
+	for _, n := range had.Namespaces {
+		if n.Owner == "" {
+			f.Handed = append(f.Handed, n.Name)
+		}
+	}
 	carol := f.user(t, f.Bootstrap, "carol", true)
 	f.CarolsBrowser = Asker{Name: "carol's browser", Principal: "carol", Session: carol, holding: "carol"}
 	f.Carol = f.mint(t, f.CarolsBrowser, "carol", api.TokenRequest{DeviceLabel: "carol's laptop"})
