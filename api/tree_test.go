@@ -122,6 +122,7 @@ func TestATreeThatCannotBeGivenToAContainer(t *testing.T) {
 		// A name sorting between the file and what is below it, since - comes before /.
 		{"a file and a directory with a name between them", adding(map[string]api.PushFile{"scripts": file("x"), "scripts-old": file("y"), "scripts/render.sh": file("z")}), http.StatusBadRequest},
 		{"a name longer than a filesystem holds", adding(map[string]api.PushFile{"data/" + strings.Repeat("n", version.TreeNameMaxBytes+1): file("x")}), http.StatusBadRequest},
+		{"a name holding what JSON leaves of a name that was not UTF-8", adding(map[string]api.PushFile{"data/caf\ufffd.csv": file("x")}), http.StatusBadRequest},
 		{"a path longer than a runner can lay out", adding(map[string]api.PushFile{strings.Repeat("d/", version.TreePathMaxBytes/2) + "x": file("x")}), http.StatusBadRequest},
 		// What Windows reads as separators, which leave the tree there.
 		{"a backslash climbing out on Windows", adding(map[string]api.PushFile{`scripts\..\..\outside.sh`: file("x")}), http.StatusBadRequest},
