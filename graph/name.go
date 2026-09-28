@@ -195,9 +195,9 @@ func hidden(name string) bool { return strings.HasPrefix(name, ".") }
 // <namespace>/<name> everywhere it appears, with @<ref> appended in the short form of a
 // sub-workflow call.
 //
-// It is comparable, because it is the key an already fetched include arrives under: the
-// evaluator never reaches another repository, so a caller resolves the ref and hands the
-// fragment over.
+// It is comparable, and it is what a workflow include asks Remote for: the evaluator never
+// reaches another repository, so a caller resolves the ref and hands over that repository's tree
+// at the commit it resolved to.
 type WorkflowRef struct {
 	Namespace string
 	Name      string

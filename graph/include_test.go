@@ -511,3 +511,66 @@ steps:
 		t.Fatalf("the includes applied were recorded as %+v: a path include of another repository is that repository's", got)
 	}
 }
+
+// A workflow include is remembered apart from every file of this tree, a file whose path spells
+// the include included: each is applied, whichever comes first.
+func TestAWorkflowIncludeIsNotAFileOfTheTreeSpelledTheSame(t *testing.T) {
+	ref := WorkflowRef{Namespace: "finance", Name: "lib", Ref: "v1"}
+	for _, order := range []string{
+		"  - path: finance/lib@v1\n  - workflow: finance/lib\n    ref: v1\n",
+		"  - workflow: finance/lib\n    ref: v1\n  - path: finance/lib@v1\n",
+	} {
+		wf := loaded(t, map[string]string{
+			"agentiik.yaml": `apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: both }
+include:
+` + order + `steps:
+  a:
+    extends: .fromlib
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    script: [echo]
+    outputs: [out]
+  b:
+    extends: .fromfile
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    script: [echo]
+    outputs: [out]
+`,
+			"finance/lib@v1": ".fromfile:\n  timeout: 1m\n",
+		}, repositories{ref: {"agentiik.yaml": ".fromlib:\n  timeout: 2m\n"}})
+		if len(wf.Included()) != 2 {
+			t.Errorf("including %q applied %+v", order, wf.Included())
+		}
+	}
+}
+
+// A library's root file is open while its own includes resolve, so that one of them including it
+// again is refused as the ring it is, where that include is written in the library.
+func TestALibraryIncludingItsRootAgainIsACycle(t *testing.T) {
+	ref := WorkflowRef{Namespace: "finance", Name: "common", Ref: "v2.1.0"}
+	_, err := Load(tree(map[string]string{
+		"agentiik.yaml": `apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: ringed }
+include:
+  - workflow: finance/common
+    ref: v2.1.0
+steps:
+  a:
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    script: [echo]
+    outputs: [out]
+`,
+	}), "agentiik.yaml", repositories{ref: {
+		"agentiik.yaml":   "include:\n  - path: ./blocks/one.yaml\n",
+		"blocks/one.yaml": "include:\n  - path: ../agentiik.yaml\n",
+	}})
+	var r *Refusal
+	if !errors.As(err, &r) || r.Rule != RuleIncludeCycle {
+		t.Fatalf("the library including its root again was refused by %v", err)
+	}
+	if want := (Position{File: "finance/common@v2.1.0:blocks/one.yaml", Line: 2, Column: 11}); r.At != want {
+		t.Errorf("the ring is refused at %s, and it is closed at %s", r.At, want)
+	}
+}

@@ -156,16 +156,25 @@ func inFile(err error, name string) error {
 }
 
 // fileTree is one tree an include resolves in: this commit's, or the commit of another repository
-// a workflow include resolved to. label is how a file of it is named where a refusal names one
-// and where resolution remembers what it has read: empty for this tree, whose files are named by
-// their paths, and the repository and the ref for another, git's <ref>:<path>, so that a file of
-// one is never taken for the file of the same path in the other.
+// a workflow include resolved to. label is how a file of it is named where a refusal names one:
+// empty for this tree, whose files are named by their paths, and the repository and the ref for
+// another, git's <ref>:<path>.
+//
+// What resolution remembers having read is keyed apart from that: by the path alone in this tree,
+// and behind a null byte in another, which no path of a tree holds. A file of one is never taken
+// for the file of the same path in the other, nor a workflow include for a file of this tree whose
+// path happens to be finance/common@v2.1.0.
 type fileTree struct {
 	fsys  fs.FS
 	label string
+	key   string
 }
 
 func (t fileTree) name(p string) string { return t.label + p }
+func (t fileTree) id(p string) string   { return t.key + p }
+
+// workflowKey is what resolution remembers a workflow include by.
+func workflowKey(ref WorkflowRef) string { return "\x00" + ref.text() }
 
 // included is what the include block has contributed so far, and what it has already
 // read.
@@ -207,7 +216,7 @@ func (in *included) gather(t fileTree, dir string, includes []Include, at []orig
 			written = at[i].value()
 		}
 		var f *Fragment
-		var key, below string
+		var key, root, below string
 		var within fileTree
 		var applied Included
 		switch {
@@ -216,9 +225,9 @@ func (in *included) gather(t fileTree, dir string, includes []Include, at []orig
 			if err != nil {
 				return placed(refuse(RuleIncludeLeavesTree, "", "", err.Error()), written)
 			}
-			key = t.name(name)
+			key = t.id(name)
 			if in.open[key] {
-				return placed(refuse(RuleIncludeCycle, "", "", fmt.Sprintf("the include of %s comes back to a file that is still being resolved: a file cannot include itself, directly or through another, since its resolution would never end", key)), written)
+				return placed(refuse(RuleIncludeCycle, "", "", fmt.Sprintf("the include of %s comes back to a file that is still being resolved: a file cannot include itself, directly or through another, since its resolution would never end", t.name(name))), written)
 			}
 			if in.visited[key] {
 				continue
@@ -231,54 +240,54 @@ func (in *included) gather(t fileTree, dir string, includes []Include, at []orig
 				return fmt.Errorf("including %s: %w", include.Path, err)
 			}
 			if f, err = in.fragment(doc); err != nil {
-				return fmt.Errorf("including %s: %w", include.Path, inFile(err, key))
+				return fmt.Errorf("including %s: %w", include.Path, inFile(err, t.name(name)))
 			}
-			within, below = t, path.Dir(name)
-			f.src.name = key
+			within, below, root = t, path.Dir(name), key
+			f.src.name = t.name(name)
 			if t.label == "" {
 				applied = Included{Path: name}
 			}
 		default:
 			ref := include.Workflow
-			key = ref.text()
+			key = workflowKey(ref)
 			if in.open[key] {
-				return placed(refuse(RuleIncludeCycle, "", "", fmt.Sprintf("the include of %s comes back to a workflow that is still being resolved: a file cannot include itself, directly or through another, since its resolution would never end", key)), written)
+				return placed(refuse(RuleIncludeCycle, "", "", fmt.Sprintf("the include of %s comes back to a workflow that is still being resolved: a file cannot include itself, directly or through another, since its resolution would never end", ref.text())), written)
 			}
 			if in.visited[key] {
 				continue
 			}
 			if in.remote == nil {
-				return placed(fmt.Errorf("the workflow include %s was not resolved: a workflow include reaches another repository at a ref, requires workflow:read on it, and nothing here reaches another repository", key), written)
+				return placed(fmt.Errorf("the workflow include %s was not resolved: a workflow include reaches another repository at a ref, requires workflow:read on it, and nothing here reaches another repository", ref.text()), written)
 			}
 			fsys, commit, err := in.remote.Include(ref)
 			if err != nil {
-				return placed(fmt.Errorf("the workflow include %s: %w", key, err), written)
+				return placed(fmt.Errorf("the workflow include %s: %w", ref.text(), err), written)
 			}
 			// "A workflow include reads the other repository's root agentiik.yaml,
 			// written as a fragment", and its own path includes resolve inside that
 			// repository, at that commit.
-			within = fileTree{fsys: fsys, label: key + ":"}
+			within = fileTree{fsys: fsys, label: ref.text() + ":", key: key + ":"}
 			doc, err := fs.ReadFile(fsys, libraryEntry)
 			if err != nil {
-				return placed(fmt.Errorf("the workflow include %s: reading its root %s: %w. A workflow include reads the other repository's root %s, written as a fragment", key, libraryEntry, err, libraryEntry), written)
+				return placed(fmt.Errorf("the workflow include %s: reading its root %s: %w. A workflow include reads the other repository's root %s, written as a fragment", ref.text(), libraryEntry, err, libraryEntry), written)
 			}
 			if f, err = in.fragment(doc); err != nil {
-				return fmt.Errorf("the workflow include %s: %w", key, inFile(err, within.name(libraryEntry)))
+				return fmt.Errorf("the workflow include %s: %w", ref.text(), inFile(err, within.name(libraryEntry)))
 			}
-			below = "."
+			below, root = ".", within.id(libraryEntry)
 			f.src.name = within.name(libraryEntry)
 			applied = Included{Workflow: ref, Commit: commit}
 		}
 
 		// What this fragment includes sits under what it writes itself, which is the
-		// same rule one level down. A library's root file is open under its own name as
+		// same rule one level down. A library's root file is open under its own path as
 		// well as the include's, so that one of its files including it again is the
 		// ring it is.
-		in.open[key], in.open[f.src.name] = true, true
+		in.open[key], in.open[root] = true, true
 		err := in.gather(within, below, f.include, f.includeAt)
 		delete(in.open, key)
-		delete(in.open, f.src.name)
-		in.visited[key], in.visited[f.src.name] = true, true
+		delete(in.open, root)
+		in.visited[key], in.visited[root] = true, true
 		if err != nil {
 			return err
 		}
