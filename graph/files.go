@@ -53,9 +53,9 @@ type Selection struct {
 // file it places". A selector that asks for a mode and relocates nothing leaves its files where
 // they are and places each over itself, under /agk/repo, with that mode.
 //
-// It refuses nothing: a selector that CheckFiles would refuse selects nothing here, since the
-// API answers a runner from what it holds rather than judging the workflow, and the driver holds
-// the task to CheckFiles before anything is placed.
+// It refuses nothing: a selector that leaves the tree, or that CheckFiles would refuse, selects
+// nothing here, since the API answers a runner from what it holds rather than judging the
+// workflow, and the driver holds the task to CheckFiles before anything is placed.
 func SelectFiles(files []FileSelector, paths []string) Selection {
 	if len(files) == 0 {
 		tree := slices.Clone(paths)
@@ -65,10 +65,10 @@ func SelectFiles(files []FileSelector, paths []string) Selection {
 	inTree := map[string]bool{}
 	placed := map[Placement]bool{}
 	for _, f := range files {
-		if checkFile(f) != nil {
+		from, err := treeRelative(f.From)
+		if err != nil || checkFile(f) != nil {
 			continue
 		}
-		from, _ := treeRelative(f.From)
 		base, isGlob := baseOf(from)
 		for _, p := range paths {
 			var under bool
@@ -118,12 +118,15 @@ func SelectFiles(files []FileSelector, paths []string) Selection {
 	return s
 }
 
-// CheckFiles refuses a selector no tree could answer: one that leaves the repository, relocates to
-// a path that is not absolute or to the root of the container, or asks for a mode that is not
-// three octal digits.
+// CheckFiles refuses a selector no tree could answer: a relocation from a path that leaves the
+// repository, to a path that is not absolute or to the root of the container, or a mode that is
+// not three octal digits.
 //
 // Every one of these is the workflow's, and none depends on what the tree holds, so it is said the
-// same way whichever tree the step runs against.
+// same way whichever tree the step runs against. A selector that relocates nothing and leaves the
+// tree selects nothing and is not refused: a server handed such a step its whole tree before
+// v0.4.0 and the driver read nothing of the short form, so a version recorded then ran, and still
+// runs.
 func CheckFiles(files []FileSelector) error {
 	for i, f := range files {
 		if err := checkFile(f); err != nil {
@@ -134,20 +137,22 @@ func CheckFiles(files []FileSelector) error {
 }
 
 func checkFile(f FileSelector) error {
+	if f.Mode != "" && !fileMode.MatchString(f.Mode) {
+		return fmt.Errorf("gives %q the mode %q: a mode is three octal digits, written as a string", f.From, f.Mode)
+	}
+	if f.To == "" {
+		return nil
+	}
 	if _, err := treeRelative(f.From); err != nil {
 		return err
 	}
 	switch to := path.Clean(f.To); {
-	case f.To == "":
 	case !path.IsAbs(f.To):
 		return fmt.Errorf("relocates %q to %q, which is not absolute: the long form of a selector names where in the container a tool insists on finding the file", f.From, f.To)
 	case to == "/":
 		return fmt.Errorf("relocates %q to the root of the container, where nothing can be placed: to names the file, or the directory what it selects goes under", f.From)
 	case strings.ContainsRune(f.To, 0):
 		return fmt.Errorf("relocates %q to a path carrying a NUL", f.From)
-	}
-	if f.Mode != "" && !fileMode.MatchString(f.Mode) {
-		return fmt.Errorf("gives %q the mode %q: a mode is three octal digits, written as a string", f.From, f.Mode)
 	}
 	return nil
 }

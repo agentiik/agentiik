@@ -361,9 +361,9 @@ func (n neverAnswerable) Error() string { return n.why }
 // them. Every URL here is minted for one object, the policy for the namespace's prefix, and each
 // ends with the grant, so nothing the runner holds outlives the task it was given for.
 //
-// selects says the version is one whose tasks are handed what their step's files select; a version
-// recorded before that rule came in is handed its tree whole, as it was then, and what its files
-// relocate is placed from that tree on the runner, as it was then.
+// selects says the version is one whose tasks are handed what their step's files select. A version
+// recorded before that rule came in runs as it ran: handed its tree whole, each file its long form
+// relocates placed there as well, with the mode the tree gives it, since no mode was applied then.
 func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree []db.TreeFile, selects bool) (Grant, error) {
 	out := Grant{
 		TaskID:    got.Row,
@@ -435,13 +435,17 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		files[f.Path] = f
 		paths = append(paths, f.Path)
 	}
-	var selectors []graph.FileSelector
-	if selects {
-		for _, f := range got.Scope.Files {
-			selectors = append(selectors, graph.FileSelector{From: f.From, To: f.To, Mode: f.Mode})
+	var selectors, relocations []graph.FileSelector
+	for _, f := range got.Scope.Files {
+		selectors = append(selectors, graph.FileSelector{From: f.From, To: f.To, Mode: f.Mode})
+		if f.To != "" {
+			relocations = append(relocations, graph.FileSelector{From: f.From, To: f.To})
 		}
 	}
 	selected := graph.SelectFiles(selectors, paths)
+	if !selects {
+		selected = graph.Selection{Tree: graph.SelectFiles(nil, paths).Tree, Placed: graph.SelectFiles(relocations, paths).Placed}
+	}
 	entry := func(path, to, mode string) error {
 		f := files[path]
 		url, err := fetch(f.SHA256)

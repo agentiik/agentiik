@@ -332,7 +332,8 @@ func placeFromTree(t graph.Task, repo string) ([]Placed, error) {
 	for _, f := range placing {
 		base, err := f.Base()
 		if err != nil {
-			return nil, fault(t.Step, nil, ChargeBrick, "files: %v", err)
+			// A mode given to a path that leaves the tree, which selects nothing.
+			continue
 		}
 		root := filepath.Join(repo, filepath.FromSlash(base))
 		err = filepath.WalkDir(root, func(at string, d fs.DirEntry, err error) error {

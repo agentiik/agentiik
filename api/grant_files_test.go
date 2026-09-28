@@ -133,18 +133,23 @@ func TestARelocationTravelsAsEachEntrysOwnTo(t *testing.T) {
 }
 
 // A version recorded before a step's files selected what a runner is handed runs as it ran: its
-// tasks are handed its tree whole, whatever its steps' files select, and what those relocate is
-// placed from that tree on the runner, as it was then. One recorded now is narrowed.
+// tasks are handed its tree whole, whatever its steps' files select, and each file their long form
+// relocates is placed there as well, with the mode the tree gives it, as a bind of the tree's own
+// file gave it then. One recorded now is narrowed, and takes the mode asked for.
 func TestAVersionRecordedBeforeFilesSelectedIsHandedItsTreeWhole(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
 	g.recorded(t, "d6c2f4b", selectingTree())
 	scope := db.GrantScope{
 		Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "d6c2f4b",
-		Files: []db.GrantFile{{From: "./sql/**/*.sql"}, {From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem"}},
+		Files: []db.GrantFile{
+			{From: "./sql/**/*.sql"},
+			{From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem", Mode: "0600"},
+			{From: "agentiik.yaml", Mode: "0400"},
+		},
 	}
 	narrowed := entriesOf(t, g.redeemed(t, credential, asking(g.granted(t, scope))))
-	if want := []string{"sql/2026/q1.sql 0644", "sql/orders.sql 0644", "certs/internal-ca.pem 0644 /etc/ssl/certs/internal-ca.pem"}; !slices.Equal(narrowed, want) {
+	if want := []string{"agentiik.yaml 0644", "sql/2026/q1.sql 0644", "sql/orders.sql 0644", "agentiik.yaml 0400 /agk/repo/agentiik.yaml", "certs/internal-ca.pem 0600 /etc/ssl/certs/internal-ca.pem"}; !slices.Equal(narrowed, want) {
 		t.Fatalf("a version recorded now is handed %q, want %q", narrowed, want)
 	}
 
@@ -158,7 +163,8 @@ func TestAVersionRecordedBeforeFilesSelectedIsHandedItsTreeWhole(t *testing.T) {
 		want = append(want, path+" "+f.Mode)
 	}
 	slices.Sort(want)
+	want = append(want, "certs/internal-ca.pem 0644 /etc/ssl/certs/internal-ca.pem")
 	if got := entriesOf(t, g.redeemed(t, credential, asking(g.granted(t, scope)))); !slices.Equal(got, want) {
-		t.Errorf("a version recorded before files selected is handed %q, want the whole tree %q", got, want)
+		t.Errorf("a version recorded before files selected is handed\n%q\nwant the whole tree and its relocation\n%q", got, want)
 	}
 }

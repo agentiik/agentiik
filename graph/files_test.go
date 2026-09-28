@@ -136,9 +136,9 @@ func TestASelectorNoTreeCouldAnswerIsRefused(t *testing.T) {
 		file FileSelector
 		says string
 	}{
-		{FileSelector{From: "../../etc/shadow"}, "leaves the repository tree"},
-		{FileSelector{From: "./../secrets"}, "leaves the repository tree"},
-		{FileSelector{From: ""}, "names no path"},
+		{FileSelector{From: "../../etc/shadow", To: "/etc/shadow"}, "leaves the repository tree"},
+		{FileSelector{From: "./../secrets", To: "/run/secrets"}, "leaves the repository tree"},
+		{FileSelector{From: "", To: "/etc/app.yaml"}, "names no path"},
 		{FileSelector{From: "certs/ca.pem", To: "etc/ssl/ca.pem"}, "not absolute"},
 		{FileSelector{From: "certs/**", To: "/"}, "root of the container"},
 		{FileSelector{From: "certs/ca.pem", Mode: "644 "}, "three octal digits"},
@@ -154,6 +154,16 @@ func TestASelectorNoTreeCouldAnswerIsRefused(t *testing.T) {
 	}
 	if err := CheckFiles([]FileSelector{{From: "./sql/**/*.sql", To: "/docker-entrypoint-initdb.d", Mode: "0444"}, {From: "/certs"}}); err != nil {
 		t.Errorf("the documentation's selectors are refused: %v", err)
+	}
+	// A selector that relocates nothing and leaves the tree selects nothing, and is not refused:
+	// a version recorded before v0.4.0 carrying one ran, since nothing read it then.
+	for _, f := range []FileSelector{{From: "../shared/**"}, {From: ""}, {From: "../bin/*.sh", Mode: "0755"}} {
+		if err := CheckFiles([]FileSelector{f}); err != nil {
+			t.Errorf("%+v is refused: %v", f, err)
+		}
+		if got := SelectFiles([]FileSelector{f}, theRepository); len(got.Tree)+len(got.Placed) != 0 {
+			t.Errorf("%+v selected %q and placed %v", f, got.Tree, got.Placed)
+		}
 	}
 }
 
