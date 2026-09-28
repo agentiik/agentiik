@@ -96,8 +96,9 @@ type Objects interface {
 // no error for a key that is absent, which a purge that died after deleting and before recording it
 // leaves, so that what was deleted is counted once. It removes nothing but the object: a directory
 // a key made is removed with its last object only below the key's first two segments,
-// <namespace>/sha256, <namespace>/logs or <namespace>/git, since other objects arrive under those at
-// any moment.
+// <namespace>/sha256, <namespace>/logs or <namespace>/git, which every namespace writes under. One
+// below them may be removed as a write into it begins, a pack's repository as a push writes its
+// first pack while the collection takes the last one a push that died left, and Put makes it again.
 type Removable interface {
 	Objects
 	Remove(ctx context.Context, key string) (bool, error)

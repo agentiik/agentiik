@@ -264,6 +264,36 @@ func TestDirRemovesAnObjectAndTheDirectoriesItLeavesEmpty(t *testing.T) {
 	}
 }
 
+// A write into a directory whose last object is being removed, which takes the directory with it,
+// makes the directory again rather than failing: a push writing a repository's first pack as the
+// collection removes the last one a push that died left.
+func TestDirWritesIntoADirectoryItsLastObjectIsTakingWithIt(t *testing.T) {
+	objects := artifact.Dir(t.TempDir())
+	repository := "acme/git/" + strings.Repeat("0", 32) + "/"
+	last := repository + "pack-" + strings.Repeat("1", 40) + ".pack"
+	for i := range 500 {
+		if err := objects.Put(t.Context(), last, strings.NewReader("PACK")); err != nil {
+			t.Fatal(err)
+		}
+		next := repository + fmt.Sprintf("pack-%040x.pack", i+2)
+		var wg sync.WaitGroup
+		var put error
+		wg.Go(func() { put = objects.Put(t.Context(), next, strings.NewReader("PACK")) })
+		wg.Go(func() {
+			if _, err := objects.Remove(t.Context(), last); err != nil {
+				t.Error(err)
+			}
+		})
+		wg.Wait()
+		if put != nil {
+			t.Fatalf("a write as the directory's last object went failed at round %d: %s", i, put)
+		}
+		if _, err := objects.Remove(t.Context(), next); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // A walk answers the objects of one namespace, each once, a batch at a time, with its size and when
 // it was written, and nothing else in its directory: not a write being staged, a link, a directory,
 // a name that is not a digest, a log, a pack of a workflow repository, even one named as a digest

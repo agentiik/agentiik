@@ -71,14 +71,10 @@ func (d dir) Put(ctx context.Context, key string, r io.Reader) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return fmt.Errorf("artifact: object %s: %w", key, err)
-	}
-
 	// Staged beside the object rather than in the system temporary directory, so that the
 	// rename that publishes it stays on one filesystem and is therefore atomic: a reader
 	// sees the whole object under the key or nothing at all.
-	stage, err := os.CreateTemp(filepath.Dir(p), ".staging-*")
+	stage, err := staging(filepath.Dir(p))
 	if err != nil {
 		return fmt.Errorf("artifact: object %s: %w", key, err)
 	}
@@ -109,6 +105,22 @@ func (d dir) Put(ctx context.Context, key string, r io.Reader) (err error) {
 		return fmt.Errorf("artifact: object %s: %w", key, err)
 	}
 	return nil
+}
+
+// staging makes dir and the file a write is staged in there. A Remove of the last object under dir
+// removes dir as well, and may do so between the two, which leaves the file nowhere to be made: dir
+// is made again then, up to three times, a failure that lasts answering the same each time. Once the
+// file is there dir is not empty, and no Remove takes it until the write has renamed it.
+func staging(dir string) (*os.File, error) {
+	for attempt := 1; ; attempt++ {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		f, err := os.CreateTemp(dir, ".staging-*")
+		if err == nil || attempt == 3 {
+			return f, err
+		}
+	}
 }
 
 // Remove deletes one object, and then each directory its key made that it leaves empty, up to
@@ -190,8 +202,8 @@ func (d dir) OpenRange(ctx context.Context, key string) (RangeReader, error) {
 }
 
 // ranged is an object held open, with the size it had when it was opened, which is its size for
-// good: an object is never written again under its key, and a rename that replaces it leaves this
-// file as it was.
+// good: the bytes under a key never change, a write of them again renames the same bytes over them,
+// and a rename that replaces the file leaves this one as it was.
 type ranged struct {
 	*os.File
 	size int64
