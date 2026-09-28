@@ -58,8 +58,9 @@
 // # Limits
 //
 // A pushed pack is bounded before any of it is believed: MaxPackBytes and MaxPackObjects, one
-// object by artifact_max_bytes, a chain of deltas by MaxDeltaDepth, and what has to be held whole
-// by MaxHeldBytes, with DeltaBaseCacheBytes of bases kept for the deltas made against them. Each
+// object by artifact_max_bytes, a chain of deltas by MaxDeltaDepth, what has to be held whole by
+// MaxHeldBytes, with DeltaBaseCacheBytes of bases kept for the deltas made against them, a commit,
+// a tree or a tag by MaxParsedBytes, and everything the pack unpacks to by MaxUnpackedBytes. Each
 // constant says why it is what it is. A packet is at most MaxPktLen bytes, which is the protocol's
 // own bound rather than this package's.
 package repo
