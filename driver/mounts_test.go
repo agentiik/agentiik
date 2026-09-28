@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -708,5 +709,167 @@ func readJSON(t *testing.T, path string, into any) {
 	}
 	if err := json.Unmarshal(b, into); err != nil {
 		t.Fatalf("reading %s: %s", path, err)
+	}
+}
+
+// On a server, a redemption that placed nothing is a task granted before its grant named its
+// step's files, or a version recorded before they selected anything: each is placed as it was
+// then, what a long form relocates and nothing else, with the mode the tree gives it. On a laptop
+// every long form is placed with its mode.
+func TestAServerPlacesWhatARedemptionDidNotAsItWasPlacedBefore(t *testing.T) {
+	repo := aRepository(t, map[string]os.FileMode{"certs/ca.pem": 0o444, "config.json": 0o444})
+	task := graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{
+		{From: "certs/ca.pem", To: "/etc/ssl/certs/ca.pem", Mode: "0600"},
+		{From: "config.json", Mode: "0400"},
+	}}
+
+	server := WithSources(context.Background(), Sources{Repo: repo})
+	g, _, err := preparing(t, server, task, nil, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, mode := placedAs(t, mountAt(t, g, "/etc/ssl/certs/ca.pem").Source); mode != 0o444 {
+		t.Errorf("on a server the relocation is %o, and it takes the tree's mode as it did before", mode)
+	}
+	for _, m := range g.Mounts {
+		if m.Target == RepoDir+"/config.json" {
+			t.Errorf("on a server a mode with no to is placed at %s, which nothing placed before", m.Target)
+		}
+	}
+
+	g, _, err = preparing(t, context.Background(), task, nil, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, mode := placedAs(t, mountAt(t, g, "/etc/ssl/certs/ca.pem").Source); mode != 0o600 {
+		t.Errorf("on a laptop the relocation is %o, want the 0600 asked for", mode)
+	}
+	if _, mode := placedAs(t, mountAt(t, g, RepoDir+"/config.json").Source); mode != 0o400 {
+		t.Errorf("on a laptop config.json is %o, want the 0400 asked for", mode)
+	}
+}
+
+// A working tree is somebody's own directory, and a link in it to their home is not a way out of
+// it: a selector that would walk through one copies nothing from beyond it.
+func TestALinkOutOfTheWorkingTreeIsNotFollowed(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "id_ed25519"), []byte("PRIVATE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := aRepository(t, map[string]os.FileMode{"agentiik.yaml": 0o644})
+	if err := os.Symlink(home, filepath.Join(repo, "home")); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []graph.FileSelector{
+		{From: "home/.ssh/**", To: "/x"},
+		{From: "home/.ssh/id_ed25519", Mode: "0644"},
+		{From: "**", To: "/everything"},
+	} {
+		g, w, err := preparing(t, context.Background(), graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{f}}, nil, repo)
+		if err == nil {
+			filepath.WalkDir(filepath.Join(w.Root, placedDir), func(at string, d os.DirEntry, err error) error {
+				if b, rerr := os.ReadFile(at); rerr == nil && string(b) == "PRIVATE" {
+					t.Errorf("%+v copied %s into the container: %s", f, at, mountTargets(g))
+				}
+				return nil
+			})
+		}
+	}
+}
+
+// Two selectors placing the same bytes at one path place one file, on a laptop as on a server,
+// where one digest is one source.
+func TestTheSameBytesPlacedTwiceOnOnePathAreOneFile(t *testing.T) {
+	repo := t.TempDir()
+	for _, dir := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, dir, "x.pem"), []byte("the same bytes\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task := graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{{From: "a/x.pem", To: "/etc/x.pem"}, {From: "b/x.pem", To: "/etc/x.pem"}}}
+	if _, _, err := preparing(t, context.Background(), task, nil, repo); err != nil {
+		t.Errorf("the same bytes placed twice on one path are refused: %v", err)
+	}
+}
+
+// A mode with no to binds each file on its own, and a container created with many of them takes
+// longer than its step: past placedAloneMax the step is refused, naming the directory form.
+func TestTooManyFilesBoundOnTheirOwnAreRefused(t *testing.T) {
+	files := map[string]os.FileMode{}
+	for i := range placedAloneMax + 1 {
+		files[fmt.Sprintf("data/%04d.csv", i)] = 0o644
+	}
+	repo := aRepository(t, files)
+	_, _, err := preparing(t, context.Background(), graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{{From: "data/*.csv", Mode: "0444"}}}, nil, repo)
+	var f *Fault
+	if !errors.As(err, &f) || f.Charge != ChargeBrick || !strings.Contains(err.Error(), "relocate them into a directory") {
+		t.Errorf("%d files bound on their own answered %v", placedAloneMax+1, err)
+	}
+	// Relocated into a directory, they are one bind.
+	g, _, err := preparing(t, context.Background(), graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{{From: "data/*.csv", To: "/data", Mode: "0444"}}}, nil, repo)
+	if err != nil || countMounts(t, g, "/data") != 1 {
+		t.Errorf("relocated into a directory, they answered %v", err)
+	}
+}
+
+// "a key that must not be" world readable is readable by the account the container runs as and
+// by nobody else: it is given to that account where it is a number, root where the image names
+// none, and a name is refused, saying what to write instead.
+func TestAPlacedKeyIsGivenToTheAccountTheContainerRunsAs(t *testing.T) {
+	for user, want := range map[string]struct {
+		uid, gid int
+		known    bool
+	}{
+		"":            {0, 0, true},
+		"65532":       {65532, 0, true},
+		"65532:65532": {65532, 65532, true},
+		"1000:50":     {1000, 50, true},
+		"nonroot":     {0, 0, false},
+		"65532:staff": {0, 0, false},
+		"-1":          {0, 0, false},
+	} {
+		uid, gid, known := accountOf(user)
+		if uid != want.uid || gid != want.gid || known != want.known {
+			t.Errorf("%q reads as %d:%d known %v, want %+v", user, uid, gid, known, want)
+		}
+	}
+
+	key := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(key, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var said []string
+	d := &Docker{cfg: Config{Announce: func(s string) { said = append(said, s) }}}
+	task := graph.Task{Step: "load"}
+	copies := []placedCopy{{Path: key, To: "/etc/app/key.pem", Mode: 0o600}}
+
+	err := d.ownPlaced(task, nil, "nonroot", copies)
+	var f *Fault
+	if !errors.As(err, &f) || f.Charge != ChargeBrick || !strings.Contains(err.Error(), "as a number") {
+		t.Errorf("a key for an account named by name answered %v", err)
+	}
+	// A mode that lets others read what its owner reads needs no owner.
+	if err := d.ownPlaced(task, nil, "nonroot", []placedCopy{{Path: key, To: "/etc/app/ca.pem", Mode: 0o444}}); err != nil {
+		t.Errorf("a file everybody reads was refused: %v", err)
+	}
+
+	// Given to 65532, which only a process holding CAP_CHOWN may do: one that may not says so
+	// and goes on, and one that may has given it.
+	if err := d.ownPlaced(task, nil, "65532:65532", copies); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, _ := ownerOf(info)
+	if owner != 65532 && (len(said) != 1 || !strings.Contains(said[0], "keeps this process's owner")) {
+		t.Errorf("the key is owned by %d and the process said %q", owner, said)
 	}
 }

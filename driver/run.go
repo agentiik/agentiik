@@ -216,6 +216,9 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	if err := floor.ownWorkdir(w); err != nil {
 		return graph.Result{}, err
 	}
+	if err := d.ownPlaced(t, floor, image.User, given.Placed); err != nil {
+		return graph.Result{}, err
+	}
 
 	// The secret values go on the task's secrets volume last of all, just before the
 	// container, since they are held in memory by a container of the runner's own until

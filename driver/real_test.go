@@ -542,7 +542,9 @@ func TestARealPullByDigestIsTheDriversOwnAndMeasured(t *testing.T) {
 // relocated into a directory keeping each path below its prefix, a file relocated with a mode, a
 // mode given to files where they are under /agk/repo, which is a file bound over one inside a
 // read-only bind, and a file of the tree written like an expression, which arrives as it was
-// committed.
+// committed. Every mode here lets others read, so it runs as the account that runs the tests: a
+// mode that does not is given to the container's account, which takes CAP_CHOWN, and
+// TestARealRemappedDaemonGivesAPlacedKeyToTheAccountItRunsAs holds that on a runner's host.
 func TestARealContainerFindsWhatItsStepsFilesPlace(t *testing.T) {
 	d, image := realDriver(t)
 
@@ -578,7 +580,7 @@ func TestARealContainerFindsWhatItsStepsFilesPlace(t *testing.T) {
 			{From: "./sql/**"},
 			{From: "./sql/**/*.sql", To: "/docker-entrypoint-initdb.d", Mode: "0444"},
 			{From: "scripts/*.sh", Mode: "0755"},
-			{From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem", Mode: "0600"},
+			{From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem", Mode: "0444"},
 		},
 		Script: []string{
 			`test "$(cat /docker-entrypoint-initdb.d/orders.sql)" = "select 1;"`,
@@ -587,7 +589,7 @@ func TestARealContainerFindsWhatItsStepsFilesPlace(t *testing.T) {
 			`test "$(stat -c %a /docker-entrypoint-initdb.d/orders.sql)" = 444`,
 			`test "$(stat -c %a /agk/repo/scripts/run.sh)" = 755`,
 			`test "$(/agk/repo/scripts/run.sh)" = ran`,
-			`test "$(stat -c %a /etc/ssl/certs/internal-ca.pem)" = 600`,
+			`test "$(stat -c %a /etc/ssl/certs/internal-ca.pem)" = 444`,
 			`test "$(cat /etc/ssl/certs/internal-ca.pem)" = "-----BEGIN CERTIFICATE-----"`,
 			`echo "` + sum + `  /agk/repo/config/template.yaml" | sha256sum -c -`,
 			`printf '{"meta":{"run_id":"%s","step":"%s","port":"out","attempt":1,"count":0,"produced_at":"2026-01-01T00:00:00Z"},"items":[]}' "$AGK_RUN_ID" "$AGK_STEP" > /agk/out/ports/out.json`,

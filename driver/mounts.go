@@ -101,6 +101,11 @@ type given struct {
 	Values  [][]byte
 	Secrets []secretFile
 	hold    *holder
+
+	// Placed are the copies placeFiles made of the files a step's files place, which are
+	// given to the container's own account once the working directory has been given to
+	// the range (ownPlaced).
+	Placed []placedCopy
 }
 
 // prepare writes the host side of the contract under the task's working directory and
@@ -125,11 +130,13 @@ func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, store *art
 		return nil, err
 	}
 
-	repoMounts, err := repoBinds(t, repo, w, sourcesOf(ctx).Placed)
+	sources := sourcesOf(ctx)
+	repoMounts, placed, err := repoBinds(t, repo, w, sources.Placed, sources.Repo != "")
 	if err != nil {
 		return nil, err
 	}
 	g.Mounts = append(g.Mounts, repoMounts...)
+	g.Placed = placed
 
 	if err := writeJSON(w.Run, run); err != nil {
 		return nil, fault(t.Step, err, ChargePlatform, "%s could not be written under the working directory", RunPath)
@@ -281,52 +288,68 @@ func stdinPort(t graph.Task) (agk.Port, bool) {
 // there, and a postgres image reads its init scripts from one directory and nowhere else.
 //
 // placed are the files the runner laid out for the ones its redemption placed. Nil is a
-// redemption that placed nothing, or none at all: agk run --local binds the working tree
-// whole, and a tree handed over whole holds every file a selector could place, so the
-// step's files are read against the tree itself, with the selection the API makes
-// (graph.SelectFiles). A selector no tree could answer is the workflow's, and refused
-// before anything is placed.
-func repoBinds(t graph.Task, repo string, w *workdir, placed []Placed) ([]docker.Mount, error) {
+// redemption that placed nothing, or none at all, and the step's files are then read against
+// the tree itself, with the selection the API makes (graph.SelectFiles). On a laptop, where
+// agk run --local binds the working tree whole, that is every long form with its mode. On a
+// server it is a redemption that placed nothing: a task granted before its grant named its
+// step's files, or a version recorded before they selected anything, each handed its tree
+// whole, and each placed as it was then, what a long form relocates and nothing else, with the
+// mode the tree gives it. A selector no tree could answer is the workflow's, and refused before
+// anything is placed.
+func repoBinds(t graph.Task, repo string, w *workdir, placed []Placed, server bool) ([]docker.Mount, []placedCopy, error) {
 	if repo == "" {
 		// A task with no repository tree behind it mounts nothing, which is a brick
 		// test whose case carries no repo/ directory and any caller that has no tree
 		// to give. Binding an empty path would create a directory on the host and
 		// call it the workflow.
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err := graph.CheckFiles(t.Files); err != nil {
-		return nil, fault(t.Step, nil, ChargeBrick, "%v", err)
+		return nil, nil, fault(t.Step, nil, ChargeBrick, "%v", err)
 	}
 	mounts := []docker.Mount{bind(repo, RepoDir, true)}
 	if placed == nil {
 		var err error
-		if placed, err = placeFromTree(t, repo); err != nil {
-			return nil, err
+		if placed, err = placeFromTree(t, repo, server); err != nil {
+			return nil, nil, err
 		}
 	}
 	if len(placed) == 0 {
-		return mounts, nil
+		return mounts, nil, nil
 	}
-	binds, err := placeFiles(t, w, placed)
+	binds, copies, err := placeFiles(t, w, placed)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return append(mounts, binds...), nil
+	return append(mounts, binds...), copies, nil
 }
 
 // placeFromTree is what the step's files place, read against the tree at repo: every file under
 // each placing selector's base, the directory a walk of a large working tree starts from, and
-// none of git's own, which a commit never holds.
-func placeFromTree(t graph.Task, repo string) ([]Placed, error) {
+// none of git's own, which a commit never holds. asBefore places what a runner placed before a
+// step's files selected anything: a relocation, with the tree's mode.
+//
+// The tree is read through an os.Root, so that nothing it reaches is outside it. A working tree
+// is somebody's own directory and may hold a link to their home: a selector that walked through
+// one would copy their keys into a container.
+func placeFromTree(t graph.Task, repo string, asBefore bool) ([]Placed, error) {
 	var placing []graph.FileSelector
 	for _, f := range t.Files {
-		if f.To != "" || f.Mode != "" {
+		switch {
+		case f.To != "" && asBefore:
+			placing = append(placing, graph.FileSelector{From: f.From, To: f.To})
+		case (f.To != "" || f.Mode != "") && !asBefore:
 			placing = append(placing, f)
 		}
 	}
 	if len(placing) == 0 {
 		return nil, nil
 	}
+	tree, err := os.OpenRoot(repo)
+	if err != nil {
+		return nil, fault(t.Step, err, ChargePlatform, "files: the tree at %s could not be opened: %v", repo, err)
+	}
+	defer tree.Close()
 	seen := map[string]bool{}
 	var paths []string
 	for _, f := range placing {
@@ -335,33 +358,28 @@ func placeFromTree(t graph.Task, repo string) ([]Placed, error) {
 			// A mode given to a path that leaves the tree, which selects nothing.
 			continue
 		}
-		root := filepath.Join(repo, filepath.FromSlash(base))
-		err = filepath.WalkDir(root, func(at string, d fs.DirEntry, err error) error {
+		err = fs.WalkDir(tree.FS(), base, func(at string, d fs.DirEntry, err error) error {
 			switch {
-			case err != nil && at == root && errors.Is(err, fs.ErrNotExist):
+			case err != nil && at == base && errors.Is(err, fs.ErrNotExist):
 				// Nothing there, which selects nothing.
-				return filepath.SkipAll
+				return fs.SkipAll
 			case err != nil:
 				return err
 			case d.IsDir() && d.Name() == ".git":
-				return filepath.SkipDir
+				return fs.SkipDir
 			case !d.Type().IsRegular():
 				// A link is resolved on whichever host lays the tree out and can point
 				// outside it, which is why a push refuses one: it is left where it is.
 				return nil
 			}
-			rel, err := filepath.Rel(repo, at)
-			if err != nil {
-				return err
-			}
-			if rel = filepath.ToSlash(rel); !seen[rel] {
-				seen[rel] = true
-				paths = append(paths, rel)
+			if !seen[at] {
+				seen[at] = true
+				paths = append(paths, at)
 			}
 			return nil
 		})
 		if err != nil {
-			return nil, fault(t.Step, err, ChargePlatform, "files: the tree under %s could not be read: %v", base, err)
+			return nil, fault(t.Step, err, ChargeBrick, "files: the tree under %s could not be read: %v, and a path that passes through a link out of the tree is refused here as a push refuses the link", base, err)
 		}
 	}
 	selected := graph.SelectFiles(placing, paths)
@@ -395,10 +413,14 @@ const placedDirMode = 0o755
 // file placed anywhere else, which is what a mode with no to places over the tree, is bound on
 // its own. Two different files placed on one path are refused, since one of them would go unread,
 // and so is a file placed where another is placed below it.
-func placeFiles(t graph.Task, w *workdir, placed []Placed) ([]docker.Mount, error) {
+func placeFiles(t graph.Task, w *workdir, placed []Placed) ([]docker.Mount, []placedCopy, error) {
 	dir := filepath.Join(w.Root, placedDir)
-	type from struct{ source, mode string }
+	type from struct {
+		source string
+		mode   os.FileMode
+	}
 	put := map[string]from{}
+	var copies []placedCopy
 	sorted := slices.Clone(placed)
 	slices.SortFunc(sorted, func(a, b Placed) int {
 		return cmp.Or(strings.Compare(a.To, b.To), strings.Compare(a.Source, b.Source), strings.Compare(a.Mode, b.Mode))
@@ -406,25 +428,29 @@ func placeFiles(t graph.Task, w *workdir, placed []Placed) ([]docker.Mount, erro
 	for _, p := range sorted {
 		to := path.Clean(p.To)
 		if !path.IsAbs(p.To) || to == "/" || strings.ContainsRune(to, 0) {
-			return nil, fault(t.Step, nil, ChargePlatform, "a file of the tree is placed at %q, which is not a path of the container a file can be placed at", p.To)
-		}
-		if had, ok := put[to]; ok {
-			if had == (from{p.Source, p.Mode}) {
-				continue
-			}
-			return nil, fault(t.Step, nil, ChargeBrick, "files: two files are placed at %s, and one path holds one of them: a relocation keeps each file's path below the directory it names, so two selectors placing different files there leave one unread", to)
+			return nil, nil, fault(t.Step, nil, ChargePlatform, "a file of the tree is placed at %q, which is not a path of the container a file can be placed at", p.To)
 		}
 		mode, err := placedMode(p)
 		if err != nil {
-			return nil, fault(t.Step, err, ChargePlatform, "files: the file placed at %s: %v", to, err)
+			return nil, nil, fault(t.Step, err, ChargePlatform, "files: the file placed at %s: %v", to, err)
 		}
-		if err := placeOne(dir, to, p.Source, mode); err != nil {
-			if errors.Is(err, errPlacedOver) {
-				return nil, fault(t.Step, nil, ChargeBrick, "files: %s is placed as a file, and another file is placed below it as if it were a directory", to)
+		if had, ok := put[to]; ok {
+			// The same bytes with the same mode are one file, however many selectors
+			// place it, as they are on a server, where one digest is one source.
+			if had.mode == mode && (had.source == p.Source || sameBytes(had.source, p.Source)) {
+				continue
 			}
-			return nil, fault(t.Step, err, ChargePlatform, "files: the file placed at %s: %v", to, err)
+			return nil, nil, fault(t.Step, nil, ChargeBrick, "files: two files are placed at %s, and one path holds one of them: a relocation keeps each file's path below the directory it names, so two selectors placing different files there leave one unread", to)
 		}
-		put[to] = from{p.Source, p.Mode}
+		name, err := placeOne(dir, to, p.Source, mode)
+		if err != nil {
+			if errors.Is(err, errPlacedOver) {
+				return nil, nil, fault(t.Step, nil, ChargeBrick, "files: %s is placed as a file, and another file is placed below it as if it were a directory", to)
+			}
+			return nil, nil, fault(t.Step, err, ChargePlatform, "files: the file placed at %s: %v", to, err)
+		}
+		put[to] = from{p.Source, mode}
+		copies = append(copies, placedCopy{Path: name, To: to, Mode: mode})
 	}
 
 	// Each file under the shallowest directory a selector relocates into, or on its own.
@@ -445,6 +471,7 @@ func placeFiles(t graph.Task, w *workdir, placed []Placed) ([]docker.Mount, erro
 		used[root] = true
 	}
 	var targets []string
+	alone := 0
 	for root := range used {
 		nested := false
 		for at := path.Dir(root); at != "/"; at = path.Dir(at) {
@@ -453,16 +480,111 @@ func placeFiles(t graph.Task, w *workdir, placed []Placed) ([]docker.Mount, erro
 				break
 			}
 		}
-		if !nested {
-			targets = append(targets, root)
+		if nested {
+			continue
 		}
+		targets = append(targets, root)
+		if !roots[root] {
+			alone++
+		}
+	}
+	if alone > placedAloneMax {
+		return nil, nil, fault(t.Step, nil, ChargeBrick, "files: %d files are each bound on their own, where a mode with no to leaves them under %s, and a container is given at most %d: relocate them into a directory with to, which is one bind however many files it holds", alone, RepoDir, placedAloneMax)
 	}
 	slices.Sort(targets)
 	mounts := make([]docker.Mount, 0, len(targets))
 	for _, target := range targets {
 		mounts = append(mounts, bind(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(target, "/"))), target, true))
 	}
-	return mounts, nil
+	return mounts, copies, nil
+}
+
+// placedAloneMax is how many placed files a container is given each on a bind of its own, which
+// is what a mode with no to places, over the tree. Each is a mount the daemon makes when it
+// creates the container, and what that costs grows faster than their number: Docker Desktop took
+// 4 seconds to create a container with 256 of them, 44 with 1,024, and had not with 4,096 after
+// five minutes. A directory relocated with to is one bind however many files it holds, which is
+// what a step placing more wants.
+const placedAloneMax = 256
+
+// ownPlaced gives each placed file whose mode gives its owner something it gives nobody else to
+// the account the container runs as, through the remapped range where there is one.
+//
+// The rest of what a task is given is read by everybody, since the account a container runs as is
+// often a name this driver never resolves. A mode such as 0600 is asked for precisely so that
+// nobody else reads the file, "a key that must not be" world readable, and a key nobody can read
+// is no key: owned by the range's base, or by the runner's own account on a daemon that does not
+// remap, it is readable by no brick, since a brick never runs as root and every capability,
+// CAP_DAC_OVERRIDE among them, is dropped. So it is given to the one account that should read it.
+// That account is known where it is written as a number, spec.runtime.user in a manifest or the
+// image's own user, or where none is written, which is root; a name is refused for such a mode,
+// with what to write instead, rather than handing over a file nobody can open.
+//
+// A process that may not give a file away, agk run --local by a person who is not root, says so
+// and goes on: Docker Desktop's file sharing reads a file whatever its owner, and a runner holds
+// CAP_CHOWN, which giving the working directory to a remapped range asks of it already.
+func (d *Docker) ownPlaced(t graph.Task, floor *usernsFloor, user string, copies []placedCopy) error {
+	for _, c := range copies {
+		owner, others := (c.Mode>>6)&0o7, c.Mode&0o7
+		if owner&^others == 0 {
+			continue
+		}
+		uid, gid, known := accountOf(user)
+		if !known {
+			return fault(t.Step, nil, ChargeBrick, "files: %s is placed with the mode %04o, which gives its owner what it gives nobody else, and the container runs as %q, which is not an account number this runner can give the file to: write the account as a number, as spec.runtime.user may, or give the file a mode its account reads as anybody does", c.To, c.Mode, user)
+		}
+		if base, baseGID, remapped := floor.ownership(); remapped {
+			uid, gid = base+uid, baseGID+gid
+		}
+		if err := os.Lchown(c.Path, uid, gid); err != nil {
+			if errors.Is(err, fs.ErrPermission) {
+				d.say(fmt.Sprintf("files: the file placed at %s for step %s keeps this process's owner, since it may not give it to uid %d, the account the container runs as: a daemon that honours owners, as Docker Engine does and Docker Desktop's file sharing does not, lets nobody but that owner read a file with the mode %04o", c.To, t.Step, uid, c.Mode))
+				return nil
+			}
+			return fault(t.Step, err, ChargePlatform, "files: the file placed at %s could not be given to uid %d: %v", c.To, uid, err)
+		}
+	}
+	return nil
+}
+
+// accountOf reads the account a container runs as, written as Docker takes it: nothing, which is
+// root, or a uid with a gid after a colon, the gid 0 where none is written. A name, of the account
+// or of its group, is not read, since only the image's own account database says what it is.
+func accountOf(user string) (uid, gid int, known bool) {
+	if user == "" {
+		return 0, 0, true
+	}
+	u, g, grouped := strings.Cut(user, ":")
+	uid, err := strconv.Atoi(u)
+	if err != nil || uid < 0 {
+		return 0, 0, false
+	}
+	if !grouped {
+		return uid, 0, true
+	}
+	gid, err = strconv.Atoi(g)
+	if err != nil || gid < 0 {
+		return 0, 0, false
+	}
+	return uid, gid, true
+}
+
+// placedCopy is one copy placeFiles made: where it is on the host, where the container finds it,
+// and its mode.
+type placedCopy struct {
+	Path string
+	To   string
+	Mode os.FileMode
+}
+
+// sameBytes says whether two files hold the same bytes, and says no where either cannot be read.
+func sameBytes(a, b string) bool {
+	x, err := os.ReadFile(a)
+	if err != nil {
+		return false
+	}
+	y, err := os.ReadFile(b)
+	return err == nil && bytes.Equal(x, y)
 }
 
 // errPlacedOver is a file placed where a directory of another placed file is, or below a file
@@ -493,13 +615,13 @@ func placedMode(p Placed) (os.FileMode, error) {
 var placedModePattern = regexp.MustCompile(`^0?[0-7]{3}$`)
 
 // placeOne copies one file to the path to names under dir, creating each directory between the two
-// with placedDirMode, and gives it its mode once its bytes are there.
-func placeOne(dir, to, source string, mode os.FileMode) error {
+// with placedDirMode, gives it its mode once its bytes are there, and answers where it is.
+func placeOne(dir, to, source string, mode os.FileMode) (string, error) {
 	if err := os.MkdirAll(dir, placedDirMode); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Chmod(dir, placedDirMode); err != nil {
-		return err
+		return "", err
 	}
 	at := dir
 	for _, segment := range strings.Split(strings.TrimPrefix(path.Dir(to), "/"), "/") {
@@ -510,7 +632,7 @@ func placeOne(dir, to, source string, mode os.FileMode) error {
 		err := os.Mkdir(at, placedDirMode)
 		if errors.Is(err, fs.ErrExist) {
 			if info, serr := os.Lstat(at); serr != nil || !info.IsDir() {
-				return errPlacedOver
+				return "", errPlacedOver
 			}
 			continue
 		}
@@ -518,30 +640,30 @@ func placeOne(dir, to, source string, mode os.FileMode) error {
 			err = os.Chmod(at, placedDirMode)
 		}
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 	src, err := os.Open(source)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer src.Close()
 	name := filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(to, "/")))
 	dst, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, fs.ErrExist) {
-		return errPlacedOver
+		return "", errPlacedOver
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	_, err = io.Copy(dst, src)
 	if cerr := dst.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
-	return os.Chmod(name, mode)
+	return name, os.Chmod(name, mode)
 }
 
 // redeemSecrets asks for the values and names the file each is written in.

@@ -264,3 +264,46 @@ func TestARealRemappedDaemonGivesTheSecretMountTheTmpfsFlags(t *testing.T) {
 		}
 	}
 }
+
+// "A key that must not be" world readable is given to the account the container runs as, inside
+// the range: the image's root, which is the base of the range on the host, or 65532, which is
+// another account of it. That account reads it, as the owner the container sees, where a copy
+// left to the base of the range would be unreadable to a brick, which never runs as root and
+// holds no capability.
+func TestARealRemappedDaemonGivesAPlacedKeyToTheAccountItRunsAs(t *testing.T) {
+	for image, owner := range map[string]string{rootImage: "0", nonRootImage: "65532"} {
+		t.Run(image, func(t *testing.T) {
+			d := remappedDriver(t, nil, image)
+			repo := t.TempDir()
+			if err := os.WriteFile(repo+"/key.pem", []byte("the key\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			d.cfg.Repo = func(context.Context, string, string, string) (string, error) { return repo, nil }
+			task := graph.Task{
+				ID:        agk.NewTaskID("01JMZ8V1P9C4", "keyed", 1, agk.Shard{}),
+				Run:       "01JMZ8V1P9C4",
+				Namespace: "finance",
+				Step:      "keyed",
+				Attempt:   1,
+				Image:     image,
+				Files:     []graph.FileSelector{{From: "key.pem", To: "/etc/app/key.pem", Mode: "0600"}},
+				Script: []string{
+					`set -eu`,
+					`test "$(cat /etc/app/key.pem)" = "the key"`,
+					`test "$(stat -c %a /etc/app/key.pem)" = 600`,
+					`test "$(stat -c %u /etc/app/key.pem)" = ` + owner,
+					`printf '{"meta":{"run_id":"%s","step":"%s","port":"out","attempt":1,"count":0,"produced_at":"2026-01-01T00:00:00Z"},"items":[]}' "$AGK_RUN_ID" "$AGK_STEP" > /agk/out/ports/out.json`,
+				},
+				Outputs: []agk.Port{"out"},
+				Network: graph.NetworkNone,
+			}
+			result, err := d.Run(t.Context(), task)
+			if err != nil {
+				t.Fatalf("running: %s", err)
+			}
+			if result.State != agk.TaskSucceeded {
+				t.Errorf("the key was not the account's to read: %s with exit code %d", result.State, result.ExitCode)
+			}
+		})
+	}
+}
