@@ -19,13 +19,17 @@ The specification is the documentation at <https://agentiik.github.io/docs>; whe
 | `bus/control` | The controller's half of the bus: `controller.Queue`, and results taken back as `controller.Answer`. |
 | `db` | PostgreSQL: the schema, its migrations, and a handle that makes the namespace impossible to forget. |
 | `api` | The HTTP boundary, where every request is authorised, deny by default. |
+| `access` | Permissions, roles and grants, and how the grants applying to a principal resolve to what it may do. |
+| `audit` | The chained audit log: its entries, the verification of the chain and its export. |
+| `runner` | The agent `agk-runner serve` runs on a runner host, around the driver. |
 | `secret` | The built-in secret store, on envelope encryption. |
 | `version` | A stored workflow version turned back into a graph. |
 | `purge` | The retention purges, the collection and the orphan sweep, run by the controller that leads, a batch at a time, and the recording of the files v0.2 left. |
 | `cmd/agk` | The command line. The loop of `agk run --local` is `cmd/agk/internal/local`. |
 | `cmd/agk-helper` | The static helper bound read-only at `/agk/bin/agk` for a script step. |
+| `cmd/agentiik-api`, `cmd/agentiik-controller`, `cmd/agk-runner` | The three programs of a server installation. |
 
-Under `internal/`: CEL (`expr`), the Engine API client and a fake daemon (`docker`, `dockertest`), a throwaway test database (`dbtest`), credential minting (`token`), identifiers (`ulid`) and the vendored schema fixtures (`fixtures`). Each package's doc comment, in `doc.go` where there is one, says what it is for and what it is not.
+Under `internal/`: CEL (`expr`), the Engine API client and a fake daemon (`docker`, `dockertest`), a throwaway test database (`dbtest`), credential minting (`token`), identifiers (`ulid`), passkey verification (`webauthn`), passwords and their second factor (`password`, `totp`), the access fixture (`accesstest`) and the vendored schema fixtures (`fixtures`). Each package's doc comment, in `doc.go` where there is one, says what it is for and what it is not.
 
 The evaluator and the driver stay libraries with no server, bus or database behind them, so that `agk run --local` takes the same code path as a server run instead of a second one that drifts. `graph/boundary_test.go` and `driver/boundary_test.go` hold that. The bus links no controller, database or secret store, since a runner links it, and `bus/boundary_test.go` holds that.
 
@@ -43,7 +47,7 @@ The Docker Engine API is spoken with the standard library.
 
 ## Status
 
-`agk run --local` runs a whole workflow on one machine, and `agk validate`, `agk graph` and `agk brick test` work beside it. Since v0.2.0 a server runs it instead: `agentiik-api`, `agentiik-controller` and `agk-runner` are the installation, and `agk push`, `agk run --namespace`, `agk status` and `agk logs` send a workflow to it, run it and follow it, as the operator whose token is in `AGENTIIK_TOKEN`. `agk share`, `agk grants` and `agk whoami` say who may do what; `login` refuses and says why until its sign-in arrives in v0.3.0, and `brick init` until its templates are released from `agentiik/bricks`. The [roadmap](https://agentiik.github.io/docs/roadmap) has the rest, and [CHANGELOG.md](CHANGELOG.md) what each release shipped.
+`agk run --local` runs a whole workflow on one machine, and `agk validate`, `agk graph` and `agk brick test` work beside it. A server runs it too: `agentiik-api`, `agentiik-controller` and `agk-runner` are the installation, and `agk push`, `agk run --namespace`, `agk status` and `agk logs` send a workflow to it, run it and follow it. Since v0.3.0 it serves more than one person: users sign in with a passkey, or a password where the authentication policy allows one, through `agk login` or the API's sign-in page, and the bootstrap token creates the first administrator; groups, service accounts and API tokens, grants and roles at namespace and workflow scope (`agk share`, `agk grants`, `agk whoami`), quotas per namespace, and a namespace a caller holds nothing in answered as one that does not exist. `brick init` still refuses until its templates are released from `agentiik/bricks`, and `network: egress` until the proxy enforcing `egress.allow` lands in v0.9.0. The [roadmap](https://agentiik.github.io/docs/roadmap) has the rest, and [CHANGELOG.md](CHANGELOG.md) what each release shipped.
 
 ## Building and testing
 
@@ -60,7 +64,7 @@ CI runs the same four, and `gofmt -l .` passes only by printing nothing. Tests t
 - NATS: set `AGENTIIK_TEST_BUS_URL` to a server started with `-js`.
 - Docker: found through `DOCKER_HOST`, then the usual socket paths. The tests run their containers from `alpine:3.21`, and one that finds it missing skips rather than pull it. It is pulled from Docker Hub only as the base of a fixture build, or by `agk run --local` in the milestone test, and a test that comes before either still skips, so `docker pull alpine:3.21` first. `AGENTIIK_TEST_REQUIRE_DOCKER=1`, which CI sets, fails a test that would otherwise skip for want of the daemon or the image.
 
-`cmd/agk/milestone_test.go` is the proof of v0.1.0: a workflow with a fan-out and a merge, run twice against the real daemon, producing the same envelopes. `e2e/` is the proof of v0.2.0: it stands up a test installation from the checkout when `AGENTIIK_E2E=1`, and its two gate tests run one workflow locally and on the installation to the same envelopes, and kill a runner mid-step without losing the run.
+`cmd/agk/milestone_test.go` is the proof of v0.1.0: a workflow with a fan-out and a merge, run twice against the real daemon, producing the same envelopes. `e2e/` is the proof of v0.2.0: it stands up a test installation from the checkout when `AGENTIIK_E2E=1`, and its two gate tests run one workflow locally and on the installation to the same envelopes, and kill a runner mid-step without losing the run. `e2e/access_test.go` is the proof of v0.3.0: on the test installation, a principal with no permission on a namespace cannot tell it from one that does not exist.
 
 A plain `go build` gives an `agk` with no embedded helper; `--helper <path>` or `$AGK_HELPER` supplies one to a script step, and `cmd/agk/internal/helper/bin/README.md` says how to build the binaries a release embeds.
 
