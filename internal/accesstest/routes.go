@@ -43,7 +43,8 @@ type Case struct {
 // namespace's record is read "to an administrator and to a principal holding a grant in it", and
 // drain and revoke "require grant:manage at installation scope", which is what an administrator
 // holds there; a secret's declarations take workflow:read at namespace scope and writing one
-// secret:write there; a push workflow:write, and secret:use where it names a secret; starting a run
+// secret:write there; a push workflow:write, and secret:use where it names a secret; recording what
+// agk read of a namespace's images workflow:write at namespace scope; starting a run
 // and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
 // being envelope contents that run:read_data alone reveals; outputs, a step's inputs and outputs and
 // an artifact run:read_data. Registration is authenticated by the join token in its body, the
@@ -132,6 +133,7 @@ var Cases = []Case{
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.WorkflowRead, Scope: api.Namespace}},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.SecretWrite, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.SecretWrite, Scope: api.Namespace}, Makes: "secret"},
+	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/images", Permission: api.WorkflowWrite, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/grants", Permission: api.GrantManage, Scope: api.Namespace}},
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/grants", Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true, Seeing: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/grants/{id}", Permission: api.GrantManage, Scope: api.Namespace}, Makes: "grant"},

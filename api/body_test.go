@@ -163,6 +163,19 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 			func(l int64) []byte { return filled(`{"quotas":{"allowed_runner_pools":[`, `]}}`, l, empty) }, 0, 0, 0.141},
 		{"quotas of empty pools", func() request { return new(Quotas) }, smallMaxBytes,
 			func(l int64) []byte { return filled(`{"allowed_runner_pools":[`, `]}`, l, empty) }, 0, 0, 0.141},
+		// So did a namespace's images.
+		{"images of empty pins", func() request { return new(Images) }, imagesMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"pins":{`, `}}`, l, func(i int) string { return named(i) + `:""` })
+			}, 0, 0, 21.967},
+		{"images of empty manifests", func() request { return new(Images) }, imagesMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"manifests":{`, `}}`, l, func(i int) string { return named(i) + `:""` })
+			}, 0, 0, 22.090},
+		{"images of one manifest as large as the body", func() request { return new(Images) }, imagesMaxBytes,
+			func(l int64) []byte {
+				return []byte(`{"manifests":{"a@sha256:0":"` + strings.Repeat("A", int(l-40)/4*4) + `"}}`)
+			}, 0, 0, 33.334},
 		// So did the passkey ceremonies, which answer anybody.
 		{"a ceremony's options with one long code, from anybody", func() request { return new(ceremonyAsked) }, smallMaxBytes,
 			func(l int64) []byte { return []byte(`{"code":"` + strings.Repeat("A", int(l)-11) + `"}`) }, 0, 0, 0.145},
@@ -245,6 +258,11 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 		}},
 		&NamespaceRecord{Name: "team-ops", Owner: "bob-martin"},
 		&Quotas{MaxRunsPerHour: 60},
+		&Images{
+			Pins:      map[string]string{"ghcr.io/acme/agk-invoice:1": "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc"},
+			Manifests: map[string][]byte{"ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc": []byte(`{"kind":"Brick"}`)},
+		},
+		&Images{},
 	} {
 		encoded, err := json.Marshal(want)
 		if err != nil {
@@ -305,6 +323,10 @@ func TestABodyIsReadClosed(t *testing.T) {
 		"an include written twice":               {`{"includes":{"a.yaml":"","a.yaml":"eA=="}}`, new(Push)},
 		"an image resolved twice":                {`{"images":{"alpine:3.21":"alpine@sha256:a","alpine:3.21":"alpine@sha256:b"}}`, new(Push)},
 		"an image resolved to a list":            {`{"images":{"alpine:3.21":["alpine@sha256:a"]}}`, new(Push)},
+		"a tag pinned twice":                     {`{"pins":{"alpine:3.21":"alpine@sha256:a","alpine:3.21":"alpine@sha256:b"}}`, new(Images)},
+		"a manifest recorded twice":              {`{"manifests":{"alpine@sha256:a":"","alpine@sha256:a":"eA=="}}`, new(Images)},
+		"a pin that is a number":                 {`{"pins":{"alpine:3.21":7}}`, new(Images)},
+		"images carrying the tree of a push":     {`{"tree":{}}`, new(Images)},
 		"a tree file with a field nobody reads":  {`{"tree":{"a.sh":{"mode":"0644","owner":"root"}}}`, new(Push)},
 		"a tree file's mode written twice":       {`{"tree":{"a.sh":{"mode":"0644","mode":"0755"}}}`, new(Push)},
 		"content that is not base64":             {`{"tree":{"a.sh":{"content":"not base64!","mode":"0644"}}}`, new(Push)},
@@ -419,6 +441,12 @@ func TestACollectionPastItsCountIsTooLarge(t *testing.T) {
 		{"images", TreeMaxFiles, func(n int) string {
 			return entries(`{"images":{`, n, func(i int) string { return fmt.Sprintf(`"i%d":""`, i) }) + `}}`
 		}, func() request { return new(Push) }, pushMaxBytes},
+		{"a namespace's pins", imagesMax, func(n int) string {
+			return entries(`{"pins":{`, n, func(i int) string { return fmt.Sprintf(`"i%d":""`, i) }) + `}}`
+		}, func() request { return new(Images) }, imagesMaxBytes},
+		{"a namespace's manifests", imagesMax, func(n int) string {
+			return entries(`{"manifests":{`, n, func(i int) string { return fmt.Sprintf(`"i%d":""`, i) }) + `}}`
+		}, func() request { return new(Images) }, imagesMaxBytes},
 		{"a pool's labels", namesMax, inPool(labels("labels")), func() request { return new(RunnerPool) }, smallMaxBytes},
 		{"a pool's namespaces", namesMax, inPool(labels("namespaces")), func() request { return new(RunnerPool) }, smallMaxBytes},
 		{"a join token's labels", namesMax, labels("labels"), func() request { return new(Issue) }, smallMaxBytes},

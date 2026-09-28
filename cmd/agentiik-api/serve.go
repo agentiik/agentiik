@@ -289,6 +289,9 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewDeclarations(rt, declarations); err != nil {
 		return nil, err
 	}
+	if _, err := api.NewImages(rt, api.ImageOptions{Pool: pool, Now: s.now}); err != nil {
+		return nil, err
+	}
 	if _, err := api.NewRunners(rt, runners); err != nil {
 		return nil, err
 	}

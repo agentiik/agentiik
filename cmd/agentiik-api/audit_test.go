@@ -62,6 +62,7 @@ var recordsNothing = map[string]string{
 	"POST /api/v1/bus/token":               "a runner's own traffic under its credential, which no principal does",
 	"PUT /objects/{key...}":                "a task's output, stored under a URL its redemption signed, and the page's audit log names no upload",
 	"POST /objects/{namespace}":            "a task's output, stored under a policy its redemption signed, and the page's audit log names no upload",
+	"PUT /api/v1/{namespace}/images":       "what agk push and agk validate read of a namespace's images, each row keeping who recorded it and when as a version keeps its author, and the page's audit log names no push",
 }
 
 // actor is how a step asks: bearing a token, carrying a session from the public URL's origin, or
@@ -447,6 +448,8 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	// owners, none but her; then she shares it, pushes, keeps a secret, and starts and cancels a run.
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"carol","role":"owner"}`, http.StatusCreated)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+s.answer(w)["id"].(string)+" finance done")
+	s.act("PUT /api/v1/{namespace}/images", "/api/v1/finance/images", carol, api.Images{Pins: map[string]string{
+		"ghcr.io/acme/agk-invoice:1.4.0": "ghcr.io/acme/agk-invoice@sha256:" + strings.Repeat("1", 64)}}, http.StatusNoContent)
 	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}", "/api/v1/finance/workflows/monthly-invoicing/versions/"+theCommit, carol, aPush(t), http.StatusOK)
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"dave","deny":"run:read_data"}`, http.StatusCreated)
 	deny := s.answer(w)["id"].(string)
