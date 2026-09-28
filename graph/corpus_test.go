@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/internal/fixtures"
@@ -27,13 +28,6 @@ func TestTheWorkflowCorpus(t *testing.T) {
 	for _, c := range cases {
 		t.Run(path.Base(c.File), func(t *testing.T) {
 			doc := read(t, c.File)
-
-			if task, ok := deferredWorkflows[path.Base(c.File)]; ok {
-				if _, err := Parse(doc); err != nil {
-					t.Fatalf("this document is refused now, so it is no longer deferred to %s: take it out of deferredWorkflows (%v)", task, err)
-				}
-				t.Skipf("accepted until %s", task)
-			}
 
 			// One fixture is the included file itself, which is where the rule it
 			// pins can be seen at all: a fragment is not an entry point and is never
@@ -69,13 +63,26 @@ func TestTheWorkflowCorpus(t *testing.T) {
 	}
 }
 
-// deferredWorkflows are the fixtures the corpus refuses that this reader still accepts, because
-// the documentation gives the refusal to a later release, and which one. A port or a workflow
-// output of 251 to 255 characters is "nothing yet, a v0.4.0 task: it is accepted", since the
-// engine carries one of up to 255 until then; the schemas already hold it to 250.
-var deferredWorkflows = map[string]string{
-	"port-name-251-characters.yaml":       "v0.4.0, which refuses a port past 250 characters where it is written",
-	"workflow-output-251-characters.yaml": "v0.4.0, which refuses a workflow output past 250 characters where it is written",
+// TestAStoredVersionReadsBackWhatTheCorpusRefusesPastThePortBound holds the two fixtures the
+// corpus refuses for a port or a workflow output of 251 characters to the stored reading: the
+// schemas refuse them, and so does this reader where a version is made, while a version recorded
+// before the bound was, holding exactly such a name, is read back and checked as it was accepted.
+func TestAStoredVersionReadsBackWhatTheCorpusRefusesPastThePortBound(t *testing.T) {
+	for _, name := range []string{"port-name-251-characters.yaml", "workflow-output-251-characters.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			files := fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: read(t, "fixtures/workflow/invalid/"+name)}}
+			if _, err := Load(files, "agentiik.yaml", nil); err == nil {
+				t.Fatal("a new version was loaded, and the corpus refuses it")
+			}
+			wf, err := LoadStored(files, "agentiik.yaml", nil)
+			if err != nil {
+				t.Fatalf("a stored version holding it was refused when read back: %v", err)
+			}
+			if err := Check(wf); err != nil {
+				t.Fatalf("a stored version holding it was refused when checked: %v", err)
+			}
+		})
+	}
 }
 
 // refusal runs the layer that can reach the rule: Check where the workflow file is the

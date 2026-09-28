@@ -11,6 +11,8 @@
 //
 //	Parse, ParseFragment, Load   the entry point, closed, with includes, extends and
 //	                             defaults resolved in the order the language fixes
+//	LoadStored                   the same, for a version already stored, without the
+//	                             bound added since one could be (agk.PortMaxBytes)
 //	Check, Images, Build         the resolved graph, its edges, its cycles and the
 //	                             manifest subset rules
 //	Start, New, Evaluator        the run, as a state a Plan comes out of and a Result

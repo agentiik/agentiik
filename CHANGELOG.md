@@ -2,6 +2,26 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### Upgrading
+
+- A version stored before this release naming a port or a workflow output of 251 to 255 characters, or a secret its namespace does not declare, rebuilds, starts and runs as before, with nothing to do: both rules are applied where a version is made, and never where a stored one is read back (`version.Build`, `graph.LoadStored`, `brick.ParseStoredManifest`, a task's read of its image, `agk run --namespace`). Pushed again with the same files, from an agk of any release, it is answered as that version, unchanged; with other files, 409 as before.
+
+### API
+
+- A push naming a port or a workflow output past 250 characters (`agk.PortMaxBytes`), in the entry point, a file it includes or a manifest it carries, is refused with 422 before any of its tree is stored (`version.BuildNew`).
+- A push naming a secret its namespace does not declare is refused with 422 before any of its tree is stored, naming the secret and the steps that mount it, once the pusher holds `secret:use`.
+
+### agk
+
+- `agk validate`, `agk run --local` and `agk push` refuse a port or a workflow output past 250 characters in the file and in the manifests they read (`graph.Load`, `brick.ParseManifest`, `driver.Docker.Manifest`).
+- `agk run --local` says before its first step that it executes the working tree, uncommitted changes included, and is labelled local.
+
+### Tests
+
+- The corpus's three documents refusing a port or a workflow output of 251 characters are refused, and are read by the stored readings.
+
 ## v0.3.0, 2026-09-28
 
 More than one person: users sign in with a passkey, or a password where the policy allows one; users, groups and service accounts hold roles and denies at namespace and workflow scope, and API tokens act for them, narrowed where a scope says; namespaces carry an owner and quotas; and a namespace a caller holds nothing in is answered as one that does not exist. A v0.2.5 installation upgrades with v0.3.0's `compose.yaml` and its own `.env`, and nothing else.

@@ -407,6 +407,118 @@ func TestTwoTagsOfOneImageAreOneManifest(t *testing.T) {
 	}
 }
 
+// Names of 251 to 255 characters: accepted before the bound a port is written to, agk.PortMaxBytes,
+// and so held by a version an installation stored then.
+var (
+	longPort   = "rejected-" + strings.Repeat("x", 242)
+	longInput  = "orders-" + strings.Repeat("x", 246)
+	longOutput = "unmatched-" + strings.Repeat("x", 245)
+	longSpare  = "spare-" + strings.Repeat("x", 246)
+	longUnused = "unused-" + strings.Repeat("x", 244)
+)
+
+// aVersionNaming is a version whose entry point names port, input and output, whose included file
+// gives its steps a hidden block declaring spare, which each step's own outputs replace, and whose
+// brick manifest declares the ports the steps use and unused besides.
+func aVersionNaming(port, input, output, spare, unused string) db.Version {
+	return db.Version{
+		Workflow: "monthly-invoicing", Commit: "a3f9c1e", Author: "alice",
+		Entry: "agentiik.yaml", Document: []byte(`
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+include:
+  - path: .agentiik/common.yaml
+outputs:
+  ` + output + `: { from: { step: normalize, port: ` + port + ` } }
+steps:
+  normalize:
+    extends: .brick
+    outputs: [ok, ` + port + `]
+  archive:
+    extends: .brick
+    needs: [{ step: normalize, port: ` + port + `, as: ` + input + ` }]
+    outputs: [ok]
+`),
+		Includes: map[string][]byte{".agentiik/common.yaml": []byte(`
+.brick:
+  image: ` + theImage + `
+  outputs: [` + spare + `]
+`)},
+		Manifests: map[string][]byte{theImage: []byte(`
+apiVersion: agentiik.dev/v1
+kind: Brick
+metadata: { name: invoice, version: 1.0.0 }
+spec:
+  inputs:
+    ` + input + `: {}
+  outputs:
+    ok: {}
+    ` + port + `: {}
+    ` + unused + `: {}
+  runtime: { user: "65532:65532" }
+`)},
+	}
+}
+
+// A version stored before the bound a port is written to is rebuilt as it was accepted, so that its
+// runs, its replays and the rebuild of its graph go on after an upgrade; a version about to be
+// recorded is held to the bound in its entry point, in the file it includes and in its manifests.
+func TestAVersionStoredBeforeThePortBoundIsRebuiltAsItWasAccepted(t *testing.T) {
+	g, err := version.Build(aVersionNaming(longPort, longInput, longOutput, longSpare, longUnused))
+	if err != nil {
+		t.Fatalf("a stored version naming ports of 251 to 255 characters was refused when rebuilt: %v", err)
+	}
+	if got := g.Consumers("normalize", agk.Port(longPort)); len(got) != 1 || got[0] != "archive" {
+		t.Errorf("the edge on the port of 251 characters reaches %v", got)
+	}
+
+	if _, err := version.BuildNew(aVersionNaming("rejected", "in", "unmatched", "spare", "unused")); err != nil {
+		t.Fatalf("a new version naming no port past 250 characters was refused: %v", err)
+	}
+	for where, v := range map[string]db.Version{
+		"its entry point":      aVersionNaming(longPort, longInput, longOutput, "spare", "unused"),
+		"the file it includes": aVersionNaming("rejected", "in", "unmatched", longSpare, "unused"),
+		"its manifest":         aVersionNaming("rejected", "in", "unmatched", "spare", longUnused),
+	} {
+		if _, err := version.Build(v); err != nil {
+			t.Errorf("a stored version with a port past 250 characters in %s was refused when rebuilt: %v", where, err)
+		}
+		if _, err := version.BuildNew(v); err == nil || !strings.Contains(err.Error(), "at most 250") {
+			t.Errorf("a new version with a port past 250 characters in %s was built, or refused with %v", where, err)
+		}
+	}
+}
+
+// And the store, which is what the controller decides a run from and the API starts one with,
+// reads such a version out of the database and answers its graph, as it did before the upgrade.
+func TestTheStoreAnswersAVersionStoredBeforeThePortBound(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		if err := ns.SaveWorkflow(ctx, "monthly-invoicing", "main"); err != nil {
+			return err
+		}
+		_, err := ns.SaveVersion(ctx, aVersionNaming(longPort, longInput, longOutput, longSpare, longUnused))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := version.New(pool, version.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := store.Graph(t.Context(), "finance", "monthly-invoicing", "a3f9c1e")
+	if err != nil {
+		t.Fatalf("a version stored before the port bound was not answered: %v", err)
+	}
+	if _, held := g.Workflow().Outputs[longOutput]; !held {
+		t.Error("the workflow output of 255 characters did not survive the round trip")
+	}
+}
+
 func keys(m map[string][]byte) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

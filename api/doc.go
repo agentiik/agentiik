@@ -67,7 +67,9 @@
 //
 // A push refused for naming a secret its pusher holds no secret:use for is a 403 too: the route let
 // the pusher through on workflow:write, so the workflow is one they already reach. So is a token
-// refused by the token routes for what the credential presenting it is, below.
+// refused by the token routes for what the credential presenting it is, below. Only a pusher holding
+// secret:use is told, with 422, that the namespace declares no secret of a name the version names,
+// so whoever may not write a secret's name into a workflow learns nothing of what is declared.
 //
 // # A caller's own credentials
 //

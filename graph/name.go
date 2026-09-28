@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -43,6 +44,79 @@ func identifier(name, what, where string) error {
 		return nil
 	}
 	return fmt.Errorf("%s names %s %q, which is not an identifier: a name is letters, digits, hyphens and underscores, beginning with a letter or a digit, so that one name survives a URL, a directory and a tool list unchanged", where, what, name)
+}
+
+// portLengths refuses a port or a workflow output written past agk.PortMaxBytes: "a port or a
+// workflow output at most 250", since each becomes the file <name>.json and no filesystem holds
+// that name past 255 characters with its suffix.
+//
+// It runs over what one document wrote, as it wrote it, which is every place a port is named: the
+// workflow outputs and the port each is taken from, a tool's output, and in each step and each
+// hidden block the ports it declares, the inputs it feeds and both ends of every edge. The grammar
+// and the 255 characters are the reader's already, so this is the one bound a version already
+// stored is read back without (LoadStored).
+func portLengths(outputs map[string]Output, mcp *MCP, values map[agk.Step]stepValues, blocks map[string]stepValues) error {
+	for _, name := range slices.Sorted(maps.Keys(outputs)) {
+		if err := portLength(name, "the output", "outputs"); err != nil {
+			return err
+		}
+		if err := portLength(string(outputs[name].From.Port), "the port", "outputs."+name+".from"); err != nil {
+			return err
+		}
+	}
+	if mcp != nil {
+		for i, t := range mcp.Tools {
+			if t.Output != nil {
+				if err := portLength(t.Output.Output, "the workflow output", fmt.Sprintf("mcp.tools[%d].output.from", i)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		if err := stepPortLengths(values[name], "steps."+string(name)); err != nil {
+			return err
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(blocks)) {
+		if err := stepPortLengths(blocks[name], name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stepPortLengths is portLengths over one step or one hidden block.
+func stepPortLengths(s stepValues, where string) error {
+	for _, port := range s.Outputs {
+		if err := portLength(string(port), "the port", where+".outputs"); err != nil {
+			return err
+		}
+	}
+	for _, port := range slices.Sorted(maps.Keys(s.Inputs)) {
+		if err := portLength(string(port), "the port", where+".inputs"); err != nil {
+			return err
+		}
+	}
+	for i, e := range s.Needs {
+		at := fmt.Sprintf("%s.needs[%d]", where, i)
+		if err := portLength(string(e.Port), "the port", at); err != nil {
+			return err
+		}
+		if err := portLength(string(e.As), "the port", at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// portLength refuses one name past agk.PortMaxBytes, saying what it named and where, and
+// printing the start of it rather than all of it, as identifier does.
+func portLength(name, what, where string) error {
+	if len(name) <= agk.PortMaxBytes {
+		return nil
+	}
+	return fmt.Errorf("%s names %s %.64s..., which is %d characters long: a port or a workflow output is at most %d, since it becomes the file <name>.json and no filesystem holds that name past %d characters", where, what, name, len(name), agk.PortMaxBytes, agk.IdentifierMaxBytes)
 }
 
 // namespaceName holds a namespace to the identifier grammar and refuses the words the API

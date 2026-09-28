@@ -125,3 +125,43 @@ func TestAManifestDeclaringRootIsRefusedWhereItIsRead(t *testing.T) {
 	}
 	t.Logf("refused: %v", err)
 }
+
+// TestAPortPastItsBoundIsRefusedForANewVersionAndRunForAStoredOne holds both readings of one
+// image. A task runs the image of a version, and one recorded before the bound a port is written
+// to may name a brick declaring a port of 251 characters, so its task runs as it did before the
+// upgrade. Manifest is the read a version is about to be made with, by agk validate, agk push and
+// agk run --local, so it refuses that manifest, naming the step, even with the manifest already
+// in the cache the task filled.
+func TestAPortPastItsBoundIsRefusedForANewVersionAndRunForAStoredOne(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	long := "rejected-" + strings.Repeat("x", 242)
+	manifest := strings.Replace(portedManifest, "    rejected:\n", "    "+long+":\n", 1)
+	r := newRunner(t, oneImage(ref, manifest), func(c dockertest.Container) (int, error) {
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"status": 200}))
+	})
+
+	result, err := r.Run(t.Context(), oneTask(ref))
+	if err != nil {
+		t.Fatalf("a task of an image declaring a port of 251 characters was not run: %v", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Errorf("the task ended %s, and a version stored with this brick runs it as it did", result.State)
+	}
+
+	_, err = r.Manifest(t.Context(), "fetch", ref)
+	if err == nil {
+		t.Fatal("the manifest was handed back for a version about to be made")
+	}
+	if !errors.Is(err, ErrContractBroken) {
+		t.Errorf("the refusal is %v, and a port no workflow could name breaks the contract", err)
+	}
+	var f *Fault
+	if !errors.As(err, &f) || f.Step != "fetch" {
+		t.Errorf("the refusal does not name the step: %v", err)
+	}
+	for _, want := range []string{"at most 250", brick.ManifestPath, ref} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+}

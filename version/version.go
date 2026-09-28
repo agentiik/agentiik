@@ -122,7 +122,27 @@ func (s *Store) Graph(ctx context.Context, namespace, workflow, commit string) (
 // evaluates exactly as it did when it started. So are the digests its tags were resolved to at
 // the push, which the graph names in their place, so that a tag moved since changes nothing a run
 // of it runs. Version.Tree is what a container is given, and plays no part here.
+//
+// And so are the rules it was accepted under. What a version holds is read with graph.LoadStored
+// and brick.ParseStoredManifest, which leave out the one bound added since a version could be
+// stored, a port or a workflow output past agk.PortMaxBytes, so that a version recorded before
+// it keeps rebuilding, and its runs and replays keep going, after an upgrade. A version about to
+// be recorded is built with BuildNew.
 func Build(v db.Version) (*graph.Graph, error) {
+	return build(v, graph.LoadStored, brick.ParseStoredManifest)
+}
+
+// BuildNew is Build for a version a push is about to record: the same graph, from the same files,
+// with every rule a version is held to where it is made, the bound a port and a workflow output
+// are written to among them, in the entry point, in every file it includes and in every manifest
+// the push carries.
+func BuildNew(v db.Version) (*graph.Graph, error) {
+	return build(v, graph.Load, brick.ParseManifest)
+}
+
+// build is Build and BuildNew, loading the workflow with load and reading each manifest with
+// manifest.
+func build(v db.Version, load func(fs.FS, string, map[graph.WorkflowRef]graph.Fragment) (*graph.Workflow, error), manifest func([]byte) (brick.Manifest, error)) (*graph.Graph, error) {
 	if v.Entry == "" || len(v.Document) == 0 {
 		return nil, fmt.Errorf("version: %s@%s carries no entry point", v.Workflow, v.Commit)
 	}
@@ -132,7 +152,7 @@ func Build(v db.Version) (*graph.Graph, error) {
 		tree[path] = &fstest.MapFile{Data: body, Mode: 0o444}
 	}
 
-	wf, err := graph.Load(tree, v.Entry, nil)
+	wf, err := load(tree, v.Entry, nil)
 	if err != nil {
 		return nil, fmt.Errorf("version: %s@%s could not be loaded: %w", v.Workflow, v.Commit, err)
 	}
@@ -144,7 +164,7 @@ func Build(v db.Version) (*graph.Graph, error) {
 	read := make(map[string][]byte, len(v.Manifests))
 	for _, image := range slices.Sorted(maps.Keys(v.Manifests)) {
 		body := v.Manifests[image]
-		m, err := brick.ParseManifest(body)
+		m, err := manifest(body)
 		if err != nil {
 			return nil, fmt.Errorf("version: the manifest of %s in %s@%s: %w", image, v.Workflow, v.Commit, err)
 		}

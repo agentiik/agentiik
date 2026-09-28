@@ -209,6 +209,12 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 	// 7. The run. Everything below this line has already been written: the loop is
 	// internal/local's, and inside driver.Run are the mounts, the environment, the wait,
 	// the collection and the spill.
+	//
+	// It is labelled before it starts, in the narration as run.json labels it: "agk run
+	// --local is the one run no commit describes: it executes the working tree, uncommitted
+	// changes included, and is labelled so that no history mistakes it for something
+	// reproducible". A terminal pasted into an incident is a history too.
+	fmt.Fprintln(story, workingTree(e.Dir, root))
 	narration := newNarration(story, g, *verbose)
 	out, err := session.Run(ctx, local.Request{
 		Graph:   g,

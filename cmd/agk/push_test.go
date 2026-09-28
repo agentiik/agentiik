@@ -1258,3 +1258,22 @@ func TestADigestThatIsNotOneIsRefusedBeforeADaemonIsAsked(t *testing.T) {
 		}
 	}
 }
+
+// A port past agk.PortMaxBytes is refused by agk push as by the installation, and before anything
+// is sent: the commit is read as a version about to be made.
+func TestAPortPastItsBoundIsRefusedBeforeThePushIsSent(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", strings.Replace(scriptWorkflow, "outputs: [ok]", "outputs: [ok, rejected-"+strings.Repeat("x", 242)+"]", 1))
+	commitAll(t, dir, "a port of 251 characters")
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("the push answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the installation anyway")
+	}
+	if !strings.Contains(errs, "at most 250") {
+		t.Errorf("the refusal reads %q", errs)
+	}
+}
