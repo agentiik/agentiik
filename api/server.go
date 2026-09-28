@@ -426,13 +426,47 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		Entry: p.Entry, Document: p.Document, Includes: p.Includes, Manifests: p.Manifests,
 		Images: p.Images, Tree: tree, Author: string(who), CreatedAt: s.now(),
 	}
+	otherTree := fmt.Sprintf("%s was already pushed at %s with other files, and a version is a commit: one commit names exactly one tree, permanently", over.Workflow, commit)
+
+	// Compared first with what is recorded under that commit, if anything is. Refused by
+	// SaveVersion instead, a commit pushed again with other files had already put them in the
+	// store, where nothing counts them, as often as anybody cared to push it. And a commit
+	// recorded with these same files is that version already, which this push is answered as,
+	// unchanged: it is not judged again by a rule added after it was stored, so that an agk of
+	// the release that stored it, pushing it again after an upgrade, meets no refusal it did not
+	// meet then. The rules that stood then, secret:use and the inputs' declaration, still apply.
+	var stored bool
+	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		if err := ns.CheckVersion(ctx, v); err != nil {
+			return err
+		}
+		_, err := ns.Version(ctx, over.Workflow, commit)
+		stored = err == nil
+		if errors.Is(err, db.ErrNoVersion) {
+			return nil
+		}
+		return err
+	})
+	if errors.Is(err, db.ErrOtherTree) {
+		fail(w, http.StatusConflict, otherTree)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the version could not be read")
+		return
+	}
+
 	// Built before it is written, so that a version that cannot be rebuilt is refused at the
 	// push rather than discovered by the first run of it. That includes a tag no digest was
 	// resolved for, which is a push from an agk that resolves none. Built as a new version is,
 	// so a port or a workflow output past agk.PortMaxBytes, in the file, a file it includes or a
 	// manifest, is refused here, where the version is made, and never where a stored one is
-	// read back.
-	g, err := version.BuildNew(v)
+	// read back or pushed again.
+	build := version.BuildNew
+	if stored {
+		build = version.Build
+	}
+	g, err := build(v)
 	if err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -467,10 +501,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// the version, once somebody has started one. Asked after secret:use, so that only a caller
 	// allowed to write a secret's name into a workflow learns whether the namespace declares it.
 	//
-	// Only here, where a version is made. A version already stored is never judged again, and one
-	// whose secret was undeclared after its push, or which was pushed before this was asked,
-	// still starts, and the redemption refuses the step as it did.
-	if len(named) > 0 {
+	// Only here, where a version is made. A version already stored is never judged again, pushed
+	// again or started: one whose secret was undeclared after its push, or which was pushed
+	// before this was asked, still starts, and the redemption refuses the step as it did.
+	if len(named) > 0 && !stored {
 		var declared []db.Declaration
 		err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 			var err error
@@ -493,23 +527,6 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	otherTree := fmt.Sprintf("%s was already pushed at %s with other files, and a version is a commit: one commit names exactly one tree, permanently", over.Workflow, commit)
-
-	// And compared with what is recorded under that commit, if anything is. Refused by
-	// SaveVersion instead, a commit pushed again with other files had already put them in the
-	// store, where nothing counts them, as often as anybody cared to push it.
-	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		return ns.CheckVersion(ctx, v)
-	})
-	if errors.Is(err, db.ErrOtherTree) {
-		fail(w, http.StatusConflict, otherTree)
-		return
-	}
-	if err != nil {
-		fail(w, http.StatusInternalServerError, "the version could not be read")
-		return
-	}
-
 	// The bytes before the row, so that a version that exists names objects that exist. A
 	// push that dies between the two leaves objects nothing references, which the collector
 	// never sees and which the next push of the same files reuses; the other order would
