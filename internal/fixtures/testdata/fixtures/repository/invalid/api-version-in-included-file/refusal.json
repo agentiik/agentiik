@@ -1,0 +1,6 @@
+{
+  "rule": "api-version-in-included-file",
+  "file": "fragments/common-bricks.yaml",
+  "line": 1,
+  "column": 1
+}

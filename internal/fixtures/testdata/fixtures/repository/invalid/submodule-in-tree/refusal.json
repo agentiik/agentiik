@@ -1,0 +1,4 @@
+{
+  "rule": "submodule-in-tree",
+  "file": "vendor/rounding"
+}

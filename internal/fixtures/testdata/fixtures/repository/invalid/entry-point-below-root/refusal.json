@@ -1,0 +1,4 @@
+{
+  "rule": "entry-point-below-root",
+  "file": "billing/agentiik.yaml"
+}

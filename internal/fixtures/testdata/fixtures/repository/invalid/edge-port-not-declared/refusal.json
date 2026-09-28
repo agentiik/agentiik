@@ -1,0 +1,6 @@
+{
+  "rule": "edge-port-not-declared",
+  "file": "agentiik.yaml",
+  "line": 24,
+  "column": 15
+}

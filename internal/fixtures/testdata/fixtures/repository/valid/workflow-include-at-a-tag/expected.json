@@ -1,0 +1,68 @@
+{
+  "workflow": "monthly-invoicing",
+  "commit": "ad214b61e92ecfffea1af77f09d61d5e4cb2a679",
+  "includes": [
+    {
+      "workflow": "finance/common",
+      "ref": "v2.1.0",
+      "commit": "c7972389ef8c63fa88ce6c3893d8c75ba8bbb7b3"
+    }
+  ],
+  "secrets": [
+    "billing_api"
+  ],
+  "retain": "30d",
+  "order": [
+    "fetch",
+    "invoice"
+  ],
+  "steps": {
+    "fetch": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f",
+      "brick": {
+        "name": "fetch-orders",
+        "version": "1.2.0"
+      },
+      "outputs": [
+        "out"
+      ],
+      "retain": "30d",
+      "idempotent": true
+    },
+    "invoice": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-invoice@sha256:8214cabcb148ac56e69ee08e1554684f7609d08b58c4527938fdcf400be68595",
+      "brick": {
+        "name": "issue-invoices",
+        "version": "1.4.0"
+      },
+      "needs": [
+        {
+          "step": "fetch",
+          "port": "out",
+          "as": "in"
+        }
+      ],
+      "outputs": [
+        "out",
+        "error"
+      ],
+      "timeout": "2m",
+      "retain": "30d",
+      "network": "egress",
+      "egress": {
+        "allow": [
+          "api.billing.example.com:443"
+        ]
+      },
+      "secrets": [
+        "billing_api"
+      ],
+      "idempotent": true,
+      "extends": [
+        ".billing-api"
+      ]
+    }
+  }
+}

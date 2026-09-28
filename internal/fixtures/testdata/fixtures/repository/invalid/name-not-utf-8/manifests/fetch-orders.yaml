@@ -1,0 +1,26 @@
+# The manifest ghcr.io/acme/agk-fetch-orders:1.2.0 carries at /agk/brick.yaml, as the namespace's
+# store recorded it under the digest the tag is pinned to.
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: fetch-orders
+  version: 1.2.0
+  summary: Reads the month's orders from the billing API.
+
+spec:
+  outputs:
+    out: {}
+
+  params:
+    currency: { type: string }
+    region: { type: string }
+
+  secrets:
+    - name: billing_api
+      optional: true
+
+  runtime:
+    network: egress
+    user: "65532:65532"

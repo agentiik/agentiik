@@ -1,0 +1,23 @@
+# The manifest ghcr.io/acme/agk-normalize:2.0.0 carries at /agk/brick.yaml, as the namespace's
+# store recorded it under the digest the tag is pinned to.
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: normalize-orders
+  version: 2.0.0
+  summary: Normalises orders and rejects what it cannot read.
+
+spec:
+  inputs:
+    in: {}
+  outputs:
+    ok: {}
+    rejected: {}
+
+  params:
+    currency: { type: string, pattern: "^[A-Z]{3}$" }
+
+  runtime:
+    user: "65532:65532"

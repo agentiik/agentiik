@@ -1,0 +1,20 @@
+defaults:
+  timeout: 10m
+  retry: { max: 2, on: [transient] }
+
+steps:
+  load:
+    image: ghcr.io/acme/agk-ledger:3.1.0
+    needs: [fetch]
+    timeout: 5m
+    params:
+      account: "706000"
+      journal: sales
+    outputs: [out]
+
+  export:
+    image: ghcr.io/acme/agk-archive:0.3.0
+    needs:
+      - { step: load, port: out, as: in }
+    timeout: 5m
+    outputs: [out]

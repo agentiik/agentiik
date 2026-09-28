@@ -1,0 +1,13 @@
+include:
+  - path: /fragments/shared.yaml
+
+secrets: [billing_api, ledger]
+
+defaults:
+  retain: 5d
+
+# Replaces first.yaml's block of the same name whole: a hidden block is not
+# merged with another, so first.yaml's network and egress do not survive.
+.api-brick:
+  timeout: 90s
+  resources: { cpu: "0.5", memory: 256Mi }

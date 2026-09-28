@@ -1,0 +1,15 @@
+# Included by first.yaml, beside it, and by second.yaml, from the root.
+
+vars:
+  currency: USD
+  region: eu
+
+defaults:
+  retain: 3d
+  retry: { max: 1, on: [transient] }
+
+.api-brick:
+  timeout: 30s
+  network: egress
+  egress:
+    allow: ["api.shared.example.com:443"]

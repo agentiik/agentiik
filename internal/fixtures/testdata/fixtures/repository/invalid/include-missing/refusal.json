@@ -1,0 +1,6 @@
+{
+  "rule": "include-missing",
+  "file": "agentiik.yaml",
+  "line": 12,
+  "column": 11
+}

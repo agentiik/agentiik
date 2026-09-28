@@ -1,0 +1,11 @@
+{
+  "namespace": "finance",
+  "repository": "monthly-invoicing",
+  "commit": "8fcd28921cc5b13a2adc584843d5a0d2d7ae4de6",
+  "versions": [
+    "8fcd28921cc5b13a2adc584843d5a0d2d7ae4de6"
+  ],
+  "pins": {},
+  "manifests": {},
+  "secrets": []
+}

@@ -1,0 +1,64 @@
+{
+  "workflow": "monthly-invoicing",
+  "commit": "ff18b1a50d46b1842803ffe988e0f30b7dcbb90a",
+  "includes": [
+    {
+      "path": "fragments/shared.yaml"
+    },
+    {
+      "path": "fragments/first.yaml"
+    },
+    {
+      "path": "fragments/second.yaml"
+    }
+  ],
+  "vars": {
+    "currency": "EUR",
+    "region": "fr"
+  },
+  "secrets": [
+    "ledger",
+    "billing_api"
+  ],
+  "retain": "5d",
+  "order": [
+    "fetch"
+  ],
+  "steps": {
+    "fetch": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f",
+      "brick": {
+        "name": "fetch-orders",
+        "version": "1.2.0"
+      },
+      "outputs": [
+        "out"
+      ],
+      "params": {
+        "currency": "${{ vars.currency }}",
+        "region": "${{ vars.region }}"
+      },
+      "retry": {
+        "max": 2,
+        "on": [
+          "transient",
+          "lost"
+        ]
+      },
+      "timeout": "90s",
+      "retain": "5d",
+      "resources": {
+        "cpu": "0.5",
+        "memory": "256Mi"
+      },
+      "secrets": [
+        "billing_api"
+      ],
+      "idempotent": true,
+      "extends": [
+        ".api-brick"
+      ]
+    }
+  }
+}

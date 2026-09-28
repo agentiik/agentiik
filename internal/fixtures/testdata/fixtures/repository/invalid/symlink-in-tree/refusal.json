@@ -1,0 +1,4 @@
+{
+  "rule": "symlink-in-tree",
+  "file": "scripts/normalize.py"
+}

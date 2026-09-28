@@ -1,0 +1,17 @@
+# A port of 251 characters, written in an included file: the bound holds in
+# the entry point and in every file it includes.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+include:
+  - path: ./fragments/export.yaml
+
+steps:
+  fetch:
+    image: ghcr.io/acme/agk-fetch-orders:1.2.0
+    outputs: [out]

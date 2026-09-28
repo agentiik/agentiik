@@ -1,0 +1,6 @@
+{
+  "rule": "manifest-missing",
+  "file": "agentiik.yaml",
+  "line": 17,
+  "column": 12
+}

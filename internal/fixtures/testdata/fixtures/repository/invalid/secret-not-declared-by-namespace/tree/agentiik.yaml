@@ -1,0 +1,18 @@
+# The secrets block names ledger, which the namespace does not declare. No
+# step mounts it, and it is refused all the same: a workflow names only what
+# its namespace declares.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+secrets: [billing_api, ledger]
+
+steps:
+  fetch:
+    image: ghcr.io/acme/agk-fetch-orders:1.2.0
+    secrets: [billing_api]
+    outputs: [out]

@@ -1,0 +1,6 @@
+.billing-api:
+  timeout: 3m
+  network: egress
+  egress:
+    allow: ["api.billing.example.com:443"]
+  secrets: [billing_api]

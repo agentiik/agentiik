@@ -1,0 +1,4 @@
+{
+  "rule": "name-not-utf-8",
+  "file": "scripts/caf%E9.py"
+}

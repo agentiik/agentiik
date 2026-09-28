@@ -1,0 +1,22 @@
+# This commit is already a version of the repository, pushed before the bounds
+# it breaks today: a port of 251 characters, and a secret the namespace has
+# since stopped declaring. Pushed again, it is answered as the version it is and
+# not judged again by rules added after it was stored.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+secrets: [billing_api]
+
+steps:
+  export:
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    secrets: [billing_api]
+    script:
+      - agk items > /tmp/items.json
+    outputs:
+      - rejected-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
