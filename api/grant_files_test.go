@@ -9,6 +9,7 @@ import (
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/dbtest"
 )
 
 // selectingTree is a repository a narrowed step reads part of: the entry point, SQL at two depths
@@ -128,5 +129,36 @@ func TestARelocationTravelsAsEachEntrysOwnTo(t *testing.T) {
 	}
 	if got := entriesOf(t, answer); !slices.Equal(got, want) {
 		t.Errorf("the relocations are handed as\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A version recorded before a step's files selected what a runner is handed runs as it ran: its
+// tasks are handed its tree whole, whatever its steps' files select, and what those relocate is
+// placed from that tree on the runner, as it was then. One recorded now is narrowed.
+func TestAVersionRecordedBeforeFilesSelectedIsHandedItsTreeWhole(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	credential := g.joined(t)
+	g.recorded(t, "d6c2f4b", selectingTree())
+	scope := db.GrantScope{
+		Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "d6c2f4b",
+		Files: []db.GrantFile{{From: "./sql/**/*.sql"}, {From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem"}},
+	}
+	narrowed := entriesOf(t, g.redeemed(t, credential, asking(g.granted(t, scope))))
+	if want := []string{"sql/2026/q1.sql 0644", "sql/orders.sql 0644", "certs/internal-ca.pem 0644 /etc/ssl/certs/internal-ca.pem"}; !slices.Equal(narrowed, want) {
+		t.Fatalf("a version recorded now is handed %q, want %q", narrowed, want)
+	}
+
+	// As v0.3.0 recorded it: the same bundle with no word about files.
+	if _, err := dbtest.Superuser(t, g.super).Exec(t.Context(),
+		`update workflow_versions set graph = graph - 'selects_files' where commit = 'd6c2f4b'`); err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for path, f := range selectingTree() {
+		want = append(want, path+" "+f.Mode)
+	}
+	slices.Sort(want)
+	if got := entriesOf(t, g.redeemed(t, credential, asking(g.granted(t, scope)))); !slices.Equal(got, want) {
+		t.Errorf("a version recorded before files selected is handed %q, want the whole tree %q", got, want)
 	}
 }

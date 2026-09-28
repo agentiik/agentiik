@@ -129,6 +129,7 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 	// transaction, so that a grant that would not redeem reads nothing else.
 	var got db.Redeemed
 	var tree []db.TreeFile
+	var selects bool
 	err := s.pool.Installation(r.Context(), db.Redemption, func(ctx context.Context, wide *db.Wide) error {
 		var err error
 		got, err = wide.Redeemable(ctx, ask.Grant, ask.IdempotencyKey, runner.ID, s.now())
@@ -143,7 +144,10 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		if got.Scope.Workflow == "" || got.Scope.Commit == "" {
 			return errNoCommit
 		}
-		tree, err = wide.Tree(ctx, got.Namespace, got.Scope.Workflow, got.Scope.Commit)
+		if tree, err = wide.Tree(ctx, got.Namespace, got.Scope.Workflow, got.Scope.Commit); err != nil {
+			return err
+		}
+		selects, err = wide.SelectsFiles(ctx, got.Namespace, got.Scope.Workflow, got.Scope.Commit)
 		return err
 	})
 	if err != nil {
@@ -161,7 +165,7 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 	// all: a transaction held open around the read would hold the task's row for as long as the
 	// store takes, and hold a connection while waiting for another, which enough redemptions at
 	// once turn into every connection held and none to be had.
-	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree)
+	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree, selects)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.As(err, new(neverAnswerable)) {
@@ -356,7 +360,11 @@ func (n neverAnswerable) Error() string { return n.why }
 // whatTheGrantIsFor turns the names the controller wrote into values, and refuses to go beyond
 // them. Every URL here is minted for one object, the policy for the namespace's prefix, and each
 // ends with the grant, so nothing the runner holds outlives the task it was given for.
-func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree []db.TreeFile) (Grant, error) {
+//
+// selects says the version is one whose tasks are handed what their step's files select; a version
+// recorded before that rule came in is handed its tree whole, as it was then, and what its files
+// relocate is placed from that tree on the runner, as it was then.
+func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree []db.TreeFile, selects bool) (Grant, error) {
 	out := Grant{
 		TaskID:    got.Row,
 		ExpiresAt: got.ExpiresAt.UTC().Format(time.RFC3339Nano),
@@ -427,9 +435,11 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		files[f.Path] = f
 		paths = append(paths, f.Path)
 	}
-	selectors := make([]graph.FileSelector, 0, len(got.Scope.Files))
-	for _, f := range got.Scope.Files {
-		selectors = append(selectors, graph.FileSelector{From: f.From, To: f.To, Mode: f.Mode})
+	var selectors []graph.FileSelector
+	if selects {
+		for _, f := range got.Scope.Files {
+			selectors = append(selectors, graph.FileSelector{From: f.From, To: f.To, Mode: f.Mode})
+		}
 	}
 	selected := graph.SelectFiles(selectors, paths)
 	entry := func(path, to, mode string) error {

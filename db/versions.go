@@ -99,6 +99,12 @@ type stored struct {
 	Includes  map[string][]byte `json:"includes,omitempty"`
 	Manifests map[string][]byte `json:"manifests,omitempty"`
 	Images    map[string]string `json:"images,omitempty"`
+
+	// SelectsFiles is a version recorded since a step's files select what a runner is handed,
+	// which every version recorded now is. One recorded before carries none, and its tasks are
+	// handed its tree whole, as they were then: a version already stored runs as it ran,
+	// whatever a later release does with the files of one made after it.
+	SelectsFiles bool `json:"selects_files,omitempty"`
 }
 
 // ErrNoVersion is nothing of that commit.
@@ -212,6 +218,7 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 	body, err := json.Marshal(stored{
 		Entry: v.Entry, Document: v.Document,
 		Includes: v.Includes, Manifests: v.Manifests, Images: v.Images,
+		SelectsFiles: true,
 	})
 	if err != nil {
 		return Saved{}, fmt.Errorf("db: version %s@%s could not be written: %w", v.Workflow, v.Commit, err)
@@ -368,6 +375,24 @@ func (n *NS) Tree(ctx context.Context, workflow, commit string) ([]TreeFile, err
 // tree, so that neither becomes an empty directory.
 func (w *Wide) Tree(ctx context.Context, namespace, workflow, commit string) ([]TreeFile, error) {
 	return readTree(ctx, w.tx, namespace, workflow, commit)
+}
+
+// SelectsFiles says whether a redemption hands a task of one version what its step's files select,
+// which is so for every version recorded since that rule came in, or the whole tree, as every task
+// of a version recorded before was handed. It answers ErrNoVersion for a commit nobody recorded.
+func (w *Wide) SelectsFiles(ctx context.Context, namespace, workflow, commit string) (bool, error) {
+	var selects bool
+	err := w.tx.QueryRow(ctx,
+		`select coalesce((graph->>'selects_files')::boolean, false) from workflow_versions
+		 where namespace = $1 and workflow = $2 and commit = $3`,
+		namespace, workflow, commit).Scan(&selects)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("%w: %s/%s@%s", ErrNoVersion, namespace, workflow, commit)
+	}
+	if err != nil {
+		return false, fmt.Errorf("db: version %s@%s could not be read: %w", workflow, commit, err)
+	}
+	return selects, nil
 }
 
 func readTree(ctx context.Context, tx pgx.Tx, namespace, workflow, commit string) ([]TreeFile, error) {
