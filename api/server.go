@@ -9,6 +9,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"path"
 	"regexp"
@@ -443,7 +444,8 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// alone. The permission comes from the namespace's grants only, and is asked over this
 	// workflow so that a deny of it here refuses as a deny does anywhere. A 403 rather than the
 	// 404 of a refused route, since the caller holds workflow:write here and learns nothing.
-	if named := secretsNamed(g.Workflow()); len(named) > 0 {
+	named := secretsNamed(g.Workflow())
+	if len(named) > 0 {
 		held, err := HoldsAlso(r)(r.Context())
 		if err != nil {
 			fail(w, http.StatusInternalServerError, "the push could not be authorised")
@@ -455,6 +457,32 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 				noun = "the secrets"
 			}
 			fail(w, http.StatusForbidden, fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use on %s, which a grant on the namespace %s gives and a deny on the workflow takes away, and you do not hold it there: whoever writes a secret's name into a workflow answers for its value going into a container, and running the version afterwards takes workflow:run alone", noun, strings.Join(named, ", "), over.Workflow, over.Namespace))
+			return
+		}
+	}
+	// And every secret it names is one the namespace declares: "a workflow can name only secrets
+	// its own namespace declares, so moving it elsewhere breaks the reference rather than carrying
+	// access along". Refused here with 422, before anything is stored, rather than at the first
+	// redemption of a step naming it, which ends that task with no container run, in every run of
+	// the version, once somebody has started one. Asked after secret:use, so that only a caller
+	// allowed to write a secret's name into a workflow learns whether the namespace declares it.
+	//
+	// Only here, where a version is made. A version already stored is never judged again, and one
+	// whose secret was undeclared after its push, or which was pushed before this was asked,
+	// still starts, and the redemption refuses the step as it did.
+	if len(named) > 0 {
+		var declared []db.Declaration
+		err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+			var err error
+			declared, err = ns.Declarations(ctx)
+			return err
+		})
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "the namespace's secret declarations could not be read")
+			return
+		}
+		if refusal := undeclared(g.Workflow(), named, declared, over.Namespace); refusal != "" {
+			fail(w, http.StatusUnprocessableEntity, refusal)
 			return
 		}
 	}
@@ -567,6 +595,44 @@ func secretsNamed(wf *graph.Workflow) []string {
 	}
 	slices.Sort(named)
 	return slices.Compact(named)
+}
+
+// undeclared says which of the secrets a workflow names its namespace does not declare, and where
+// each is named: by the steps that mount it, or by the secrets block alone where no step does. It
+// answers the refusal, or nothing where every one is declared.
+func undeclared(wf *graph.Workflow, named []string, declared []db.Declaration, namespace string) string {
+	held := make(map[string]bool, len(declared))
+	for _, d := range declared {
+		held[d.Name] = true
+	}
+	var missing, where []string
+	for _, secret := range named {
+		if held[secret] {
+			continue
+		}
+		missing = append(missing, secret)
+		var steps []string
+		for _, name := range slices.Sorted(maps.Keys(wf.Steps)) {
+			if slices.Contains(wf.Steps[name].Secrets, secret) {
+				steps = append(steps, string(name))
+			}
+		}
+		switch len(steps) {
+		case 0:
+			where = append(where, "the secrets block names the secret "+secret)
+		case 1:
+			where = append(where, "step "+steps[0]+" names the secret "+secret)
+		default:
+			where = append(where, "steps "+strings.Join(steps[:len(steps)-1], ", ")+" and "+steps[len(steps)-1]+" name the secret "+secret)
+		}
+	}
+	switch len(missing) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("%s, which the namespace %s does not declare: a workflow can name only the secrets its own namespace declares, so that moving it elsewhere breaks the reference rather than carrying access along, and every run of this version would be refused the secret at its first redemption. Declare it with PUT /api/v1/%s/secrets/%s, or push a version that does not name it", where[0], namespace, namespace, missing[0])
+	}
+	return fmt.Sprintf("%s, none of which the namespace %s declares: a workflow can name only the secrets its own namespace declares, so that moving it elsewhere breaks the reference rather than carrying access along, and every run of this version would be refused them at their first redemption. Declare each with PUT /api/v1/%s/secrets/{name}, or push a version that does not name them", strings.Join(where, ", and "), namespace, namespace)
 }
 
 // pushedTree is the tree a push carries, as the fs.FS an input's schema resolves a reference
