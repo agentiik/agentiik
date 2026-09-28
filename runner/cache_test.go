@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/driver"
@@ -327,4 +329,65 @@ func (s *objectStore) taskIn(t *testing.T, namespace string, tree map[string]fil
 		r.Tree = append(r.Tree, TreeEntry{Path: path, Mode: f.mode, SHA256: d, URL: u})
 	}
 	return m, r
+}
+
+// A file of the cache named as many times as its filesystem allows is copied rather than linked
+// once more, with its mode, so a tree is laid out whole however many trees name the same bytes.
+func TestAFileOutOfLinksIsCopiedIntoTheTree(t *testing.T) {
+	s := newObjectStore(t)
+	m, r := s.taskFor(t, nil, aCommit(), nil)
+	hardLink = func(string, string) error { return &os.LinkError{Op: "link", Err: syscall.EMLINK} }
+	t.Cleanup(func() { hardLink = os.Link })
+
+	a, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, f := range aCommit() {
+		name := filepath.Join(a.Sources.Repo, filepath.FromSlash(path))
+		b, err := os.ReadFile(name)
+		if err != nil || string(b) != f.content {
+			t.Errorf("%s reads %q: %v", path, b, err)
+		}
+		info, err := os.Stat(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := treeFileMode
+		if f.mode == "0755" {
+			want = treeExecMode
+		}
+		if info.Mode().Perm() != want {
+			t.Errorf("%s is %o, want %o", path, info.Mode().Perm(), want)
+		}
+	}
+}
+
+// A file a tree being laid out holds is not taken away by the eviction another layout runs, even
+// past the bound: it is on its way into a tree.
+func TestAFileHeldForALayoutSurvivesAnotherLayoutsEviction(t *testing.T) {
+	s := newObjectStore(t)
+	work := t.TempDir()
+	cache := treeCacheAt(work)
+	cache.bound = 64
+
+	m, r := s.taskFor(t, nil, map[string]file{"old.txt": {string(bytes.Repeat([]byte("o"), 40)), "0644"}}, nil)
+	o, err := objectsOf(m.Namespace, r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, release, err := cache.hold(t.Context(), o, m.Namespace, []cachedObject{{objectKey: objectKey{digest: r.Tree[0].SHA256}, path: "old.txt"}}, agk.DefaultLimits())
+	defer release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, rf := s.taskFor(t, nil, map[string]file{"new.txt": {string(bytes.Repeat([]byte("n"), 40)), "0644"}}, nil)
+	if _, err := Assemble(t.Context(), anotherStep(fresh, "archive"), rf, Assembly{WorkRoot: work}); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range at {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("a file held for a layout went: %v", err)
+		}
+	}
 }

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -180,7 +182,7 @@ func layOutTree(ctx context.Context, cache *treeCache, objects artifact.Objects,
 		}
 		mode, _ := treeMode(e.Mode)
 		from := at[objectKey{digest: e.SHA256, exec: mode&0o111 != 0}]
-		if err := os.Link(from, filepath.Join(repo, filepath.FromSlash(e.Path))); err != nil {
+		if err := linkOrCopy(from, filepath.Join(repo, filepath.FromSlash(e.Path))); err != nil {
 			return nil, fmt.Errorf("runner: the tree file %s could not be laid out: %w", e.Path, err)
 		}
 	}
@@ -194,12 +196,53 @@ func layOutTree(ctx context.Context, cache *treeCache, objects artifact.Objects,
 				return nil, fmt.Errorf("runner: the tree's directory %s: %w", filepath.Join(dir, placedDir), err)
 			}
 		}
-		if err := os.Link(at[objectKey{digest: e.SHA256}], dest); err != nil && !errors.Is(err, fs.ErrExist) {
+		if err := linkOrCopy(at[objectKey{digest: e.SHA256}], dest); err != nil && !errors.Is(err, fs.ErrExist) {
 			return nil, fmt.Errorf("runner: the tree file %s could not be laid out: %w", e.Path, err)
 		}
 		placed = append(placed, driver.Placed{Source: dest, To: e.To, Mode: e.Mode})
 	}
 	return placed, nil
+}
+
+// linkOrCopy puts the cached file from at to, as a hard link, or as a copy with its mode where the
+// file has as many links as its filesystem allows one: ext4 stops at 65,000, and a tree holding a
+// thousand empty __init__.py laid out for sixty tasks at once is one file named sixty thousand
+// times. A copy costs the bytes the link saved, and nothing else.
+func linkOrCopy(from, to string) error {
+	err := hardLink(from, to)
+	if !errors.Is(err, syscall.EMLINK) {
+		return err
+	}
+	return copyFile(from, to)
+}
+
+// hardLink is os.Link, which a test answers in its place to see what a filesystem out of links does.
+var hardLink = os.Link
+
+// copyFile writes a new file at to holding what from holds, with from's mode once its bytes are
+// there.
+func copyFile(from, to string) error {
+	src, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	dst, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(dst, src)
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Chmod(to, info.Mode().Perm())
 }
 
 // mkdirTree creates a directory of the tree, rel below dir, and every directory between the two,
