@@ -34,7 +34,8 @@
 //	fs.FS                        the repository tree, already pinned to the commit, so
 //	                             an include and a schema $ref resolve inside it and can
 //	                             never leave it
-//	map[WorkflowRef]Fragment     the cross-repository includes, already fetched, because
+//	Remote                       the repositories a workflow include names, each tree
+//	                             answered at the commit its ref resolved to, because
 //	                             resolving one is reaching another repository
 //	map[string]brick.Manifest    the manifests, already fetched, because reading
 //	                             /agk/brick.yaml means pulling an image, and pulling an

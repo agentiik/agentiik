@@ -81,14 +81,14 @@ func Parse(doc []byte) (*Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := portLengths(wf.Outputs, wf.MCP, wf.values, wf.blocks); err != nil {
+	if err := wf.newRules(); err != nil {
 		return nil, err
 	}
 	return wf, nil
 }
 
-// parse is Parse less the bound a port is written to, which is how a version already stored
-// is read back (LoadStored).
+// parse is Parse less the rules added since a version could be stored, the bound a port is
+// written to among them, which is how a version already stored is read back (LoadStored).
 func parse(doc []byte) (*Workflow, error) {
 	root, file, err := document(doc)
 	if err != nil {
@@ -98,7 +98,8 @@ func parse(doc []byte) (*Workflow, error) {
 		return nil, err
 	}
 
-	wf := &Workflow{doc: file, values: map[agk.Step]stepValues{}, blocks: map[string]stepValues{}}
+	src := &source{doc: file}
+	wf := &Workflow{doc: file, src: src, root: root, values: map[agk.Step]stepValues{}, blocks: map[string]stepValues{}}
 	if wf.APIVersion, err = constantAt(root, "apiVersion", "agentiik.dev/v1", "the workflow"); err != nil {
 		return nil, fmt.Errorf("%w. apiVersion is read before anything else, because it decides how every other key in the file is interpreted", err)
 	}
@@ -123,13 +124,15 @@ func parse(doc []byte) (*Workflow, error) {
 	if wf.Include, err = includesOf(root); err != nil {
 		return nil, err
 	}
+	wf.includeAt = includeOrigins(src, wf.Include)
 	if wf.Vars, err = varsOf(root); err != nil {
 		return nil, err
 	}
 	if wf.Secrets, err = secretsOf(root); err != nil {
 		return nil, err
 	}
-	if wf.Defaults, err = defaultsOf(root); err != nil {
+	wf.secretAt = secretOrigins(src, wf.Secrets)
+	if wf.Defaults, err = defaultsOf(root, src); err != nil {
 		return nil, err
 	}
 	if wf.Concurrency, err = concurrencyOf(root); err != nil {
@@ -138,7 +141,7 @@ func parse(doc []byte) (*Workflow, error) {
 	if wf.Timeout, err = durationAt(root, "timeout", "the workflow"); err != nil {
 		return nil, err
 	}
-	if err := stepsOf(root, wf.values, wf.blocks); err != nil {
+	if err := stepsOf(root, src, wf.values, wf.blocks); err != nil {
 		return nil, err
 	}
 
@@ -165,6 +168,12 @@ type Fragment struct {
 	defaults Defaults
 	values   map[agk.Step]stepValues
 	blocks   map[string]stepValues
+
+	// src is the file the fragment was read from, named by the loader once it knows which,
+	// and includeAt and secretAt are where each include and each secret is written in it.
+	src       *source
+	includeAt []origin
+	secretAt  map[string]origin
 }
 
 // ParseFragment reads one included file.
@@ -185,53 +194,105 @@ func ParseFragment(doc []byte) (*Fragment, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := portLengths(nil, nil, f.values, f.blocks); err != nil {
+	if err := newStepRules(f.values, f.blocks, f.defaults); err != nil {
 		return nil, err
 	}
 	return f, nil
 }
 
-// parseFragment is ParseFragment less the bound a port is written to, which is how a fragment a
-// stored version carries is read back (LoadStored).
+// parseFragment is ParseFragment less the rules added since a version could be stored, which is
+// how a fragment a stored version carries is read back (LoadStored).
 func parseFragment(doc []byte) (*Fragment, error) {
-	root, _, err := document(doc)
+	root, file, err := document(doc)
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := root["mcp"]; ok {
-		return nil, refuse(RuleMCPInIncludedFile, "", "", "reuse applies to steps and defaults; the published surface is declared by the workflow that publishes it, so that reading one file tells you everything that workflow exposes")
-	}
-	for _, key := range []string{"apiVersion", "kind", "metadata"} {
-		if _, ok := root[key]; ok {
-			return nil, fmt.Errorf("the included file declares %s: an included file is a fragment, not an entry point, and it has no apiVersion, no kind and no metadata", key)
+	src := &source{doc: file}
+	// Each key an included file may not carry is refused by a rule of its own, named as the
+	// fragment group names the fixture pinning it, and placed at the key: writing it at all is
+	// what is refused. The order is the order of the documentation's sentence, so that a file
+	// carrying several is refused by the same one every time.
+	for _, key := range []string{"mcp", "apiVersion", "kind", "metadata", "inputs", "outputs", "on", "concurrency", "timeout"} {
+		if _, ok := root[key]; !ok {
+			continue
 		}
-	}
-	for _, key := range []string{"inputs", "outputs", "on", "concurrency", "timeout"} {
-		if _, ok := root[key]; ok {
-			return nil, fmt.Errorf("the included file declares %s: the boundary of a workflow, what it is given, what it returns and what starts it, is declared by the workflow itself, so that reading one file tells you what that workflow is", key)
-		}
+		r := refuse(entryPointKeys[key], "", "", entryPointKeyDetail(key))
+		r.At = origin{src: src, path: []any{key}}.key()
+		return nil, r
 	}
 	if err := closedTo(root, "the included file", fragmentKeys...); err != nil {
 		return nil, err
 	}
 
-	f := &Fragment{values: map[agk.Step]stepValues{}, blocks: map[string]stepValues{}}
+	f := &Fragment{values: map[agk.Step]stepValues{}, blocks: map[string]stepValues{}, src: src}
 	if f.include, err = includesOf(root); err != nil {
 		return nil, err
 	}
+	f.includeAt = includeOrigins(src, f.include)
 	if f.vars, err = varsOf(root); err != nil {
 		return nil, err
 	}
 	if f.secrets, err = secretsOf(root); err != nil {
 		return nil, err
 	}
-	if f.defaults, err = defaultsOf(root); err != nil {
+	f.secretAt = secretOrigins(src, f.secrets)
+	if f.defaults, err = defaultsOf(root, src); err != nil {
 		return nil, err
 	}
-	if err := stepsOf(root, f.values, f.blocks); err != nil {
+	if err := stepsOf(root, src, f.values, f.blocks); err != nil {
 		return nil, err
 	}
 	return f, nil
+}
+
+// entryPointKeys are the keys that make a document an entry point, each with the rule an
+// included file carrying it is refused by.
+var entryPointKeys = map[string]Rule{
+	"mcp":         RuleMCPInIncludedFile,
+	"apiVersion":  RuleAPIVersionInIncludedFile,
+	"kind":        RuleKindInIncludedFile,
+	"metadata":    RuleMetadataInIncludedFile,
+	"inputs":      RuleInputsInIncludedFile,
+	"outputs":     RuleOutputsInIncludedFile,
+	"on":          RuleOnInIncludedFile,
+	"concurrency": RuleConcurrencyInIncludedFile,
+	"timeout":     RuleTimeoutInIncludedFile,
+}
+
+// entryPointKeyDetail is why an included file may not carry key, in the documentation's words.
+func entryPointKeyDetail(key string) string {
+	switch key {
+	case "mcp":
+		return "reuse applies to steps and defaults; the published surface is declared by the workflow that publishes it, so that reading one file tells you everything that workflow exposes"
+	case "apiVersion", "kind", "metadata":
+		return fmt.Sprintf("the included file declares %s: an included file is a fragment, not an entry point, and it has no apiVersion, no kind and no metadata", key)
+	}
+	return fmt.Sprintf("the included file declares %s: the boundary of a workflow, what it is given, what it returns, what starts it and what bounds its runs, is declared by the workflow itself, so that reading one file tells you what that workflow is", key)
+}
+
+// includeOrigins are where each include of a list is written: its path, or the workflow it names.
+func includeOrigins(src *source, includes []Include) []origin {
+	at := make([]origin, len(includes))
+	for i, include := range includes {
+		key := "path"
+		if include.Path == "" {
+			key = "workflow"
+		}
+		at[i] = origin{src: src, path: []any{"include", i, key}}
+	}
+	return at
+}
+
+// secretOrigins are where each name of the secrets block is written.
+func secretOrigins(src *source, names []string) map[string]origin {
+	if len(names) == 0 {
+		return nil
+	}
+	at := make(map[string]origin, len(names))
+	for i, name := range names {
+		at[name] = origin{src: src, path: []any{"secrets", i}}
+	}
+	return at
 }
 
 // document reads the file with a YAML 1.2 parser and puts what it read on JSON's own
@@ -875,7 +936,7 @@ func concurrencyOf(root map[string]any) (Concurrency, error) {
 // stepsOf reads the steps block and the hidden blocks, wherever they are written. "A
 // hidden block may be written at the root of the entry point as well as at the root of an
 // included file, and a step under steps may be named with a leading dot."
-func stepsOf(root map[string]any, into map[agk.Step]stepValues, blocks map[string]stepValues) error {
+func stepsOf(root map[string]any, src *source, into map[agk.Step]stepValues, blocks map[string]stepValues) error {
 	for _, name := range keysOf(root) {
 		if !hidden(name) {
 			continue
@@ -887,6 +948,7 @@ func stepsOf(root map[string]any, into map[agk.Step]stepValues, blocks map[strin
 		if err != nil {
 			return err
 		}
+		values.written = writtenBy(root[name], origin{src: src, path: []any{name}})
 		blocks[name] = values
 	}
 
@@ -904,6 +966,7 @@ func stepsOf(root map[string]any, into map[agk.Step]stepValues, blocks map[strin
 		if err != nil {
 			return err
 		}
+		values.written = writtenBy(b[name], origin{src: src, path: []any{"steps", name}})
 		if hidden(name) {
 			if !hiddenName.MatchString(name) {
 				return fmt.Errorf("%s is a hidden block whose name is not an identifier after the dot", where)
@@ -1024,9 +1087,32 @@ func stepValuesOf(raw any, where string) (stepValues, error) {
 	return s, nil
 }
 
+// writtenBy is every keyword a block writes, each at the block's origin, which is what the
+// value of the keyword is found below once resolution has moved it into a step.
+func writtenBy(raw any, at origin) map[string]origin {
+	b, ok := raw.(map[string]any)
+	if !ok || len(b) == 0 {
+		return nil
+	}
+	written := make(map[string]origin, len(b))
+	for key := range b {
+		written[key] = at
+	}
+	return written
+}
+
 // defaultsOf reads the defaults block, which carries "execution settings, and only
 // those".
-func defaultsOf(root map[string]any) (Defaults, error) {
+func defaultsOf(root map[string]any, src *source) (Defaults, error) {
+	d, err := defaultsIn(root)
+	if err != nil {
+		return Defaults{}, err
+	}
+	d.written = writtenBy(root["defaults"], origin{src: src, path: []any{"defaults"}})
+	return d, nil
+}
+
+func defaultsIn(root map[string]any) (Defaults, error) {
 	raw, ok := root["defaults"]
 	if !ok {
 		return Defaults{}, nil

@@ -79,7 +79,7 @@ func Build(wf *Workflow, manifests map[string]brick.Manifest) (*Graph, error) {
 		return nil, fmt.Errorf("graph: the workflow declares includes that were never resolved: it was parsed and not loaded, so the blocks its steps extend are not in hand")
 	}
 	for _, name := range slices.Sorted(maps.Keys(wf.Steps)) {
-		if err := checkAgainstManifest(name, wf.Steps[name], manifests); err != nil {
+		if err := checkAgainstManifest(wf, name, wf.Steps[name], manifests); err != nil {
 			return nil, err
 		}
 	}

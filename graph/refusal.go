@@ -118,23 +118,68 @@ const (
 	RuleExpressionDoesNotCompile Rule = "expression-does-not-compile"
 )
 
+// The rules the repository fixtures name, which are about the files of a tree together
+// rather than about one document: what an include reaches, what an included file may carry,
+// and the bound a port and a workflow output are held to in every file a version is made of.
+// They are spelled as the corpus names them, so that a hook writing one on git's error stream
+// and a fixture pinning it read the same word.
+const (
+	// RuleIncludeLeavesTree is a path include naming a file outside the repository tree. "A
+	// path include resolves inside the same commit", and nothing outside the tree is readable
+	// at all.
+	RuleIncludeLeavesTree Rule = "include-leaves-tree"
+	// RuleIncludeMissing is a path include naming a file the commit does not hold.
+	RuleIncludeMissing Rule = "include-missing"
+	// RuleIncludeCycle is an include coming back to a file still being resolved, which would
+	// never finish resolving.
+	RuleIncludeCycle Rule = "include-cycle"
+	// The keys that make a document an entry point, refused in an included file one rule
+	// each, as the fragment group files one fixture each and mcp-in-included-file already
+	// was. "An included file is a fragment, not an entry point."
+	RuleAPIVersionInIncludedFile  Rule = "api-version-in-included-file"
+	RuleKindInIncludedFile        Rule = "kind-in-included-file"
+	RuleMetadataInIncludedFile    Rule = "metadata-in-included-file"
+	RuleInputsInIncludedFile      Rule = "inputs-in-included-file"
+	RuleOutputsInIncludedFile     Rule = "outputs-in-included-file"
+	RuleOnInIncludedFile          Rule = "on-in-included-file"
+	RuleConcurrencyInIncludedFile Rule = "concurrency-in-included-file"
+	RuleTimeoutInIncludedFile     Rule = "timeout-in-included-file"
+	// RulePortPastBound is a port past agk.PortMaxBytes, wherever it is written: "a port
+	// becomes the file <name>.json, which a filesystem holds to 255 characters with its
+	// suffix". The value is the name the corpus files the fixture pinning it under.
+	RulePortPastBound Rule = "port-name-251-characters"
+	// RuleWorkflowOutputPastBound is a workflow output past the same bound, for the same
+	// reason.
+	RuleWorkflowOutputPastBound Rule = "workflow-output-251-characters"
+)
+
 // Refusal is a workflow refused by a rule of the language, naming the step, the port and
-// the rule, in the documentation's own words.
+// the rule, in the documentation's own words, and where in the tree it was written.
 //
 // Step and Port are empty where the rule is not about one: a cycle is about a list of
 // steps and a published tool is about the workflow's own boundary. Detail is the
 // sentence, and it quotes the documentation rather than describing the code, because the
 // person reading it is holding the file and not this package.
+//
+// At is the file, line and column of the node refused, as far as the engine can know
+// them: a hook writes a refusal as file:line:column: message (rule), and a person given a rule
+// and a step still has to find which of four files wrote the value. A refusal about the tree
+// or about a file as a whole names the file alone, and one about no file of the tree names
+// none.
 type Refusal struct {
 	Step   agk.Step
 	Port   agk.Port
 	Rule   Rule
 	Detail string
+	At     Position
 }
 
 func (r *Refusal) Error() string {
 	var b strings.Builder
 	b.WriteString("graph: ")
+	if at := r.At.String(); at != "" {
+		b.WriteString(at + ": ")
+	}
 	if r.Step != "" {
 		b.WriteString("step " + string(r.Step) + ": ")
 	}

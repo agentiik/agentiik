@@ -115,7 +115,7 @@ func paramsScope(wf *Workflow, st Step) expr.Scope {
 // step that extends something, which is exactly the case where the file does not yet say
 // how the step is divided.
 func fanOutStillToArrive(wf *Workflow, st Step) bool {
-	return !wf.resolved && st.Extends != ""
+	return !wf.resolved && len(st.Extends) > 0
 }
 
 // holdValue compiles every expression one value carries. A parameter written as a map or
@@ -149,7 +149,12 @@ func holdValue(wf *Workflow, sc expr.Scope, st *Step, name agk.Step, v any, at s
 func holdExpression(wf *Workflow, sc expr.Scope, st *Step, name agk.Step, value, at string) error {
 	t, err := expr.Interpolate(sc, value)
 	if err != nil {
-		return expressionRefusal(wf, name, at, value, err)
+		refused := expressionRefusal(wf, name, at, value, err)
+		var r *Refusal
+		if errors.As(refused, &r) {
+			r.At = wf.expressionAt(name, at)
+		}
+		return refused
 	}
 	if st == nil || fanOutOf(st) == FanOutItem || fanOutStillToArrive(wf, *st) {
 		return nil
@@ -158,9 +163,9 @@ func holdExpression(wf *Workflow, sc expr.Scope, st *Step, name agk.Step, value,
 		if !slices.Contains(p.Roots(), expr.RootItem) {
 			continue
 		}
-		return refuse(RuleExpressionItemOutsideFanOutItem, name, "", fmt.Sprintf(
+		return place(refuse(RuleExpressionItemOutsideFanOutItem, name, "", fmt.Sprintf(
 			"%s reads item where the step is divided %s: item is the current item and is available only under fan_out: item, because item contents are not exposed to controller expressions and a test reads port metadata instead, inputs.in.count and inputs.in.empty%s",
-			at, fanOutOf(st), writtenAt(wf, at)))
+			at, fanOutOf(st), writtenAt(wf, at))), wf.expressionAt(name, at))
 	}
 	return nil
 }

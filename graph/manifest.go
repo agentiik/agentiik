@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -25,25 +26,35 @@ import (
 // for a reason the documentation states. A script step's image "is treated as a base
 // image and nothing about its ports is inferred", so there is nothing to be a subset of;
 // a sub-workflow call runs no container of its own.
-func checkAgainstManifest(name agk.Step, st Step, manifests map[string]brick.Manifest) error {
+func checkAgainstManifest(wf *Workflow, name agk.Step, st Step, manifests map[string]brick.Manifest) error {
 	if st.Image == "" || len(st.Script) > 0 {
 		return nil
 	}
 	m, ok := manifests[st.Image]
 	if !ok {
-		return refuse(RuleManifestMissing, name, "", fmt.Sprintf("the manifest of %s was not handed in: reading /agk/brick.yaml means pulling an image, and pulling an image is executing, so the manifests are fetched by the caller between Check and Build and Images says which ones", st.Image))
+		return place(refuse(RuleManifestMissing, name, "", fmt.Sprintf("the manifest of %s was not handed in: reading /agk/brick.yaml means pulling an image, and pulling an image is executing, so the manifests are fetched by the caller between Check and Build and Images says which ones", st.Image)), wf.StepAt(name, "image"))
 	}
 
 	if err := outputsInManifest(name, st, m); err != nil {
-		return err
+		return place(err, wf.StepAt(name, "outputs", slices.Index(st.Outputs, err.Port)))
 	}
 	if err := inputsInManifest(name, st, m); err != nil {
-		return err
+		if _, fed := st.Inputs[err.Port]; fed {
+			return place(err, wf.stepKeyAt(name, "inputs", string(err.Port)))
+		}
+		return place(err, wf.StepAt(name, "needs", slices.IndexFunc(st.Needs, func(e Edge) bool { return e.As == err.Port }), "as"))
 	}
 	// Only what the file already settles is checked here. A parameter written as an
 	// expression is a value the run has, not a value the file has, so it is validated
 	// where it is resolved, against the same schemas, by the same function.
-	return paramsAgainstManifest(name, st, m, st.Params, false)
+	if err := paramsAgainstManifest(name, st, m, st.Params, false); err != nil {
+		var r *Refusal
+		if errors.As(err, &r) {
+			r.At = wf.StepAt(name, "params")
+		}
+		return err
+	}
+	return nil
 }
 
 // outputsInManifest is the subset rule: "outputs must be a subset of the ports in the
@@ -53,7 +64,7 @@ func checkAgainstManifest(name agk.Step, st Step, manifests map[string]brick.Man
 // what it could not match on the step's own unmatched port, "without the container ever
 // touching it, which is why a step doing a join declares it in outputs". Holding that
 // port to the manifest would ask a brick to declare a port it never writes.
-func outputsInManifest(name agk.Step, st Step, m brick.Manifest) error {
+func outputsInManifest(name agk.Step, st Step, m brick.Manifest) *Refusal {
 	declared := m.OutputPorts()
 	for _, port := range st.Outputs {
 		if slices.Contains(declared, port) {
@@ -78,7 +89,7 @@ func outputsInManifest(name agk.Step, st Step, m brick.Manifest) error {
 // A port is fed two ways and both are held to it: by the inputs keyword, which "feeds a
 // port from a workflow input or an expression, with no dependency on another step", and
 // by the as of an edge, which is the port an upstream output arrives on.
-func inputsInManifest(name agk.Step, st Step, m brick.Manifest) error {
+func inputsInManifest(name agk.Step, st Step, m brick.Manifest) *Refusal {
 	declared := m.InputPorts()
 	fed := make([]agk.Port, 0, len(st.Inputs)+len(st.Needs))
 	fed = append(fed, slices.Sorted(maps.Keys(st.Inputs))...)
