@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -143,9 +144,10 @@ func TestEveryObjectGitWroteReadsBackAsItsOwnBytes(t *testing.T) {
 	}
 }
 
-// refusal is an object this package refuses, the check it names, and whether git fsck --strict
-// refuses it under the same name: most are git's own checks, and the few that are not are the
-// spellings git never writes and this package refuses beside them.
+// refusal is an object this package refuses, the check it names, and whether git refuses it under
+// the same name. git hash-object is asked, which runs git's fsck over what it is given and makes
+// every finding an error, as fsck --strict does of all but badFilemode, which it only reports. The
+// few git does not refuse are this package's own, the spellings git never writes among them.
 type refusal struct {
 	name  string
 	typ   Type
@@ -309,6 +311,67 @@ func TestObjectsGitFsckLetsByAreRead(t *testing.T) {
 	}
 }
 
+func TestAHeaderOfManyLinesIsReadInOnePass(t *testing.T) {
+	// Joined a line at a time, a header of 20,000 lines would copy what it had read at each line,
+	// some 600 MB for a commit of 60 KB; joined once, it costs a few times its weight.
+	const n = 20000
+	var b strings.Builder
+	b.WriteString("tree " + emptyID + "\nauthor A <a@example.com> 1 +0000\ncommitter C <c@example.com> 1 +0000\ngpgsig x\n")
+	for range n {
+		b.WriteString(" y\n")
+	}
+	b.WriteString("\nsigned\n")
+	data := []byte(b.String())
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	c, err := ParseCommit(data)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "x" + strings.Repeat("\ny", n); len(c.Headers) != 1 || c.Headers[0].Value != want {
+		t.Fatalf("the header reads as %d headers", len(c.Headers))
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 100*uint64(len(data)) {
+		t.Errorf("reading a commit of %d bytes allocated %d", len(data), allocated)
+	}
+}
+
+func TestATreeIsCheckedWithoutBeingHeldTwice(t *testing.T) {
+	// A hundred thousand entries of four-letter names: kept as entries and a map of names, they
+	// would take several times the tree's weight; checked, they are let go one by one.
+	var entries []TreeEntry
+	for i := range 100000 {
+		entries = append(entries, TreeEntry{Name: fmt.Sprintf("%04x", i), Mode: ModeFile, ID: HashObject(TypeBlob, nil)})
+	}
+	entries = append(entries, TreeEntry{Name: "a", Mode: ModeFile, ID: HashObject(TypeBlob, nil)}, TreeEntry{Name: "a-b", Mode: ModeFile, ID: HashObject(TypeBlob, nil)})
+	tree, err := EncodeTree(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	err = checkTree(tree)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > uint64(len(tree)) {
+		t.Errorf("checking a tree of %d bytes allocated %d", len(tree), allocated)
+	}
+	// And still finds a name twice where the two are apart, which git's order puts them.
+	entries = append(entries, TreeEntry{Name: "a", Mode: ModeTree, ID: HashObject(TypeTree, nil)})
+	slices.SortStableFunc(entries, compareEntries)
+	var twice []byte
+	for _, e := range entries {
+		twice = append(twice, entry(e.Mode.String(), e.Name, e.ID)...)
+	}
+	var oe *ObjectError
+	if err := checkTree(twice); !errors.As(err, &oe) || oe.Check != checkDuplicateEntries {
+		t.Errorf("a file a, a file a-b and a directory a check with %v", err)
+	}
+}
+
 func TestEncodingRefusesWhatWouldNotReadBackAsItself(t *testing.T) {
 	blob := HashObject(TypeBlob, []byte("x"))
 	for name, err := range map[string]error{
@@ -365,7 +428,7 @@ func TestDotGitIsGitsRuleOnEveryFilesystem(t *testing.T) {
 		".git::$INDEX_ALLOCATION": true, ".git:": true, "GIT~1": true, "git~1": true, "GIT~2": true, "git~10": true,
 		".g\u200cit": true, "\ufeff.git": true, ".gi\u206ft": true, `a\.git`: true, `.git\a`: true, `a\GIT~1\b`: true,
 		".gitx": false, "x.git": false, "git": false, ".gi": false, "GIT~": false, "GIT~1a": false, "git~x": false,
-		"..git": false, ".g it": false, ".gitmodules": false, `a\b`: false,
+		"..git": false, ".g it": false, ".gitmodules": false, `a\b`: false, ".g\u0130t": false,
 	} {
 		if got := DotGit(name); got != want {
 			t.Errorf("DotGit(%q) = %t", name, got)
@@ -375,6 +438,7 @@ func TestDotGitIsGitsRuleOnEveryFilesystem(t *testing.T) {
 		".gitmodules": true, ".GITMODULES": true, ".gitmodules.": true, ".gitmodules:x": true, ".git\u200bmodules": false,
 		".gitmod\u200cules": true, "GITMOD~1": true, "gitmod~4": true, "gitmod~5": false, "GI7EBA~1": true, "gi7eba~9": true,
 		"gi7eb~12": true, "g~123456": true, "gi7eba~0": false, "gi7ebb~1": false, "gitmodules": false, `a\.gitmodules`: true,
+		".gitmodule\u017f": false, ".gitmodu\u212ales": false,
 	} {
 		if got := dotGitmodules(name); got != want {
 			t.Errorf("dotGitmodules(%q) = %t", name, got)

@@ -15,24 +15,46 @@ import "strings"
 //
 // The API's tree push applies it to every segment of a path, so both hold the one rule.
 func DotGit(name string) bool {
-	for _, part := range strings.Split(name, `\`) {
-		if dotGitPart(part) {
+	return anyPart(name, dotGitPart)
+}
+
+// anyPart is whether f holds of any part of a name NTFS reads as a path, a backslash separating
+// them.
+func anyPart(name string, f func(string) bool) bool {
+	for {
+		part, rest, more := strings.Cut(name, `\`)
+		if f(part) {
 			return true
 		}
+		if !more {
+			return false
+		}
+		name = rest
 	}
-	return false
 }
 
 func dotGitPart(name string) bool {
-	s := ntfsName(hfsName(name))
-	if strings.EqualFold(s, ".git") {
+	s := asciiLower(ntfsName(hfsName(name)))
+	if s == ".git" {
 		return true
 	}
 	// GIT~1, and any other number, since which one NTFS gives depends on what the directory held
 	// before. Git refuses GIT~1 alone; the others are refused here because a runner's disk is not
 	// git's business and is this one's.
-	number, short := strings.CutPrefix(strings.ToLower(s), "git~")
+	number, short := strings.CutPrefix(s, "git~")
 	return short && number != "" && strings.Trim(number, "0123456789") == ""
+}
+
+// asciiLower is a name with its ASCII letters in lower case and nothing else changed, which is how
+// git folds a name it compares with .git or .gitmodules: Unicode folding would read the long s,
+// U+017F, as an s, and refuse a name git and every filesystem in question take as another.
+func asciiLower(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
 }
 
 // hfsName is a name without the code points HFS+ leaves out when it compares two names: the ones
@@ -68,12 +90,9 @@ func ntfsName(name string) string {
 // decide where submodules go, and one that is a symbolic link would have it read something the
 // tree does not hold.
 func dotGitmodules(name string) bool {
-	for _, part := range strings.Split(name, `\`) {
-		if strings.EqualFold(hfsName(part), ".gitmodules") || ntfsDotGitmodules(part) {
-			return true
-		}
-	}
-	return false
+	return anyPart(name, func(part string) bool {
+		return asciiLower(hfsName(part)) == ".gitmodules" || ntfsDotGitmodules(part)
+	})
 }
 
 // ntfsDotGitmodules is git's is_ntfs_dot_generic for .gitmodules: the long name, the short name
@@ -81,8 +100,7 @@ func dotGitmodules(name string) bool {
 // those, a hash of the name that is gi7eba followed by a tilde and a number, each with what NTFS
 // drops from the end of a name.
 func ntfsDotGitmodules(name string) bool {
-	s := ntfsName(name)
-	lower := strings.ToLower(s)
+	lower := asciiLower(ntfsName(name))
 	if lower == ".gitmodules" {
 		return true
 	}

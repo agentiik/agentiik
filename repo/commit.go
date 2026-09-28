@@ -126,19 +126,35 @@ func splitHeaders(data []byte) ([]string, string) {
 // parseHeaders reads the headers this package keeps as they are. A line beginning with a space
 // continues the value above it, and one that continues nothing, which git's own reader drops, is
 // kept as the value of a header with no key, so that it is written back where it was.
+//
+// A header's lines are joined once it has ended, and never one line at a time, which would copy
+// the value read so far at every line: a signature of a million lines would then cost a million
+// copies of itself.
 func parseHeaders(lines []string) []Header {
 	var headers []Header
+	var value []string
+	end := func() {
+		if len(headers) > 0 {
+			headers[len(headers)-1].Value = strings.Join(value, "\n")
+		}
+	}
 	for _, line := range lines {
-		if rest, ok := strings.CutPrefix(line, " "); ok && len(headers) > 0 {
-			headers[len(headers)-1].Value += "\n" + rest
-			continue
-		} else if ok {
-			headers = append(headers, Header{Value: rest})
+		rest, continued := strings.CutPrefix(line, " ")
+		if continued && len(headers) > 0 {
+			value = append(value, rest)
 			continue
 		}
-		key, value, _ := strings.Cut(line, " ")
-		headers = append(headers, Header{Key: key, Value: value})
+		end()
+		if continued {
+			headers = append(headers, Header{})
+			value = append(value[:0], rest)
+			continue
+		}
+		key, first, _ := strings.Cut(line, " ")
+		headers = append(headers, Header{Key: key})
+		value = append(value[:0], first)
 	}
+	end()
 	return headers
 }
 

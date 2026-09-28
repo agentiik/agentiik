@@ -10,8 +10,8 @@ import (
 // Mode is what a tree entry is, as git writes it in octal.
 type Mode uint32
 
-// The five modes git fsck --strict accepts. Git once wrote 100664 as well, which fsck lets by
-// without --strict and refuses with it, as this package does.
+// The five modes git writes. Git once wrote 100664 as well, which git fsck reports as
+// badFilemode and lets by, and git hash-object refuses, as this package does.
 const (
 	ModeTree       Mode = 0o40000
 	ModeFile       Mode = 0o100644
@@ -53,45 +53,76 @@ const MaxNameBytes = 4096
 // no object, and entries out of git's order or twice.
 func ParseTree(data []byte) ([]TreeEntry, error) {
 	var entries []TreeEntry
-	// A name may appear twice without the two being next to each other: a file a, then a-b, then
-	// a directory a, which sorts as a/ and so after a-b.
-	seen := map[string]bool{}
-	for len(data) > 0 {
+	err := eachEntry(data, func(e TreeEntry) { entries = append(entries, e) })
+	return entries, err
+}
+
+// checkTree holds a tree to what ParseTree does, keeping none of its entries: a pushed tree is
+// checked without being held twice.
+func checkTree(data []byte) error { return eachEntry(data, nil) }
+
+// eachEntry reads a tree's entries in order, holding each to git fsck --strict, and hands each to
+// fn where there is one. What it keeps as it goes is the entry before and the names a directory
+// coming later could repeat, never the entries themselves.
+func eachEntry(data []byte, fn func(TreeEntry)) error {
+	var prev TreeEntry
+	// files are the names of files a directory of the same name may yet follow, since a directory
+	// sorts as if its name ended with a slash: a file a, then a-b, then a directory a. Each is a
+	// prefix of the next, and one is let go once a name shows no directory of it can follow.
+	var files []string
+	for first := true; len(data) > 0; first = false {
 		space := bytes.IndexByte(data, ' ')
 		if space < 0 {
-			return nil, refuse(TypeTree, checkBadTree, "an entry with no space after its mode")
+			return refuse(TypeTree, checkBadTree, "an entry with no space after its mode")
 		}
 		mode, err := parseMode(data[:space])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		data = data[space+1:]
 		nul := bytes.IndexByte(data, 0)
 		if nul < 0 {
-			return nil, refuse(TypeTree, checkBadTree, "an entry whose name does not end")
+			return refuse(TypeTree, checkBadTree, "an entry whose name does not end")
 		}
 		name := string(data[:nul])
 		data = data[nul+1:]
 		if len(data) < len(ID{}) {
-			return nil, refuse(TypeTree, checkBadTree, "the entry %q ends before its object ID", name)
+			return refuse(TypeTree, checkBadTree, "the entry %q ends before its object ID", name)
 		}
-		var id ID
-		copy(id[:], data)
-		data = data[len(id):]
-		e := TreeEntry{Name: name, Mode: mode, ID: id}
+		e := TreeEntry{Name: name, Mode: mode, ID: ID(data[:len(ID{})])}
+		data = data[len(ID{}):]
 		if err := checkEntry(e); err != nil {
-			return nil, err
+			return err
 		}
-		if seen[name] {
-			return nil, refuse(TypeTree, checkDuplicateEntries, "the name %q twice", name)
+		if !first {
+			switch c := compareEntries(prev, e); {
+			case c == 0:
+				return refuse(TypeTree, checkDuplicateEntries, "the name %q twice", name)
+			case c > 0:
+				return refuse(TypeTree, checkTreeNotSorted, "%q after %q, which is not git's order", name, prev.Name)
+			}
 		}
-		seen[name] = true
-		if n := len(entries); n > 0 && compareEntries(entries[n-1], e) > 0 {
-			return nil, refuse(TypeTree, checkTreeNotSorted, "%q after %q, which is not git's order", name, entries[n-1].Name)
+		for len(files) > 0 && !directoryMayFollow(files[len(files)-1], name) {
+			files = files[:len(files)-1]
 		}
-		entries = append(entries, e)
+		switch {
+		case e.Mode == ModeTree && len(files) > 0 && files[len(files)-1] == name:
+			return refuse(TypeTree, checkDuplicateEntries, "the name %q twice", name)
+		case e.Mode != ModeTree:
+			files = append(files, name)
+		}
+		if fn != nil {
+			fn(e)
+		}
+		prev = e
 	}
-	return entries, nil
+	return nil
+}
+
+// directoryMayFollow is whether a directory named file may still come after the entry name in a
+// tree in git's order: name is file itself, or file followed by a byte that sorts before a slash.
+func directoryMayFollow(file, name string) bool {
+	return strings.HasPrefix(name, file) && (len(name) == len(file) || name[len(file)] < '/')
 }
 
 // parseMode reads a mode as a tree writes it: octal, one of the five, and with no leading zero,
