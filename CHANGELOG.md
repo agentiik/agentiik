@@ -9,6 +9,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A version stored before this release naming a port or a workflow output of 251 to 255 characters, or a secret its namespace does not declare, rebuilds, starts and runs as before, with nothing to do: both rules are applied where a version is made, and never where a stored one is read back (`version.Build`, `graph.LoadStored`, `brick.ParseStoredManifest`, a task's read of its image, `agk run --namespace`). Pushed again with the same files, from an agk of any release, it is answered as that version, unchanged; with other files, 409 as before.
 - A version stored before this release from a directory of its repository, under a name its `metadata` does not write, or relocating a file to a relative path, rebuilds, starts and runs as before, with nothing to do, and the push route answers it as that version when an earlier agk pushes it again: those rules are applied where a version is made (`version.Check`), which is also why this release's `agk push` makes none.
 - A workflow v0.2 or v0.3 pushed as trees becomes an empty repository at the upgrade, with nothing to do: migration 0049 gives it a key of its own for its packs and its default branch unborn and unprotected, so that an editor's `agk push` keeps landing, and keeps every version, run and counted object as it was, each version recorded as sent as a tree (`workflow_versions.source`).
+- A version recorded before this release runs as it ran, with nothing to do: its tasks are handed its tree whole, whatever its steps' `files` select, and a file their long form relocates is there as well, with the tree's mode rather than the one asked for, which was not applied then. One recorded from this release on, a stored commit pushed again excepted, is handed what its `files` select; the mark is `selects_files` in the version's stored bundle, which one recorded before carries none of.
 
 ### Workflows
 
@@ -25,6 +26,19 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A push naming a port or a workflow output past 250 characters (`agk.PortMaxBytes`), in the entry point, a file it includes or a manifest it carries, is refused with 422 before any of its tree is stored (`version.BuildNew`).
 - A push naming a secret its namespace does not declare is refused with 422 before any of its tree is stored, naming the secret and the steps that mount it, once the pusher holds `secret:use`.
 - A push whose `metadata.name` is not the workflow it is pushed to, or whose `metadata.namespace` is not its namespace, is refused with 422 at the line (`metadata-name-not-repository`, `metadata-namespace-not-repository`), and a version records only the files, manifests and digests it was judged over.
+- A redemption answers a step's `files`: the files its paths and globs select, and each file a long form places elsewhere as an entry of its own with that `to` and the mode asked for (`graph.SelectFiles`), so a runner is handed no URL for a file its step did not select. A relocated file is there instead of under `/agk/repo`, so a step whose `files` only relocate is handed an empty `/agk/repo`.
+
+### Controller
+
+- A task's grant carries its step's `files` (`db.GrantScope.Files`), which its redemption selects the tree by.
+
+### Runner
+
+- Trees are cached by digest inside their namespace, at `<work root>/.trees/<namespace>/objects/`, and each task's tree is hard-linked from there, so a second task of a commit fetches nothing and no namespace's task is laid out from another's files; past 4 GiB, the least recently used go.
+
+### Driver
+
+- The long form of `files` relocates a file, a directory or a glob, each file keeping its path below the glob's segments before its first wildcard, and gives every file it places its `mode`, as copies in the task's working directory removed with it. A file whose mode gives its owner what it gives nobody else is given to the account the container runs as, and refused where that account is a name; a mode with no `to` places at most 256 files, each on a bind of its own. `agk run --local` places the same files from the working tree, which it binds whole, and follows no link out of it.
 
 ### agk
 
@@ -38,6 +52,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The schemas' repository corpus runs through `version.Check`, each valid case resolving to exactly its `expected.json`, which the vendored wire schema accepts, and each invalid one meeting exactly its `refusal.json`; the fragment corpus runs through `graph.ParseFragment` (schemas `75d34d9` vendored, still `0.3.0`).
 - The runner's boundary test refuses package `repo` by name: a runner never speaks git.
 - An installation of v0.3.0 is upgraded through `init` and `serve`: its versions, runs and counted objects are unchanged, its runs read and start as before, and its workflows are empty repositories.
+- What a runner holds at rest may include a namespace's cache of trees, each file the bytes its name is the digest of, and nothing else of the workflow's.
 
 ### Repository
 
