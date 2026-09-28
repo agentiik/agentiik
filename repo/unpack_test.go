@@ -181,22 +181,22 @@ func TestAPackThatIsNotWholeIsRefused(t *testing.T) {
 		opts UnpackOptions
 		says string
 	}{
-		"a trailer that is not the checksum":        {flipLast(good().all()), UnpackOptions{}, "trailer is not the checksum"},
-		"a pack cut short inside an entry":          {cut, UnpackOptions{}, "unexpected EOF"},
-		"bytes after the last entry":                {junk.all(), UnpackOptions{}, "after the last"},
-		"more entries counted than it holds":        {good().pack(2), UnpackOptions{}, "unexpected EOF"},
-		"more entries counted than it could hold":   {good().pack(1000), UnpackOptions{}, "cannot hold"},
-		"more entries than a push may send":         {good().pack(MaxPackObjects + 1), UnpackOptions{}, "more than the 1048576"},
-		"a version other than 2":                    {versioned(good().all(), 3), UnpackOptions{}, "version 3"},
-		"a zlib stream that is not one":             {notZlib.all(), UnpackOptions{}, "zlib"},
-		"a zlib stream shorter than its header":     {short.all(), UnpackOptions{}, "where its header gives 10"},
-		"a zlib stream longer than its header":      {long.all(), UnpackOptions{}, "longer than"},
-		"a zlib stream whose checksum is not":       {checksum.all(), UnpackOptions{}, "checksum"},
-		"an entry of the kind git reserves":         {kind5.all(), UnpackOptions{}, "kind 5"},
-		"an entry of kind 0":                        {kind0.all(), UnpackOptions{}, "kind 0"},
-		"a blob larger than an object may be":       {large.all(), UnpackOptions{MaxObjectBytes: 10}, "more than the 10"},
-		"a header and a trailer, and nothing else":  {[]byte("PACK"), UnpackOptions{}, "shorter than a header"},
-		"no pack at all, but a pack-sized trailer":  {resum(append([]byte("KCAP\x00\x00\x00\x02\x00\x00\x00\x00"), make([]byte, 20)...)), UnpackOptions{}, "begins with PACK"},
+		"a trailer that is not the checksum":       {flipLast(good().all()), UnpackOptions{}, "trailer is not the checksum"},
+		"a pack cut short inside an entry":         {cut, UnpackOptions{}, "unexpected EOF"},
+		"bytes after the last entry":               {junk.all(), UnpackOptions{}, "after the last"},
+		"more entries counted than it holds":       {good().pack(2), UnpackOptions{}, "unexpected EOF"},
+		"more entries counted than it could hold":  {good().pack(1000), UnpackOptions{}, "cannot hold"},
+		"more entries than a push may send":        {good().pack(MaxPackObjects + 1), UnpackOptions{}, "more than the 1048576"},
+		"a version other than 2":                   {versioned(good().all(), 3), UnpackOptions{}, "version 3"},
+		"a zlib stream that is not one":            {notZlib.all(), UnpackOptions{}, "zlib"},
+		"a zlib stream shorter than its header":    {short.all(), UnpackOptions{}, "where its header gives 10"},
+		"a zlib stream longer than its header":     {long.all(), UnpackOptions{}, "longer than"},
+		"a zlib stream whose checksum is not":      {checksum.all(), UnpackOptions{}, "checksum"},
+		"an entry of the kind git reserves":        {kind5.all(), UnpackOptions{}, "kind 5"},
+		"an entry of kind 0":                       {kind0.all(), UnpackOptions{}, "kind 0"},
+		"a blob larger than an object may be":      {large.all(), UnpackOptions{MaxObjectBytes: 10}, "more than the 10"},
+		"a header and a trailer, and nothing else": {[]byte("PACK"), UnpackOptions{}, "shorter than a header"},
+		"no pack at all, but a pack-sized trailer": {resum(append([]byte("KCAP\x00\x00\x00\x02\x00\x00\x00\x00"), make([]byte, 20)...)), UnpackOptions{}, "begins with PACK"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := unpackErr(t, c.pack, c.opts)
@@ -260,9 +260,9 @@ func TestADeltaIsAppliedOnlyWithinItsBase(t *testing.T) {
 func TestAnOfsDeltaNamesTheBeginningOfAnEarlierEntry(t *testing.T) {
 	d, _ := edit([]byte("base"), "!")
 	for name, distance := range map[string]int64{
-		"no distance":              0,
+		"no distance":             0,
 		"inside the entry before": 3,
-		"before the pack begins":   1000,
+		"before the pack begins":  1000,
 	} {
 		b := &builder{}
 		b.whole(TypeBlob, []byte("base"))

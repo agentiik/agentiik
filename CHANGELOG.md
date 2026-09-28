@@ -2,6 +2,16 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### Repository
+
+- Package `repo` reads and writes git on the standard library alone, for the repositories the API is to serve: SHA-1 object IDs; commits, trees and tags held to `git fsck --strict`, each refusal naming git's own check (`hasDotgit`, `treeNotSorted`); packs of version 2, their deltas resolved against the pack or, in a thin pack, the repository, at most 50 deep and with 64 MiB of bases held, and written back whole so that an entry is copied into a fetch as it is stored; indexes of version 2, the same bytes `git index-pack` writes; pkt-line with side-band; and a tree as an `fs.FS`, read as it is walked. Its readers are fuzzed from what git writes.
+
+### Tests
+
+- The runner's boundary test refuses package `repo` by name: a runner never speaks git.
+
 ## v0.3.0, 2026-09-28
 
 More than one person: users sign in with a passkey, or a password where the policy allows one; users, groups and service accounts hold roles and denies at namespace and workflow scope, and API tokens act for them, narrowed where a scope says; namespaces carry an owner and quotas; and a namespace a caller holds nothing in is answered as one that does not exist. A v0.2.5 installation upgrades with v0.3.0's `compose.yaml` and its own `.env`, and nothing else.
