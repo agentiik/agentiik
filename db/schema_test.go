@@ -246,6 +246,8 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// What a namespace is writing into the store, and what it holds, counted against its own
 		// quota.
 		"artifact_uploads": true, "artifact_room": true,
+		// A workflow repository's refs and packs are its workflow's, in its namespace.
+		"workflow_refs": true, "git_packs": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -440,6 +442,7 @@ func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
 		"groups":            "a group is named by an administrator, on the namespace grammar",
 		"service_accounts":  "a service account is named by a namespace's owner, on the namespace grammar",
 		"artifacts":         "an artifact is named after the file it is, dot and all, and held to one segment of its URI",
+		"git_packs":         "a pack is named after its checksum, as git names one",
 		"schema_migrations": "a migration is named after its file, dot and all",
 	}
 
@@ -526,6 +529,7 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		{`insert into principals (id, kind) values ('alice', 'user')`, nil},
 		{`insert into grants (id, namespace, workflow, principal, role, granted_by)
 		  values ('01JQ3M8T', 'finance', $1, 'alice', 'viewer', 'alice')`, []any{workflow}},
+		{`insert into workflow_refs (namespace, workflow, ref) values ('finance', $1, 'refs/heads/main')`, []any{workflow}},
 	} {
 		if _, err := conn.Exec(ctx, s.sql, s.args...); err != nil {
 			t.Fatalf("%s: %s", s.sql, err)
@@ -543,6 +547,7 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		"secret_declarations.name":   {secret},
 		"secret_values.name":         {secret},
 		"grants.workflow":            {workflow},
+		"workflow_refs.workflow":     {workflow},
 	}
 	for _, c := range schemaColumns(t, conn) {
 		if c.typeName == "identifier" && written[c.table+"."+c.column] == nil {

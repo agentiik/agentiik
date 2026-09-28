@@ -18,13 +18,17 @@ import (
 //
 // A key becomes a path under root, so the objects of two namespaces sit in two
 // directories and an existence check still cannot reach across one. It is also the
-// built-in store of a server, AGK_OBJECTS_DIR, which is why it can remove an object, and why
-// it is Walkable, for the collector to find the objects nothing names.
+// built-in store of a server, AGK_OBJECTS_DIR, which is why it can remove an object, why it
+// is Walkable, for the collector to find the objects nothing names, and why it is Ranged, for
+// the packs of a workflow repository to be read one entry at a time.
 func Dir(root string) Removable {
 	return dir{root: root}
 }
 
-var _ Walkable = dir{}
+var (
+	_ Walkable = dir{}
+	_ Ranged   = dir{}
+)
 
 type dir struct {
 	root string
@@ -67,14 +71,10 @@ func (d dir) Put(ctx context.Context, key string, r io.Reader) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return fmt.Errorf("artifact: object %s: %w", key, err)
-	}
-
 	// Staged beside the object rather than in the system temporary directory, so that the
 	// rename that publishes it stays on one filesystem and is therefore atomic: a reader
 	// sees the whole object under the key or nothing at all.
-	stage, err := os.CreateTemp(filepath.Dir(p), ".staging-*")
+	stage, err := staging(filepath.Dir(p))
 	if err != nil {
 		return fmt.Errorf("artifact: object %s: %w", key, err)
 	}
@@ -105,6 +105,22 @@ func (d dir) Put(ctx context.Context, key string, r io.Reader) (err error) {
 		return fmt.Errorf("artifact: object %s: %w", key, err)
 	}
 	return nil
+}
+
+// staging makes dir and the file a write is staged in there. A Remove of the last object under dir
+// removes dir as well, and may do so between the two, which leaves the file nowhere to be made: dir
+// is made again then, up to three times, a failure that lasts answering the same each time. Once the
+// file is there dir is not empty, and no Remove takes it until the write has renamed it.
+func staging(dir string) (*os.File, error) {
+	for attempt := 1; ; attempt++ {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		f, err := os.CreateTemp(dir, ".staging-*")
+		if err == nil || attempt == 3 {
+			return f, err
+		}
+	}
 }
 
 // Remove deletes one object, and then each directory its key made that it leaves empty, up to
@@ -158,6 +174,42 @@ func (d dir) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	}
 	return f, nil
 }
+
+// OpenRange opens one object to be read at any offset, which an os.File is: ReadAt is pread, which
+// several goroutines may call at once.
+func (d dir) OpenRange(ctx context.Context, key string) (RangeReader, error) {
+	p, err := d.path(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, fmt.Errorf("artifact: object %s: %w", key, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("artifact: object %s: %w", key, err)
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("artifact: object %s is not a file", key)
+	}
+	return ranged{File: f, size: info.Size()}, nil
+}
+
+// ranged is an object held open, with the size it had when it was opened, which is its size for
+// good: the bytes under a key never change, a write of them again renames the same bytes over them,
+// and a rename that replaces the file leaves this one as it was.
+type ranged struct {
+	*os.File
+	size int64
+}
+
+func (r ranged) Size() int64 { return r.size }
 
 // Walk lists the objects of one namespace: the files of its sha256 directory named as a digest is,
 // and nothing else. A directory, a link, a write being staged and a name that is not sixty-four

@@ -142,13 +142,67 @@ func TestDirRefusesAKeyThatLeavesItsRoot(t *testing.T) {
 			if _, err := objects.Remove(t.Context(), key); err == nil {
 				t.Errorf("Remove: accepted %q", key)
 			}
+			if _, err := objects.(artifact.Ranged).OpenRange(t.Context(), key); err == nil {
+				t.Errorf("OpenRange: accepted %q", key)
+			}
 		})
 	}
 }
 
+// An object is read at any offset without the bytes before it, by several readers at once, with the
+// size it was written at; an absent key is a missing object, as Open answers it, and a directory
+// where an object would be is no object.
+func TestDirReadsAnObjectAtAnyOffset(t *testing.T) {
+	root := t.TempDir()
+	objects := artifact.Dir(root)
+	ranged, ok := objects.(artifact.Ranged)
+	if !ok {
+		t.Fatal("the directory store cannot read a range of an object")
+	}
+	key := "acme/git/" + strings.Repeat("0", 32) + "/pack-" + strings.Repeat("1", 40) + ".pack"
+	content := strings.Repeat("0123456789", 1000)
+	if err := objects.Put(t.Context(), key, strings.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	r, err := ranged.OpenRange(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if r.Size() != int64(len(content)) {
+		t.Errorf("an object of %d bytes opened as %d", len(content), r.Size())
+	}
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Go(func() {
+			off := int64(i * 613)
+			b := make([]byte, 7)
+			if n, err := r.ReadAt(b, off); n != len(b) || string(b) != content[off:off+7] {
+				t.Errorf("7 bytes at %d read as %q, %d, %v", off, b[:n], n, err)
+			}
+		})
+	}
+	wg.Wait()
+	b := make([]byte, 10)
+	if n, err := r.ReadAt(b, int64(len(content))-4); n != 4 || !errors.Is(err, io.EOF) {
+		t.Errorf("reading past the end answered %d, %v", n, err)
+	}
+
+	if _, err := ranged.OpenRange(t.Context(), artifact.Key("acme", sha256OfHello)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("an absent object opened answering %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "acme", "sha256", sha256OfHello), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ranged.OpenRange(t.Context(), artifact.Key("acme", sha256OfHello)); err == nil {
+		t.Error("a directory opened as an object")
+	}
+}
+
 // Remove deletes an object, answers nil for one already gone, and takes with its last object each
-// directory the key made below its first two segments: a log's run, task and dispatch go, and the
-// namespace's logs and sha256 directories stay, as does a directory still holding something.
+// directory the key made below its first two segments: a log's run, task and dispatch go, and a
+// repository's, and the namespace's logs, sha256 and git directories stay, as does a directory still
+// holding something.
 func TestDirRemovesAnObjectAndTheDirectoriesItLeavesEmpty(t *testing.T) {
 	root := t.TempDir()
 	objects := artifact.Dir(root)
@@ -196,11 +250,54 @@ func TestDirRemovesAnObjectAndTheDirectoriesItLeavesEmpty(t *testing.T) {
 	if exists("acme/logs/run-1") || !exists("acme/logs") {
 		t.Errorf("removing a run's last chunk: the run's directory held %t, acme/logs held %t", exists("acme/logs/run-1"), exists("acme/logs"))
 	}
+
+	repository := "acme/git/" + strings.Repeat("0", 32)
+	pack := repository + "/pack-" + strings.Repeat("1", 40) + ".pack"
+	if err := objects.Put(t.Context(), pack, strings.NewReader("PACK")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := objects.Remove(t.Context(), pack); err != nil {
+		t.Fatal(err)
+	}
+	if exists(repository) || !exists("acme/git") {
+		t.Errorf("removing a repository's last pack: its directory held %t, acme/git held %t", exists(repository), exists("acme/git"))
+	}
+}
+
+// A write into a directory whose last object is being removed, which takes the directory with it,
+// makes the directory again rather than failing: a push writing a repository's first pack as the
+// collection removes the last one a push that died left.
+func TestDirWritesIntoADirectoryItsLastObjectIsTakingWithIt(t *testing.T) {
+	objects := artifact.Dir(t.TempDir())
+	repository := "acme/git/" + strings.Repeat("0", 32) + "/"
+	last := repository + "pack-" + strings.Repeat("1", 40) + ".pack"
+	for i := range 500 {
+		if err := objects.Put(t.Context(), last, strings.NewReader("PACK")); err != nil {
+			t.Fatal(err)
+		}
+		next := repository + fmt.Sprintf("pack-%040x.pack", i+2)
+		var wg sync.WaitGroup
+		var put error
+		wg.Go(func() { put = objects.Put(t.Context(), next, strings.NewReader("PACK")) })
+		wg.Go(func() {
+			if _, err := objects.Remove(t.Context(), last); err != nil {
+				t.Error(err)
+			}
+		})
+		wg.Wait()
+		if put != nil {
+			t.Fatalf("a write as the directory's last object went failed at round %d: %s", i, put)
+		}
+		if _, err := objects.Remove(t.Context(), next); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // A walk answers the objects of one namespace, each once, a batch at a time, with its size and when
 // it was written, and nothing else in its directory: not a write being staged, a link, a directory,
-// a name that is not a digest, a log or another namespace's object.
+// a name that is not a digest, a log, a pack of a workflow repository, even one named as a digest
+// is, or another namespace's object.
 func TestDirWalksTheObjectsOfOneNamespaceAndNothingElse(t *testing.T) {
 	root := t.TempDir()
 	objects := artifact.Dir(root)
@@ -225,6 +322,8 @@ func TestDirWalksTheObjectsOfOneNamespaceAndNothingElse(t *testing.T) {
 	for _, key := range []string{
 		artifact.Key("other", fmt.Sprintf("%064x", 9)),
 		"acme/logs/run-1/task-a/dispatch-1/0000000001-" + sha256OfHello,
+		"acme/git/" + strings.Repeat("0", 32) + "/pack-" + strings.Repeat("1", 40) + ".pack",
+		"acme/git/" + strings.Repeat("0", 32) + "/" + fmt.Sprintf("%064x", 6),
 	} {
 		if err := objects.Put(t.Context(), key, strings.NewReader("not acme's object")); err != nil {
 			t.Fatal(err)

@@ -96,10 +96,38 @@ type Objects interface {
 // no error for a key that is absent, which a purge that died after deleting and before recording it
 // leaves, so that what was deleted is counted once. It removes nothing but the object: a directory
 // a key made is removed with its last object only below the key's first two segments,
-// <namespace>/sha256 or <namespace>/logs, since other objects arrive under those at any moment.
+// <namespace>/sha256, <namespace>/logs or <namespace>/git, which every namespace writes under. One
+// below them may be removed as a write into it begins, a pack's repository as a push writes its
+// first pack while the collection takes the last one a push that died left, and Put makes it again.
 type Removable interface {
 	Objects
 	Remove(ctx context.Context, key string) (bool, error)
+}
+
+// Ranged is a byte layer an object can be read from at any offset without reading the bytes before
+// it, which the directory Dir opens is: the built-in store, where the packs of a workflow repository
+// are kept, each read through its index one entry at a time and never whole, since a pack runs to
+// gigabytes and a fetch wants a few of its objects. An object store over HTTP is one with range
+// requests.
+//
+// Objects stays three methods wide, and a caller asks for this one by a type assertion: what reads
+// an artifact reads it whole, and verifies it whole, which a range cannot be.
+//
+// OpenRange answers an error satisfying errors.Is(err, fs.ErrNotExist) for a key that is absent,
+// as Open does, and honours ctx until it answers. What it answers reads the bytes Put was given at
+// any offset, from any number of goroutines at once, until it is closed.
+type Ranged interface {
+	Objects
+	OpenRange(ctx context.Context, key string) (RangeReader, error)
+}
+
+// RangeReader is one object, read at the offsets asked for.
+type RangeReader interface {
+	io.ReaderAt
+	io.Closer
+
+	// Size is the object's length in bytes.
+	Size() int64
 }
 
 // Walkable is a byte layer whose objects can be listed, one namespace at a time, which the directory

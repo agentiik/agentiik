@@ -8,6 +8,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - A version stored before this release naming a port or a workflow output of 251 to 255 characters, or a secret its namespace does not declare, rebuilds, starts and runs as before, with nothing to do: both rules are applied where a version is made, and never where a stored one is read back (`version.Build`, `graph.LoadStored`, `brick.ParseStoredManifest`, a task's read of its image, `agk run --namespace`). Pushed again with the same files, from an agk of any release, it is answered as that version, unchanged; with other files, 409 as before.
 - A version stored before this release from a directory of its repository, under a name its `metadata` does not write, or relocating a file to a relative path, rebuilds, starts and runs as before, with nothing to do, and the push route answers it as that version when an earlier agk pushes it again: those rules are applied where a version is made (`version.Check`), which is also why this release's `agk push` makes none.
+- A workflow v0.2 or v0.3 pushed as trees becomes an empty repository at the upgrade, with nothing to do: migration 0049 gives it a key of its own for its packs and its default branch unborn and unprotected, so that an editor's `agk push` keeps landing, and keeps every version, run and counted object as it was, each version recorded as sent as a tree (`workflow_versions.source`).
 
 ### Workflows
 
@@ -20,6 +21,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### API
 
 - A push naming a port or a workflow output past 250 characters (`agk.PortMaxBytes`), in the entry point, a file it includes or a manifest it carries, is refused with 422 before any of its tree is stored (`version.Check`).
+- A workflow its first push creates is a repository whose default branch is unborn and unprotected, as every repository is until an owner protects it.
+- A push naming a port or a workflow output past 250 characters (`agk.PortMaxBytes`), in the entry point, a file it includes or a manifest it carries, is refused with 422 before any of its tree is stored (`version.BuildNew`).
 - A push naming a secret its namespace does not declare is refused with 422 before any of its tree is stored, naming the secret and the steps that mount it, once the pusher holds `secret:use`.
 - A push whose `metadata.name` is not the workflow it is pushed to, or whose `metadata.namespace` is not its namespace, is refused with 422 at the line (`metadata-name-not-repository`, `metadata-namespace-not-repository`), and a version records only the files, manifests and digests it was judged over.
 
@@ -34,10 +37,13 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The corpus's three documents refusing a port or a workflow output of 251 characters are refused, and are read by the stored readings.
 - The schemas' repository corpus runs through `version.Check`, each valid case resolving to exactly its `expected.json`, which the vendored wire schema accepts, and each invalid one meeting exactly its `refusal.json`; the fragment corpus runs through `graph.ParseFragment` (schemas `75d34d9` vendored, still `0.3.0`).
 - The runner's boundary test refuses package `repo` by name: a runner never speaks git.
+- An installation of v0.3.0 is upgraded through `init` and `serve`: its versions, runs and counted objects are unchanged, its runs read and start as before, and its workflows are empty repositories.
 
 ### Repository
 
 - Package `repo` reads and writes git on the standard library alone, for the repositories the API is to serve: SHA-1 object IDs; commits, trees and tags held to git's own checks of each object, a refusal naming the check as git does (`hasDotgit`, `treeNotSorted`); packs of version 2, their deltas resolved against the pack or, in a thin pack, the repository, and written back whole so that an entry is copied into a fetch as it is stored; indexes of version 2, the same bytes `git index-pack` writes; pkt-line with side-band; and a tree as an `fs.FS`, read as it is walked. A push is bounded in what it sends, holds and unpacks, each bound a constant with its reason. Its readers are fuzzed from what git writes.
+- A repository's refs are rows of `workflow_refs`, a branch or a tag each, the default branch held unborn until its first push: a push moves them by compare and swap under a lock on its workflow, all or none, and never deletes the default branch (`db.NS.UpdateRefs`). Its packs are rows of `git_packs`, recorded receiving before their bytes are written and made live in the push's transaction. Both are behind the namespace's row level security.
+- Package `repo/store` keeps a repository's packs and their indexes in the object store under `<namespace>/git/<repository>/pack-<checksum>.pack` and `.idx`, the repository a random key that a rename leaves alone, and reads any object of its live packs through their indexes with ranged reads (`artifact.Ranged`, which the built-in store is), each index read once for the process. The orphan sweep never walks them, and a write into a repository's directory as its last pack is removed makes the directory again.
 
 ## v0.3.0, 2026-09-28
 

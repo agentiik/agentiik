@@ -54,7 +54,22 @@ type Version struct {
 
 	Author    string
 	CreatedAt time.Time
+
+	// Source is how the version arrived, SourceGit or SourceTree. Empty is SourceTree: the tree
+	// agk push sends through PUT /api/v1/{ns}/workflows/{name}/versions/{commit}, which was the one
+	// way a version arrived before a repository was hosted, and what its callers record.
+	Source string
 }
+
+// The two ways a version arrives, as workflow_versions.source holds them.
+const (
+	// SourceGit is a commit a git push carried, whose objects are in the repository's packs.
+	SourceGit = "git"
+
+	// SourceTree is a commit agk push sent as a tree, whose files alone are stored: no clone holds
+	// it unless a git push carried that commit since.
+	SourceTree = "tree"
+)
 
 // TreeFile is one file of the repository, at the path the container sees it under /agk/repo.
 //
@@ -128,15 +143,31 @@ type Saved struct {
 //
 // Idempotent, because pushing a second version of a workflow that already exists is the ordinary
 // case and is not a request to change anything about the workflow itself.
+//
+// A workflow it records is a repository created from v0.4.0, empty until its first git push: its
+// default branch is recorded unborn and unprotected, as every repository is until an owner protects
+// it, so that whoever holds workflow:write pushes to it as they did before v0.4.0. A branch no push
+// could create, which only an API call written by hand names, is given no row, as the migration
+// gives none: no push can move it, and it is unborn and unprotected either way.
 func (n *NS) SaveWorkflow(ctx context.Context, name, branch string) error {
 	if branch == "" {
 		branch = "main"
 	}
-	if _, err := n.tx.Exec(ctx,
+	tag, err := n.tx.Exec(ctx,
 		`insert into workflows (namespace, name, default_branch) values ($1, $2, $3)
 		 on conflict (namespace, name) do nothing`,
-		n.namespace, name, branch); err != nil {
+		n.namespace, name, branch)
+	if err != nil {
 		return fmt.Errorf("db: workflow %s could not be recorded: %w", name, err)
+	}
+	head := "refs/heads/" + branch
+	if tag.RowsAffected() == 0 || checkRef(head) != nil {
+		return nil
+	}
+	if _, err := n.tx.Exec(ctx,
+		`insert into workflow_refs (namespace, workflow, ref, protected) values ($1, $2, $3, false)`,
+		n.namespace, name, head); err != nil {
+		return fmt.Errorf("db: the default branch of workflow %s could not be recorded: %w", name, err)
 	}
 	return nil
 }
@@ -165,6 +196,14 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 	case v.Author == "":
 		return Saved{}, fmt.Errorf("db: version %s@%s has no author", v.Workflow, v.Commit)
 	}
+	source := v.Source
+	switch source {
+	case "":
+		source = SourceTree
+	case SourceGit, SourceTree:
+	default:
+		return Saved{}, fmt.Errorf("db: version %s@%s arrived by %q, where a version arrives by git or as a tree", v.Workflow, v.Commit, v.Source)
+	}
 
 	tree, err := sortedTree(v.Tree)
 	if err != nil {
@@ -192,10 +231,10 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 		created = time.Now().UTC()
 	}
 	tag, err := n.tx.Exec(ctx,
-		`insert into workflow_versions (namespace, workflow, commit, parent, graph, tree, author, created_at)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8)
+		`insert into workflow_versions (namespace, workflow, commit, parent, graph, tree, author, created_at, source)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 on conflict (namespace, workflow, commit) do nothing`,
-		n.namespace, v.Workflow, v.Commit, nilIfEmpty(v.Parent), body, column, v.Author, created)
+		n.namespace, v.Workflow, v.Commit, nilIfEmpty(v.Parent), body, column, v.Author, created, source)
 	if err != nil {
 		return Saved{}, fmt.Errorf("db: version %s@%s could not be recorded: %w", v.Workflow, v.Commit, err)
 	}
@@ -366,9 +405,9 @@ func readVersion(ctx context.Context, tx pgx.Tx, namespace, workflow, commit str
 	var body, tree []byte
 	var parent *string
 	err := tx.QueryRow(ctx,
-		`select parent, graph, tree, author, created_at from workflow_versions
+		`select parent, graph, tree, author, created_at, source from workflow_versions
 		 where namespace = $1 and workflow = $2 and commit = $3`,
-		namespace, workflow, commit).Scan(&parent, &body, &tree, &v.Author, &v.CreatedAt)
+		namespace, workflow, commit).Scan(&parent, &body, &tree, &v.Author, &v.CreatedAt, &v.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Version{}, fmt.Errorf("%w: %s/%s@%s", ErrNoVersion, namespace, workflow, commit)
 	}

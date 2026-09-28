@@ -215,13 +215,17 @@ func TestAnEnvelopeThatCannotBeReadKeepsItsNamespacesOrphans(t *testing.T) {
 }
 
 // The sweep looks at the objects of a namespace's sha256 directory and at nothing else: a log with
-// no row, a write being staged, a name that is not a digest, a directory, a namespace the database
+// no row, a pack of a workflow repository and its index, which git_packs names and the repack
+// collects, a write being staged, a name that is not a digest, a directory, a namespace the database
 // does not have and a file beside the namespaces all stay, however old.
 func TestTheSweepTouchesNothingButObjects(t *testing.T) {
 	in := withInstallation(t)
 	var kept []string
 	for _, key := range []string{
 		"finance/logs/01JMZ8V1P9C4XQ7K2N4D6F8H0A/task/1/0000000001-" + strings.Repeat("a", 64),
+		"finance/git/" + strings.Repeat("0", 32) + "/pack-" + strings.Repeat("1", 40) + ".pack",
+		"finance/git/" + strings.Repeat("0", 32) + "/pack-" + strings.Repeat("1", 40) + ".idx",
+		"finance/git/" + strings.Repeat("0", 32) + "/" + strings.Repeat("d", 64),
 		"finance/sha256/.staging-4242",
 		"finance/sha256/" + strings.Repeat("A", 64),
 		"finance/other/" + strings.Repeat("b", 64),
