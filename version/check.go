@@ -315,8 +315,10 @@ func pinned(ctx context.Context, wf *graph.Workflow, c Checking) (map[string]str
 }
 
 // manifestsOf reads the manifest of every image a brick step runs, once per image, for the first
-// step in name order that runs it. An image with none recorded is left out, and graph.Build
-// refuses the step naming it, where its image is written.
+// step in name order that runs it. An image with none held is refused there, where the step's
+// image is written, naming agk push: reading one out of the image would be pulling it, which a
+// hook does not do and reaches no registry to do, so a manifest is what agk push reads where the
+// image is and records beside the version, and in the namespace's store.
 func manifestsOf(ctx context.Context, wf *graph.Workflow, c Checking) (map[string]brick.Manifest, error) {
 	parse := brick.ParseManifest
 	if c.Stored {
@@ -334,7 +336,8 @@ func manifestsOf(ctx context.Context, wf *graph.Workflow, c Checking) (map[strin
 	for _, image := range graph.Images(wf) {
 		body, err := c.Manifest(ctx, image, first[image])
 		if errors.Is(err, ErrNotHeld) {
-			continue
+			return nil, &graph.Refusal{Step: first[image], Rule: graph.RuleManifestMissing, At: wf.StepAt(first[image], "image"), Detail: fmt.Sprintf(
+				"the step runs %s as a brick, and no manifest of it is held: a server reads none out of an image, since that is pulling it, and reaches no registry to pull from, so a brick's manifest is recorded by agk push, which reads it where the image is", image)}
 		}
 		if err != nil {
 			return nil, err

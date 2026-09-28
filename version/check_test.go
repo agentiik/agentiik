@@ -110,6 +110,27 @@ func TestATagWithNoPinIsRefusedWhereItIsWritten(t *testing.T) {
 	if want := (graph.Position{File: "fragments/bricks.yaml", Line: 2, Column: 10}); r.At != want {
 		t.Errorf("the tag is refused at %s, and it is written at %s", r.At, want)
 	}
+	if !strings.Contains(r.Detail, "agk push") {
+		t.Errorf("the refusal does not name agk push, which records a pin: %s", r.Detail)
+	}
+}
+
+// An image whose manifest is not held is refused where the step's image is written, naming agk
+// push, which is what reads a manifest where the image is and records it: a hook reaches no
+// registry to read one out of the image.
+func TestAnImageWithNoManifestHeldIsRefusedNamingAgkPush(t *testing.T) {
+	c := everything()
+	c.Manifest = func(context.Context, string, agk.Step) ([]byte, error) { return nil, version.ErrNotHeld }
+	_, err := version.Check(t.Context(), aRepository(), c)
+	r := refusedBy(t, err, graph.RuleManifestMissing)
+	if want := (graph.Position{File: "fragments/bricks.yaml", Line: 2, Column: 10}); r.At != want || r.Step != "invoice" {
+		t.Errorf("the image is refused at %s for step %s, and step invoice's image is written at %s", r.At, r.Step, want)
+	}
+	for _, said := range []string{pinnedInvoice, "agk push"} {
+		if !strings.Contains(r.Detail, said) {
+			t.Errorf("the refusal does not say %q: %s", said, r.Detail)
+		}
+	}
 }
 
 // The tree of a commit is held to what a runner can lay out, whichever entry holds what: a name
