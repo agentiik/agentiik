@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Signature is who wrote a commit or a tag, and when, as the author, committer and tagger lines
@@ -23,6 +24,37 @@ type Signature struct {
 // String is the signature as a commit's author line carries it, after the word author.
 func (s Signature) String() string {
 	return s.Name + " <" + s.Email + "> " + strconv.FormatInt(s.When, 10) + " " + s.Zone
+}
+
+// Person is who a signature names, without when: the name and the address as the commit or the tag
+// records them, whoever the git configuration of whoever wrote it named, checked against nothing.
+// Its fields are written as the API's history writes a commit's author, so that the API answers a
+// commit's author without spelling the address's name itself.
+type Person struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// Person is who the signature names.
+func (s Signature) Person() Person { return Person{Name: s.Name, Email: s.Email} }
+
+// Time is when the signature was made, in the zone it was written in, or in UTC where that zone is
+// past what an offset from UTC can be, as git lets +9999 by.
+func (s Signature) Time() time.Time {
+	t := time.Unix(s.When, 0).UTC()
+	if !validZone(s.Zone) {
+		return t
+	}
+	hours, _ := strconv.Atoi(s.Zone[1:3])
+	minutes, _ := strconv.Atoi(s.Zone[3:])
+	if hours > 23 || minutes > 59 {
+		return t
+	}
+	offset := hours*3600 + minutes*60
+	if s.Zone[0] == '-' {
+		offset = -offset
+	}
+	return t.In(time.FixedZone(s.Zone, offset))
 }
 
 // Header is a header line of a commit or a tag that is none of the ones this package reads, such

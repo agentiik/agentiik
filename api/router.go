@@ -71,9 +71,19 @@ type Router struct {
 	// route taking OnRun without it is refused at registration, as a runner route is.
 	runs FindRun
 
+	// git holds the routes of git's smart HTTP protocol, by method and by what their path names
+	// after /{namespace}/{workflow}.git/, which ServeHTTP reaches before either mux.
+	git map[string]gitRoute
+
 	// routes is what was registered, in registration order, for the test that reads the
 	// list back and for an installation that wants to print its own surface.
 	routes []Route
+}
+
+// gitRoute is one route of git's protocol and what stands in front of it.
+type gitRoute struct {
+	guard   guard
+	handler Handler
 }
 
 // Route is one registered route and what stands in front of it.
@@ -115,6 +125,11 @@ type Route struct {
 	// of the service accounts of the namespaces it owns, or who it is, and needs no permission:
 	// see Own.
 	Own bool
+
+	// Git is set where the route is one of git's smart HTTP protocol, under
+	// /{namespace}/{workflow}.git/, whose caller presents an API token and nothing else: see
+	// OnRepository.
+	Git bool
 }
 
 // RunnerHandler is a route a runner reaches, given the machine the credential named.
@@ -132,7 +147,7 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 	holdings, _ := auth.(Holdings)
 	return &Router{
 		mux: http.NewServeMux(), namespaced: http.NewServeMux(), words: map[string]bool{},
-		auth: auth, identify: confined(identify), holdings: holdings,
+		git: map[string]gitRoute{}, auth: auth, identify: confined(identify), holdings: holdings,
 	}, nil
 }
 
@@ -247,6 +262,9 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 	}
 	if guard.across {
 		return fmt.Errorf("api: %s %s answers across what its caller holds, and is registered with HandleAcross, whose handler is given what it may ask", method, pattern)
+	}
+	if guard.git {
+		return fmt.Errorf("api: %s %s is a route of git's protocol, and is registered with HandleGit, since its path is git's and not one the mux reads", method, pattern)
 	}
 	if guard.members {
 		if rt.holdings == nil {
@@ -389,6 +407,47 @@ func (rt *Router) MustHandleOwn(method, pattern string, g Own, h OwnHandler) {
 	}
 }
 
+// HandleGit registers one route of git's smart HTTP protocol, at rest under a repository's path,
+// /{namespace}/{workflow}.git/, for one method.
+//
+// Separate from Handle because the path is git's rather than the API's: git clones
+// https://agentiik.example.com/finance/monthly-invoicing.git, whose second segment is the workflow
+// with .git after it, which no pattern of net/http's can name, and whose first segment would make a
+// pattern of its own collide with /objects/{key...}. So ServeHTTP reads such a path itself, before
+// either mux, and a route here is found by its method and rest alone. The handler is a Handler, given
+// the principal and the workflow the router authorised, as any other route's is.
+func (rt *Router) HandleGit(method, rest string, g OnRepository, h Handler) error {
+	pattern := gitPrefix + rest
+	switch {
+	case h == nil:
+		return fmt.Errorf("api: %s %s has no handler", method, pattern)
+	case method == "" || rest == "" || strings.HasPrefix(rest, "/") || strings.Contains(rest, "{"):
+		return fmt.Errorf("api: %s %s is no route of git's: it is a method and a path under the repository, such as GET info/refs", method, pattern)
+	}
+	guard := g.guards()
+	if err := guard.check(method, pattern); err != nil {
+		return err
+	}
+	key := method + " " + rest
+	if _, twice := rt.git[key]; twice {
+		return fmt.Errorf("api: %s %s is registered already", method, pattern)
+	}
+	rt.git[key] = gitRoute{guard: guard, handler: h}
+	rt.routes = append(rt.routes, Route{Method: method, Pattern: pattern, Permission: guard.permission, Scope: guard.scope, Git: true})
+	return nil
+}
+
+// MustHandleGit is HandleGit for a caller that builds its routes at start-up.
+func (rt *Router) MustHandleGit(method, rest string, g OnRepository, h Handler) {
+	if err := rt.HandleGit(method, rest, g, h); err != nil {
+		panic(err.Error())
+	}
+}
+
+// gitPrefix is what a route of git's protocol is listed under, the repository's path, which Routes
+// writes as the router reads it: the namespace, and the workflow with .git after it.
+const gitPrefix = "/{namespace}/{workflow}.git/"
+
 // OwnHandler is a route about its caller's own credentials, given who asks, as Caller says.
 type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
 
@@ -485,7 +544,78 @@ func (rt *Router) Routes() []Route {
 // A route nobody registered is a 404 from the mux, which is the same answer an inaccessible one
 // gets, and that is the right accident: an installation's surface is not a thing to enumerate by
 // asking.
-func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) { rt.muxFor(r).ServeHTTP(w, r) }
+//
+// A path of git's protocol is read first, where the router serves git: one whose first segment is a
+// namespace's name and whose second ends in .git, /finance/monthly-invoicing.git/info/refs. No path
+// of the API's is one, since every one of them starts /api/v1/, /auth/, /objects/ or /healthz and
+// none has a second segment ending so, a namespace's name holding no dot; and a namespace called api,
+// auth or objects keeps its repositories, which is why the path is read here rather than by a pattern
+// of the mux, which would collide with /objects/{key...}.
+func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if len(rt.git) > 0 {
+		if namespace, workflow, rest, ok := gitPath(r); ok {
+			rt.serveGit(w, r, namespace, workflow, rest)
+			return
+		}
+	}
+	rt.muxFor(r).ServeHTTP(w, r)
+}
+
+// gitPath reads a path of git's protocol: the namespace its first segment names, the workflow its
+// second names before .git, and what follows, as the mux reads a segment, from the escaped path and
+// unescaped on its own. The namespace is held to the grammar a namespace is named on, and nothing
+// else is: a workflow no grant could name is refused as the absence it is, once its caller has
+// presented a token, as any repository a caller cannot read is.
+func gitPath(r *http.Request) (namespace, workflow, rest string, ok bool) {
+	path, rooted := strings.CutPrefix(r.URL.EscapedPath(), "/")
+	if !rooted {
+		return "", "", "", false
+	}
+	segments := strings.SplitN(path, "/", 3)
+	if len(segments) < 2 {
+		return "", "", "", false
+	}
+	namespace, err := url.PathUnescape(segments[0])
+	if err != nil || len(namespace) > agk.IdentifierMaxBytes || !givenName.MatchString(namespace) {
+		return "", "", "", false
+	}
+	repository, err := url.PathUnescape(segments[1])
+	if err != nil {
+		return "", "", "", false
+	}
+	workflow, ok = strings.CutSuffix(repository, ".git")
+	if !ok || workflow == "" {
+		return "", "", "", false
+	}
+	if len(segments) == 3 {
+		rest = segments[2]
+	}
+	return namespace, workflow, rest, true
+}
+
+// serveGit answers a path of git's protocol through the route registered for its method and what
+// follows the repository, or, where none is, as the absence it is to a caller reading the repository:
+// git's dumb protocol, which reads a repository's files by their paths, among them. Either way the
+// caller presents a token first, since "no credential: 401 with a Basic challenge on every repository
+// path" is what makes git ask for one, and is let through as one reading the repository or refused as
+// one asking about a repository that is not there.
+func (rt *Router) serveGit(w http.ResponseWriter, r *http.Request, namespace, workflow, rest string) {
+	route, ok := rt.git[r.Method+" "+rest]
+	if !ok {
+		route = gitRoute{guard: OnRepository{Permission: WorkflowRead}.guards(), handler: unservedGit}
+	}
+	r.SetPathValue("namespace", namespace)
+	r.SetPathValue("workflow", workflow)
+	rt.serve(w, r, route.guard, route.handler)
+}
+
+// unservedGit answers a path under a repository that no route of git's serves, to a caller let
+// through as reading the repository, as the absence it answers a caller who cannot read it, whether
+// the repository is there or not: which of the two it is told it may learn otherwise, and a path
+// nothing serves is no way to learn it.
+func unservedGit(w http.ResponseWriter, _ *http.Request, _ Principal, _ Target) {
+	refuse(w, http.StatusNotFound, absence)
+}
 
 // muxFor is the mux that answers a request: the one holding the API's own words where the path's
 // first segment after /api/v1/ is one of them, and the one holding the namespaced routes for any
@@ -519,7 +649,13 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		return
 	}
 
-	as, err := rt.identify(r)
+	// A route of git's is asked by a git client, which presents a token alone and is asked for one
+	// with a challenge it answers: see OnRepository.
+	identify, challenge := rt.identify, unauthenticated
+	if g.git {
+		identify, challenge = rt.identifyGit, unauthenticatedGit
+	}
+	as, err := identify(r)
 	if err != nil {
 		// A credential that could not be checked is not a credential that failed. Saying
 		// no here would tell a caller their token is bad when the database is down.
@@ -531,7 +667,7 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		// "An unauthenticated caller: Deny by default at the API." It is a 401 rather than
 		// the scope's own answer, because a caller with no credential has learned nothing
 		// about what exists by being told to present one.
-		unauthenticated(w, as)
+		challenge(w, as)
 		return
 	}
 
@@ -630,7 +766,7 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		// The credential first, since a token revoked or a session ended while its holder's
 		// grants remain is access lost too, then the permission, through what the credential
 		// narrows it to as it reads now.
-		again, err := rt.identify(request.WithContext(ctx))
+		again, err := identify(request.WithContext(ctx))
 		if err != nil || again.Principal != who {
 			return false, err
 		}
@@ -798,6 +934,44 @@ func unauthenticated(w http.ResponseWriter, as Identity) {
 	refuse(w, http.StatusUnauthorized, why)
 }
 
+// identifyGit is who a request of git's protocol is from: the API token it presents, as the
+// password of HTTP Basic authentication whatever the username, or as a bearer token, identified as
+// the router identifies any. Nothing else is read: a session cookie is left out of what is
+// identified, so that a request carrying one and no token presents nothing, and one carrying both
+// is the token's, since git never sends a cookie unless it is told to and a browser sends one to
+// any page that asks it to fetch from here.
+func (rt *Router) identifyGit(r *http.Request) (Identity, error) {
+	asked := r.Clone(r.Context())
+	asked.Header.Del("Cookie")
+	if _, password, ok := r.BasicAuth(); ok {
+		asked.Header.Del("Authorization")
+		if password != "" {
+			asked.Header.Set("Authorization", "Bearer "+password)
+		}
+	}
+	return rt.identify(asked)
+}
+
+// gitRealm is the challenge a request of git's protocol presenting no token is answered with, which
+// is what makes git ask its credential helper, or the person at the terminal, for a username and a
+// password: the password is the token, and the username is not read.
+const gitRealm = `Basic realm="agentiik"`
+
+// unauthenticatedGit answers a request of git's protocol nobody was identified from, as
+// unauthenticated does, with Basic's challenge in place of Bearer's.
+func unauthenticatedGit(w http.ResponseWriter, as Identity) {
+	if as.RefusedAs != 0 {
+		refuse(w, as.RefusedAs, as.Refused)
+		return
+	}
+	w.Header().Set("WWW-Authenticate", gitRealm)
+	why := as.Refused
+	if why == "" {
+		why = "this request carries no credential"
+	}
+	refuse(w, http.StatusUnauthorized, why)
+}
+
 // deny answers a refusal in the shape the scope calls for.
 //
 // "An inaccessible workflow answering the same 404 as an absent one, so that probing yields
@@ -805,11 +979,15 @@ func unauthenticated(w http.ResponseWriter, as Identity) {
 // that answer 403 are the ones that exist.
 func (rt *Router) deny(w http.ResponseWriter, scope Scope) {
 	if scope.Hides() {
-		refuse(w, http.StatusNotFound, "no such thing, or not yours")
+		refuse(w, http.StatusNotFound, absence)
 		return
 	}
 	refuse(w, http.StatusForbidden, "you do not hold what this needs")
 }
+
+// absence is the sentence a refusal at a namespace's or a workflow's scope says, and a handler says
+// of what it finds nothing under where it has to be answered as one it may not reach.
+const absence = "no such thing, or not yours"
 
 // standIn is what the authorizer is asked about in place of a run that is not there: a workflow in
 // the namespace the path names, or in one of this name where it names none, whose answer is not read.

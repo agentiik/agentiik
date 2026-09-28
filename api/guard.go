@@ -19,9 +19,9 @@ import (
 // Guard is what stands in front of one route.
 //
 // The interface is closed: the only things that implement it are Needs, OnRun, OnArtifact, Across,
-// OnNamespace, Public, ForRunner and Own, because its one method is unexported. A further kind of
-// guard is therefore a change to this file, which is a change somebody reads, rather than a struct
-// somebody writes in a handler package.
+// OnNamespace, OnRepository, Public, ForRunner and Own, because its one method is unexported. A
+// further kind of guard is therefore a change to this file, which is a change somebody reads,
+// rather than a struct somebody writes in a handler package.
 type Guard interface {
 	guards() guard
 }
@@ -37,6 +37,7 @@ type guard struct {
 	artifact   bool
 	across     bool
 	members    bool
+	git        bool
 	why        string
 
 	// within is set by the router on a route taking OnRun, Across or OnNamespace whose pattern
@@ -133,6 +134,29 @@ type OnArtifact struct {
 
 func (o OnArtifact) guards() guard {
 	return guard{permission: o.Permission, scope: Workflow, run: true, artifact: true}
+}
+
+// OnRepository is a route of git's smart HTTP protocol about one workflow repository, under
+// /{namespace}/{workflow}.git/, which requires one permission over that workflow.
+//
+// It is Needs at the workflow's scope, and differs in who it lets present what. "git clone
+// https://agentiik.example.com/finance/monthly-invoicing.git" is a git client asking, which
+// authenticates with the API token agk uses, given as the password of HTTP Basic authentication
+// whatever the username, since that is what a credential helper hands git, or as a bearer token,
+// and with nothing else: a session cookie is never read, so that a page of another site cannot
+// have a browser fetch a repository on its session's strength. A request presenting no token is
+// answered 401 with a Basic challenge, which is what makes git ask its credential helper, on
+// every path under a repository whether or not the repository exists; one presenting a token
+// that cannot read the repository is answered the 404 an absent one gets.
+//
+// It is registered with HandleGit rather than Handle, since git's paths are not the API's: see
+// Router.ServeHTTP.
+type OnRepository struct {
+	Permission Permission
+}
+
+func (o OnRepository) guards() guard {
+	return guard{permission: o.Permission, scope: Workflow, git: true}
 }
 
 // Across is a route answering, across the installation or one namespace, what its caller holds one
