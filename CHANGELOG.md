@@ -33,6 +33,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The corpus's three documents refusing a port or a workflow output of 251 characters are refused, and are read by the stored readings.
 - The schemas' repository corpus runs through `version.Check`, each valid case resolving to exactly its `expected.json`, which the vendored wire schema accepts, and each invalid one meeting exactly its `refusal.json`; the fragment corpus runs through `graph.ParseFragment` (schemas `75d34d9` vendored, still `0.3.0`).
+- The runner's boundary test refuses package `repo` by name: a runner never speaks git.
+
+### Repository
+
+- Package `repo` reads and writes git on the standard library alone, for the repositories the API is to serve: SHA-1 object IDs; commits, trees and tags held to git's own checks of each object, a refusal naming the check as git does (`hasDotgit`, `treeNotSorted`); packs of version 2, their deltas resolved against the pack or, in a thin pack, the repository, and written back whole so that an entry is copied into a fetch as it is stored; indexes of version 2, the same bytes `git index-pack` writes; pkt-line with side-band; and a tree as an `fs.FS`, read as it is walked. A push is bounded in what it sends, holds and unpacks, each bound a constant with its reason. Its readers are fuzzed from what git writes.
 
 ## v0.3.0, 2026-09-28
 

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("tree 0ac36709c405b167dc3e5fe1d78260b8489961b1\nparent ae1cbe3f0cb9bc848523005bd7a134b03f317108\nauthor Ada Lovelace <ada@example.com> 1700000000 +0100\ncommitter Grace Hopper <grace@example.com> 1700000100 +0000\n\nsecond\n")

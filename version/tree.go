@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/repo"
 )
 
 // The rules a version is refused by beyond the language's own, each spelled as the repository
@@ -131,8 +132,9 @@ func TreePath(p string) error {
 		}
 		// A segment that is .git, which a commit's tree never holds since git refuses it,
 		// and which laid out under /agk/repo would be a repository configuration, hooks
-		// and all, that any git a step runs there obeys.
-		if dotGit(segment) {
+		// and all, that any git a step runs there obeys. The rule is git's own, held in
+		// package repo, which reads the trees a push sends.
+		if repo.DotGit(segment) {
 			return inTree(RuleDotGitInTree, p, fmt.Sprintf("%q has a segment that is .git on some filesystem a tree is laid out on, and .git is git's own and never part of a commit's tree", p))
 		}
 	}
@@ -213,42 +215,4 @@ func entryPoint(tree fs.FS) error {
 func EntryPointBelowRoot(name string) error {
 	dir := path.Dir(name)
 	return inTree(RuleEntryPointBelowRoot, name, fmt.Sprintf("the entry point is in %s/ rather than at the root of the repository, where it always is: a workflow kept in a directory of a larger repository is pushed as a repository of its own, which git subtree split --prefix %s makes, and a version pushed from a directory before v0.4.0 stays runnable", dir, dir))
-}
-
-// dotGit is whether a segment is .git on some filesystem a runner may lay a tree out on, which is
-// the rule git applies itself, with core.protectNTFS and core.protectHFS, before it writes a name.
-//
-// A filesystem that folds case makes .GIT one. NTFS also drops the dots and spaces a name ends
-// with, reads what follows a colon as a stream of the file before it, and gives .git the short
-// name GIT~1, so .git., .git::$INDEX_ALLOCATION and GIT~1 are each .git there. HFS+ ignores a
-// handful of invisible code points, so .g\u200cit is .git on it. On a Linux disk every one of
-// these is an ordinary name, and a tree is laid out on whatever disk its runner has.
-func dotGit(segment string) bool {
-	s := strings.Map(func(r rune) rune {
-		if hfsIgnores(r) {
-			return -1
-		}
-		return r
-	}, segment)
-	if colon := strings.IndexByte(s, ':'); colon >= 0 {
-		s = s[:colon]
-	}
-	s = strings.TrimRight(s, ". ")
-	if strings.EqualFold(s, ".git") {
-		return true
-	}
-	// GIT~1, and any other number, since which one NTFS gives depends on what the directory
-	// held before.
-	number, short := strings.CutPrefix(strings.ToLower(s), "git~")
-	return short && number != "" && strings.Trim(number, "0123456789") == ""
-}
-
-// hfsIgnores is whether HFS+ leaves a code point out when it compares two names: the ones git's
-// own is_hfs_dotgit skips.
-func hfsIgnores(r rune) bool {
-	switch {
-	case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x206a && r <= 0x206f, r == 0xfeff:
-		return true
-	}
-	return false
 }
