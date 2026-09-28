@@ -71,6 +71,7 @@ func TestEveryTableNamingANamespaceIsBehindItsPolicy(t *testing.T) {
 	// that name one all the same: a table dropped from the catalog, or renamed, is one this test no
 	// longer asks about, and has to be seen to be.
 	for _, want := range []string{"workflows", "runs", "tasks", "artifacts", "grants", "secret_declarations",
+		"image_pins", "brick_manifests",
 		"audit_log", "auth_policy", "notifications", "service_accounts"} {
 		if !strings.Contains(" "+joinNames(tables, func(tb table) string { return tb.name })+" ", " "+want+" ") {
 			t.Errorf("%s names no namespace in the catalog, and this test expects it to", want)

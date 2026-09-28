@@ -71,3 +71,18 @@ func TestTheRepositoryOfAReference(t *testing.T) {
 		}
 	}
 }
+
+// An image named by digest is its repository at its digest, whatever tag is written beside it: a
+// pull reads the digest and not the tag.
+func TestAnImageAtItsDigestLeavesOutTheTagBesideIt(t *testing.T) {
+	for ref, want := range map[string]string{
+		"alpine@" + aDigest:                                 "alpine@" + aDigest,
+		"alpine:3.21@" + aDigest:                            "alpine@" + aDigest,
+		"registry.example:5000/acme/brick@" + aDigest:       "registry.example:5000/acme/brick@" + aDigest,
+		"registry.example:5000/acme/brick:1.4.0@" + aDigest: "registry.example:5000/acme/brick@" + aDigest,
+	} {
+		if got := agk.ImageAtDigest(ref); got != want {
+			t.Errorf("%s at its digest is %q, want %q", ref, got, want)
+		}
+	}
+}

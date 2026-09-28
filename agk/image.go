@@ -37,3 +37,11 @@ func ImageRepository(ref string) string {
 	}
 	return ref
 }
+
+// ImageAtDigest is ref, which names its image by digest, as its repository at its digest: less a
+// tag written beside the digest, which a pull does not read. alpine:3.21@sha256:<hex> and
+// alpine@sha256:<hex> pull one image, so whatever is kept by image is kept under one name.
+func ImageAtDigest(ref string) string {
+	_, digest, _ := strings.Cut(ref, "@")
+	return ImageRepository(ref) + "@" + digest
+}
