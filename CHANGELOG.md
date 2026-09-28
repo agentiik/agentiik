@@ -8,6 +8,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - A version stored before this release naming a port or a workflow output of 251 to 255 characters, or a secret its namespace does not declare, rebuilds, starts and runs as before, with nothing to do: both rules are applied where a version is made, and never where a stored one is read back (`version.Build`, `graph.LoadStored`, `brick.ParseStoredManifest`, a task's read of its image, `agk run --namespace`). Pushed again with the same files, from an agk of any release, it is answered as that version, unchanged; with other files, 409 as before.
 - A version stored before this release from a directory of its repository, under a name its `metadata` does not write, or relocating a file to a relative path, rebuilds, starts and runs as before, with nothing to do, and the push route answers it as that version when an earlier agk pushes it again: those rules are applied where a version is made (`version.Check`), which is also why this release's `agk push` makes none.
+- Every tag a stored version pinned, and every manifest it holds, is recorded in its namespace at the upgrade (migration 0050), each from the newest version holding it, so that a workflow pushed as trees is known at its first git push; no version changes.
 
 ### Workflows
 
@@ -16,18 +17,25 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A step keeps its whole `extends` chain (`graph.Step.Extends`), a workflow include reads the other repository's root `agentiik.yaml` as a fragment with its path includes resolved there (`graph.Remote`), and the includes are recorded in the order they applied.
 - A version's graph is written as `wire.schema.json#/$defs/resolvedGraph` (`graph.Graph.Resolved`), leaving out keywords at the language's default, the script keywords of a brick or a call, and the namespace.
 - A file relocated to a relative path by `files` is refused where a version is made.
+- A brick step whose image no manifest is held of is refused at its image naming `agk push` (`manifest-missing`), as a tag with no pin is (`image-not-pinned`), and `version.Recorded` answers both from what the namespace recorded.
 
 ### API
 
 - A push naming a port or a workflow output past 250 characters (`agk.PortMaxBytes`), in the entry point, a file it includes or a manifest it carries, is refused with 422 before any of its tree is stored (`version.Check`).
 - A push naming a secret its namespace does not declare is refused with 422 before any of its tree is stored, naming the secret and the steps that mount it, once the pusher holds `secret:use`.
 - A push whose `metadata.name` is not the workflow it is pushed to, or whose `metadata.namespace` is not its namespace, is refused with 422 at the line (`metadata-name-not-repository`, `metadata-namespace-not-repository`), and a version records only the files, manifests and digests it was judged over.
+- `PUT /api/v1/{ns}/images` records tags pinned to digests and brick manifests by image digest, under `workflow:write` on the namespace, answered 204; at most 16 MiB, 4,096 pins and 4,096 manifests, and a reference of at most 512 bytes. Not audited: each row keeps who recorded it and when.
+
+### State
+
+- `image_pins` and `brick_manifests` hold what a namespace recorded of its images, with who recorded each and when, under forced row level security.
 
 ### agk
 
 - `agk validate`, `agk run --local` and `agk push` refuse a port or a workflow output past 250 characters in the file and in the manifests they read (`graph.Load`, `brick.ParseManifest`, `driver.Docker.Manifest`).
 - `agk run --local` says before its first step that it executes the working tree, uncommitted changes included, and is labelled local.
 - `agk push` pushes its repository from the root and refuses an entry point below it, naming `git subtree split --prefix <directory>` (`entry-point-below-root`), and a `--namespace` other than the file's `metadata.namespace`.
+- `agk push` records what it read of the images in its namespace before it pushes the version, and says so where it could not; `agk validate`, where an installation is configured, records its bricks' tags and manifests in `--namespace` or the file's namespace, and exits as it did.
 
 ### Tests
 
