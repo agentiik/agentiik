@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -399,5 +400,146 @@ func TestSessionsAnEnrolmentCodeOpenedGoAtTheUpgrade(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// v030 is the last migration v0.3.0 carried.
+const v030 = "0048_sessions_opened_by_a_credential.sql"
+
+// A workflow v0.3.0 holds becomes an empty repository at the upgrade and keeps everything it held:
+// its versions, its runs and the objects its trees name are the rows they were, not one of them
+// written again, every version reads as sent as a tree, and each workflow gains a key of its own and
+// its default branch unborn and unprotected, one ref and no pack. A default branch no push could
+// create, which only an API call written by hand could have named, is given no ref.
+func TestAWorkflowOfV030BecomesAnEmptyRepositoryWithEveryVersionItHeld(t *testing.T) {
+	super, role := migratedAt(t, v030)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	const first, second = "01JMZ8V1P9C4XQ7K2N4D6F8H0A", "01M2AAZ9G62NQXFAFCXKRPJEH5"
+	tree := `[{"path": "agentiik.yaml", "sha256": "` + digestOf("a") + `", "size": 412, "mode": "0644"}]`
+	for _, stmt := range []string{
+		`insert into namespaces (name) values ('finance'), ('team-ops')`,
+		`insert into workflows (namespace, name, default_branch) values
+		   ('finance', 'monthly-invoicing', 'master'), ('team-ops', 'nightly', 'main'), ('team-ops', 'odd', 'two words')`,
+		`insert into workflow_versions (namespace, workflow, commit, parent, graph, tree, author, created_at) values
+		   ('finance', 'monthly-invoicing', 'a3f9c1e', null, '{"entry": "agentiik.yaml"}', '` + tree + `', 'alice', now() - interval '2 days'),
+		   ('finance', 'monthly-invoicing', 'b4a0d2f', 'a3f9c1e', '{"entry": "agentiik.yaml"}', '` + tree + `', 'bob', now() - interval '1 day'),
+		   ('team-ops', 'nightly', 'c1d2e3f', null, '{"entry": "agentiik.yaml"}', null, 'operator', now())`,
+		`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs)
+		   values ('finance', 'sha256:` + digestOf("a") + `', 412, 'application/octet-stream', 2)`,
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, files_recorded) values
+		   ('finance', '` + first + `', 'monthly-invoicing', 'a3f9c1e', 'succeeded', 'manual', 'alice', true),
+		   ('finance', '` + second + `', 'monthly-invoicing', 'b4a0d2f', 'running', 'schedule', 'bob', true)`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("filling the database as v0.3.0 would have: %s", err)
+		}
+	}
+
+	// Every row as it is stored, where it is stored and by which transaction: a row written again,
+	// even with the same values, moves or changes its xmin.
+	rows := func(table, without string) []string {
+		t.Helper()
+		var out []string
+		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - '%s')::text
+		                                         from %s t order by 1`, without, pgx.Identifier{table}.Sanitize()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err = pgx.CollectRows(r, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	before := map[string][]string{}
+	for _, table := range []string{"workflow_versions", "runs", "artifact_objects"} {
+		before[table] = rows(table, "source")
+	}
+
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatalf("the upgrade was refused on a database v0.3.0 filled: %s", err)
+	}
+	for table, was := range before {
+		if now := rows(table, "source"); !slices.Equal(now, was) {
+			t.Errorf("the upgrade wrote %s again:\nbefore %q\nafter  %q", table, was, now)
+		}
+	}
+	var sources []string
+	if err := conn.QueryRow(ctx, `select array_agg(distinct source) from workflow_versions`).Scan(&sources); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sources, []string{SourceTree}) {
+		t.Errorf("the versions v0.3.0 held read as sent by %v", sources)
+	}
+
+	type refRow struct {
+		namespace, workflow, ref, key string
+		unborn, protected, anybody    bool
+	}
+	r, err := conn.Query(ctx, `select w.namespace, w.name, r.ref, w.repository, r.commit is null, r.protected,
+	                                  r.moved_by is not null or w.created_by is not null
+	                             from workflows w join workflow_refs r on r.namespace = w.namespace and r.workflow = w.name
+	                            order by 1, 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := pgx.CollectRows(r, func(row pgx.CollectableRow) (refRow, error) {
+		var x refRow
+		err := row.Scan(&x.namespace, &x.workflow, &x.ref, &x.key, &x.unborn, &x.protected, &x.anybody)
+		return x, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 || refs[0].workflow != "monthly-invoicing" || refs[0].ref != "refs/heads/master" ||
+		refs[1].workflow != "nightly" || refs[1].ref != "refs/heads/main" {
+		t.Fatalf("the upgrade gave the workflows the refs %+v", refs)
+	}
+	for _, x := range refs {
+		if !x.unborn || x.protected || x.anybody {
+			t.Errorf("%s/%s's default branch reads as unborn %t, protected %t, and moved or created by somebody %t", x.namespace, x.workflow, x.unborn, x.protected, x.anybody)
+		}
+	}
+	var keys, distinct int
+	if err := conn.QueryRow(ctx, `select count(*) filter (where repository ~ '^[0-9a-f]{32}$'), count(distinct repository) from workflows`).Scan(&keys, &distinct); err != nil {
+		t.Fatal(err)
+	}
+	if keys != 3 || distinct != 3 {
+		t.Errorf("of 3 workflows, %d were given a key and %d keys are distinct", keys, distinct)
+	}
+	var packs int
+	if err := conn.QueryRow(ctx, `select count(*) from git_packs`).Scan(&packs); err != nil || packs != 0 {
+		t.Errorf("the upgrade recorded %d packs, %v", packs, err)
+	}
+
+	// A version recorded from now on says how it arrived: a tree push says nothing and is a tree,
+	// and a git push says so.
+	pool, err := Open(ctx, withCredentials(super, role, "test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	for commit, source := range map[string]string{"d5e6f7a": "", "e6f7a8b": SourceGit} {
+		v := aVersion(commit, nil)
+		v.Source = source
+		err := pool.In(ctx, "finance", func(ctx context.Context, n *NS) error {
+			if _, err := n.SaveVersion(ctx, v); err != nil {
+				return err
+			}
+			read, err := n.Version(ctx, "monthly-invoicing", commit)
+			if want := cmp.Or(source, SourceTree); read.Source != want {
+				t.Errorf("a version saved from %q reads as arrived by %q", source, read.Source)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
