@@ -199,7 +199,7 @@ func TestASelectorsBaseIsItsFixedPrefix(t *testing.T) {
 // A redemption reads every selector against every file of the tree, so a glob written with many
 // ** against a deep tree has to cost the product of the two lengths and not a power of them.
 func TestManyDoubleStarsCostNoMoreThanTheTreeIsDeep(t *testing.T) {
-	glob := strings.Repeat("**/a/", 30) + "b"
+	glob := strings.Split(strings.Repeat("**/a/", 30)+"b", "/")
 	deep := strings.Repeat("a/", 60) + "c"
 	done := make(chan bool)
 	go func() { done <- globMatch(glob, deep) }()

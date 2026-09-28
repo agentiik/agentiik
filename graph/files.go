@@ -70,11 +70,12 @@ func SelectFiles(files []FileSelector, paths []string) Selection {
 			continue
 		}
 		base, isGlob := baseOf(from)
+		glob := strings.Split(from, "/")
 		for _, p := range paths {
 			var under bool
 			switch {
 			case isGlob:
-				under = globMatch(from, p)
+				under = globMatch(glob, p)
 			default:
 				under = p == from || from == "." || strings.HasPrefix(p, from+"/")
 			}
@@ -239,15 +240,15 @@ func segmentMatch(glob, name string) bool {
 	return ok
 }
 
-// globMatch says whether a glob selects the file at p, segment by segment.
+// globMatch says whether a glob, split into its segments, selects the file at p, segment by
+// segment.
 //
 // ** is held to "a segment of its own", and written inside one it is two stars, each matching
 // within that segment. The match is a table of which segments of the glob can meet which of the
 // path's rather than a recursion, so that a glob of many ** against a deep tree costs the product
 // of their lengths and never more: a runner's redemption reads it once per file of the tree, and a
 // workflow should not be able to make that exponential.
-func globMatch(glob, p string) bool {
-	pat := strings.Split(glob, "/")
+func globMatch(pat []string, p string) bool {
 	name := strings.Split(p, "/")
 	// meets[i][j]: pat[i:] matches name[j:].
 	meets := make([][]bool, len(pat)+1)
