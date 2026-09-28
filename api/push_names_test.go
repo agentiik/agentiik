@@ -160,3 +160,85 @@ func TestAStoredVersionPushedAgainIsAnsweredAsItWas(t *testing.T) {
 		t.Errorf("the refusal reads %q", said)
 	}
 }
+
+// A version is made under the name its file writes: metadata.name is the workflow's name, which
+// the route names too, and metadata.namespace, where the file writes one, the namespace. A push
+// under another is refused with 422 naming the rule and the line, before anything is stored. A
+// commit already stored under another name, which a push before v0.4.0 could make, is not judged
+// again by it.
+func TestAVersionIsPushedUnderTheNameItsFileWrites(t *testing.T) {
+	h, pool, _, objects := servingWithObjects(t)
+	for _, c := range []struct {
+		to, document, says string
+	}{
+		{"/api/v1/finance/workflows/payroll/versions/" + aCommit, workflowDocument, "agentiik.yaml:4:19: metadata-name-not-repository"},
+		{pushTo, named(workflowDocument, "team-ops", "monthly-invoicing"), "agentiik.yaml:4:49: metadata-namespace-not-repository"},
+	} {
+		w, answer := call(t, h, "PUT", c.to, "alice", pushedAsWritten(c.document, brickManifest))
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Errorf("a push to %s answered %d: %s", c.to, w.Code, w.Body)
+			continue
+		}
+		if said, _ := answer["error"].(string); !strings.Contains(said, c.says) {
+			t.Errorf("a push to %s was refused with %q", c.to, said)
+		}
+		if held, err := objects.Has(t.Context(), keyOf("finance", []byte(c.document))); held || err != nil {
+			t.Errorf("a push to %s was refused and its tree stored: %v %v", c.to, held, err)
+		}
+	}
+
+	push := pushedAsWritten(workflowDocument, brickManifest)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		if err := ns.SaveWorkflow(ctx, "payroll", "main"); err != nil {
+			return err
+		}
+		_, err := ns.SaveVersion(ctx, db.Version{
+			Workflow: "payroll", Commit: aCommit, Author: "operator",
+			Entry: push.Entry, Document: push.Document, Manifests: push.Manifests, Tree: treeOf(push.Tree),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/payroll/versions/"+aCommit, "alice", push); w.Code != http.StatusOK {
+		t.Errorf("a version stored under another name, pushed again, answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// What a push records is what its version was judged over, the files resolution read and the
+// manifest of every image a brick step runs, and nothing else the push carried, so that a rebuild
+// reads what was accepted. A digest for a tag no step names is refused, since its reviewers would
+// be reading about an image that never runs.
+func TestAPushRecordsWhatItsVersionWasJudgedOver(t *testing.T) {
+	h, pool, _ := serving(t)
+	push := aPush(t)
+	push.Tree["fragments/unused.yaml"] = api.PushFile{Content: []byte(".unused:\n  timeout: 1m\n"), Mode: "0644"}
+	push.Includes = map[string][]byte{"fragments/unused.yaml": push.Tree["fragments/unused.yaml"].Content}
+	push.Manifests["ghcr.io/acme/agk-unused@sha256:8214cabcb148ac56e69ee08e1554684f7609d08b58c4527938fdcf400be68595"] = []byte(brickManifest)
+
+	tagged := push
+	tagged.Images = map[string]string{"ghcr.io/acme/agk-unused:1.0.0": "ghcr.io/acme/agk-unused@sha256:8214cabcb148ac56e69ee08e1554684f7609d08b58c4527938fdcf400be68595"}
+	w, answer := call(t, h, "PUT", pushTo, "alice", tagged)
+	if said, _ := answer["error"].(string); w.Code != http.StatusUnprocessableEntity || !strings.Contains(said, "ghcr.io/acme/agk-unused:1.0.0") {
+		t.Fatalf("a push recording a digest for a tag no step names answered %d: %s", w.Code, w.Body)
+	}
+
+	if w, _ := call(t, h, "PUT", pushTo, "alice", push); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		v, err := ns.Version(ctx, "monthly-invoicing", aCommit)
+		if err != nil {
+			return err
+		}
+		if len(v.Includes) != 0 {
+			t.Errorf("the version holds the includes %v, and the workflow includes nothing", slices.Sorted(maps.Keys(v.Includes)))
+		}
+		if got := slices.Sorted(maps.Keys(v.Manifests)); !slices.Equal(got, []string{image}) {
+			t.Errorf("the version holds the manifests of %v, and its bricks run %s", got, image)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

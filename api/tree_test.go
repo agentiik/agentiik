@@ -19,6 +19,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/version"
 )
 
 // The tree a push carries, which is what every step of every run sees.
@@ -120,8 +121,8 @@ func TestATreeThatCannotBeGivenToAContainer(t *testing.T) {
 		{"a path that is a file and a directory", adding(map[string]api.PushFile{"scripts": file("x"), "scripts/render.sh": file("y")}), http.StatusBadRequest},
 		// A name sorting between the file and what is below it, since - comes before /.
 		{"a file and a directory with a name between them", adding(map[string]api.PushFile{"scripts": file("x"), "scripts-old": file("y"), "scripts/render.sh": file("z")}), http.StatusBadRequest},
-		{"a name longer than a filesystem holds", adding(map[string]api.PushFile{"data/" + strings.Repeat("n", api.TreeNameMaxBytes+1): file("x")}), http.StatusBadRequest},
-		{"a path longer than a runner can lay out", adding(map[string]api.PushFile{strings.Repeat("d/", api.TreePathMaxBytes/2) + "x": file("x")}), http.StatusBadRequest},
+		{"a name longer than a filesystem holds", adding(map[string]api.PushFile{"data/" + strings.Repeat("n", version.TreeNameMaxBytes+1): file("x")}), http.StatusBadRequest},
+		{"a path longer than a runner can lay out", adding(map[string]api.PushFile{strings.Repeat("d/", version.TreePathMaxBytes/2) + "x": file("x")}), http.StatusBadRequest},
 		// What Windows reads as separators, which leave the tree there.
 		{"a backslash climbing out on Windows", adding(map[string]api.PushFile{`scripts\..\..\outside.sh`: file("x")}), http.StatusBadRequest},
 		{"a Windows drive", adding(map[string]api.PushFile{`C:\outside.sh`: file("x")}), http.StatusBadRequest},
@@ -186,12 +187,12 @@ func TestAPathOfMebibytesIsRefusedByItsLength(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("a path of %d bytes answered %d", len(deep), w.Code)
 	}
-	if said, _ := answer["error"].(string); !strings.Contains(said, fmt.Sprint(api.TreePathMaxBytes)) || len(said) > 1024 {
+	if said, _ := answer["error"].(string); !strings.Contains(said, fmt.Sprint(version.TreePathMaxBytes)) || len(said) > 1024 {
 		t.Errorf("the refusal reads %.200q, in %d bytes", said, len(said))
 	}
 
 	// And the longest path and the longest name there may be are pushed like any other.
-	longest := strings.Repeat("d/", (api.TreePathMaxBytes-api.TreeNameMaxBytes)/2) + strings.Repeat("n", api.TreeNameMaxBytes)
+	longest := strings.Repeat("d/", (version.TreePathMaxBytes-version.TreeNameMaxBytes)/2) + strings.Repeat("n", version.TreeNameMaxBytes)
 	if w, _ := call(t, h, "PUT", pushTo, "alice", pushed(t, map[string]api.PushFile{longest: {Content: []byte("x"), Mode: "0644"}})); w.Code != http.StatusOK {
 		t.Errorf("a path of %d bytes answered %d: %s", len(longest), w.Code, w.Body)
 	}
@@ -321,9 +322,11 @@ func TestANameLongerThanADirectoryHoldsIsRefusedAtThePush(t *testing.T) {
 	h, _, _, objects := servingWithObjects(t)
 	longest := strings.Repeat("n", 255)
 
-	// The ordinary push with its last step renamed, carrying a file no other push carries.
-	renamed := func(step string, lone []byte) api.Push {
-		doc := []byte(strings.ReplaceAll(workflowDocument, "archive", step))
+	// The ordinary push under another name, with its last step renamed, carrying a file no
+	// other push carries. The file's metadata names the workflow it is pushed as, which a new
+	// version is held to.
+	renamed := func(workflow, step string, lone []byte) api.Push {
+		doc := []byte(strings.ReplaceAll(named(workflowDocument, "finance", workflow), "archive", step))
 		p := pushed(t, map[string]api.PushFile{"scripts/lone.sh": {Content: lone, Mode: "0755"}})
 		p.Document = doc
 		p.Tree["agentiik.yaml"] = api.PushFile{Content: doc, Mode: "0644"}
@@ -333,7 +336,7 @@ func TestANameLongerThanADirectoryHoldsIsRefusedAtThePush(t *testing.T) {
 	// At the bound, under a workflow and with a step of 255 characters each, and a run of it
 	// starts, which is where the step is first written into a row.
 	at := "/api/v1/finance/workflows/" + longest
-	if w, _ := call(t, h, "PUT", at+"/versions/"+aCommit, "alice", renamed(longest, []byte("at the bound\n"))); w.Code != http.StatusOK {
+	if w, _ := call(t, h, "PUT", at+"/versions/"+aCommit, "alice", renamed(longest, longest, []byte("at the bound\n"))); w.Code != http.StatusOK {
 		t.Fatalf("a workflow and a step of 255 characters answered %d: %s", w.Code, w.Body)
 	}
 	if w, _ := call(t, h, "POST", at+"/runs", "alice", api.Start{Commit: aCommit, Inputs: map[string]any{"orders": []any{}}}); w.Code != http.StatusAccepted {
@@ -341,16 +344,17 @@ func TestANameLongerThanADirectoryHoldsIsRefusedAtThePush(t *testing.T) {
 	}
 
 	for _, c := range []struct {
-		name   string
-		to     string
-		step   string
-		status int
+		name     string
+		to       string
+		workflow string
+		step     string
+		status   int
 	}{
-		{"a step of 256 characters", pushTo, longest + "n", http.StatusUnprocessableEntity},
-		{"a workflow of 256 characters", "/api/v1/finance/workflows/" + longest + "n/versions/" + aCommit, "archive", http.StatusBadRequest},
+		{"a step of 256 characters", pushTo, "monthly-invoicing", longest + "n", http.StatusUnprocessableEntity},
+		{"a workflow of 256 characters", "/api/v1/finance/workflows/" + longest + "n/versions/" + aCommit, "monthly-invoicing", "archive", http.StatusBadRequest},
 	} {
 		lone := []byte("only " + c.name + " carries this file\n")
-		w, answer := call(t, h, "PUT", c.to, "alice", renamed(c.step, lone))
+		w, answer := call(t, h, "PUT", c.to, "alice", renamed(c.workflow, c.step, lone))
 		if w.Code != c.status {
 			t.Errorf("%s answered %d: %s", c.name, w.Code, w.Body)
 			continue
