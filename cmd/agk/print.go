@@ -247,6 +247,13 @@ func under(dir, path string) string {
 	return rel
 }
 
+// workingTree is the line a local run starts with: it runs the working tree at tree as the disk
+// holds it, which no commit describes, so the line says so before any step does and names the
+// label run.json carries, which is where a history looks.
+func workingTree(tree string) string {
+	return fmt.Sprintf("this run executes the working tree at %s, uncommitted changes included, and no commit describes it: it is labelled local, so that no history takes it for a run that can be reproduced", tree)
+}
+
 // reportSuccess is the success line of a run and where everything it produced is.
 //
 // A control names its effect, so it says what the run did rather than that it finished: the
