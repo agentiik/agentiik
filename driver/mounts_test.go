@@ -17,6 +17,7 @@ import (
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/docker"
+	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
 // vault is a secret source of values written down, which is what agk run --local is and
@@ -871,5 +872,27 @@ func TestAPlacedKeyIsGivenToTheAccountTheContainerRunsAs(t *testing.T) {
 	owner, _ := ownerOf(info)
 	if owner != 65532 && (len(said) != 1 || !strings.Contains(said[0], "keeps this process's owner")) {
 		t.Errorf("the key is owned by %d and the process said %q", owner, said)
+	}
+}
+
+// Run holds a placed key to the account the brick runs as before any container exists: a brick
+// whose manifest names its account by name, given a key only its owner may read, is refused,
+// saying what to write instead, and nothing is created.
+func TestABrickNamingItsAccountIsRefusedAKeyOnlyItsOwnerReads(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	named := strings.Replace(goodManifest, `user: "65532:65532"`, `user: "nonroot"`, 1)
+	r := newRunner(t, oneImage(ref, named), func(dockertest.Container) (int, error) { return 0, nil })
+	repo := aRepository(t, map[string]os.FileMode{"key.pem": 0o644})
+	r.cfg.Repo = func(context.Context, string, string, string) (string, error) { return repo, nil }
+
+	task := oneTask(ref)
+	task.Files = []graph.FileSelector{{From: "key.pem", To: "/etc/app/key.pem", Mode: "0600"}}
+	_, err := r.Run(t.Context(), task)
+	var f *Fault
+	if !errors.As(err, &f) || f.Charge != ChargeBrick || !strings.Contains(err.Error(), `"nonroot"`) {
+		t.Fatalf("running answered %v", err)
+	}
+	if made := createdFor(r, task.ID); made.ID != "" {
+		t.Errorf("a container was created for a key its brick could not read")
 	}
 }
