@@ -214,7 +214,7 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 	// --local is the one run no commit describes: it executes the working tree, uncommitted
 	// changes included, and is labelled so that no history mistakes it for something
 	// reproducible". A terminal pasted into an incident is a history too.
-	fmt.Fprintln(story, workingTree(root))
+	fmt.Fprintln(story, workingTree(e.Dir, root))
 	narration := newNarration(story, g, *verbose)
 	out, err := session.Run(ctx, local.Request{
 		Graph:   g,

@@ -250,8 +250,16 @@ func under(dir, path string) string {
 // workingTree is the line a local run starts with: it runs the working tree at tree as the disk
 // holds it, which no commit describes, so the line says so before any step does and names the
 // label run.json carries, which is where a history looks.
-func workingTree(tree string) string {
-	return fmt.Sprintf("this run executes the working tree at %s, uncommitted changes included, and no commit describes it: it is labelled local, so that no history takes it for a run that can be reproduced", tree)
+//
+// The tree is named the way the person reading would type it, as the report names a file: the
+// directory the command was run in is the current directory, one below it is its path from
+// there, and one elsewhere is said in full.
+func workingTree(dir, tree string) string {
+	where := "in the current directory"
+	if filepath.Clean(dir) != filepath.Clean(tree) {
+		where = "at " + under(dir, tree)
+	}
+	return fmt.Sprintf("this run executes the working tree %s, uncommitted changes included, and no commit describes it: it is labelled local, so that no history takes it for a run that can be reproduced", where)
 }
 
 // reportSuccess is the success line of a run and where everything it produced is.

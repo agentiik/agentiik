@@ -422,3 +422,20 @@ func TestTheReportNamesAFileTheWayItWouldBeTyped(t *testing.T) {
 		t.Errorf("with no directory, a path reads as %q", got)
 	}
 }
+
+// The working tree a local run executes is named the way the person reading would type it: the
+// directory the command was run in, a directory below it by its path from there, and one elsewhere
+// in full.
+func TestTheWorkingTreeIsNamedTheWayItWouldBeTyped(t *testing.T) {
+	dir := filepath.Join(string(filepath.Separator), "Users", "someone", "invoicing")
+	for tree, want := range map[string]string{
+		dir:                              "the working tree in the current directory,",
+		dir + string(filepath.Separator): "the working tree in the current directory,",
+		filepath.Join(dir, "billing"):    "the working tree at billing,",
+		filepath.Join(string(filepath.Separator), "srv", "billing"): "the working tree at " + filepath.Join(string(filepath.Separator), "srv", "billing") + ",",
+	} {
+		if got := workingTree(dir, tree); !strings.Contains(got, want) || !strings.Contains(got, "uncommitted changes included") || !strings.Contains(got, "labelled local") {
+			t.Errorf("the working tree %s run from %s reads %q", tree, dir, got)
+		}
+	}
+}

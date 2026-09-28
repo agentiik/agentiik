@@ -208,9 +208,9 @@ steps:
 	if code != exitSucceeded {
 		t.Fatalf("the exit code is %d\n%s\n%s", code, out, errs)
 	}
-	said := strings.Index(errs, "this run executes the working tree at "+dir+", uncommitted changes included")
+	said := strings.Index(errs, "this run executes the working tree in the current directory, uncommitted changes included")
 	if said < 0 {
-		t.Fatalf("the narration does not say the run executes the working tree at %s:\n%s", dir, errs)
+		t.Fatalf("the narration does not say the run executes the working tree it was run in:\n%s", errs)
 	}
 	if !strings.Contains(errs[said:], "labelled local") {
 		t.Errorf("the line does not name the label a history reads:\n%s", errs)
