@@ -566,6 +566,15 @@ func TestInitRefusesItsSettingsBeforeWritingAnything(t *testing.T) {
 	if entries, _ := os.ReadDir(dir); len(entries) > 0 {
 		t.Errorf("init wrote %d entries for a namespace it refuses", len(entries))
 	}
+
+	// stats, reserved since v0.2.5's init could create a namespace under it, is decided once the
+	// database says whether it holds one, so the settings let it through.
+	env[config.InitNamespace] = "stats"
+	stderr.Reset()
+	run(t.Context(), []string{"init"}, lookup, &stdout, &stderr)
+	if strings.Contains(stderr.String(), "the configuration refuses the start") {
+		t.Errorf("the settings refused stats before the database was asked:\n%s", stderr.String())
+	}
 }
 
 // Against a database: the migration, the namespace and the runner's join token, each run, and a
@@ -677,6 +686,80 @@ func TestInitWarnsAndGoesOnWhereALoginHoldsTheNamespacesName(t *testing.T) {
 	}
 	if strings.TrimSpace(d.read(t, runnerDir, "join-token")) == first {
 		t.Error("init stopped before the runner's join token, where a login held the namespace's name")
+	}
+}
+
+// init names the namespace AGK_INIT_NAMESPACE says at every run. On an installation of v0.2.5
+// that named stats, which v0.3.0 reserved for GET /api/v1/stats/pools, the namespace is there
+// already and is kept: init goes on, at every run, saying in one line that it is served as before
+// with nothing to do, and asks nothing of anybody. Where no namespace of that name is there, as on a
+// new installation naming it, init creates none, asks for another name, and goes on: every service
+// waits on init.
+func TestInitKeepsANamespaceOfV025NamedAfterAWordReservedSince(t *testing.T) {
+	database := freshDatabase(t)
+	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.WithoutCancel(t.Context()))
+	if _, err := db.MigrateThrough(t.Context(), admin, v025); err != nil {
+		t.Fatalf("the database could not be migrated as v0.2.5 migrated it: %s", err)
+	}
+	if _, err := admin.Exec(t.Context(), `insert into namespaces (name) values ('stats')`); err != nil {
+		t.Fatal(err)
+	}
+	d := aPreparedDirectory(t)
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "stats",
+		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
+	}
+	for run := range 2 {
+		d.out.Reset()
+		if err := initialize(t.Context(), c, d.at(firstRun.Add(time.Duration(run)*time.Minute))); err != nil {
+			t.Fatalf("run %d on the installation v0.2.5 left failed: %s\n%s", run+1, err, d.out.String())
+		}
+		for _, said := range []string{
+			"namespace stats already exists, and was left as it was",
+			"namespace stats keeps its name and is served as before, with nothing to do: stats is reserved from v0.3.0, so no new namespace, login, group or service account takes it\n",
+		} {
+			if !strings.Contains(d.out.String(), said) {
+				t.Errorf("run %d did not say %q:\n%s", run+1, said, d.out.String())
+			}
+		}
+		if out := d.out.String(); strings.Contains(out, "workflows") || strings.Contains(out, "create another") || strings.Contains(out, "Pick another") {
+			t.Errorf("run %d asked something of an installation keeping stats:\n%s", run+1, out)
+		}
+	}
+	var accounts int
+	if err := admin.QueryRow(t.Context(), `select count(*) from service_accounts where namespace = 'stats' and name = 'agentiik'`).Scan(&accounts); err != nil {
+		t.Fatal(err)
+	}
+	if accounts != 1 {
+		t.Error("stats was given no built-in identity")
+	}
+
+	// Gone, as on a new installation naming it.
+	if _, err := admin.Exec(t.Context(), `delete from service_accounts where namespace = 'stats'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(t.Context(), `delete from principals where id = 'stats/agentiik'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(t.Context(), `delete from namespaces where name = 'stats'`); err != nil {
+		t.Fatal(err)
+	}
+	for run := range 2 {
+		d.out.Reset()
+		if err := initialize(t.Context(), c, d.at(firstRun.Add(time.Duration(run+2)*time.Minute))); err != nil {
+			t.Fatalf("run %d with no namespace stats failed: %s\n%s", run+1, err, d.out.String())
+		}
+		if !strings.Contains(d.out.String(), "did not create namespace stats, which "+config.InitNamespace+" names: stats is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools") ||
+			!strings.Contains(d.out.String(), "Pick another name for it there") || strings.Contains(d.out.String(), "keeps its name") {
+			t.Errorf("run %d with no namespace stats said:\n%s", run+1, d.out.String())
+		}
+	}
+	if exists(t, admin, "stats") {
+		t.Error("init created a namespace named stats")
 	}
 }
 

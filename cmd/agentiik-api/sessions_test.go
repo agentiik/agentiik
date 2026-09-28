@@ -17,8 +17,8 @@ import (
 
 // The API serve builds reads the console's session beside the bearer token, and accepts a request
 // changing something that a session carries from the public URL's origin alone: an installation
-// that left AcceptSessions out would answer a signed-in browser as nobody. A session a recovery code
-// opened reaches none of its routes, the caller's own tokens among them.
+// that left AcceptSessions out would answer a signed-in browser as nobody. A session a password
+// opened where a passkey is required reaches none of its routes, the caller's own tokens among them.
 func TestServeAcceptsSessionsFromThePublicURL(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -47,11 +47,10 @@ func TestServeAcceptsSessionsFromThePublicURL(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		code := db.EnrolmentCode{Hash: make([]byte, 32), Login: "carol", Kind: db.EnrolmentRecovery, IssuedBy: "carol", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
-		if _, err := w.IssueEnrolmentCode(ctx, code); err != nil {
+		if err := w.AddCredential(ctx, db.Credential{ID: "carol-password", Login: "carol", Type: db.CredentialPassword, PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA"}); err != nil {
 			return err
 		}
-		enrolling, err = api.OpenSession(ctx, w, "carol", api.OpenedBy{EnrolmentCode: code.Hash}, now)
+		enrolling, err = api.OpenSession(ctx, w, "carol", api.OpenedBy{Credential: "carol-password"}, now)
 		return err
 	})
 	if err != nil {
@@ -91,7 +90,7 @@ func TestServeAcceptsSessionsFromThePublicURL(t *testing.T) {
 		{"GET", "/api/v1/auth/tokens", ""},
 	} {
 		if w := carried(enrolling, c.method, c.path, "https://agentiik.example.com", c.body); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "enrols passkeys and nothing else") {
-			t.Errorf("%s %s answered a session a recovery code opened %d: %s", c.method, c.path, w.Code, w.Body)
+			t.Errorf("%s %s answered a session that may only enrol %d: %s", c.method, c.path, w.Code, w.Body)
 		}
 	}
 }

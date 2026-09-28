@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/agentiik/agentiik/agk"
@@ -46,12 +47,19 @@ func identifier(name, what, where string) error {
 
 // namespaceName holds a namespace to the identifier grammar and refuses the words the API
 // routes on, which no namespace can be named after.
+//
+// A word reserved after namespaces could be created under it is read: an installation may hold
+// a namespace created under it before, and a version of one of its workflows is read again
+// every time a run of it is evaluated, so refusing it here would fail runs an upgrade has to
+// leave going (agk.LateReservations). Creating a namespace of that name is refused where a
+// namespace is created.
 func namespaceName(name, where string) error {
 	if err := identifier(name, "the namespace", where); err != nil {
 		return err
 	}
-	if agk.IsReservedNamespace(name) {
-		return fmt.Errorf("%s names the namespace %q, a word the API routes on: the first path segment after /api/v1/ decides the route, so %s cannot name a namespace", where, name, strings.Join(agk.ReservedNamespaces, ", "))
+	if agk.NamesNoNamespace(name) {
+		words := slices.DeleteFunc(slices.Clone(agk.ReservedNamespaces), func(w string) bool { return !agk.NamesNoNamespace(w) })
+		return fmt.Errorf("%s names the namespace %q, a word the API routes on: the first path segment after /api/v1/ decides the route, so %s cannot name a namespace", where, name, strings.Join(words, ", "))
 	}
 	return nil
 }

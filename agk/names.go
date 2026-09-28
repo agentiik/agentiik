@@ -23,15 +23,38 @@ const identifierPattern = `^[A-Za-z0-9][A-Za-z0-9_-]*$`
 const IdentifierMaxBytes = 255
 
 // ReservedNamespaces are the words the API routes on as the first segment after /api/v1/,
-// which is why they cannot name a namespace: GET /api/v1/runs/{id} and GET
+// or will, which is why they cannot name a namespace: GET /api/v1/runs/{id} and GET
 // /api/v1/{ns}/runs would both claim /api/v1/runs/runs, and the router answers such a
 // path by the word. The list is fixed rather than read off the routes, so that a route
-// added later under a new word cannot make an existing namespace unreachable. The
-// schemas refuse the same words, and namespace and login creation refuse them from
-// v0.3.0, since each user gets a namespace named after their login.
-var ReservedNamespaces = []string{"auth", "me", "users", "groups", "service-accounts", "namespaces", "runners", "runner-pools", "bus", "tasks", "bricks", "runs", "artifacts"}
+// added later under a new word cannot make an existing namespace unreachable: a word is
+// reserved in a release before the route that needs it is served, as LateReservations
+// records. The schemas refuse the same words, and namespace and login creation refuse
+// them from v0.3.0, since each user gets a namespace named after their login.
+var ReservedNamespaces = []string{"auth", "me", "users", "groups", "service-accounts", "namespaces", "runners", "runner-pools", "bus", "tasks", "bricks", "runs", "artifacts", "stats"}
 
-// IsReservedNamespace reports whether name is one of ReservedNamespaces.
+// LateReservation is a word of ReservedNamespaces reserved after an installation could
+// already create a namespace under it: the release that reserved it, the route that needs
+// it and the release that serves that route.
+type LateReservation struct {
+	Word   string
+	Since  string
+	Route  string
+	Served string
+}
+
+// LateReservations are the words reserved late, stats from v0.3.0 among them. Nothing
+// renames a namespace, and an upgrade asks nothing beyond compose.yaml and .env, so one an
+// installation created under such a word before it was reserved keeps its name and is
+// served as before, the route needing the word being served at its own path alone, which
+// no route of a namespace takes: the word is refused where a name is given, and read
+// wherever an existing one is named, so that a grant, a workflow, a service account or a
+// token naming that namespace works through an upgrade as it did before it.
+var LateReservations = []LateReservation{
+	{Word: "stats", Since: "v0.3.0", Route: "GET /api/v1/stats/pools", Served: "v0.6.0"},
+}
+
+// IsReservedNamespace reports whether name is one of ReservedNamespaces, which no
+// namespace, login, group or service account is created under.
 func IsReservedNamespace(name string) bool {
 	for _, w := range ReservedNamespaces {
 		if name == w {
@@ -39,6 +62,25 @@ func IsReservedNamespace(name string) bool {
 		}
 	}
 	return false
+}
+
+// ReservedLate answers the late reservation of name, where it is one.
+func ReservedLate(name string) (LateReservation, bool) {
+	for _, r := range LateReservations {
+		if name == r.Word {
+			return r, true
+		}
+	}
+	return LateReservation{}, false
+}
+
+// NamesNoNamespace reports whether no namespace can carry name: a word of
+// ReservedNamespaces reserved before a namespace could be created under it. A reference to
+// a namespace, a login, a group or a service account is refused for these alone, since a
+// word reserved late may name one an installation created before (LateReservations).
+func NamesNoNamespace(name string) bool {
+	_, late := ReservedLate(name)
+	return IsReservedNamespace(name) && !late
 }
 
 // RunID is the identifier of a run, carried as the run's ULID. It is the value the

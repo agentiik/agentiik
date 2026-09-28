@@ -116,17 +116,12 @@ func TestTheIdentityTablesHoldTheirRules(t *testing.T) {
 		{"a token narrowed to a permission nobody has", `insert into api_tokens (id, hash, principal, principal_kind, created_at, expires_at, scope_permissions)
 		   values ('01JQ3M8T', ` + aHash + `, 'alice', 'user', now(), now() + interval '90 days', '{workflow:admin}')`, "permission_check"},
 
-		// A session was opened by one credential or one code, of its own user.
+		// A session was opened by one credential, of its own user.
 		{"a session opened by a passkey", `insert into sessions (hash, login, credential, idle_expires_at) values (` + aHash + `, 'alice', 'cGFzc2tleQ', now() + interval '1 hour')`, ""},
 		{"a session opened by somebody else's passkey", `insert into sessions (hash, login, credential, idle_expires_at) values (` + aHash + `, 'bob', 'cGFzc2tleQ', now() + interval '1 hour')`, "sessions_credential_login_fkey"},
 		{"a session kept by less than a SHA-256", `insert into sessions (hash, login, credential, idle_expires_at)
 		   values ('\x01', 'alice', 'cGFzc2tleQ', now() + interval '1 hour')`, "sessions_hash_check"},
-		{"a session opened by nothing", `insert into sessions (hash, login, idle_expires_at) values (` + aHash + `, 'alice', now() + interval '1 hour')`, "sessions_opened_by"},
-		{"two sessions opened by one code", `insert into enrolment_codes (hash, login, kind, issued_by, issued_at, expires_at)
-		   values (` + aHash + `, 'alice', 'recovery', 'bob', now(), now() + interval '1 hour');
-		   insert into sessions (hash, login, enrolment_code, idle_expires_at)
-		   values ('\x0303030303030303030303030303030303030303030303030303030303030303', 'alice', ` + aHash + `, now() + interval '1 hour'),
-		          ('\x0404040404040404040404040404040404040404040404040404040404040404', 'alice', ` + aHash + `, now() + interval '1 hour')`, "sessions_enrolment_code_key"},
+		{"a session opened by nothing", `insert into sessions (hash, login, idle_expires_at) values (` + aHash + `, 'alice', now() + interval '1 hour')`, `null value in column "credential"`},
 
 		// An enrolment code is single use, one open at a time, and good for an hour.
 		{"an enrolment code for more than an hour", `insert into enrolment_codes (hash, login, kind, issued_by, issued_at, expires_at)
@@ -316,16 +311,17 @@ func TestOneNamespaceCannotSeeAnothersGrants(t *testing.T) {
 
 // agentiik_reserved refuses the words the API routes on, which agk.ReservedNamespaces lists: no
 // fewer, so that no login takes a route, and no more, so that no login is refused for a word the
-// API does not route on.
+// API does not route on. The last migration to write the function is the one that holds.
 func TestTheReservedWordsAreTheAPIs(t *testing.T) {
 	all, err := Migrations()
 	if err != nil {
 		t.Fatal(err)
 	}
+	written := regexp.MustCompile(`create (or replace )?function agentiik_reserved`)
 	var body string
 	for _, m := range all {
-		if i := strings.Index(m.SQL, "create function agentiik_reserved"); i >= 0 {
-			body = m.SQL[i:]
+		if at := written.FindStringIndex(m.SQL); at != nil {
+			body = m.SQL[at[0]:]
 			body = body[:strings.Index(body, "$$;")]
 		}
 	}

@@ -62,6 +62,31 @@ func TestAGrantSaysWhatItBinds(t *testing.T) {
 	}
 }
 
+// A namespace created under stats before v0.3.0 reserved the word keeps its name and is served as
+// before, so a grant on it, one for its built-in identity, and a token kept within it read as they
+// did: the word is refused where a name is given, and a grant or a token only names one.
+func TestAGrantNamesANamespaceReservedLater(t *testing.T) {
+	stats := access.Scope{Namespace: "stats"}
+	for _, g := range []access.Grant{
+		allow("g1", "alice", stats, access.Owner),
+		allow("g2", "stats/agentiik", stats, access.Operator),
+		deny("d1", "alice", access.Scope{Namespace: "stats", Workflow: "daily-report"}, access.RunReadData),
+	} {
+		if err := g.Validate(); err != nil {
+			t.Errorf("%+v is refused: %v", g, err)
+		}
+	}
+	if s, err := access.ParseScope("stats/daily-report"); err != nil || s.Namespace != "stats" {
+		t.Errorf("the scope stats/daily-report reads as %+v, %v", s, err)
+	}
+	if _, err := access.ParseTokenScope(nil, []string{"stats"}); err != nil {
+		t.Errorf("a token kept within stats is refused: %v", err)
+	}
+	if err := access.TokenHolder("stats/nightly-sync"); err != nil {
+		t.Errorf("a service account of stats holds no token: %v", err)
+	}
+}
+
 // A grant is written as the wire's accessGrant: the scope as one string, the role or the deny and
 // not the other, and no expiry where it has none.
 func TestAGrantIsWrittenAsTheWireWritesIt(t *testing.T) {

@@ -570,7 +570,7 @@ func (s *PolicyAPI) setInstallation(w http.ResponseWriter, r *http.Request, who 
 // namespace is GET /api/v1/{namespace}/auth/policy, which the router let through to a caller who
 // sees the namespace: what it tightens, and nothing it inherits.
 func (s *PolicyAPI) namespace(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
-	if NamespaceName(over.Namespace) != nil {
+	if NamespaceRef(over.Namespace) != nil {
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
 		return
 	}
@@ -610,7 +610,7 @@ func (l *loosened) Error() string {
 // does to every account.
 func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := over.Namespace
-	if NamespaceName(name) != nil {
+	if NamespaceRef(name) != nil {
 		fail(w, http.StatusNotFound, "there is no namespace of that name")
 		return
 	}

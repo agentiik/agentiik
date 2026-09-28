@@ -105,7 +105,10 @@
 // init does: a namespace is created with one from v0.3.0, so those that lack it are the ones v0.2
 // made, and the runs nobody starts there are attributed to it. Each is recorded as
 // service_account.create by installation in its namespace, and a run finding none lacking says
-// nothing of it.
+// nothing of it. Then it says, in one line for every namespace named after a word reserved since
+// it was created, stats among them (agk.LateReservations), that it keeps its name and is served as
+// before, with nothing to do: nothing renames a namespace, and the word is refused to anything new
+// alone.
 //
 // And it records the artifact files of the runs v0.2 finished, as init does, where AGK_OBJECTS_DIR
 // is set, as it is among the API's settings, and names a directory it can read, which is all it
@@ -132,8 +135,10 @@
 // it; and the bus's configuration; the migration, as migrate does, as the role
 // AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does,
 // saying so and going on where a user's login holds the name, since a failed init would keep every
-// service from starting over a name somebody else holds; the built-in identity of every namespace
-// that has none, as migrate gives it; the artifact files of the runs v0.2 finished, from their
+// service from starting over a name somebody else holds, and leaving one named after a word
+// reserved since it was created as it is, as migrate says of it, or saying so, asking for another
+// name, and going on where no namespace carries such a word; the built-in identity of every
+// namespace that has none, as migrate gives it; the artifact files of the runs v0.2 finished, from their
 // envelopes in the object store's directory, as migrate records them; the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
 // administrator has signed in, saying so where none is set and none is kept, and minting none; and a
 // join token of the pool default for the runner beside it, issued through the database since the
@@ -155,7 +160,8 @@
 // a namespace before anybody could ask the API for one. It reads AGK_DATABASE_URL and
 // AGK_DATABASE_PASSWORD_FILE and connects as that role, the one the API connects as, so it runs
 // where the API runs with the API's environment; the name is held to what the API holds a namespace
-// to, reserved words refused. Each change is recorded in the audit log in its own transaction, as
+// to, reserved words refused, but for a namespace created under a word reserved since, which is
+// left as any namespace created again is. Each change is recorded in the audit log in its own transaction, as
 // namespace.create or namespace.delete by installation, as init's own acts are, the installation
 // itself being no principal a grant names, and a namespace created again is recorded unchanged and
 // left as it was, so that an installation script can run it every time. A namespace it creates has

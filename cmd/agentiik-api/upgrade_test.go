@@ -16,6 +16,7 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/config"
+	"github.com/agentiik/agentiik/internal/ulid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -27,8 +28,10 @@ const v025 = "0031_audit_verified.sql"
 // token's hash is where v0.2.5's init kept it, and this release's init runs with the same token in
 // the same setting, then serve. The token authenticates as the bootstrap operator, lists the pools,
 // reads the run the operator started under v0.2.5, and pushes and starts a run, recorded as the
-// operator's as the old one is. Once the first administrator has enrolled, the same token is a 401
-// that says why, and init, run again with the line still set, says it is ignored and succeeds.
+// operator's as the old one is. It creates the first administrator, who is handed the namespace
+// v0.2.5 made and reads the old run with nothing shared by hand. Once the first administrator has
+// enrolled, the same token is a 401 that says why, and init, run again with the line still set,
+// says it is ignored and succeeds.
 func TestAnInstallationOfV025KeepsItsOperatorTokenThroughTheUpgrade(t *testing.T) {
 	database := freshDatabase(t)
 	ctx := t.Context()
@@ -121,17 +124,40 @@ func TestAnInstallationOfV025KeepsItsOperatorTokenThroughTheUpgrade(t *testing.T
 		t.Errorf("with no token, the pools answered %d", code)
 	}
 
-	// The first administrator enrols, which ends the bootstrap token.
+	// The token creates the first administrator, who is handed the namespace v0.2.5 made, which
+	// no record names an owner of, and reads the operator's old run with nothing shared by hand.
+	if code, answer := cl.do("POST", "/api/v1/users", theToken, map[string]any{"login": "dana", "admin": true}); code != http.StatusCreated {
+		t.Fatalf("the operator token creating the first administrator answered %d: %v", code, answer)
+	}
+	var handed int
+	if err := admin.QueryRow(ctx, `select count(*) from grants where namespace = 'finance' and workflow is null
+	                                 and principal = 'dana' and role = 'owner' and granted_by = 'operator'`).Scan(&handed); err != nil {
+		t.Fatal(err)
+	}
+	if handed != 1 {
+		t.Errorf("the first administrator was handed finance %d times", handed)
+	}
 	pool, err := db.Open(ctx, application.ConnString())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	danas := "agk_test_dana_upgraded"
+	if err := pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.MintToken(ctx, db.APIToken{ID: ulid.New(), Hash: hashOf(danas), Principal: "dana", CreatedAt: time.Now().Add(-time.Minute), ExpiresAt: time.Now().Add(time.Hour)})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first administrator enrols, which ends the bootstrap token.
 	if err := pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
 		_, err := w.EndBootstrap(ctx, time.Now())
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if code, answer := cl.do("GET", "/api/v1/finance/runs/"+old, danas, nil); code != http.StatusOK || answer["triggered_by"] != "operator" {
+		t.Errorf("the first administrator reading the operator's run of v0.2.5 answered %d: %v", code, answer)
 	}
 	code, answer = cl.do("GET", "/api/v1/runner-pools", theToken, nil)
 	if said, _ := answer["error"].(string); code != http.StatusUnauthorized || !strings.Contains(said, "bootstrap token, that ended when the first administrator signed in") {

@@ -18,6 +18,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/ulid"
 )
 
 // The administrator's routes for people: the users of an installation, the enrolment link a user
@@ -130,7 +131,13 @@ func NewUsers(rt *Router, o UserOptions) (*UserAPI, error) {
 // grammar and the reserved words a namespace is named with, since a login is also the name of its
 // user's personal namespace, and operator and installation, which name the authors of rows the
 // installation holds, so that a user of either name would read as that author.
-func LoginName(login string) error {
+func LoginName(login string) error { return loginName(login, agk.IsReservedNamespace) }
+
+// LoginRef refuses a login no user can hold, which a route naming one answers as it answers a user
+// who does not exist: LoginName's refusals, save a word reserved late, as NamespaceRef reads one.
+func LoginRef(login string) error { return loginName(login, agk.NamesNoNamespace) }
+
+func loginName(login string, reserved func(string) bool) error {
 	switch {
 	case login == "":
 		return errors.New("login: a user has a login, lowercase words joined by hyphens, such as alice or bob-martin")
@@ -138,8 +145,8 @@ func LoginName(login string) error {
 		return fmt.Errorf("login: a login is at most %d characters and this one is %d, since it is also the name of its user's personal namespace", agk.IdentifierMaxBytes, len(login))
 	case !givenName.MatchString(login):
 		return fmt.Errorf("login: %.64q is not a login: a login is lowercase words joined by hyphens, such as alice or bob-martin, the grammar a namespace is named in, since it is also the name of its user's personal namespace", login)
-	case agk.IsReservedNamespace(login):
-		return fmt.Errorf("login: %s is reserved: the API routes on it, and a login is also the name of a namespace", login)
+	case reserved(login):
+		return fmt.Errorf("login: %s is reserved: it is %s, and a login is also the name of a namespace", login, routesOn(login))
 	case login == string(BootstrapOperator) || login == installationActor:
 		return fmt.Errorf("login: %s is reserved: it names the author of rows the installation holds, and a user of that name would read as that author", login)
 	}
@@ -149,7 +156,13 @@ func LoginName(login string) error {
 // GroupName refuses a name no group can be created under: one outside the grammar and the reserved
 // words a namespace is named with, which $defs/group holds a group's name to "so that every name a
 // person gives on an installation is written one way".
-func GroupName(name string) error {
+func GroupName(name string) error { return groupName(name, agk.IsReservedNamespace) }
+
+// groupRef refuses a name no group can carry: GroupName's refusals, save a word reserved late, as
+// NamespaceRef reads one.
+func groupRef(name string) error { return groupName(name, agk.NamesNoNamespace) }
+
+func groupName(name string, reserved func(string) bool) error {
 	switch {
 	case name == "":
 		return errors.New("name: a group has a name, lowercase words joined by hyphens, such as team-finance")
@@ -157,8 +170,8 @@ func GroupName(name string) error {
 		return fmt.Errorf("name: a group's name is at most %d characters and this one is %d", agk.IdentifierMaxBytes, len(name))
 	case !givenName.MatchString(name):
 		return fmt.Errorf("name: %.64q is not a group's name: a group is named in lowercase words joined by hyphens, such as team-finance, as a namespace is", name)
-	case agk.IsReservedNamespace(name):
-		return fmt.Errorf("name: %s is reserved: it is a word the API routes on, which names no namespace and so no group", name)
+	case reserved(name):
+		return fmt.Errorf("name: %s is reserved: it is %s, which names no namespace and so no group", name, routesOn(name))
 	}
 	return nil
 }
@@ -350,8 +363,9 @@ func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Princip
 	}
 }
 
-// create is createUser's transaction: the user, where there is none by that login, the link, and
-// both recorded.
+// create is createUser's transaction: the user, where there is none by that login, the link, the
+// namespaces handed over to an administrator the bootstrap token creates (handOver), and each
+// recorded.
 func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now time.Time) (CreatedUser, bool, error) {
 	var answer CreatedUser
 	var created bool
@@ -385,6 +399,10 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
 		}
+		handed, err := handOver(ctx, wide, who, user, now)
+		if err != nil {
+			return err
+		}
 		result := audit.Done
 		if !created {
 			result = audit.Unchanged
@@ -398,10 +416,63 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 		if err := wide.Audit(ctx, issued); err != nil {
 			return err
 		}
+		for _, g := range handed {
+			if err := wide.AuditIn(ctx, g.Scope.Namespace, audit.Record{
+				Actor: string(who), Action: audit.GrantCreate, Target: g.ID, Result: audit.Done, Detail: grantDetail(g),
+			}); err != nil {
+				return err
+			}
+		}
 		answer = CreatedUser{User: userOf(user), Enrolment: link}
 		return nil
 	})
 	return answer, created, err
+}
+
+// handOver gives an administrator the bootstrap token creates the owner role on every namespace
+// whose record names no owner, and answers the grants it wrote: those the token owned in effect,
+// which init, agentiik-api namespace create or a v0.2 installation made, "so an upgraded or new
+// installation's first administrator owns its namespaces without an extra command". The token
+// ends at that administrator's first sign-in, and what it held would otherwise be shared by hand
+// by the administrator it made, one namespace at a time.
+//
+// A namespace the administrator owns already is left, so that a repeat of the create, for a fresh
+// link, gives nothing twice, and hands over a namespace made since. One somebody else holds the
+// owner role on through a grant, the record naming nobody, is handed over all the same, as the
+// decision reads it. Written in the create's transaction, after its rows are locked and before it
+// appends to the audit log, by the bootstrap token as every act of the create is, and told to
+// nobody, as a grant the token writes through the grant routes is: nobody widens their own access.
+// The namespaces are held while they are handed over (db.Wide.Ownerless), so that one removed at
+// the same moment is either left out or waits, and never fails the creation. Nothing is handed
+// over by an administrator creating a user, nor to a user who does not administer.
+func handOver(ctx context.Context, wide *db.Wide, who Principal, user db.User, now time.Time) ([]access.Grant, error) {
+	if who != BootstrapOperator || !user.Admin {
+		return nil, nil
+	}
+	namespaces, err := wide.Ownerless(ctx)
+	if err != nil {
+		return nil, err
+	}
+	principal := access.Principal{Ref: user.Login}
+	held, err := wide.AccessGrantsAcross(ctx, principal, now)
+	if err != nil {
+		return nil, err
+	}
+	var handed []access.Grant
+	for _, name := range namespaces {
+		if access.Owns(principal, held, name, now) {
+			continue
+		}
+		g := access.Grant{
+			ID: ulid.New(), Principal: user.Login, Scope: access.Scope{Namespace: name},
+			Role: access.Owner, GrantedBy: string(who), GrantedAt: now,
+		}
+		if err := wide.GrantAccess(ctx, g); err != nil {
+			return nil, err
+		}
+		handed = append(handed, g)
+	}
+	return handed, nil
 }
 
 // issue issues a link for user, as who, revoking the one it replaces, and answers the entry that
@@ -432,7 +503,7 @@ func (s *UserAPI) issueEnrolment(w http.ResponseWriter, r *http.Request, who Pri
 		return
 	}
 	login := r.PathValue("login")
-	if LoginName(login) != nil {
+	if LoginRef(login) != nil {
 		fail(w, http.StatusNotFound, noUser)
 		return
 	}
@@ -492,7 +563,7 @@ func (s *UserAPI) users(w http.ResponseWriter, r *http.Request, _ Principal, _ T
 // user is GET /api/v1/users/{login}: one user, and never a credential.
 func (s *UserAPI) user(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
 	login := r.PathValue("login")
-	if LoginName(login) != nil {
+	if LoginRef(login) != nil {
 		fail(w, http.StatusNotFound, noUser)
 		return
 	}
@@ -531,7 +602,7 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 		return
 	}
 	login := r.PathValue("login")
-	if LoginName(login) != nil {
+	if LoginRef(login) != nil {
 		fail(w, http.StatusNotFound, noUser)
 		return
 	}
@@ -679,7 +750,7 @@ func (s *UserAPI) createGroup(w http.ResponseWriter, r *http.Request, who Princi
 		return
 	}
 	if err := distinct(ask.Members, "member", func(login string) error {
-		if err := LoginName(login); err != nil {
+		if err := LoginRef(login); err != nil {
 			return fmt.Errorf("members: %w", err)
 		}
 		return nil
@@ -750,7 +821,7 @@ func (s *UserAPI) groups(w http.ResponseWriter, r *http.Request, _ Principal, _ 
 // group is GET /api/v1/groups/{group}: one group and its members.
 func (s *UserAPI) group(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
 	name := r.PathValue("group")
-	if GroupName(name) != nil {
+	if groupRef(name) != nil {
 		fail(w, http.StatusNotFound, noGroup)
 		return
 	}
@@ -779,7 +850,7 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 		return
 	}
 	name := r.PathValue("group")
-	if GroupName(name) != nil {
+	if groupRef(name) != nil {
 		fail(w, http.StatusNotFound, noGroup)
 		return
 	}
@@ -871,11 +942,11 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		return
 	}
 	name, login := r.PathValue("group"), r.PathValue("login")
-	if GroupName(name) != nil {
+	if groupRef(name) != nil {
 		fail(w, http.StatusNotFound, noGroup)
 		return
 	}
-	if LoginName(login) != nil {
+	if LoginRef(login) != nil {
 		fail(w, http.StatusNotFound, noUser)
 		return
 	}

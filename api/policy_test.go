@@ -420,6 +420,22 @@ func TestANamespacesPolicyIsReadByWhoHoldsAGrantInItAndSetByAnAdministrator(t *t
 	}
 }
 
+// A namespace v0.2 created under stats, which v0.3.0 reserved for GET /api/v1/stats/pools, keeps
+// its name, and its policy is read and set as any namespace's.
+func TestANamespaceCreatedBeforeItsWordWasReservedHasItsPolicy(t *testing.T) {
+	in := somePasswords(t)
+	in.administrator(t, "carol")
+	in.exec(t, `insert into namespaces (name) values ('stats')`)
+	carol := in.token(t, "carol", nil, nil)
+	set := `{"min_passkeys":3}`
+	if w := in.bearing(t, "PUT", "/api/v1/stats/auth/policy", carol, set); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != set {
+		t.Fatalf("carol setting stats's policy answered %d %s", w.Code, w.Body)
+	}
+	if w := in.bearing(t, "GET", "/api/v1/stats/auth/policy", carol, ""); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != set {
+		t.Errorf("stats's policy reads back %d %s", w.Code, w.Body)
+	}
+}
+
 // A namespace may tighten the installation's policy, never loosen it: each setting looser than the
 // installation's is refused naming it, against the installation's as it stands; one as strict is
 // taken.

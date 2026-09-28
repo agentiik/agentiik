@@ -150,6 +150,41 @@ func TestAServiceAccountIsCreatedInANamespaceTheCallerOwns(t *testing.T) {
 	}
 }
 
+// A namespace v0.2 created under stats, which v0.3.0 reserved for GET /api/v1/stats/pools, keeps
+// its name, since nothing renames a namespace, and what names it works as it did before the word
+// was reserved: a grant on it, a service account created in it and removed, that account's token,
+// and a token kept within it. A service account named stats is refused, as a name given under any
+// reserved word is, and the refusal says when the API routes on it.
+func TestWhatNamesANamespaceCreatedBeforeItsWordWasReservedWorks(t *testing.T) {
+	in := withBuiltIns(t)
+	if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), `insert into namespaces (name) values ('stats')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.pool.In(t.Context(), "stats", func(ctx context.Context, n *db.NS) error {
+		return n.GrantAccess(ctx, access.Grant{ID: ulid.New(), Principal: "alice", Scope: access.Scope{Namespace: "stats"}, Role: access.Owner, GrantedBy: "carol"})
+	}); err != nil {
+		t.Fatalf("a grant on stats was refused: %s", err)
+	}
+	if w := in.ask(t, "POST", "/api/v1/service-accounts", in.values["alice"], `{"namespace":"stats","name":"ci"}`); w.Code != http.StatusCreated {
+		t.Fatalf("a service account created in stats was answered %d: %s", w.Code, w.Body)
+	}
+	w := in.ask(t, "POST", "/api/v1/service-accounts", in.values["alice"], `{"namespace":"finance","name":"stats"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "stats is reserved: it is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools") {
+		t.Errorf("a service account named stats was answered %d: %s", w.Code, w.Body)
+	}
+	ci := in.mint(t, in.values["alice"], `{"principal":"stats/ci"}`)
+	within := in.mint(t, in.values["alice"], `{"scope":{"within":["stats"]}}`)
+	if w := in.ask(t, "GET", "/api/v1/stats/probe", within.Token, ""); w.Code != http.StatusNoContent {
+		t.Errorf("a token of the owner kept within stats was answered %d there", w.Code)
+	}
+	if w := in.ask(t, "GET", "/api/v1/stats/probe", ci.Token, ""); w.Code != http.StatusNotFound {
+		t.Errorf("stats/ci, granted nothing, was answered %d there", w.Code)
+	}
+	if w := in.ask(t, "DELETE", "/api/v1/service-accounts/stats/ci", in.values["alice"], ""); w.Code != http.StatusNoContent {
+		t.Errorf("removing stats/ci was answered %d: %s", w.Code, w.Body)
+	}
+}
+
 // The service accounts of the namespaces the caller owns are listed, the built-in identity of each
 // among them, by namespace and then by name, and nobody else's: the bootstrap token owns every
 // namespace, a narrowed token none, and whoever owns nothing is answered an empty list.

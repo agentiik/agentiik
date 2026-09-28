@@ -24,7 +24,8 @@ func migrateVerb(ctx context.Context, lookup config.Lookup, stdout, stderr io.Wr
 }
 
 // migrateAndBootstrap is the whole of migrate: the migrations and the role, then the built-in
-// identity of every namespace made before v0.3.0, the artifact files of the runs v0.2 finished,
+// identity of every namespace made before v0.3.0, a line for each named after a word reserved
+// since, the artifact files of the runs v0.2 finished,
 // where AGK_OBJECTS_DIR names the store holding their envelopes, and the bootstrap token's hash, as
 // init gives, records and keeps them, for an installation that runs no init.
 //
@@ -50,6 +51,7 @@ func migrateAndBootstrap(ctx context.Context, c config.Migration, stdout io.Writ
 	if err := builtInIdentities(ctx, pool, stdout); err != nil {
 		return err
 	}
+	reservedLater(ctx, pool, "migrate", stdout)
 	if err := unrecordedArtifacts(ctx, pool, c.Objects, "migrate", stdout); err != nil {
 		return err
 	}

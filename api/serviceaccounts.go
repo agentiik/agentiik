@@ -79,7 +79,13 @@ func NewServiceAccounts(rt *Router, o ServiceAccountOptions) (*ServiceAccountAPI
 // grammar and the reserved words a namespace is named with, which $defs/serviceAccount holds each
 // half of NS/NAME to, and agentiik, "the built-in identity's name in every namespace and no other
 // service account's".
-func ServiceAccountName(name string) error {
+func ServiceAccountName(name string) error { return serviceAccountName(name, agk.IsReservedNamespace) }
+
+// serviceAccountRef refuses a name no service account can carry: ServiceAccountName's refusals,
+// save a word reserved late, as NamespaceRef reads one.
+func serviceAccountRef(name string) error { return serviceAccountName(name, agk.NamesNoNamespace) }
+
+func serviceAccountName(name string, reserved func(string) bool) error {
 	switch {
 	case name == "":
 		return errors.New("name: a service account has a name, lowercase words joined by hyphens, such as nightly-sync")
@@ -87,8 +93,8 @@ func ServiceAccountName(name string) error {
 		return fmt.Errorf("name: a service account's name is at most %d characters and this one is %d", agk.IdentifierMaxBytes, len(name))
 	case !givenName.MatchString(name):
 		return fmt.Errorf("name: %.64q is not a service account's name: one is named in lowercase words joined by hyphens, such as nightly-sync, as a namespace is", name)
-	case agk.IsReservedNamespace(name):
-		return fmt.Errorf("name: %s is reserved: it is a word the API routes on, which names no namespace and so neither half of a service account", name)
+	case reserved(name):
+		return fmt.Errorf("name: %s is reserved: it is %s, which names no namespace and so neither half of a service account", name, routesOn(name))
 	case name == db.BuiltIn:
 		return fmt.Errorf("name: %s is the name of every namespace's built-in identity, which the installation creates with the namespace, and of no other service account", db.BuiltIn)
 	}
@@ -174,7 +180,7 @@ func (s *ServiceAccountAPI) create(w http.ResponseWriter, r *http.Request, calle
 		fail(w, statusOf(err), err.Error())
 		return
 	}
-	if err := NamespaceName(ask.Namespace); err != nil {
+	if err := NamespaceRef(ask.Namespace); err != nil {
 		fail(w, http.StatusBadRequest, "namespace: "+err.Error())
 		return
 	}
@@ -237,7 +243,7 @@ func (s *ServiceAccountAPI) remove(w http.ResponseWriter, r *http.Request, calle
 	// A name no service account can have is one nobody could have created, answered as absent
 	// before anything is asked, agentiik aside, which is refused as what it is once the
 	// namespace is known to be the caller's.
-	if NamespaceName(namespace) != nil || (name != db.BuiltIn && ServiceAccountName(name) != nil) {
+	if NamespaceRef(namespace) != nil || (name != db.BuiltIn && serviceAccountRef(name) != nil) {
 		fail(w, http.StatusNotFound, noServiceAccount)
 		return
 	}

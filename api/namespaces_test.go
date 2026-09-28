@@ -272,6 +272,35 @@ func TestANamespaceIsRefusedWhatTheWireAndTheInstallationRefuse(t *testing.T) {
 	}
 }
 
+// A namespace v0.2 created under stats, which v0.3.0 reserved for GET /api/v1/stats/pools, keeps
+// its name, since nothing renames a namespace: it is read, bounded and removed as any other, and
+// only a new namespace of that name is refused, naming the route that needs the word and the
+// release that serves it.
+func TestANamespaceCreatedBeforeItsWordWasReservedIsServed(t *testing.T) {
+	in := someNamespaces(t)
+	w := in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"stats","owner":"alice"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "stats is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools") {
+		t.Errorf("creating stats answered %d %s", w.Code, w.Body)
+	}
+	if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), `insert into namespaces (name) values ('stats')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{"GET", "/api/v1/namespaces/stats", "", http.StatusOK},
+		{"PUT", "/api/v1/namespaces/stats/quotas", `{"max_runs_per_hour":10}`, http.StatusOK},
+		{"GET", "/api/v1/namespaces/stats/quotas", "", http.StatusOK},
+		{"DELETE", "/api/v1/namespaces/stats", "", http.StatusNoContent},
+		{"GET", "/api/v1/namespaces/stats", "", http.StatusNotFound},
+	} {
+		if w := in.ask(t, c.method, c.path, in.carol, c.body); w.Code != c.want {
+			t.Errorf("%s %s answered %d, want %d: %s", c.method, c.path, w.Code, c.want, w.Body)
+		}
+	}
+}
+
 // A namespace is read by an administrator and by whoever holds a grant in it, its own or a group's;
 // anybody else, and a principal holding nothing there but a deny, is answered as if it did not
 // exist, and so is one that does not, whoever asks.

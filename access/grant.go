@@ -50,14 +50,15 @@ func ParseScope(s string) (Scope, error) {
 // validate refuses a scope no grant can name: a namespace outside the namespace grammar, one of
 // the words the API routes on, which "cannot name a namespace", or a workflow outside the
 // identifier grammar. Both halves are bounded as every name is, since no namespace or workflow
-// can be called anything longer.
+// can be called anything longer. A word reserved late is a scope still, since a namespace created
+// under it before keeps its name and its grants (agk.LateReservations).
 func (s Scope) validate() error {
 	switch {
 	case s.Namespace == "":
 		return errors.New("a grant's scope names a namespace, such as finance, or one workflow in it, such as finance/monthly-invoicing: the installation is not a scope a grant names")
 	case len(s.Namespace) > agk.IdentifierMaxBytes || !namespaceForm.MatchString(s.Namespace):
 		return fmt.Errorf("%.64q is not a namespace: a namespace is named in lowercase words joined by hyphens, such as finance or team-ops", s.Namespace)
-	case agk.IsReservedNamespace(s.Namespace):
+	case agk.NamesNoNamespace(s.Namespace):
 		return fmt.Errorf("%s is a word the API routes on, which cannot name a namespace, so no grant is scoped to it", s.Namespace)
 	case s.Workflow == "":
 		return nil
@@ -185,7 +186,9 @@ const BootstrapOperator = "operator"
 // held to the namespace grammar and its reserved words since each user's personal namespace is
 // named after it, and is never operator; group:NAME for a group; and NS/NAME for a service account,
 // whose namespace is never a reserved word either. Each name is bounded as every name is.
-// The forms cannot be taken for one another, since a login holds neither a colon nor a slash.
+// The forms cannot be taken for one another, since a login holds neither a colon nor a slash. A
+// word reserved late names a principal still, as it names a namespace still
+// (agk.LateReservations): it is refused where a name is given, which is not here.
 //
 // Resolve matches a principal by its exact string, so a grant written for one spelled wrongly is a
 // grant for nobody, and a deny for nobody denies nothing while reading as though it did.
@@ -203,7 +206,7 @@ func principalRef(ref string) error {
 		switch {
 		case !given(ns) || !given(name):
 			return fmt.Errorf("%.64q names no service account: one is written NS/NAME, both in lowercase words joined by hyphens, such as finance/agentiik", ref)
-		case agk.IsReservedNamespace(ns):
+		case agk.NamesNoNamespace(ns):
 			// The wire leaves this to the API, since a reserved word never names a
 			// namespace and so a reference through one names nobody; a scope on one is
 			// refused the same way.
@@ -218,7 +221,7 @@ func principalRef(ref string) error {
 		return errors.New("operator names the v0.2 operator on the rows it wrote, and is no principal a grant can name")
 	case !given(ref):
 		return fmt.Errorf("%.64q names no principal: a login is lowercase words joined by hyphens, such as alice, a group is group:NAME and a service account NS/NAME", ref)
-	case agk.IsReservedNamespace(ref):
+	case agk.NamesNoNamespace(ref):
 		return fmt.Errorf("%s is a word the API routes on, which names no user, since a user's personal namespace is named after their login", ref)
 	}
 	return nil

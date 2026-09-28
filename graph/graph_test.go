@@ -221,3 +221,24 @@ steps:
 		t.Fatalf("a call into the namespace runs was read: %v", err)
 	}
 }
+
+// TestAWorkflowOfANamespaceReservedLaterIsRead holds what an upgrade has to leave working: a
+// namespace created under stats before v0.3.0 reserved the word keeps its name, and a version of
+// one of its workflows is read again at every evaluation of a run of it, so the file naming it,
+// and a call into it, are read as they were.
+func TestAWorkflowOfANamespaceReservedLaterIsRead(t *testing.T) {
+	wf, err := Parse([]byte(`
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: order-loading, namespace: stats }
+steps:
+  remind:
+    workflow: stats/common@v2.1.0
+`))
+	if err != nil {
+		t.Fatalf("a workflow of the namespace stats was refused: %v", err)
+	}
+	if wf.Metadata.Namespace != "stats" {
+		t.Errorf("the workflow reads as of the namespace %q", wf.Metadata.Namespace)
+	}
+}

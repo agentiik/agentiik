@@ -216,6 +216,22 @@ func (w *Wide) NamespaceNamed(ctx context.Context, name string) (Namespace, erro
 	return n, nil
 }
 
+// Ownerless is the names of the namespaces whose record names no owner, ordered by name, each held
+// for key share, as a grant written in one holds it: a removal under way is waited for, and the
+// namespace it removes is left out rather than named to a grant that could no longer be written,
+// and a removal that comes after waits for the transaction that read them.
+func (w *Wide) Ownerless(ctx context.Context) ([]string, error) {
+	rows, err := w.tx.Query(ctx, `select name from namespaces where owner is null order by name for key share`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces nobody owns could not be read: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces nobody owns could not be read: %w", err)
+	}
+	return names, nil
+}
+
 // Namespaces is the listing, ordered by name.
 func (w *Wide) Namespaces(ctx context.Context) ([]Namespace, error) {
 	rows, err := w.tx.Query(ctx, `select `+namespaceColumns+` from namespaces order by name`)

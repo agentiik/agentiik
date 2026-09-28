@@ -539,9 +539,9 @@ func TestASignOutIsRefusedFromAnotherOrigin(t *testing.T) {
 func TestASignOutEndsASessionThatMayOnlyEnrol(t *testing.T) {
 	in := someSessions(t)
 	h := in.signInOn(t, "https://agentiik.example.com", false)
-	c := in.open(t, "alice", api.OpenedBy{EnrolmentCode: in.recovery(t, "alice", "agkenrol_signing-out")})
+	c := in.open(t, "alice", api.OpenedBy{Credential: "alice-password"})
 	if as := in.asked(t, "GET", "", c); as.Principal != "alice" || !as.Enrolling {
-		t.Fatalf("a session a recovery code opened identified %+v", as)
+		t.Fatalf("a session a password opened where a passkey is required identified %+v", as)
 	}
 	if w := signOut(t, h, publicOrigin, c); w.Code != http.StatusNoContent || !cleared(w) {
 		t.Fatalf("a sign-out of a session that may only enrol answered %d: %s", w.Code, w.Body)

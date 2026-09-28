@@ -127,9 +127,6 @@ const (
 	// noRegistrar is a registration with neither an enrolment code nor a session.
 	noRegistrar = "a passkey is registered from a signed-in browser's session, or with the code of an enrolment link or a recovery code, and this request carries neither"
 
-	// sessionOfACode is a registration from a session an enrolment code opened.
-	sessionOfACode = "this session was opened by an enrolment link, and registers nothing: open the link again, whose code registers the passkey"
-
 	// codeOpensNothing is an enrolment code used, lapsed, replaced or never issued.
 	codeOpensNothing = "that code opens nothing: it was used already, or it has lapsed or been replaced by a fresher link. Ask an administrator for a new one"
 
@@ -443,11 +440,8 @@ func tooManyCeremonies(w http.ResponseWriter, full *db.TooManyChallenges, now ti
 // sign-in page, and a request carrying one is answered as one carrying nothing that could; so is the
 // bootstrap token's operator, who is nobody's account.
 //
-// Nor does a session an enrolment code opened: the code travels in the options now and is spent by
-// the registration it starts, which ends the bootstrap where it is an administrator's, and a
-// session holding a code would register a passkey without spending it. The session a password
-// opened that may only enrol is the one this reads Identify rather than the router's for, since the
-// router refuses it everywhere, and it registers here like any other.
+// The session a password opened that may only enrol is the one this reads Identify rather than the
+// router's for, since the router refuses it everywhere, and it registers here like any other.
 func (s *PasskeyAPI) registrar(r *http.Request) (Identity, error) {
 	if _, bearer := bearerOf(r); bearer {
 		return Identity{Refused: noRegistrar}, nil
@@ -463,8 +457,6 @@ func (s *PasskeyAPI) registrar(r *http.Request) (Identity, error) {
 		return as, nil
 	case as.Principal == "" || as.Token != "" || as.Principal == BootstrapOperator:
 		return Identity{Refused: noRegistrar}, nil
-	case as.OpenedByCode:
-		return Identity{Refused: sessionOfACode}, nil
 	}
 	return as, nil
 }
@@ -784,9 +776,9 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		// The bootstrap ends at the enrolment of the first administrator who can sign in, and not
 		// before: ended at a suspended one's, it would leave the installation with nobody to
 		// administer it, the lockout ending it at an enrolment rather than at a creation avoids.
-		// Whatever brought them to it: the first administrator's link, a recovery code, or a
-		// session their code opened with a password where the policy requires a passkey, which
-		// may only enrol, so that nobody administers from it (passwords_set.go). Every
+		// Whatever brought them to it: the first administrator's link, a recovery code, or the
+		// session a password they set from their code opened where the policy requires a
+		// passkey, which may only enrol, so that nobody administers from it (passwords_set.go). Every
 		// administrator enrolling while the token lives is one it created, and once it has
 		// ended, ending it again ends nothing.
 		if user.Admin && !user.Suspended {
