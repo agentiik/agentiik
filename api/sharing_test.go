@@ -551,11 +551,12 @@ func TestAnAdministratorsGrantWhereNobodyOwnsIsToldToTheOtherAdministrators(t *t
 
 // A grant names somebody: a principal that does not exist is 422, and so is a service account of a
 // namespace its writer does not see, with the same sentence, so that the answer never says whether
-// that namespace exists. A body that does not say one thing is 400, and an expiry past is 422.
+// that namespace exists. A body that does not say one thing is 400, operator and installation
+// included since neither is a principal the wire can name, and an expiry past is 422.
 // Nothing refused is written or recorded.
 func TestAGrantNamesSomebodyItsWriterSees(t *testing.T) {
 	in := someSharing(t)
-	for _, principal := range []string{"nobody", "group:nowhere", "hr/reports", "hr/agentiik", "nowhere/agentiik", "finance/nowhere", "installation"} {
+	for _, principal := range []string{"nobody", "group:nowhere", "hr/reports", "hr/agentiik", "nowhere/agentiik", "finance/nowhere"} {
 		w := in.ask(t, "POST", "/api/v1/finance/grants", "frank", `{"principal":"`+principal+`","role":"viewer"}`)
 		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "principal "+principal+" names nobody") {
 			t.Errorf("a grant to %s answered %d: %s", principal, w.Code, w.Body)
@@ -571,6 +572,7 @@ func TestAGrantNamesSomebodyItsWriterSees(t *testing.T) {
 		`{"principal":"alice","deny":"run:everything"}`:                                         http.StatusBadRequest,
 		`{"principal":"Alice","role":"viewer"}`:                                                 http.StatusBadRequest,
 		`{"principal":"operator","role":"viewer"}`:                                              http.StatusBadRequest,
+		`{"principal":"installation","role":"viewer"}`:                                          http.StatusBadRequest,
 		`{"principal":"alice","role":"viewer","scope":"hr"}`:                                    http.StatusBadRequest,
 		`{"principal":"alice","role":"viewer","expires_at":"soon"}`:                             http.StatusBadRequest,
 		`{"principal":"alice","role":"viewer","expires_at":"` + ends + `"}`:                     http.StatusUnprocessableEntity,
