@@ -129,7 +129,7 @@ func usage(w io.Writer) {
   %[1]s bus-init DIR          create the installation's NATS operator and accounts in DIR
   %[1]s bus-credential DIR    mint the control plane a new bus credential under the account in DIR
   %[1]s audit-verify FILE     verify the chain of an audit log export, as its receiver wrote it down
-  %[1]s namespace create NAME create a namespace, until v0.3.0's routes do
+  %[1]s namespace create NAME create a namespace with no owner, from the host the API runs on
   %[1]s namespace remove NAME remove a namespace that holds no workflow, run or secret
   %[1]s recover LOGIN         issue the administrator LOGIN a recovery code, where no administrator can sign in to issue one
 

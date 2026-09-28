@@ -519,7 +519,7 @@ func TestAnotherNamespacesDeclarationsAreNotFound(t *testing.T) {
 }
 
 // Reading a declaration takes workflow:read and writing one takes secret:write, each at the
-// namespace, and until v0.3.0 gives anybody either, every one of the four is refused.
+// namespace, and a principal holding neither is refused all four.
 //
 // Each principal is sent the four against a declaration that exists, because a refusal answers
 // 404 and so does an absence: against an empty namespace a route guarded by nothing at all would
