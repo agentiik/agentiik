@@ -2,9 +2,11 @@ package runner
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,6 +84,32 @@ func TestASecondTaskOfTheSameCommitFetchesNothing(t *testing.T) {
 	}
 	if n := s.gets.Load(); n != 2 {
 		t.Errorf("a task assembled after a restart fetched %d objects more", n-2)
+	}
+}
+
+// Tasks of one commit assembled at once, as a runner holding several does, fetch each object once
+// between them: the second to want one waits for the first to put it in place.
+func TestTasksOfOneCommitAssembledAtOnceFetchEachFileOnce(t *testing.T) {
+	s := newObjectStore(t)
+	m, r := s.taskFor(t, nil, aCommit(), nil)
+	work := t.TempDir()
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := range 8 {
+		wg.Go(func() {
+			_, err := Assemble(t.Context(), anotherStep(m, fmt.Sprintf("shard-%d", i)), r, Assembly{WorkRoot: work})
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := s.gets.Load(); n != 2 {
+		t.Errorf("eight tasks of one commit fetched %d objects for two distinct ones", n)
 	}
 }
 
