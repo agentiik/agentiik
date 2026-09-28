@@ -38,10 +38,10 @@ type Granted struct {
 // GrantScope is what one grant may be turned into, and the whole of it.
 //
 // It is what the task was dispatched with, written by the controller at the moment it decided:
-// the version whose tree the task sees under /agk/repo, the envelopes on each input port, named by
-// digest, and the secrets the step asked for, named with where they go and never valued. A
-// redemption answers from this and from nothing else, which is what makes "refusing anything the
-// task does not name" a comparison rather than a promise.
+// the version whose tree the task sees under /agk/repo and the files of it the step selected, the
+// envelopes on each input port, named by digest, and the secrets the step asked for, named with
+// where they go and never valued. A redemption answers from this and from nothing else, which is
+// what makes "refusing anything the task does not name" a comparison rather than a promise.
 type GrantScope struct {
 	Run  agk.RunID `json:"run,omitempty"`
 	Step agk.Step  `json:"step,omitempty"`
@@ -54,8 +54,22 @@ type GrantScope struct {
 	Workflow string `json:"workflow,omitempty"`
 	Commit   string `json:"commit,omitempty"`
 
+	// Files are the step's files as the evaluator resolved them, which the redemption selects
+	// the tree by, so that "a narrowed step downloads only what it asked for". None is the
+	// whole tree, which is also what a scope written before a scope named any is answered with,
+	// as it was then.
+	Files []GrantFile `json:"files,omitempty"`
+
 	Inputs  []GrantInput  `json:"inputs,omitempty"`
 	Secrets []GrantSecret `json:"secrets,omitempty"`
+}
+
+// GrantFile is one selector of a step's files, as the workflow wrote it: a path or a glob, and
+// for the long form where it goes and the mode it takes.
+type GrantFile struct {
+	From string `json:"from"`
+	To   string `json:"to,omitempty"`
+	Mode string `json:"mode,omitempty"`
 }
 
 // GrantInput is one input port's envelope, named by digest.

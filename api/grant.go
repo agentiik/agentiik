@@ -12,6 +12,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/token"
 )
 
@@ -29,8 +30,9 @@ import (
 // The repository is one of those values. "A runner still never speaks git and never holds a
 // credential, because the controller resolves a commit to a tree and the runner fetches
 // content-addressed objects with the task's grant, exactly as it fetches an artifact." So the
-// commit is in the scope the controller wrote, the files of that commit are named here with a URL
-// each, and the runner can reach the tree of the one version its task runs and of no other.
+// commit is in the scope the controller wrote, the files of that commit the step selected are
+// named here with a URL each, and the runner can reach the tree of the one version its task runs
+// and of no other.
 //
 // Somewhere to write is the one part the runner could not be told by name, because the key of an
 // output is the digest of bytes that do not exist until the container has exited. So it is told at
@@ -278,17 +280,18 @@ type Artifact struct {
 	URL    string  `json:"url"`
 }
 
-// TreeEntry is one file of the repository, where it goes under /agk/repo, and the URL that fetches
-// it.
+// TreeEntry is one file of the repository, where it goes, and the URL that fetches it.
 //
-// The shape is the wire's, entry for entry. It carries no to, the relocation the long form of a
-// step's files asks for, because narrowing and relocating are not served yet and every file here
-// goes where its path says.
+// The shape is the wire's, entry for entry. Path is where the file is in the tree. An entry with no
+// To goes there under /agk/repo; one with a To is a file the long form of the step's files places
+// at To instead, "a relocation travels as the entry's own to", with the mode the selector asked
+// for or, where it asked for none, the file's own.
 type TreeEntry struct {
 	Path   string `json:"path"`
 	Mode   string `json:"mode"`
 	SHA256 string `json:"sha256"`
 	URL    string `json:"url"`
+	To     string `json:"to,omitempty"`
 }
 
 // Secret is a name, the path the value goes at, and the value, which exists in this answer and
@@ -330,9 +333,8 @@ type Grant struct {
 	Inputs  []Input  `json:"inputs"`
 	Secrets []Secret `json:"secrets"`
 
-	// Tree is the whole of the commit's tree, which is what a step that says nothing about
-	// files is given. Narrowing it by a step's files is the controller's to add, and until it
-	// does every task of a version is handed the same list.
+	// Tree is what the step's files select from the commit's tree, and the whole of it for a
+	// step that says nothing about files.
 	Tree []TreeEntry `json:"tree"`
 
 	Uploads Uploads `json:"uploads"`
@@ -413,13 +415,44 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		out.Inputs = append(out.Inputs, port)
 	}
 
-	// The files of the version the scope names, each minted exactly as an artifact's URL is.
+	// The files of the version the scope names that the step's files select, each minted exactly
+	// as an artifact's URL is: "a narrowed step downloads only what it asked for", and a runner
+	// is handed no URL for a file its step did not select. Selecting here rather than on the
+	// runner is what keeps the rest from reaching it at all, and is also why "a runner evaluates
+	// no path rule": the globs are expanded and each relocation is written on its entry. It is
+	// never a permission boundary, since whoever holds workflow:read reads the whole tree.
+	files := map[string]db.TreeFile{}
+	paths := make([]string, 0, len(tree))
 	for _, f := range tree {
+		files[f.Path] = f
+		paths = append(paths, f.Path)
+	}
+	selectors := make([]graph.FileSelector, 0, len(got.Scope.Files))
+	for _, f := range got.Scope.Files {
+		selectors = append(selectors, graph.FileSelector{From: f.From, To: f.To, Mode: f.Mode})
+	}
+	selected := graph.SelectFiles(selectors, paths)
+	entry := func(path, to, mode string) error {
+		f := files[path]
 		url, err := fetch(f.SHA256)
 		if err != nil {
+			return err
+		}
+		if mode == "" {
+			mode = f.Mode
+		}
+		out.Tree = append(out.Tree, TreeEntry{Path: f.Path, Mode: mode, SHA256: f.SHA256, URL: url, To: to})
+		return nil
+	}
+	for _, path := range selected.Tree {
+		if err := entry(path, "", ""); err != nil {
 			return Grant{}, err
 		}
-		out.Tree = append(out.Tree, TreeEntry{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, URL: url})
+	}
+	for _, p := range selected.Placed {
+		if err := entry(p.Path, p.To, p.Mode); err != nil {
+			return Grant{}, err
+		}
 	}
 
 	// Signed for the namespace the grant was issued in, never one the runner names, and expiring

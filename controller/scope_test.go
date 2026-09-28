@@ -186,3 +186,75 @@ func TestTheControllerNamesTheSecretsATaskMayHave(t *testing.T) {
 		t.Errorf("archive mounts no secret and may have %+v", got)
 	}
 }
+
+// selectingWorkflow narrows its first step's tree, and relocates part of it, and leaves its second
+// step the whole tree.
+const selectingWorkflow = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+inputs:
+  orders: { schema: { type: array } }
+outputs:
+  invoices: { from: { step: archive, port: ok } }
+steps:
+  normalize:
+    image: ` + theImage + `
+    files:
+      - ./sql/**
+      - { from: ./sql/**/*.sql, to: /docker-entrypoint-initdb.d, mode: "0444" }
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, rejected]
+  archive:
+    image: ` + theImage + `
+    needs:
+      - { step: normalize, port: ok, as: orders }
+    outputs: [ok]
+`
+
+// "Apply the step's files selection at fetch time, so a narrowed step downloads only what it asked
+// for." The redemption selects the tree by the grant's scope and by nothing else, so the step's
+// files are written into it, each selector as the workflow wrote it, and a step that wrote none has
+// none there, which the redemption answers with the whole tree.
+func TestTheGrantNamesTheFilesItsStepSelects(t *testing.T) {
+	core, q, pool, _ := decidingOn(t, selectingWorkflow)
+	createRun(t, pool)
+
+	scoped := func(d Dispatch) []db.GrantFile {
+		t.Helper()
+		var got db.Redeemed
+		if err := core.controller.Fenced(t.Context(), core.term, func(ctx context.Context, w *db.Wide) error {
+			var err error
+			got, err = w.Redeem(ctx, d.Grant, d.Task.ID, theRunner, core.now())
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got.Scope.Files
+	}
+
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 || first[0].Task.Step != "normalize" {
+		t.Fatalf("the first pass dispatched %+v", first)
+	}
+	want := []db.GrantFile{
+		{From: "./sql/**"},
+		{From: "./sql/**/*.sql", To: "/docker-entrypoint-initdb.d", Mode: "0444"},
+	}
+	if got := scoped(first[0]); !slices.Equal(got, want) {
+		t.Errorf("the grant of normalize names the files %+v, want %+v", got, want)
+	}
+
+	core.answer(t, succeeded(t, first[0].Task, core.now()))
+	second := q.dispatched()
+	if len(second) != 1 || second[0].Task.Step != "archive" {
+		t.Fatalf("the second pass dispatched %+v", second)
+	}
+	if got := scoped(second[0]); len(got) != 0 {
+		t.Errorf("archive selects no files, and its grant names %+v", got)
+	}
+}

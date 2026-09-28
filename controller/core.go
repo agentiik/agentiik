@@ -706,9 +706,13 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 // run pinned, the envelopes on this task's input ports, the secrets this step declared, and
 // nothing else in the namespace. The commit is written here for the reason the rest is: "the
 // controller resolves a commit to a tree", and a runner that named its own would reach every
-// version in the namespace.
+// version in the namespace. The step's files go with it, so that the redemption answers a
+// narrowed step with the files it selected and a runner fetches no others.
 func scopeOf(t graph.Task, inputs map[agk.Port]InputRef) db.GrantScope {
 	scope := db.GrantScope{Run: t.Run, Step: t.Step, Workflow: t.Workflow, Commit: t.Commit}
+	for _, f := range t.Files {
+		scope.Files = append(scope.Files, db.GrantFile{From: f.From, To: f.To, Mode: f.Mode})
+	}
 	ports := make([]agk.Port, 0, len(inputs))
 	for port := range inputs {
 		ports = append(ports, port)
