@@ -518,8 +518,19 @@ func TestAWorkflowOfV030BecomesAnEmptyRepositoryWithEveryVersionItHeld(t *testin
 		t.Errorf("the upgrade recorded %d packs, %v", packs, err)
 	}
 
-	// A version recorded from now on says how it arrived: a tree push says nothing and is a tree,
-	// and a git push says so.
+	// A version recorded from now on is a tree unless it says otherwise: v0.3.0's API, still serving
+	// while init migrates, writes one naming no source, and so does a tree push of this release, and
+	// a git push says so.
+	if _, err := conn.Exec(ctx, `insert into workflow_versions (namespace, workflow, commit, graph, author, created_at)
+	                             values ('finance', 'monthly-invoicing', 'f7a8b9c', '{}', 'alice', now())`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `select array_agg(distinct source) from workflow_versions`).Scan(&sources); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sources, []string{SourceTree}) {
+		t.Errorf("a version written as v0.3.0 writes one reads as sent by %v", sources)
+	}
 	pool, err := Open(ctx, withCredentials(super, role, "test"))
 	if err != nil {
 		t.Fatal(err)

@@ -57,7 +57,7 @@ create function git_ref_name(ref text) returns boolean
 -- and is never a row. commit is null only while a branch is unborn, which is what the default
 -- branch of a repository nothing was pushed to is: its row is there before the branch is, so that
 -- whether pushing to it takes grant:manage is decided before the first push rather than by it.
--- Deleting the default branch leaves it unborn again, protection kept.
+-- Once born it is never unborn again: a push deleting it is refused.
 --
 -- commit is the commit the ref names, an annotated tag peeled to it, as the wire answers a ref;
 -- tag is the annotated tag object itself, which the ref names in git and a fetch is answered with.
@@ -126,11 +126,11 @@ $$;
 
 -- How a version arrived: git for a commit a git push carried, whose objects are in the
 -- repository's packs, and tree for one agk push sent as a tree, whose files alone are stored.
--- Every version here was sent as a tree, and the constant default says so without writing a row;
--- one recorded from now on says which it is, git where it does not.
+-- Every version here was sent as a tree, and the constant default says so without writing a row.
+-- It stays the default: a writer that does not say is one written before git hosting, v0.3.0's API
+-- still serving while init applies this file among them, and what it records is a tree.
 alter table workflow_versions add column source text not null default 'tree'
   constraint workflow_versions_source check (source in ('git', 'tree'));
-alter table workflow_versions alter column source set default 'git';
 
 -- Every workflow here is an empty repository whose default branch is unborn, and unprotected, so
 -- that an editor's agk push keeps landing after the upgrade; whoever holds grant:manage on it turns

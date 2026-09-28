@@ -138,9 +138,9 @@ func TestAWorkflowRecordedIsAnEmptyRepositoryWithItsDefaultBranchUnborn(t *testi
 	}
 }
 
-// A ref is created, moved and deleted only while it names what the push found it naming. Deleting
-// the default branch leaves it unborn with its protection, an annotated tag keeps the tag object git
-// names beside the commit it peels to, and who moved a ref, and when, is kept with it.
+// A ref is created, moved and deleted only while it names what the push found it naming, and the
+// default branch is not deleted at all. An annotated tag keeps the tag object git names beside the
+// commit it peels to, and who moved a ref, and when, is kept with it.
 func TestARefMovesOnlyFromWhereThePushFoundIt(t *testing.T) {
 	pool, super := repositories(t)
 	// The refs held in a collation that is not git's order, as a database created under a glibc or
@@ -170,7 +170,6 @@ func TestARefMovesOnlyFromWhereThePushFoundIt(t *testing.T) {
 	for _, stale := range []RefUpdate{
 		{Ref: "refs/heads/main", New: c2},
 		{Ref: "refs/heads/main", Old: c2, New: c3},
-		{Ref: "refs/heads/main", Old: c2},
 		{Ref: "refs/heads/feature", Old: c1, New: c2},
 		{Ref: "refs/heads/feature", Old: c1},
 	} {
@@ -200,16 +199,19 @@ func TestARefMovesOnlyFromWhereThePushFoundIt(t *testing.T) {
 		t.Errorf("deleting an annotated tag by the commit it peels to answered %v, and git names it by the tag object", err)
 	}
 
-	if err := move("carol", RefUpdate{Ref: "refs/heads/main", Old: c2}, RefUpdate{Ref: "refs/heads/feature", Old: c3},
-		RefUpdate{Ref: "refs/heads/Zeta", Old: c3}, RefUpdate{Ref: "refs/tags/v1", Old: tagObject}); err != nil {
+	others := []RefUpdate{{Ref: "refs/heads/feature", Old: c3}, {Ref: "refs/heads/Zeta", Old: c3}, {Ref: "refs/tags/v1", Old: tagObject}}
+	if err := move("carol", append(others, RefUpdate{Ref: "refs/heads/main", Old: c2})...); !errors.Is(err, ErrDefaultBranch) {
+		t.Errorf("a push deleting the default branch answered %v", err)
+	}
+	if r := repositoryOf(t, pool, "finance", "nightly"); !sameRefs(r.Refs, want) {
+		t.Errorf("a push refused for deleting the default branch left the refs %+v", r.Refs)
+	}
+	if err := move("carol", others...); err != nil {
 		t.Fatal(err)
 	}
 	r = repositoryOf(t, pool, "finance", "nightly")
-	if len(r.Refs) != 1 || r.Refs[0] != (Ref{Name: "refs/heads/main", Protected: true}) {
-		t.Errorf("once every ref is deleted the refs read as %+v, where the default branch is unborn again and protected", r.Refs)
-	}
-	if err := move("dana", RefUpdate{Ref: "refs/heads/main", New: c3}); err != nil {
-		t.Errorf("the default branch deleted could not be pushed to again: %v", err)
+	if !sameRefs(r.Refs, want[2:3]) {
+		t.Errorf("once every other ref is deleted the refs read as %+v", r.Refs)
 	}
 }
 
@@ -486,6 +488,11 @@ func TestAPackIsReceivedThenMadeLive(t *testing.T) {
 		return s, superseded
 	}
 
+	// Received first as what it is not, as a write refused for its size leaves it, then as it is: it
+	// is recorded as it is.
+	if _, err := receive(Pack{Name: c1, Size: 4095, Objects: 11}); err != nil {
+		t.Fatal(err)
+	}
 	first := Pack{Name: c1, Size: 4096, Objects: 12}
 	if got, err := receive(first); err != nil || got != key {
 		t.Fatalf("receiving a pack answered %q, %v, and the repository's key is %s", got, err, key)
@@ -518,11 +525,20 @@ func TestAPackIsReceivedThenMadeLive(t *testing.T) {
 	if err := live(c1); !errors.Is(err, ErrNoPack) {
 		t.Errorf("a superseded pack made live answered %v", err)
 	}
+	if _, err := conn.Exec(t.Context(), `update git_packs set created_at = now() - interval '2 days' where name = $1`, c1); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := receive(first); err != nil {
 		t.Fatal(err)
 	}
 	if s, superseded := state(c1); s != "receiving" || superseded {
 		t.Errorf("a superseded pack received again is %s, superseded %t", s, superseded)
+	}
+	// Receiving from now, so that the collection of packs receiving past the grace leaves the bytes
+	// this push is about to write.
+	var fresh bool
+	if err := conn.QueryRow(t.Context(), `select created_at > now() - interval '1 minute' from git_packs where name = $1`, c1).Scan(&fresh); err != nil || !fresh {
+		t.Errorf("a pack received again is receiving from when it was first received: %v", err)
 	}
 
 	if err := live(c2); !errors.Is(err, ErrNoPack) {

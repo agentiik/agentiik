@@ -93,6 +93,9 @@ type RefUpdate struct {
 // ErrStaleRef is a ref no longer where the push found it: another push moved it first.
 var ErrStaleRef = errors.New("db: a ref is no longer where the push found it")
 
+// ErrDefaultBranch is a push deleting the default branch, which is refused.
+var ErrDefaultBranch = errors.New("db: the default branch is not deleted: another branch is named the default first")
+
 // Pack is one packfile of a repository, named by its checksum.
 type Pack struct {
 	// Name is the pack's checksum, 40 hexadecimal digits: the SHA-1 its trailer and its index hold,
@@ -184,8 +187,10 @@ func (n *NS) Repository(ctx context.Context, workflow string) (Repository, error
 // and commits: the set is written under a savepoint of its own. That is git's atomic push, which
 // every push is, so that a push is accepted or refused whole.
 //
-// Deleting the default branch leaves it unborn rather than removing its row, so that its protection
-// stays with it.
+// A push deleting the default branch is refused whole with ErrDefaultBranch, as git refuses to delete
+// the branch a repository has checked out: HEAD would name nothing, and unborn would no longer mean
+// what the wire says it means, a default branch nothing was pushed to yet, which a run naming no ref
+// reads to run the latest version sent as a tree. Another branch is named the default first.
 //
 // The lock is FOR NO KEY UPDATE, which two pushes take in turn and which leaves alone the key share a
 // version, a grant or a run takes on the workflow's row as it is written: a push waits for a push,
@@ -229,6 +234,12 @@ func (n *NS) UpdateRefs(ctx context.Context, workflow, by string, at time.Time, 
 		return fmt.Errorf("db: the repository of %s could not be locked: %w", workflow, err)
 	}
 
+	for _, m := range moves {
+		if m.deletes && m.ref == "refs/heads/"+branch {
+			return fmt.Errorf("%w: %s of %s", ErrDefaultBranch, m.ref, workflow)
+		}
+	}
+
 	set, err := n.tx.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("db: the refs of %s could not be moved: %w", workflow, err)
@@ -249,11 +260,6 @@ func (n *NS) UpdateRefs(ctx context.Context, workflow, by string, at time.Time, 
 					 on conflict (namespace, workflow, ref) do nothing`,
 					n.namespace, workflow, m.ref, m.commit, nilIfEmpty(m.tag), by, at)
 			}
-		case m.deletes && m.ref == "refs/heads/"+branch:
-			moved, err = exec(ctx, set,
-				`update workflow_refs set commit = null, tag = null, moved_by = null, moved_at = null
-				 where namespace = $1 and workflow = $2 and ref = $3 and coalesce(tag, commit) = $4`,
-				n.namespace, workflow, m.ref, m.old)
 		case m.deletes:
 			moved, err = exec(ctx, set,
 				`delete from workflow_refs
@@ -349,7 +355,9 @@ func checkRef(ref string) error {
 // A pack of the same name is the same bytes, since its name is their checksum: one receiving is
 // receiving again from now, one live stays live, and one superseded is receiving again, so that a
 // repack's collection, which deletes a pack only while it is superseded, leaves the bytes this push
-// is about to write alone.
+// is about to write alone. One not live takes the size and the count given now, which are those of
+// the bytes about to be written: a write refused for a size that was not theirs leaves nothing to
+// hold the next one to.
 func (n *NS) ReceivePack(ctx context.Context, workflow string, p Pack) (string, error) {
 	switch {
 	case !objectID.MatchString(p.Name):
@@ -371,7 +379,8 @@ func (n *NS) ReceivePack(ctx context.Context, workflow string, p Pack) (string, 
 		`insert into git_packs (namespace, repository, name, size, objects)
 		 values ($1, $2, $3, $4, $5)
 		 on conflict (namespace, repository, name) do update
-		   set state = 'receiving', superseded_at = null, created_at = now()
+		   set state = 'receiving', superseded_at = null, created_at = now(),
+		       size = excluded.size, objects = excluded.objects
 		 where git_packs.state <> 'live'`,
 		n.namespace, key, p.Name, p.Size, p.Objects); err != nil {
 		return "", fmt.Errorf("db: pack %s of %s could not be recorded: %w", p.Name, workflow, err)
