@@ -41,13 +41,16 @@ Each one records its reason in `go.mod`.
 - `github.com/goccy/go-yaml`: YAML 1.2, because YAML 1.1 reads the trigger key `on:` as `true`.
 - `github.com/jackc/pgx/v5`: PostgreSQL, since the controller's advisory lock and `LISTEN` need a pinned connection that `database/sql` cannot give.
 - `github.com/nats-io/nats.go`, `github.com/nats-io/jwt/v2` and `github.com/nats-io/nkeys`: the bus and its credentials. `github.com/nats-io/nats-server/v2` is a test dependency and ships in nothing.
+- `github.com/pelletier/go-toml/v2`: the runner's `runner.toml`, read strictly, so that a misspelled key is refused.
 - `github.com/santhosh-tekuri/jsonschema/v6`: JSON Schema 2020-12.
+- `golang.org/x/crypto`: Argon2id for the password fallback, which the standard library lacks.
+- `golang.org/x/text`: the PRECIS OpaqueString profile, so that the SCRAM verifier of the role the application connects as is computed as pgx prepares the password.
 
 The Docker Engine API is spoken with the standard library.
 
 ## Status
 
-`agk run --local` runs a whole workflow on one machine, and `agk validate`, `agk graph` and `agk brick test` work beside it. A server runs it too: `agentiik-api`, `agentiik-controller` and `agk-runner` are the installation, and `agk push`, `agk run --namespace`, `agk status` and `agk logs` send a workflow to it, run it and follow it. Since v0.3.0 it serves more than one person: users sign in with a passkey, or a password where the authentication policy allows one, through `agk login` or the API's sign-in page, and the bootstrap token creates the first administrator; groups, service accounts and API tokens, grants and roles at namespace and workflow scope (`agk share`, `agk grants`, `agk whoami`), quotas per namespace, and a namespace a caller holds nothing in answered as one that does not exist. `brick init` still refuses until its templates are released from `agentiik/bricks`, and `network: egress` until the proxy enforcing `egress.allow` lands in v0.9.0. The [roadmap](https://agentiik.github.io/docs/roadmap) has the rest, and [CHANGELOG.md](CHANGELOG.md) what each release shipped.
+`agk run --local` runs a whole workflow on one machine, and `agk validate`, `agk graph` and `agk brick test` work beside it. A server runs it too: `agentiik-api`, `agentiik-controller` and `agk-runner` are the installation, and `agk push`, `agk run --namespace`, `agk status` and `agk logs` send a workflow to it, run it and follow it. Since v0.3.0 it serves more than one person: users sign in with a passkey, or a password where the authentication policy allows one, through `agk login` or the API's sign-in page, and the bootstrap token creates the first administrator; users, groups and service accounts hold roles and denies at namespace and workflow scope (`agk share`, `agk grants`, `agk whoami`), API tokens act for them, namespaces carry an owner and quotas, and a namespace a caller holds nothing in is answered as one that does not exist. `brick init` still refuses until its templates are released from `agentiik/bricks`, and the driver refuses `network: egress` until the proxy enforcing `egress.allow` lands in v0.9.0. The [roadmap](https://agentiik.github.io/docs/roadmap) has the rest, and [CHANGELOG.md](CHANGELOG.md) what each release shipped.
 
 ## Building and testing
 
