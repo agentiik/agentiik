@@ -252,12 +252,18 @@ func encodeHeaders(b *strings.Builder, t Type, headers []Header) error {
 		if strings.ContainsAny(h.Key, " \n\x00") || (h.Key == "" && i > 0) || strings.IndexByte(h.Value, 0) >= 0 {
 			return fmt.Errorf("repo: the %s header %q cannot be written so that it reads back as itself: a key holds no space, line feed or null byte, only the first header may have none, and a value holds no null byte", t, h.Key)
 		}
+		// The first line of the value follows the key after a space, and each line after it
+		// begins with one, which is what makes it a continuation. An empty first line is written
+		// with no space, so that a key such as tagger, which a tag's own line begins with, reads
+		// back as the header it was and not as that line; a header with no key is a continuation
+		// of nothing, and begins with its space whatever follows.
+		first, rest, more := strings.Cut(h.Value, "\n")
 		b.WriteString(h.Key)
-		// A key with no value is written with no space after it, as it may have been read; a
-		// value is written after one space, with a space before each of its lines after the
-		// first, which is what makes them continuations.
-		if h.Key == "" || h.Value != "" {
-			b.WriteString(" " + strings.ReplaceAll(h.Value, "\n", "\n "))
+		if h.Key == "" || first != "" {
+			b.WriteString(" " + first)
+		}
+		if more {
+			b.WriteString("\n " + strings.ReplaceAll(rest, "\n", "\n "))
 		}
 		b.WriteByte('\n')
 	}
