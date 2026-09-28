@@ -26,6 +26,12 @@ func TestTheBrickCorpus(t *testing.T) {
 				t.Fatal(err)
 			}
 			m, err := brick.ParseManifest(doc)
+			if task, ok := deferredManifests[c.File]; ok {
+				if err != nil {
+					t.Fatalf("this manifest is refused now, so it is no longer deferred to %s: take it out of deferredManifests (%v)", task, err)
+				}
+				t.Skipf("accepted until %s", task)
+			}
 			switch {
 			case c.Valid && err != nil:
 				t.Fatalf("the corpus says this manifest covers %s, and it was refused: %v", c.Covers, err)
@@ -38,6 +44,14 @@ func TestTheBrickCorpus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// deferredManifests are the fixtures the corpus refuses that this reader still accepts, because
+// the documentation gives the refusal to a later release, and which one: a port of 251 to 255
+// characters is "nothing yet, a v0.4.0 task: it is accepted", since the engine carries one of up
+// to 255 until then; the schema already holds it to 250.
+var deferredManifests = map[string]string{
+	"fixtures/brick/invalid/port-name-251-characters.yaml": "v0.4.0, which refuses a port past 250 characters in the manifest reader",
 }
 
 // TestAPortSchemaResolvesAgainstTheManifest holds the rule about pointers: a definition

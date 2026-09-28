@@ -28,6 +28,13 @@ func TestTheWorkflowCorpus(t *testing.T) {
 		t.Run(path.Base(c.File), func(t *testing.T) {
 			doc := read(t, c.File)
 
+			if task, ok := deferredWorkflows[path.Base(c.File)]; ok {
+				if _, err := Parse(doc); err != nil {
+					t.Fatalf("this document is refused now, so it is no longer deferred to %s: take it out of deferredWorkflows (%v)", task, err)
+				}
+				t.Skipf("accepted until %s", task)
+			}
+
 			// One fixture is the included file itself, which is where the rule it
 			// pins can be seen at all: a fragment is not an entry point and is never
 			// read as one.
@@ -60,6 +67,15 @@ func TestTheWorkflowCorpus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// deferredWorkflows are the fixtures the corpus refuses that this reader still accepts, because
+// the documentation gives the refusal to a later release, and which one. A port or a workflow
+// output of 251 to 255 characters is "nothing yet, a v0.4.0 task: it is accepted", since the
+// engine carries one of up to 255 until then; the schemas already hold it to 250.
+var deferredWorkflows = map[string]string{
+	"port-name-251-characters.yaml":       "v0.4.0, which refuses a port past 250 characters where it is written",
+	"workflow-output-251-characters.yaml": "v0.4.0, which refuses a workflow output past 250 characters where it is written",
 }
 
 // refusal runs the layer that can reach the rule: Check where the workflow file is the

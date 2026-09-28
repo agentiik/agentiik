@@ -82,7 +82,7 @@
       "title": "Workflow outputs",
       "description": "The results a run is read by, each one a view of a single step port. Naming the boundary here is what lets a step be renamed, split or replaced without anything that consumes the workflow having to change.",
       "type": "object",
-      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "propertyNames": { "$ref": "#/$defs/portName" },
       "additionalProperties": { "$ref": "#/$defs/workflowOutput" },
       "examples": [
         {
@@ -229,8 +229,8 @@
     },
     "timeout": {
       "title": "Run timeout",
-      "description": "Maximum duration of the whole run. It is not the step keyword of the same name: that one bounds a single shard, this one bounds everything the run does, from the first task to the last. A run still going when it expires is stopped and ends in the timed_out state, which is what makes that state reachable from a file rather than only from an operator cancelling something. It is capped by the namespace quota max_run_duration, so a workflow may always ask for less and never for more, exactly as retain is capped by max_retention_days.",
-      "$comment": "The ceiling is not written into the grammar, unlike the sync call timeout, whose 120 seconds are the same for every namespace and are therefore in its pattern. max_run_duration is a per-namespace quota, so a pattern refusing anything above it would refuse for one namespace what another is entitled to. The validator reads the quota and refuses the file, the way it does for a retain above max_retention_days.",
+      "description": "Maximum duration of the whole run. It is not the step keyword of the same name: that one bounds a single shard, this one bounds everything the run does, from the first task to the last. A run still going when it expires is stopped and ends in the timed_out state, which is what makes that state reachable from a file rather than only from an operator cancelling something. It is capped by the namespace quota max_run_duration, exactly as retain is capped by max_retention_days: a timeout above the quota is held to it rather than refused, and a workflow writing none is bounded by the quota.",
+      "$comment": "The ceiling is not written into the grammar, unlike the sync call timeout, whose 120 seconds are the same for every namespace and are therefore in its pattern. max_run_duration is a per-namespace quota, so a pattern refusing anything above it would refuse for one namespace what another is entitled to. Nothing refuses the file either: the controller caps the run's deadline at the quota, read at every pass, so a quota lowered after the push holds a run already going from its next pass, and a push is not checked against it, since the quota can change before the version runs.",
       "$ref": "#/$defs/duration",
       "examples": ["30m", "6h", "24h"]
     },
@@ -239,8 +239,11 @@
       "description": "The steps of the workflow, named. The order they appear in has no bearing on scheduling: a step becomes runnable once every declared input port is satisfied, and an edge is the only form of dependency there is. A name starting with a dot is a hidden block, never executed, there to be extended.",
       "type": "object",
       "propertyNames": {
-        "description": "Step identifier, unique in the workflow. It names the step in needs, in expressions and in the run detail. A leading dot marks a hidden block, which is never executed.",
-        "pattern": "^\\.?[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "description": "Step identifier, unique in the workflow. It names the step in needs, in expressions and in the run detail, and is held to $defs/identifier's 255 characters, since a step becomes a directory. A leading dot marks a hidden block, which is never executed, and so never a directory either.",
+        "anyOf": [
+          { "$ref": "#/$defs/identifier" },
+          { "pattern": "^\\.[A-Za-z0-9][A-Za-z0-9_-]*$" }
+        ],
         "examples": ["normalize", "check-vat", ".api-brick"]
       },
       "additionalProperties": { "$ref": "#/$defs/step" },
@@ -271,16 +274,18 @@
   "$defs": {
     "identifier": {
       "title": "Identifier",
-      "description": "A name written in the file and used as a key elsewhere: a workflow, a namespace, an input, an output, a port, a variable, a secret or a tool. Kept to letters, digits, hyphens and underscores so that the same name survives a URL, an environment variable and a tool list unchanged.",
+      "description": "A name written in the file and used as a key elsewhere: a workflow, a namespace, an input, an output, a port, a variable, a secret or a tool. Kept to letters, digits, hyphens and underscores so that the same name survives a URL, an environment variable and a tool list unchanged, and to 255 characters because no filesystem holds a longer name: a step becomes a directory and a secret a file. A port and a workflow output are held to 250, $defs/portName.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "maxLength": 255,
       "examples": ["monthly-invoicing", "create_invoice", "orders"]
     },
     "namespace": {
       "title": "Namespace",
-      "description": "The name of a namespace, an identifier other than a reserved word. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts cannot name a namespace, and are refused at namespace and login creation from v0.3.0.",
+      "description": "The name of a namespace, an identifier other than a reserved word, at most 255 characters, the most a directory holds a name to. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. Nothing renames a namespace, so one made before v0.3.0 under it keeps its name and the API still serves it, every route of it, with nothing to do; only its creation is refused, which is why the engine still reads a workflow naming it.",
       "$ref": "#/$defs/identifier",
-      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts)$" },
+      "maxLength": 255,
+      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)$" },
       "examples": ["finance", "platform"]
     },
     "duration": {
@@ -296,6 +301,13 @@
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
       "examples": ["url", "method", "endpoint", "currency"]
+    },
+    "portName": {
+      "title": "Port name",
+      "description": "The name of a port, or of a workflow output: an identifier of at most 250 characters, since each becomes the file <name>.json, which a filesystem holds to 255 with its suffix. It is the grammar and the bound the brick manifest declares its ports on, so that every port a manifest declares can be named here.",
+      "$ref": "#/$defs/identifier",
+      "maxLength": 250,
+      "examples": ["out", "error", "rejected", "invoices"]
     },
     "expression": {
       "title": "Expression",
@@ -365,7 +377,7 @@
             },
             "port": {
               "description": "Output port of that step. An error port raised to a workflow output is how a run reports what it could not process without failing.",
-              "$ref": "#/$defs/identifier",
+              "$ref": "#/$defs/portName",
               "examples": ["out", "error"]
             }
           }
@@ -477,10 +489,10 @@
     },
     "workflowPath": {
       "title": "Workflow path",
-      "description": "A workflow addressed as <namespace>/<name>, the same identity a grant and a git remote use. The namespace is never a reserved word, as $defs/namespace lists them.",
+      "description": "A workflow addressed as <namespace>/<name>, the same identity a grant and a git remote use. The namespace is never a reserved word, as $defs/namespace lists them, and each half is at most 255 characters, as $defs/identifier is: a maxLength would bound the whole string, so the pattern counts each half.",
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*$",
-      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts)/" },
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$",
+      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/" },
       "examples": ["finance/common", "finance/monthly-invoicing"]
     },
     "scheduleTrigger": {
@@ -670,7 +682,7 @@
               "properties": {
                 "output": {
                   "description": "A workflow output declared in this file.",
-                  "$ref": "#/$defs/identifier",
+                  "$ref": "#/$defs/portName",
                   "examples": ["invoices"]
                 }
               }
@@ -885,7 +897,7 @@
         "inputs": {
           "description": "Feeds an input port from a workflow input or from an expression, creating no dependency on another step. It is how a step reads what the run was started with rather than what another step produced.",
           "type": "object",
-          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "propertyNames": { "$ref": "#/$defs/portName" },
           "additionalProperties": {
             "description": "Expression, or literal value, feeding one input port.",
             "examples": ["${{ workflow.inputs.orders }}"]
@@ -899,7 +911,7 @@
           "uniqueItems": true,
           "items": {
             "description": "Name of one output port.",
-            "$ref": "#/$defs/identifier",
+            "$ref": "#/$defs/portName",
             "examples": ["out", "error", "rejected"]
           },
           "examples": [["ok", "rejected"], ["out", "error"]]
@@ -1095,10 +1107,10 @@
           "description": "Calls a sub-workflow instead of running an image. It is the only way to loop, since cycles in the graph are refused at validation, and it is bounded by a configurable maximum depth. A call into another namespace requires workflow:run on the workflow being called.",
           "oneOf": [
             {
-              "description": "The workflow to call, as <namespace>/<name>, optionally at a ref after an @.",
+              "description": "The workflow to call, as <namespace>/<name>, optionally at a ref after an @, each half at most 255 characters, as $defs/workflowPath counts them.",
               "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*(@\\S+)?$",
-              "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts)/" }
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}(@\\S+)?$",
+              "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/" }
             },
             {
               "description": "The workflow to call and the ref it is read at, written apart.",
@@ -1145,13 +1157,13 @@
             },
             "port": {
               "description": "Which of that step's output ports is taken. This is what lets an item rejected by one step bypass the next and still reach the last.",
-              "$ref": "#/$defs/identifier",
+              "$ref": "#/$defs/portName",
               "default": "out",
               "examples": ["ok", "rejected", "error"]
             },
             "as": {
               "description": "The input port the envelope arrives on here. Naming it is what lets one step take two different envelopes and still tell them apart.",
-              "$ref": "#/$defs/identifier",
+              "$ref": "#/$defs/portName",
               "default": "in",
               "examples": ["in", "invoices", "rejected"]
             }

@@ -23,8 +23,8 @@
 //
 // The password is hashed as the bytes it was sent as, prepared by no profile, and whatever sets a
 // password hashes it with Hash, so both sides see the same bytes. Preparing it, with the PRECIS
-// OpaqueString profile of RFC 8265 for one, would change every hash made before, and is decided
-// with the route that sets a password, which v0.3.0 does not serve.
+// OpaqueString profile of RFC 8265 for one, would change every hash made before, so the routes
+// that set a password hash it as it was sent.
 package password
 
 import (

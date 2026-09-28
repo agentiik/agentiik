@@ -1,0 +1,9 @@
+{
+  "kind": "user",
+  "login": "dave",
+  "display_name": "Dave Moreau",
+  "admin": false,
+  "suspended": false,
+  "suspended_for": "no_passkey",
+  "created_at": "2026-09-27T09:30:00Z"
+}

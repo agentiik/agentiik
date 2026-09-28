@@ -6,8 +6,8 @@
 // putting it here would be the evaluator executing." It lives under cmd/agk/internal
 // because the root doc.go reserved cmd/agk for this group and nothing else, and because
 // writing an exported package for a second consumer two milestones away, whose shape
-// nobody can see, is speculation. When the controller wants it in v0.3.0 it moves up,
-// which is an addition rather than a change.
+// nobody can see, is speculation. Should the controller want it, it moves up, which is an
+// addition rather than a change.
 //
 // # What this package refuses to be
 //

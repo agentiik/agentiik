@@ -184,10 +184,10 @@ const BootstrapOperator = "operator"
 
 // principalRef refuses a principal no grant can name, on the wire's three forms: a login, which is
 // held to the namespace grammar and its reserved words since each user's personal namespace is
-// named after it, and is never operator; group:NAME for a group; and NS/NAME for a service account,
-// whose namespace is never a reserved word either. Each name is bounded as every name is.
-// The forms cannot be taken for one another, since a login holds neither a colon nor a slash. A
-// word reserved late names a principal still, as it names a namespace still
+// named after it, and is never operator or installation; group:NAME for a group; and NS/NAME for a
+// service account, whose namespace is never a reserved word either. Each name is bounded as every
+// name is. The forms cannot be taken for one another, since a login holds neither a colon nor a
+// slash. A word reserved late names a principal still, as it names a namespace still
 // (agk.LateReservations): it is refused where a name is given, which is not here.
 //
 // Resolve matches a principal by its exact string, so a grant written for one spelled wrongly is a
@@ -219,6 +219,8 @@ func principalRef(ref string) error {
 		return errors.New("a grant names the principal it is for: a login such as alice, group:NAME such as group:team-finance, or NS/NAME such as finance/agentiik")
 	case ref == BootstrapOperator:
 		return errors.New("operator names the v0.2 operator on the rows it wrote, and is no principal a grant can name")
+	case ref == "installation":
+		return errors.New("installation names the installation itself, as the author of the rows it writes, and is no principal a grant can name")
 	case !given(ref):
 		return fmt.Errorf("%.64q names no principal: a login is lowercase words joined by hyphens, such as alice, a group is group:NAME and a service account NS/NAME", ref)
 	case agk.NamesNoNamespace(ref):

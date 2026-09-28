@@ -37,10 +37,10 @@ func TestEnvelopesCarriesTheWholeCorpus(t *testing.T) {
 			}
 		}
 	}
-	// The corpus the documentation describes: three documents that must be
-	// accepted and eleven that must be refused.
-	if valid != 3 || invalid != 11 {
-		t.Fatalf("the corpus holds %d valid and %d invalid documents, want 3 and 11", valid, invalid)
+	// The corpus the documentation describes: four documents that must be
+	// accepted and twelve that must be refused.
+	if valid != 4 || invalid != 12 {
+		t.Fatalf("the corpus holds %d valid and %d invalid documents, want 4 and 12", valid, invalid)
 	}
 }
 
@@ -198,11 +198,11 @@ func TestWorkflowsCarriesTheWholeCorpus(t *testing.T) {
 			}
 		}
 	}
-	// The corpus the release carries: nine documents that must be accepted and
-	// fifty-four that must be refused, of which fifteen are rules no JSON Schema can
+	// The corpus the release carries: ten documents that must be accepted and
+	// fifty-nine that must be refused, of which fifteen are rules no JSON Schema can
 	// express and the evaluator owns.
-	if valid != 9 || invalid != 54 || byValidator != 15 {
-		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 9, 54 and 15", valid, invalid, byValidator)
+	if valid != 10 || invalid != 59 || byValidator != 15 {
+		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 10, 59 and 15", valid, invalid, byValidator)
 	}
 }
 
@@ -223,8 +223,8 @@ func TestBricksCarriesTheWholeCorpus(t *testing.T) {
 			t.Errorf("%s names no rule it is refused by", c.File)
 		}
 	}
-	if valid != 4 || invalid != 15 {
-		t.Fatalf("the corpus holds %d valid and %d invalid manifests, want 4 and 15", valid, invalid)
+	if valid != 5 || invalid != 16 {
+		t.Fatalf("the corpus holds %d valid and %d invalid manifests, want 5 and 16", valid, invalid)
 	}
 }
 
@@ -269,14 +269,16 @@ func TestTheAccessCorporaCarryTheWholeCorpus(t *testing.T) {
 		read           func() ([]Case, error)
 		valid, invalid int
 	}{
-		// A viewer on a namespace, an operator on one workflow with an expiry, and a deny of
-		// run:read_data on that workflow, which is the documentation's example; refused, a row
-		// carrying a role and a deny, a deny naming a role, a role that is not one of the four,
-		// and a scope on a reserved word.
-		{"access grants", AccessGrants, 3, 4},
-		// A login, a group and a service account; refused, operator, a user written with a
-		// prefix, and a group written in capitals.
-		{"principal references", PrincipalRefs, 3, 3},
+		// A viewer on a namespace, an operator on one workflow with an expiry, a deny of
+		// run:read_data on that workflow, which is the documentation's example, and an owner
+		// grant the installation wrote; refused, a row carrying a role and a deny, a deny naming
+		// a role, a role that is not one of the four, a scope on a reserved word, and a
+		// namespace of 256 characters.
+		{"access grants", AccessGrants, 4, 5},
+		// A login, a group and a service account, and a group and a service account at 255
+		// characters; refused, operator, installation, a user written with a prefix, a group
+		// written in capitals, and a group and a service account of 256 characters.
+		{"principal references", PrincipalRefs, 5, 6},
 		// operator and owner; refused, admin.
 		{"roles", Roles, 2, 1},
 		// run:read_data and grant:manage; refused, a hyphenated one and a wildcard.
