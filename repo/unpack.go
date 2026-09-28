@@ -350,27 +350,24 @@ func (u *unpacker) resolve() error {
 			}
 		}
 	}
-	// A thin base may be one only once a delta of the pack has been resolved against another,
-	// so the bases are looked up until a round finds none.
-	for progress := true; progress && len(u.refKids) > 0 && u.opts.Bases != nil; {
-		progress = false
-		for _, id := range u.unresolvedBases() {
-			if _, still := u.refKids[id]; !still {
-				continue
-			}
-			t, data, err := ReadObject(u.ctx, u.opts.Bases, id, maxHeld)
-			if errors.Is(err, ErrMissing) {
-				continue
-			}
-			if err != nil {
-				return fmt.Errorf("repo: the base %s of a thin pack: %w", id, err)
-			}
-			progress = true
-			root := &frame{entry: -1, id: id, t: t, data: data}
-			u.hold(data)
-			if err := u.from(root); err != nil {
-				return err
-			}
+	// What is left is made against objects the pack does not hold whole. The repository is asked
+	// for each; one it lacks may yet be an object the pack holds as a delta against another base,
+	// and it is taken from what is left to resolve when that delta is.
+	for _, id := range u.unresolvedBases() {
+		if _, still := u.refKids[id]; !still || u.opts.Bases == nil {
+			continue
+		}
+		t, data, err := ReadObject(u.ctx, u.opts.Bases, id, maxHeld)
+		if errors.Is(err, ErrMissing) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("repo: the base %s of a thin pack: %w", id, err)
+		}
+		root := &frame{entry: -1, id: id, t: t, data: data}
+		u.hold(data)
+		if err := u.from(root); err != nil {
+			return err
 		}
 	}
 	if missing := u.unresolvedBases(); len(missing) > 0 {
