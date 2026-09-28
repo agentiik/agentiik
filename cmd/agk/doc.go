@@ -168,6 +168,8 @@
 //	run.go           agk run --local
 //	bricktest.go     agk brick test
 //	push.go          agk push
+//	images.go        what agk push and agk validate read of the images, recorded on the
+//	                 installation for its git pushes to be judged against
 //	serverrun.go     agk run on an installation
 //	logs.go          agk logs
 //	status.go        agk status

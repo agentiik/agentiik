@@ -156,6 +156,18 @@ func push(ctx context.Context, e Env, args []string) int {
 	}
 	wf, captured, images := checked.Workflow, checked.Version, checked.Version.Images
 
+	// What was read of the images is recorded in the namespace before the version is pushed: "a
+	// git push reaches no registry", and the hook judges one against what the namespace recorded,
+	// which this is. Not recording it refuses nothing today, since the version carries its own
+	// digests and manifests, and is said, since a git push naming them would be refused.
+	if record := recordable(captured); len(record.Pins)+len(record.Manifests) > 0 {
+		if err := recordImages(ctx, at, *namespace, record); err != nil {
+			fmt.Fprintf(e.Err, "what was read of the images was not recorded in %s, and a git push naming them is refused until it is: %v\n", *namespace, err)
+		} else {
+			fmt.Fprintln(e.Out, recorded(record, *namespace))
+		}
+	}
+
 	body := api.Push{
 		Entry: captured.Entry, Document: captured.Document,
 		Includes: captured.Includes, Manifests: captured.Manifests,

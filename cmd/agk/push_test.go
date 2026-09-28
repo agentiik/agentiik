@@ -105,15 +105,32 @@ func pushing(t *testing.T, dir string, answer int, args ...string) (int, string,
 // pushingTo is pushing, and the path the version was sent to, which is where its commit is named.
 func pushingTo(t *testing.T, dir string, answer int, args ...string) (int, string, string, *api.Push, string) {
 	t.Helper()
+	code, out, errs, got, path, _ := pushingAll(t, dir, answer, args...)
+	return code, out, errs, got, path
+}
+
+// pushingAll is pushingTo, and the images recorded before the version, which the server takes.
+func pushingAll(t *testing.T, dir string, answer int, args ...string) (int, string, string, *api.Push, string, *api.Images) {
+	t.Helper()
 	var got *api.Push
+	var images *api.Images
 	var path string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
 		if r.Header.Get("Authorization") != "Bearer the-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":"no"}`))
 			return
 		}
+		if r.Method == http.MethodPut && r.URL.Path == "/api/v1/finance/images" {
+			if got != nil {
+				t.Error("the images were recorded after the version was pushed")
+			}
+			images = &api.Images{}
+			json.NewDecoder(r.Body).Decode(images)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		path = r.URL.Path
 		var p api.Push
 		json.NewDecoder(r.Body).Decode(&p)
 		got = &p
@@ -133,7 +150,7 @@ func pushingTo(t *testing.T, dir string, answer int, args ...string) (int, strin
 	t.Cleanup(server.Close)
 
 	code, out, errs := pushAgainst(dir, server.URL, args...)
-	return code, out, errs, got, path
+	return code, out, errs, got, path, images
 }
 
 // pushAgainst runs the command against the installation at url, and answers what it said.
@@ -1131,7 +1148,11 @@ func TestAPushSaysWhereItsVersionKeepsAnotherImage(t *testing.T) {
 		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
 		"alpine:3.21":                    {Digest: alpineDigest},
 	})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/images") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		json.NewEncoder(w).Encode(api.Pushed{Images: map[string]string{"ghcr.io/acme/agk-invoice:1.4.0": kept}})
 	}))
 	t.Cleanup(server.Close)

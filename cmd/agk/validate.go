@@ -34,10 +34,12 @@ const (
 )
 
 func validate(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk validate", "agk validate [-f <path>] [--manifests read|skip]")
+	fs := flags(e, "agk validate", "agk validate [-f <path>] [--manifests read|skip] [--namespace <namespace>]")
 	entry := fs.String("f", "", "The entry point to validate. Defaults to "+entryPoint+" in the directory the command is run in.")
 	manifests := fs.String("manifests", manifestsRead,
 		"read pulls the referenced images and checks each step's ports and params against the brick manifest inside them; skip validates the file alone.")
+	namespace := fs.String("namespace", "",
+		"The namespace to record what was read of the images in, where an installation is configured, which its git pushes are judged against. Defaults to metadata.namespace.")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -57,7 +59,7 @@ func validate(ctx context.Context, e Env, args []string) int {
 	// cannot start.
 	images := &daemon{e: e}
 	defer images.close()
-	c := versions.Checking{Entry: base}
+	c := versions.Checking{Entry: base, Namespace: *namespace}
 	if *manifests == manifestsRead {
 		c.Manifest = images.manifest
 	}
@@ -79,6 +81,7 @@ func validate(ctx context.Context, e Env, args []string) int {
 	fmt.Fprintf(e.Out, "%s held to the manifests of %s\n",
 		counted(len(wf.Steps), "step", "steps"),
 		counted(images.read, "referenced image", "referenced images"))
+	recordValidated(ctx, e, images, checked, *namespace)
 	return exitSucceeded
 }
 
@@ -143,6 +146,20 @@ func (m *daemon) manifest(ctx context.Context, image string, step agk.Step) ([]b
 	m.read++
 	fmt.Fprintf(m.e.Out, "%s: %s %s, reads %s, writes %s\n", image, mf.Metadata.Name, mf.Metadata.Version,
 		ports(mf.InputPorts()), ports(mf.OutputPorts()))
+	return mf.Document(), nil
+}
+
+// readAt reads the brick manifest inside an image again, for what agk validate records, saying
+// nothing: the line saying what the image's brick is was said when it was first read.
+func (m *daemon) readAt(ctx context.Context, image string, step agk.Step) ([]byte, error) {
+	d, err := m.open()
+	if err != nil {
+		return nil, err
+	}
+	mf, err := d.Manifest(ctx, step, image)
+	if err != nil {
+		return nil, err
+	}
 	return mf.Document(), nil
 }
 

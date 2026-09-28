@@ -163,6 +163,9 @@ func anInstallation(t *testing.T) installation {
 	if _, err := api.NewObjects(rt, signed, nil); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := api.NewImages(rt, api.ImageOptions{Pool: pool}); err != nil {
+		t.Fatal(err)
+	}
 	handler = rt
 	return installation{url: srv.URL, pool: pool, objects: objects, store: store}
 }
