@@ -212,3 +212,44 @@ func TestManyDoubleStarsCostNoMoreThanTheTreeIsDeep(t *testing.T) {
 		t.Fatal("matching one glob against one path took more than five seconds")
 	}
 }
+
+// "* matches within one path segment, ? one character, [abc] one of a set or a range", and that is
+// the whole grammar: a set has no negation, there is no escape, and every other character is
+// itself, so one glob means one thing to every reader of the workflow.
+func TestASegmentIsMatchedOnTheDocumentedGrammarAlone(t *testing.T) {
+	for _, c := range []struct {
+		glob, name string
+		match      bool
+	}{
+		{"*.sql", "orders.sql", true},
+		{"*.sql", "orders.sql.bak", false},
+		{"q?.sql", "q1.sql", true},
+		{"q?.sql", "q10.sql", false},
+		{"[abc].txt", "b.txt", true},
+		{"[abc].txt", "d.txt", false},
+		{"[a-c]*", "cat", true},
+		{"[a-c]*", "dog", false},
+		{"[0-9][0-9]", "42", true},
+		// A - that begins or ends a set is itself.
+		{"[-x]", "-", true},
+		{"[x-]", "-", true},
+		// No negation: ^ and ! are characters of the set.
+		{"[^a]", "b", false},
+		{"[^a]", "^", true},
+		{"[!a]", "!", true},
+		// No escape: a backslash is itself, and the star after it is a star.
+		{`a\*`, `a\bc`, true},
+		{`a\*`, "a*", false},
+		// A [ nothing closes is itself.
+		{"data[1*", "data[12", true},
+		{"data[1*", "data12", false},
+		{"[]", "[]", true},
+		{"*a*b*", "xaxxbx", true},
+		{"*a*b*", "xbxa", false},
+		{"é?", "éa", true},
+	} {
+		if got := segmentMatch(c.glob, c.name); got != c.match {
+			t.Errorf("%s against %s matches %v, want %v", c.glob, c.name, got, c.match)
+		}
+	}
+}

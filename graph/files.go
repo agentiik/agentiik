@@ -192,18 +192,25 @@ func treeRelative(from string) (string, error) {
 	return p, nil
 }
 
-// isWild says whether one segment holds a wildcard.
+// isWild says whether one segment holds a wildcard: a *, a ?, or a set, a [ that a ] closes with
+// something between them.
 //
-// A segment that holds one and does not read as a glob, a [ that no ] closes, is read as the name
-// it spells instead. Files were narrowed by nothing on a server before v0.4.0, so a version
-// recorded then may name such a path, and it selects that path rather than refusing a step that
-// ran before.
+// A [ that nothing closes is the character it is, and a segment holding nothing else is the name
+// it spells. Files were narrowed by nothing on a server before v0.4.0, so a version recorded then
+// may name such a path, and it selects that path rather than refusing a step that ran before.
 func isWild(segment string) bool {
-	if !strings.ContainsAny(segment, "*?[") {
-		return false
+	g := []rune(segment)
+	for i, c := range g {
+		switch c {
+		case '*', '?':
+			return true
+		case '[':
+			if _, ok := setEnd(g, i); ok {
+				return true
+			}
+		}
 	}
-	_, err := path.Match(segment, "")
-	return err == nil
+	return false
 }
 
 // baseOf is a from's fixed prefix, and whether it is a glob at all.
@@ -232,12 +239,87 @@ func below(base, p string) string {
 }
 
 // segmentMatch says whether one segment of a glob matches one segment of a path.
+//
+// The grammar is the documentation's and nothing more: * any run of characters, ? one, [abc] one
+// of a set, where a-z is a range, and every other character itself. A set has no negation and
+// there is no escape, since the grammar names neither: path.Match would read [^a] as not a and \*
+// as a star, and a glob that meant another thing to another reader of the same workflow is what
+// one grammar is for. A * is tried against the shortest run first and lengthened on a mismatch,
+// which costs at most the product of the two lengths.
 func segmentMatch(glob, name string) bool {
 	if !isWild(glob) {
 		return glob == name
 	}
-	ok, _ := path.Match(glob, name)
-	return ok
+	g, n := []rune(glob), []rune(name)
+	gi, ni := 0, 0
+	star, from := -1, 0
+	for ni < len(n) {
+		if gi < len(g) {
+			switch c := g[gi]; c {
+			case '*':
+				star, from = gi, ni
+				gi++
+				continue
+			case '?':
+				gi, ni = gi+1, ni+1
+				continue
+			case '[':
+				if end, ok := setEnd(g, gi); ok {
+					if inSet(g[gi+1:end], n[ni]) {
+						gi, ni = end+1, ni+1
+						continue
+					}
+					break
+				}
+				fallthrough
+			default:
+				if c == n[ni] {
+					gi, ni = gi+1, ni+1
+					continue
+				}
+			}
+		}
+		if star < 0 {
+			return false
+		}
+		// The last * takes one character more, and the rest of the glob is tried
+		// after it.
+		from++
+		gi, ni = star+1, from
+	}
+	for gi < len(g) && g[gi] == '*' {
+		gi++
+	}
+	return gi == len(g)
+}
+
+// setEnd is the index of the ] that closes the set opening at g[at], with at least one character
+// between the two.
+func setEnd(g []rune, at int) (int, bool) {
+	for i := at + 2; i < len(g); i++ {
+		if g[i] == ']' {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// inSet says whether c is one of a set's characters or in one of its ranges. A - that begins or
+// ends the set is itself.
+func inSet(set []rune, c rune) bool {
+	for i := 0; i < len(set); i++ {
+		if i+2 < len(set) && set[i+1] == '-' {
+			if set[i] <= c && c <= set[i+2] {
+				return true
+			}
+			i += 2
+			continue
+		}
+		if set[i] == c {
+			return true
+		}
+	}
+	return false
 }
 
 // globMatch says whether a glob, split into its segments, selects the file at p, segment by
