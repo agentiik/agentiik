@@ -310,3 +310,44 @@ func TestARedemptionThatDoesNotAnswerTheMessageIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A file the tree places elsewhere goes where the step's files place one: at or below the path a
+// selector relocates to, or over its own path under /agk/repo for a selector that asks for a mode
+// and relocates nothing. Anywhere else, or written otherwise than it cleans to, is a relocation the
+// redemption made up, which the driver would have no directory of the step's to bind it under.
+func TestAPlacedFileGoesWhereTheStepsFilesPlaceOne(t *testing.T) {
+	var m bus.TaskMessage
+	readFixture(t, "fixtures/wire/valid/task-message.json", &m)
+	m.Files = []bus.File{
+		{From: "./sql/**/*.sql", To: "/docker-entrypoint-initdb.d", Mode: "0444"},
+		{From: "scripts/*.sh", Mode: "0755"},
+	}
+	base := answering(redemptionFixture(t, "fixtures/wire/valid/grant-redemption.json"), m)
+	placed := func(path, to string) Redemption {
+		var r Redemption
+		b, _ := json.Marshal(base)
+		json.Unmarshal(b, &r)
+		e := r.Tree[0]
+		e.Path, e.To = path, to
+		r.Tree = append(r.Tree, e)
+		return r
+	}
+	for _, c := range []struct {
+		path, to string
+		taken    bool
+	}{
+		{"sql/orders.sql", "/docker-entrypoint-initdb.d/orders.sql", true},
+		{"sql/2026/q1.sql", "/docker-entrypoint-initdb.d/2026/q1.sql", true},
+		{"scripts/run.sh", "/agk/repo/scripts/run.sh", true},
+		{"sql/orders.sql", "/docker-entrypoint-initdb.d-evil/orders.sql", false},
+		{"sql/orders.sql", "/etc/passwd", false},
+		{"sql/orders.sql", "/docker-entrypoint-initdb.d/../../etc/passwd", false},
+		{"sql/orders.sql", "docker-entrypoint-initdb.d/orders.sql", false},
+		{"scripts/run.sh", "/agk/repo/scripts/other.sh", false},
+	} {
+		err := placed(c.path, c.to).answers(m)
+		if (err == nil) != c.taken {
+			t.Errorf("%s placed at %s answers %v", c.path, c.to, err)
+		}
+	}
+}

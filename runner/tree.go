@@ -2,31 +2,28 @@ package runner
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/driver"
 )
 
 // Laying out the workflow repository a task runs against.
 //
 // "A runner still never speaks git and never holds a credential": the API names every file of the
-// commit's tree with a URL for its object, and the runner writes those files into a directory of
-// its own, which the driver binds read-only at /agk/repo (driver.Sources.Repo). Each file is held
-// to the digest the tree names before the directory is handed over, so a tree that is not the
-// commit's is refused before any container exists.
+// commit's tree the step selected with a URL for its object, and the runner lays those files out
+// in a directory of its own, which the driver binds read-only at /agk/repo (driver.Sources.Repo).
+// Each file is held to the digest the tree names when it enters the namespace's cache, which the
+// directory is linked from, so a tree that is not the commit's is refused before any container
+// exists.
 //
 // The modes are what a remapped container can read. The container runs as an account of the
 // remapped range, and the bind is what it reaches the tree through, so the directory and what is
@@ -35,7 +32,8 @@ import (
 // step that will not run. Nothing is writable by anybody but the agent, which keeps the write bit
 // on directories so that it can take the tree away again.
 
-// TreesDir is where the trees sit under the work root.
+// TreesDir is where the trees sit under the work root: each task's, named after the task, and
+// each namespace's cache, named after the namespace (cache.go).
 //
 // The dot keeps it apart from the task directories beside it, whose first segment is a run
 // identifier, for the reason driver.KeysDir has one. It is outside every task's directory,
@@ -101,16 +99,32 @@ func newTreeDir(workRoot string, id agk.TaskID) (string, error) {
 	return dir, nil
 }
 
-// layOutTree writes every file of a tree under dir, which is new and empty, each fetched through
-// objects and held to its digest.
+// The two directories of one assembly's layout. repoDir is the tree under /agk/repo, which the
+// driver binds read-only, and placedDir holds one link for each object a long form of the step's
+// files places somewhere else, which the driver copies from into the task's working directory,
+// with the mode the selector asked for.
+const (
+	repoDir   = "repo"
+	placedDir = "placed"
+)
+
+// layOutTree writes the tree a redemption names under dir, which is new and empty, and answers
+// the files it places elsewhere for the driver to put there.
+//
+// Every file is a hard link to the namespace's cache (cache.go), where it was held to its digest
+// when it arrived: a file the cache does not hold yet is fetched through objects first, once
+// however many paths name it, and one it holds is not fetched at all. An entry with no to goes at
+// its path under dir/repo. An entry with a to goes under dir/placed, by its digest, and is
+// answered as a driver.Placed. None is answered as nil, which tells the driver there is nothing
+// the redemption placed: an API that places nothing leaves the step's files to the driver, as
+// agk run --local does.
 //
 // On any refusal the directory is taken away again, so what is left behind is either a whole,
 // checked tree or nothing.
 //
 // A file above artifact_max_bytes is refused as it arrives, since a tree file is an object of the
-// store like any other and the store holds none larger. Files of one digest are fetched once and
-// copied, since they are one object.
-func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir string, entries []TreeEntry, l agk.Limits) (err error) {
+// store like any other and the store holds none larger.
+func layOutTree(ctx context.Context, cache *treeCache, objects artifact.Objects, namespace, dir string, entries []TreeEntry, l agk.Limits) (placed []driver.Placed, err error) {
 	defer func() {
 		if err != nil {
 			if left := os.RemoveAll(dir); left != nil {
@@ -118,68 +132,74 @@ func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir st
 			}
 		}
 	}()
-	if err := os.Chmod(dir, treeDirMode); err != nil {
-		return fmt.Errorf("runner: the tree's directory %s: %w", dir, err)
+	repo := filepath.Join(dir, repoDir)
+	if err := os.Mkdir(repo, treeDirMode); err != nil {
+		return nil, fmt.Errorf("runner: the tree's directory %s: %w", repo, err)
+	}
+	if err := os.Chmod(repo, treeDirMode); err != nil {
+		return nil, fmt.Errorf("runner: the tree's directory %s: %w", repo, err)
 	}
 
-	// The directories first, one after the other, so that the fetchers only ever create
-	// files. A path another entry needs as a directory is refused by Redemption.answers, and
-	// would be refused here by the file's creation, which finds a directory in its place.
-	byDigest := map[string][]TreeEntry{}
+	// The directories first, one after the other, so that the links only ever create files. A
+	// path another entry needs as a directory is refused by Redemption.answers, and would be
+	// refused here by the link, which finds a directory in its place.
+	var want []cachedObject
+	wanted := map[objectKey]bool{}
 	for _, e := range entries {
 		if err := treePath(e.Path); err != nil {
-			return fmt.Errorf("runner: %w", err)
+			return nil, fmt.Errorf("runner: %w", err)
 		}
-		if err := mkdirTree(dir, path.Dir(e.Path)); err != nil {
-			return err
+		mode, err := treeMode(e.Mode)
+		if err != nil {
+			return nil, fmt.Errorf("runner: the tree gives %s %w", e.Path, err)
 		}
-		byDigest[e.SHA256] = append(byDigest[e.SHA256], e)
-	}
-	digests := make([]string, 0, len(byDigest))
-	for d := range byDigest {
-		digests = append(digests, d)
-	}
-	sort.Strings(digests)
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	work := make(chan string)
-	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		first error
-	)
-	fail := func(err error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if first == nil {
-			first = err
-			cancel()
-		}
-	}
-	for range min(treeFetchers, len(digests)) {
-		wg.Go(func() {
-			for digest := range work {
-				if err := writeObject(ctx, objects, namespace, dir, digest, byDigest[digest], l); err != nil {
-					fail(err)
-				}
+		// A placed file is copied by the driver with the mode its entry gives, so the
+		// cache's plain file is what it needs.
+		key := objectKey{digest: e.SHA256, exec: e.To == "" && mode&0o111 != 0}
+		if e.To == "" {
+			if err := mkdirTree(repo, path.Dir(e.Path)); err != nil {
+				return nil, err
 			}
-		})
-	}
-feed:
-	for _, d := range digests {
-		select {
-		case work <- d:
-		case <-ctx.Done():
-			break feed
+		}
+		if !wanted[key] {
+			wanted[key] = true
+			want = append(want, cachedObject{objectKey: key, path: e.Path})
 		}
 	}
-	close(work)
-	wg.Wait()
-	if first != nil {
-		return first
+
+	at, release, err := cache.hold(ctx, objects, namespace, want, l)
+	defer cache.evict()
+	defer release()
+	if err != nil {
+		return nil, err
 	}
-	return ctx.Err()
+
+	for _, e := range entries {
+		if e.To != "" {
+			continue
+		}
+		mode, _ := treeMode(e.Mode)
+		from := at[objectKey{digest: e.SHA256, exec: mode&0o111 != 0}]
+		if err := os.Link(from, filepath.Join(repo, filepath.FromSlash(e.Path))); err != nil {
+			return nil, fmt.Errorf("runner: the tree file %s could not be laid out: %w", e.Path, err)
+		}
+	}
+	for _, e := range entries {
+		if e.To == "" {
+			continue
+		}
+		dest := filepath.Join(dir, placedDir, e.SHA256)
+		if placed == nil {
+			if err := os.Mkdir(filepath.Join(dir, placedDir), treesMode); err != nil {
+				return nil, fmt.Errorf("runner: the tree's directory %s: %w", filepath.Join(dir, placedDir), err)
+			}
+		}
+		if err := os.Link(at[objectKey{digest: e.SHA256}], dest); err != nil && !errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("runner: the tree file %s could not be laid out: %w", e.Path, err)
+		}
+		placed = append(placed, driver.Placed{Source: dest, To: e.To, Mode: e.Mode})
+	}
+	return placed, nil
 }
 
 // mkdirTree creates a directory of the tree, rel below dir, and every directory between the two,
@@ -205,73 +225,6 @@ func mkdirTree(dir, rel string) error {
 		if err != nil {
 			return fmt.Errorf("runner: the tree's directory %s could not be created: %w", at, err)
 		}
-	}
-	return nil
-}
-
-// writeObject fetches one object and writes it at every path of the tree that names it.
-func writeObject(ctx context.Context, objects artifact.Objects, namespace, dir, digest string, at []TreeEntry, l agk.Limits) error {
-	r, err := objects.Open(ctx, artifact.Key(namespace, digest))
-	if err != nil {
-		return fmt.Errorf("runner: the tree file %s could not be fetched: %w", at[0].Path, err)
-	}
-	defer r.Close()
-	first := filepath.Join(dir, filepath.FromSlash(at[0].Path))
-	if err := writeChecked(first, r, digest, at[0], l); err != nil {
-		return err
-	}
-	for _, e := range at[1:] {
-		src, err := os.Open(first)
-		if err != nil {
-			return fmt.Errorf("runner: the tree file %s: %w", e.Path, err)
-		}
-		err = writeChecked(filepath.Join(dir, filepath.FromSlash(e.Path)), src, digest, e, l)
-		src.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeChecked writes one file of the tree, hashing it on the way, and gives it its mode only once
-// the bytes are the ones the tree names. A file that already exists is refused rather than
-// written through, since the directory was created empty and one there now is a second entry of
-// one path, or something that is not this runner's.
-func writeChecked(name string, r io.Reader, digest string, e TreeEntry, l agk.Limits) error {
-	mode, err := treeMode(e.Mode)
-	if err != nil {
-		return fmt.Errorf("runner: the tree gives %s %w", e.Path, err)
-	}
-	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("runner: the tree file %s could not be created: %w", e.Path, err)
-	}
-	h := sha256.New()
-	limit := l.ArtifactMaxBytes
-	var from io.Reader = r
-	if limit > 0 {
-		from = io.LimitReader(r, limit+1)
-	}
-	n, err := io.Copy(io.MultiWriter(f, h), from)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	switch {
-	case err != nil:
-		return fmt.Errorf("runner: the tree file %s could not be fetched: %w", e.Path, err)
-	case limit > 0 && n > limit:
-		return fmt.Errorf("%w: the tree file %s is longer than the %d bytes an object of the store may be", ErrNotAsNamed, e.Path, limit)
-	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != digest {
-		return fmt.Errorf("%w: the tree file %s is named sha256 %s and its bytes are sha256 %s", ErrNotAsNamed, e.Path, digest, got)
-	}
-	perm := treeFileMode
-	if mode&0o111 != 0 {
-		perm = treeExecMode
-	}
-	if err := os.Chmod(name, perm); err != nil {
-		return fmt.Errorf("runner: the tree file %s: %w", e.Path, err)
 	}
 	return nil
 }

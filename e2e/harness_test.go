@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -100,7 +102,7 @@ func TestAOneStepWorkflowRunsToSucceededAndEachRunnerHoldsItsOwnIdentityAlone(t 
 	// What each runner holds at rest, once the task's own directory is gone. A task's
 	// directory holds the tree while its brick runs, and is removed when it has ended, which
 	// may be a moment after the run is read as succeeded.
-	held := append(in.held, heldValue{"the workflow's repository", document})
+	held := append(in.held, heldValue{workflowText, document})
 	for _, r := range in.Runners {
 		var last []string
 		eventually(in.ctx, t, 30*time.Second, "runner "+r.Name+" held its identity alone", func() error {
@@ -244,11 +246,23 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 	held := []heldValue{
 		{"the presign key", "cHJlc2lnbi1rZXk="},
 		{"the database URL", "postgres://agentiik@/agentiik?host=/tmp/agk-e2e-1/postgres"},
-		{"the workflow's repository", "apiVersion: agentiik.dev/v1\nkind: Workflow\n"},
+		{workflowText, "apiVersion: agentiik.dev/v1\nkind: Workflow\n"},
 	}
 	forbidden := []string{"agk-e2e-1-objects", "agk-e2e-1-api", "/tmp/agk-e2e-1/postgres"}
 	if broken := aRunnerAtRest().breaches(public, held, forbidden); len(broken) != 0 {
 		t.Fatalf("a runner holding its identity alone broke %q", broken)
+	}
+
+	// A namespace's cache of trees holds the workflow's text on purpose, under the digest of
+	// its bytes: "trees are content-addressed and cached on the runner by commit".
+	document := []byte("apiVersion: agentiik.dev/v1\nkind: Workflow\nsteps: {}\n")
+	sum := sha256.Sum256(document)
+	cached := libPath + "/work/.trees/e2e/objects/" + hex.EncodeToString(sum[:])
+	withCache := aRunnerAtRest()
+	withCache.Files[cached] = document
+	withCache.Files[cached+".exec"] = document
+	if broken := withCache.breaches(public, held, forbidden); len(broken) != 0 {
+		t.Errorf("a runner holding a namespace's cache of trees broke %q", broken)
 	}
 
 	for _, c := range []struct {
@@ -270,6 +284,20 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 		{"no key", func(h *Holdings) { delete(h.Files, "/var/lib/agentiik/runner.key") }, "the host's key"},
 		{"a repository", func(h *Holdings) { h.Directories = append(h.Directories, "/var/lib/agentiik/work/t1/repo/.git") }, "never holds a repository"},
 		{"the tree left behind", func(h *Holdings) { h.Files["/var/lib/agentiik/work/t1/repo/agentiik.yaml"] = nil }, "never holds a repository"},
+		{"a task's tree left beside the cache", func(h *Holdings) {
+			h.Files["/var/lib/agentiik/work/.trees/01JM.invoice.1.123/repo/agentiik.yaml"] = nil
+		}, "never holds a repository"},
+		{"the workflow's text in the cache under another name", func(h *Holdings) {
+			h.Files["/var/lib/agentiik/work/.trees/e2e/objects/"+strings.Repeat("0", 64)] = []byte("apiVersion: agentiik.dev/v1\nkind: Workflow\n")
+		}, "not the ones its name is the digest of"},
+		{"the workflow's text beside the cache", func(h *Holdings) {
+			h.Files["/var/lib/agentiik/work/.trees/e2e/copy"] = []byte("apiVersion: agentiik.dev/v1\nkind: Workflow\n")
+		}, "holds the workflow's repository"},
+		{"the presign key in the cache", func(h *Holdings) {
+			key := []byte("key=cHJlc2lnbi1rZXk=")
+			sum := sha256.Sum256(key)
+			h.Files["/var/lib/agentiik/work/.trees/e2e/objects/"+hex.EncodeToString(sum[:])] = key
+		}, "holds the presign key"},
 		{"the workflow's text", func(h *Holdings) {
 			h.Files["/var/lib/agentiik/work/t1/copy"] = []byte("apiVersion: agentiik.dev/v1\nkind: Workflow\nsteps: {}\n")
 		}, "holds the workflow's repository"},

@@ -17,6 +17,7 @@ import (
 
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/driver"
 )
 
 // Redeeming a task's grant.
@@ -85,9 +86,9 @@ type RedeemedArtifact struct {
 // TreeEntry is one file of the workflow repository: where it goes under /agk/repo, the mode it
 // is created with, its digest and the URL it is fetched through.
 //
-// To is the wire's relocation, which the API does not send yet. It is read rather than refused,
-// since the wire allows it, and held to the step's own files, which is what the driver binds a
-// relocation from.
+// To is the wire's relocation: where a file the long form of the step's files places goes
+// instead, held to the step's own files, under which the driver binds it. An entry with a To is
+// not laid out under /agk/repo, and the mode it carries is the one the driver copies it with.
 type TreeEntry struct {
 	Path   string `json:"path"`
 	Mode   string `json:"mode"`
@@ -292,17 +293,25 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 		}
 	}
 
-	// The tree: each path inside /agk/repo, once, with a mode and a digest.
-	relocated := map[string]bool{}
+	// The tree: each path inside /agk/repo, once, with a mode and a digest, and each file
+	// placed elsewhere somewhere the step's files place one.
+	var roots []string
+	modeOnly := false
 	for _, f := range m.Files {
-		if f.To != "" {
-			relocated[f.To] = true
+		switch {
+		case f.To != "":
+			roots = append(roots, path.Clean(f.To))
+		case f.Mode != "":
+			modeOnly = true
 		}
 	}
 	paths := make(map[string]bool, len(r.Tree))
 	for _, f := range r.Tree {
 		if err := treePath(f.Path); err != nil {
 			return err
+		}
+		if f.To != "" {
+			continue
 		}
 		if paths[f.Path] {
 			return fmt.Errorf("the tree names %s twice", f.Path)
@@ -312,7 +321,7 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 	for _, f := range r.Tree {
 		// A file one entry names is a directory another entry is below, and no tree can
 		// be laid out with both, on any try.
-		for dir := path.Dir(f.Path); dir != "."; dir = path.Dir(dir) {
+		for dir := path.Dir(f.Path); f.To == "" && dir != "."; dir = path.Dir(dir) {
 			if paths[dir] {
 				return fmt.Errorf("the tree names %s as a file and %s below it", dir, f.Path)
 			}
@@ -323,10 +332,8 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 		if !isHex64(f.SHA256) || f.URL == "" {
 			return fmt.Errorf("the tree gives %s no digest and URL to fetch it by", f.Path)
 		}
-		// A relocation is bound by the driver from the step's own files, so one the
-		// step did not write would be a relocation nothing binds.
-		if f.To != "" && !relocated[f.To] {
-			return fmt.Errorf("the tree relocates %s to %s, which none of the step's files names", f.Path, f.To)
+		if f.To != "" && !placedWhereAsked(f, roots, modeOnly) {
+			return fmt.Errorf("the tree places %s at %s, where none of the step's files places a file", f.Path, f.To)
 		}
 	}
 
@@ -340,6 +347,26 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 		return fmt.Errorf("the upload policy writes under %q, and the task's namespace is written under %q", r.Uploads.KeyPrefix, want)
 	}
 	return nil
+}
+
+// placedWhereAsked says whether a file the tree places elsewhere goes where the step's files place
+// one: at or below a directory a selector relocates into, or, for a selector that asks for a mode
+// and relocates nothing, over its own path under /agk/repo. The driver binds a placed file under
+// the directory the step's own files name, so a file placed anywhere else is one the redemption
+// made up.
+func placedWhereAsked(f TreeEntry, roots []string, modeOnly bool) bool {
+	if !path.IsAbs(f.To) || path.Clean(f.To) != f.To || strings.ContainsRune(f.To, 0) {
+		return false
+	}
+	if modeOnly && f.To == driver.RepoDir+"/"+f.Path {
+		return true
+	}
+	for _, root := range roots {
+		if f.To == root || strings.HasPrefix(f.To, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // treeModePattern is the wire's grammar for a mode, octal with or without its leading zero.

@@ -327,6 +327,9 @@ func TestTheResultIsPublishedOnceTheContainerAndItsDirectoriesAreGone(t *testing
 			case err != nil || rel == ".":
 			case rel == driver.KeysDir || rel == ResultsDir:
 				return filepath.SkipDir
+			case filepath.Dir(rel) == TreesDir && givenName.MatchString(d.Name()):
+				// A namespace's cache of trees, which is no task's and stays.
+				return filepath.SkipDir
 			case filepath.Dir(rel) == TreesDir || !d.IsDir():
 				left = append(left, rel)
 			}

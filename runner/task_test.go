@@ -201,7 +201,7 @@ func TestATaskIsAssembledFromWhatItsRedemptionNames(t *testing.T) {
 	if v, err := a.Sources.Secrets.Value(t.Context(), "billing"); err != nil || string(v) != "bk_live_7Qm2rXt9vZa4" {
 		t.Errorf("the secret reads as %q: %v", v, err)
 	}
-	if filepath.Dir(a.Sources.Repo) != filepath.Join(work, TreesDir) {
+	if filepath.Dir(filepath.Dir(a.Sources.Repo)) != filepath.Join(work, TreesDir) {
 		t.Errorf("the tree is laid out at %s, outside %s", a.Sources.Repo, TreesDir)
 	}
 	if b, err := os.ReadFile(filepath.Join(a.Sources.Repo, "config", "copy-of.json")); err != nil || string(b) != "{}\n" {
@@ -271,8 +271,12 @@ func TestATamperedInputOrTreeFileIsRefused(t *testing.T) {
 			if !errors.Is(err, ErrNotAsNamed) {
 				t.Fatalf("assembling answered %v", err)
 			}
-			if left, _ := os.ReadDir(filepath.Join(work, TreesDir)); len(left) != 0 {
-				t.Errorf("a refused task left its tree behind: %v", left)
+			left, _ := os.ReadDir(filepath.Join(work, TreesDir))
+			for _, e := range left {
+				// The namespace's cache, which keeps what was checked and nothing else.
+				if e.Name() != "finance" {
+					t.Errorf("a refused task left its tree behind: %v", e.Name())
+				}
 			}
 		})
 	}

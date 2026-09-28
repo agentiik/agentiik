@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -416,6 +418,10 @@ var (
 		etcPath: true, etcPath + "/runner.toml": true, libPath: true, agentSocketDir: true, caPath: true,
 	}
 
+	// cachedTreeFile is a file of a namespace's cache of trees, named by the digest of its
+	// bytes, and of the executable twin of those bytes.
+	cachedTreeFile = regexp.MustCompile(`^` + regexp.QuoteMeta(libPath) + `/work/\.trees/[a-z0-9]+(?:-[a-z0-9]+)*/objects/([0-9a-f]{64})(?:\.exec)?$`)
+
 	// A bus credential at rest, whichever way it is written: the decorated file nats and nsc
 	// write, a JWT of any kind, or an NKey seed of a user, an account or an operator.
 	natsDecoration = regexp.MustCompile(`-----BEGIN NATS [A-Z ]+-----`)
@@ -468,7 +474,17 @@ func (h Holdings) breaches(publicURL string, held []heldValue, forbidden []strin
 		}
 	}
 	for _, path := range slices.Sorted(maps.Keys(h.Files)) {
-		broken = append(broken, heldIn("the file "+path, string(h.Files[path]), held)...)
+		mayHold := held
+		if found := cachedTreeFile.FindStringSubmatch(path); found != nil {
+			// "Trees are content-addressed and cached on the runner by commit": a file
+			// of a namespace's cache is a file of a tree, which is the workflow's text,
+			// and it is the bytes its name is the digest of and nothing else.
+			if sum := sha256.Sum256(h.Files[path]); hex.EncodeToString(sum[:]) != found[1] {
+				broken = append(broken, fmt.Sprintf("%s is in a namespace's cache of trees, and its bytes are not the ones its name is the digest of", path))
+			}
+			mayHold = slices.DeleteFunc(slices.Clone(held), func(v heldValue) bool { return v.what == workflowText })
+		}
+		broken = append(broken, heldIn("the file "+path, string(h.Files[path]), mayHold)...)
 	}
 	for _, v := range h.Env {
 		name, _, _ := strings.Cut(v, "=")
@@ -504,6 +520,10 @@ func (h Holdings) breaches(publicURL string, held []heldValue, forbidden []strin
 	}
 	return broken
 }
+
+// workflowText names the held value that is the text of a workflow's tree, which a runner holds at
+// rest in a namespace's cache of trees alone.
+const workflowText = "the workflow's repository"
 
 // heldIn answers a sentence for every held value text carries, and for a bus credential in any
 // of its forms.

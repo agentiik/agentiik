@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/artifact/granted"
 )
 
@@ -39,10 +40,7 @@ func TestAnExecutableTreeFileStaysExecutable(t *testing.T) {
 		"scripts/lib.sh":   {"echo sourced\n", "0644"},
 		"scripts/run.sh":   {"#!/bin/sh\necho by owner alone\n", "0700"},
 	})
-	dir := emptyDir(t)
-	if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err != nil {
-		t.Fatal(err)
-	}
+	dir := laidOut(t, o, entries, agk.DefaultLimits())
 	for name, want := range map[string]os.FileMode{"entry.sh": 0o555, "lib.sh": 0o444, "run.sh": 0o555} {
 		info, err := os.Stat(filepath.Join(dir, "scripts", name))
 		if err != nil {
@@ -67,7 +65,7 @@ func TestATreePathOutsideTheRepositoryIsRefused(t *testing.T) {
 			entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}})
 			entries[0].Path = path
 			dir := emptyDir(t)
-			if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err == nil {
+			if _, err := layOutTree(t.Context(), cacheBeside(dir), o, "finance", dir, entries, agk.DefaultLimits()); err == nil {
 				t.Fatal("the tree was laid out")
 			}
 			if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
@@ -81,13 +79,15 @@ func TestATreePathOutsideTheRepositoryIsRefused(t *testing.T) {
 	t.Run("twice", func(t *testing.T) {
 		entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}})
 		entries = append(entries, entries[0])
-		if err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, agk.DefaultLimits()); err == nil {
+		dir := emptyDir(t)
+		if _, err := layOutTree(t.Context(), cacheBeside(dir), o, "finance", dir, entries, agk.DefaultLimits()); err == nil {
 			t.Fatal("a path named twice was laid out")
 		}
 	})
 	t.Run("a file under a file", func(t *testing.T) {
 		entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}, "a/b": {"y", "0644"}})
-		if err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, agk.DefaultLimits()); err == nil {
+		dir := emptyDir(t)
+		if _, err := layOutTree(t.Context(), cacheBeside(dir), o, "finance", dir, entries, agk.DefaultLimits()); err == nil {
 			t.Fatal("a file was laid out as a directory of another")
 		}
 	})
@@ -129,9 +129,14 @@ func TestEachAssemblyOfATaskLaysOutATreeOfItsOwn(t *testing.T) {
 	if err := restarted.Remove(); err != nil {
 		t.Fatal(err)
 	}
+	// The namespace's cache stays: it is the namespace's and no task's.
 	left, _ := os.ReadDir(filepath.Join(work, TreesDir))
-	if len(left) != 1 || filepath.Join(work, TreesDir, left[0].Name()) != kept.Sources.Repo {
-		t.Errorf("the trees left behind: %v", left)
+	var names []string
+	for _, e := range left {
+		names = append(names, e.Name())
+	}
+	if len(left) != 2 || names[1] != "finance" || filepath.Join(work, TreesDir, names[0], repoDir) != kept.Sources.Repo {
+		t.Errorf("the trees left behind: %v", names)
 	}
 }
 
@@ -145,10 +150,7 @@ func TestATreeIsOpenToTheContainerWhateverTheUmask(t *testing.T) {
 	defer syscall.Umask(old)
 	s := newObjectStore(t)
 	entries, o := treeOf(t, s, map[string]file{"src/pkg/main.py": {"print(1)\n", "0644"}, "src/deep/er/x": {"x", "0644"}})
-	dir := emptyDir(t)
-	if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err != nil {
-		t.Fatal(err)
-	}
+	dir := laidOut(t, o, entries, agk.DefaultLimits())
 	for _, rel := range []string{".", "src", "src/pkg", "src/deep", "src/deep/er"} {
 		info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
 		if err != nil {
@@ -166,7 +168,8 @@ func TestATreeFileAboveTheObjectLimitIsRefused(t *testing.T) {
 	entries, o := treeOf(t, s, map[string]file{"big": {strings.Repeat("x", 64), "0644"}})
 	l := agk.DefaultLimits()
 	l.ArtifactMaxBytes = 32
-	err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, l)
+	dir := emptyDir(t)
+	_, err := layOutTree(t.Context(), cacheBeside(dir), o, "finance", dir, entries, l)
 	if !errors.Is(err, ErrNotAsNamed) {
 		t.Errorf("a file above artifact_max_bytes answered %v", err)
 	}
@@ -204,4 +207,19 @@ func emptyDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// cacheBeside is the cache of a work root of the test's own, beside a directory emptyDir made.
+func cacheBeside(dir string) *treeCache {
+	return treeCacheAt(filepath.Dir(dir))
+}
+
+// laidOut lays a tree out in a directory of its own and answers the directory bound at /agk/repo.
+func laidOut(t *testing.T, o artifact.Objects, entries []TreeEntry, l agk.Limits) string {
+	t.Helper()
+	dir := emptyDir(t)
+	if _, err := layOutTree(t.Context(), cacheBeside(dir), o, "finance", dir, entries, l); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, repoDir)
 }

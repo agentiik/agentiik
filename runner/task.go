@@ -199,6 +199,10 @@ type Assembly struct {
 type Assembled struct {
 	Task    graph.Task
 	Sources driver.Sources
+
+	// layout is the directory the assembly laid the task's tree out in, named after the task,
+	// which holds Sources.Repo and what the redemption placed.
+	layout string
 }
 
 // Context is the context to hand driver.Run for this task, carrying its sources.
@@ -215,14 +219,14 @@ func (a *Assembled) Context(ctx context.Context) context.Context {
 // of the key's trees is bound into anything. A tree already gone is the outcome asked for and no
 // error.
 func (a *Assembled) Remove() error {
-	if a == nil || a.Sources.Repo == "" {
+	if a == nil || a.layout == "" {
 		return nil
 	}
-	trees, name := filepath.Split(a.Sources.Repo)
+	trees, name := filepath.Split(a.layout)
 	at := strings.LastIndex(name, ".")
 	if at < 0 {
 		// Not a directory newTreeDir named, so nothing tells which trees are the key's.
-		return os.RemoveAll(a.Sources.Repo)
+		return os.RemoveAll(a.layout)
 	}
 	of := name[:at]
 	entries, err := os.ReadDir(trees)
@@ -305,10 +309,15 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 	if err != nil {
 		return nil, err
 	}
-	if err := layOutTree(ctx, objects, m.Namespace, dir, r.Tree, limits); err != nil {
+	placed, err := layOutTree(ctx, treeCacheAt(o.WorkRoot), objects, m.Namespace, dir, r.Tree, limits)
+	if err != nil {
 		return nil, fmt.Errorf("runner: task %s: %w", t.ID, err)
 	}
-	return &Assembled{Task: t, Sources: driver.Sources{Store: store, Secrets: secrets, Repo: dir}}, nil
+	return &Assembled{
+		Task:    t,
+		Sources: driver.Sources{Store: store, Secrets: secrets, Repo: filepath.Join(dir, repoDir), Placed: placed},
+		layout:  dir,
+	}, nil
 }
 
 // objectsOf is the store as one task's redemption lets it be reached: the presigned GET of every
