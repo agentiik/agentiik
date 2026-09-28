@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("000eversion 2\n001cagent=git/2.54.0-Darwin\n0013ls-refs=unborn\n0020fetch=shallow wait-for-done\n0012server-option\n0017object-format=sha1\n0000")

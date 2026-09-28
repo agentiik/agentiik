@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("object 0000000000000000000000000000000000000000\ntype commit\ntag \ntagger\n \n")

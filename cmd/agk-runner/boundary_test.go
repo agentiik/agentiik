@@ -36,6 +36,7 @@ var runnerRefusesInside = []struct{ path, what string }{
 	{"internal/dbtest", "a database fixture"},
 	{"internal/config", "the server programs' configuration, which names the master key and the database"},
 	{"cmd/agk", "the command line, which links the API"},
+	{"repo", "git's objects and packs: the runner never speaks git, and fetches a tree's files by digest with the task's grant"},
 }
 
 // runnerRefuses is what a third-party or standard package may not be, with the same.
@@ -138,6 +139,8 @@ func TestTheBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 		runnerModule + "internal/config",
 		runnerModule + "cmd/agk",
 		runnerModule + "cmd/agk/internal/helper",
+		runnerModule + "repo",
+		runnerModule + "repo/store",
 		runnerModule + "somethingnew",
 		"database/sql",
 		"github.com/jackc/pgx/v5",
@@ -164,6 +167,17 @@ func TestTheBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 	} {
 		if why := whyTheAgentRefuses(imported); why != "" {
 			t.Errorf("%s is refused as %s, and the agent may link it", imported, why)
+		}
+	}
+}
+
+// "The runner never speaks git": it fetches a tree's files by digest with the task's grant. So
+// package repo is refused by name rather than only for being off the list of what the agent may
+// link, which is a reason nobody would read as a rule if repo were added to it.
+func TestTheAgentNeverLinksGit(t *testing.T) {
+	for _, imported := range []string{runnerModule + "repo", runnerModule + "repo/store"} {
+		if why := whyTheAgentRefuses(imported); !strings.Contains(why, "never speaks git") {
+			t.Errorf("%s is refused as %q, which is not the rule that the runner never speaks git", imported, why)
 		}
 	}
 }

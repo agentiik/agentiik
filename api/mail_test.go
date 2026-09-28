@@ -47,6 +47,13 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 		}
 		lower := bytes.ToLower(b)
 		for _, word := range words {
+			// Git's author, committer and tagger lines carry an email address, and git names its
+			// own checks of them for it, missingEmail and badEmail among them. Package repo reads
+			// that format as the data a commit holds and sends nothing to anyone, so it may hold
+			// that word, and none of the others.
+			if word == "email" && strings.HasPrefix(filepath.ToSlash(path), "../repo/") {
+				continue
+			}
 			if bytes.Contains(lower, []byte(word)) {
 				t.Errorf("%s holds %q: nothing in the product sends mail or writes a link to be mailed", path, word)
 			}

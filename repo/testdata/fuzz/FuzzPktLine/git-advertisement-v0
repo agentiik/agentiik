@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("01129430629049ae5cf7dd12a90e7ae120527c0f6401 HEAD\x00multi_ack thin-pack side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main object-format=sha1 agent=git/2.54.0-Darwin\n003d9430629049ae5cf7dd12a90e7ae120527c0f6401 refs/heads/main\n003a05f9c97f35f1c51aa533821f7c950caa6c23ea9c refs/tags/v1\n003d9430629049ae5cf7dd12a90e7ae120527c0f6401 refs/tags/v1^{}\n0000")

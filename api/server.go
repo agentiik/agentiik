@@ -26,6 +26,7 @@ import (
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/repo"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -830,50 +831,13 @@ func CheckTreePath(p string) error {
 		}
 		// A segment that is .git, which a commit's tree never holds since git refuses it,
 		// and which laid out under /agk/repo would be a repository configuration, hooks
-		// and all, that any git a step runs there obeys.
-		if dotGit(segment) {
+		// and all, that any git a step runs there obeys. The rule is git's own, held in
+		// package repo, which reads the trees a push sends.
+		if repo.DotGit(segment) {
 			return fmt.Errorf("%q has a segment that is .git on some filesystem a tree is laid out on, and .git is git's own and never part of a commit's tree", p)
 		}
 	}
 	return nil
-}
-
-// dotGit is whether a segment is .git on some filesystem a runner may lay a tree out on, which is
-// the rule git applies itself, with core.protectNTFS and core.protectHFS, before it writes a name.
-//
-// A filesystem that folds case makes .GIT one. NTFS also drops the dots and spaces a name ends
-// with, reads what follows a colon as a stream of the file before it, and gives .git the short
-// name GIT~1, so .git., .git::$INDEX_ALLOCATION and GIT~1 are each .git there. HFS+ ignores a
-// handful of invisible code points, so .g\u200cit is .git on it. On a Linux disk every one of
-// these is an ordinary name, and a tree is laid out on whatever disk its runner has.
-func dotGit(segment string) bool {
-	s := strings.Map(func(r rune) rune {
-		if hfsIgnores(r) {
-			return -1
-		}
-		return r
-	}, segment)
-	if colon := strings.IndexByte(s, ':'); colon >= 0 {
-		s = s[:colon]
-	}
-	s = strings.TrimRight(s, ". ")
-	if strings.EqualFold(s, ".git") {
-		return true
-	}
-	// GIT~1, and any other number, since which one NTFS gives depends on what the directory
-	// held before.
-	number, short := strings.CutPrefix(strings.ToLower(s), "git~")
-	return short && number != "" && strings.Trim(number, "0123456789") == ""
-}
-
-// hfsIgnores is whether HFS+ leaves a code point out when it compares two names: the ones git's
-// own is_hfs_dotgit skips.
-func hfsIgnores(r rune) bool {
-	switch {
-	case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x206a && r <= 0x206f, r == 0xfeff:
-		return true
-	}
-	return false
 }
 
 // Start is a manual run: the inputs, and nothing else. What version it runs is the workflow's
