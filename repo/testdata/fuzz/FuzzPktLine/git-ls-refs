@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("00509430629049ae5cf7dd12a90e7ae120527c0f6401 HEAD symref-target:refs/heads/main\n003d9430629049ae5cf7dd12a90e7ae120527c0f6401 refs/heads/main\n006a05f9c97f35f1c51aa533821f7c950caa6c23ea9c refs/tags/v1 peeled:9430629049ae5cf7dd12a90e7ae120527c0f6401\n0000")

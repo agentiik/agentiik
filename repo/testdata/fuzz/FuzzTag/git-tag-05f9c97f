@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("object 9430629049ae5cf7dd12a90e7ae120527c0f6401\ntype commit\ntag v1\ntagger Grace Hopper <grace@example.com> 1700000100 +0000\n\nrelease\n")
