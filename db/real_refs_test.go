@@ -142,7 +142,17 @@ func TestAWorkflowRecordedIsAnEmptyRepositoryWithItsDefaultBranchUnborn(t *testi
 // the default branch leaves it unborn with its protection, an annotated tag keeps the tag object git
 // names beside the commit it peels to, and who moved a ref, and when, is kept with it.
 func TestARefMovesOnlyFromWhereThePushFoundIt(t *testing.T) {
-	pool, _ := repositories(t)
+	pool, super := repositories(t)
+	// The refs held in a collation that is not git's order, as a database created under a glibc or
+	// an ICU locale sorts them, feature before Zeta: git's order is byte by byte whatever that is.
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	if _, err := conn.Exec(t.Context(), `alter table workflow_refs alter column ref type text collate "und-x-icu"`); err != nil {
+		t.Fatal(err)
+	}
 	at := time.Date(2026, 9, 28, 10, 12, 0, 0, time.UTC)
 	move := func(by string, updates ...RefUpdate) error {
 		return pool.In(t.Context(), "finance", func(ctx context.Context, n *NS) error {
@@ -169,11 +179,13 @@ func TestARefMovesOnlyFromWhereThePushFoundIt(t *testing.T) {
 		}
 	}
 	if err := move("bob", RefUpdate{Ref: "refs/heads/main", Old: c1, New: c2}, RefUpdate{Ref: "refs/heads/feature", New: c3},
-		RefUpdate{Ref: "refs/tags/v1", New: tagObject, Commit: c1}); err != nil {
+		RefUpdate{Ref: "refs/heads/Zeta", New: c3}, RefUpdate{Ref: "refs/tags/v1", New: tagObject, Commit: c1}); err != nil {
 		t.Fatal(err)
 	}
+	// In git's order, byte by byte.
 	r := repositoryOf(t, pool, "finance", "nightly")
 	want := []Ref{
+		{Name: "refs/heads/Zeta", Commit: c3, MovedBy: "bob", MovedAt: at},
 		{Name: "refs/heads/feature", Commit: c3, MovedBy: "bob", MovedAt: at},
 		{Name: "refs/heads/main", Commit: c2, Protected: true, MovedBy: "bob", MovedAt: at},
 		{Name: "refs/tags/v1", Commit: c1, Tag: tagObject, MovedBy: "bob", MovedAt: at},
@@ -189,7 +201,7 @@ func TestARefMovesOnlyFromWhereThePushFoundIt(t *testing.T) {
 	}
 
 	if err := move("carol", RefUpdate{Ref: "refs/heads/main", Old: c2}, RefUpdate{Ref: "refs/heads/feature", Old: c3},
-		RefUpdate{Ref: "refs/tags/v1", Old: tagObject}); err != nil {
+		RefUpdate{Ref: "refs/heads/Zeta", Old: c3}, RefUpdate{Ref: "refs/tags/v1", Old: tagObject}); err != nil {
 		t.Fatal(err)
 	}
 	r = repositoryOf(t, pool, "finance", "nightly")
@@ -255,13 +267,23 @@ func TestTwoPushesOfOneRefTakeTurnsAndOneWins(t *testing.T) {
 		close(release)
 		t.Fatal(err)
 	}
-	second := make(chan error, 1)
+	// The same ref, and another one: a push waits for the push before it whatever refs either moves,
+	// which is what keeps two pushes moving two refs in two orders from waiting on each other.
+	second, third := make(chan error, 1), make(chan error, 1)
 	go func() {
 		second <- updateRefs(t, pool, "finance", RefUpdate{Ref: "refs/heads/main", Old: c1, New: c3})
 	}()
+	go func() {
+		third <- updateRefs(t, pool, "finance", RefUpdate{Ref: "refs/heads/other", New: c3})
+	}()
+	// An answer here is put back, for the reads below to find.
 	select {
 	case err := <-second:
 		t.Errorf("the second push answered %v while the first held the repository", err)
+		second <- err
+	case err := <-third:
+		t.Errorf("a push of another ref answered %v while the first held the repository", err)
+		third <- err
 	case <-time.After(300 * time.Millisecond):
 	}
 	close(release)
@@ -270,6 +292,9 @@ func TestTwoPushesOfOneRefTakeTurnsAndOneWins(t *testing.T) {
 	}
 	if err := <-second; !errors.Is(err, ErrStaleRef) {
 		t.Errorf("the second push, once the first had moved the ref, answered %v", err)
+	}
+	if err := <-third; err != nil {
+		t.Errorf("a push of another ref, once the first had moved its own, answered %v", err)
 	}
 	if main, _ := refNamed(repositoryOf(t, pool, "finance", "nightly"), "refs/heads/main"); main.Commit != c2 {
 		t.Errorf("the ref names %s, and the first push moved it to %s", main.Commit, c2)

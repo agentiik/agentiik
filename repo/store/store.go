@@ -155,7 +155,8 @@ func (s *Store) Open(r db.Repository) (*Objects, error) {
 //
 // It is a repo.Lookup, for a thin pack's deltas to be resolved against and a pushed tree to be read
 // through, and it answers the stored pack holding an object, for a fetch to copy its entry as it is.
-// It may be used from several goroutines at once.
+// It may be used from several goroutines at once, and is closed once none of them reads through it,
+// or through a pack it answered, any more.
 type Objects struct {
 	store                 *Store
 	namespace, repository string

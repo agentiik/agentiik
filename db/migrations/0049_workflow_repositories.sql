@@ -11,8 +11,8 @@
 
 -- The key a workflow's packs are kept under, <namespace>/git/<repository>/pack-<name>.pack and
 -- .idx: random rather than the workflow's name, so that a rename re-keys nothing, and never
--- changed, since every pack of the repository is found under it. 32 hexadecimal digits, a UUID's
--- random bits, drawn for every workflow already here as the column is added and for each one
+-- changed, since every pack of the repository is found under it. The 32 hexadecimal digits of a
+-- random UUID, drawn for every workflow already here as the column is added and for each one
 -- created after. Unique within a namespace, which is what an object key is scoped to.
 alter table workflows
   add column repository text not null default replace(gen_random_uuid()::text, '-', '')
