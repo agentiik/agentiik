@@ -57,6 +57,14 @@ type Unpacked struct {
 // its base, is at most MaxHeldBytes, with DeltaBaseCacheBytes of bases kept for the deltas made
 // against them.
 func Unpack(ctx context.Context, r io.ReaderAt, size int64, w io.Writer, opts UnpackOptions) (*Unpacked, error) {
+	u, err := newUnpacker(ctx, r, size, w, opts)
+	if err != nil {
+		return nil, err
+	}
+	return u.run()
+}
+
+func newUnpacker(ctx context.Context, r io.ReaderAt, size int64, w io.Writer, opts UnpackOptions) (*unpacker, error) {
 	if opts.MaxObjectBytes <= 0 {
 		opts.MaxObjectBytes = agk.DefaultArtifactMaxBytes
 	}
@@ -66,7 +74,10 @@ func Unpack(ctx context.Context, r io.ReaderAt, size int64, w io.Writer, opts Un
 	case size < packHeaderLen+packTrailerLen:
 		return nil, fmt.Errorf("repo: a pack of %d bytes, shorter than a header and a trailer", size)
 	}
-	u := &unpacker{ctx: ctx, r: r, w: w, end: size - packTrailerLen, opts: opts, refKids: map[ID][]int32{}}
+	return &unpacker{ctx: ctx, r: r, w: w, end: size - packTrailerLen, opts: opts, refKids: map[ID][]int32{}}, nil
+}
+
+func (u *unpacker) run() (*Unpacked, error) {
 	if err := u.read(); err != nil {
 		return nil, err
 	}
