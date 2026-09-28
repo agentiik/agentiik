@@ -1089,6 +1089,10 @@ func stepValuesOf(raw any, where string) (stepValues, error) {
 
 // writtenBy is every keyword a block writes, each at the block's origin, which is what the
 // value of the keyword is found below once resolution has moved it into a step.
+//
+// A parameter is recorded by its own name as well, under params.<name>, since parameters merge by
+// name across layers: the value a step ends up with may be a block's in another file while the
+// step itself writes params too, and the line a refusal names is the one that wrote that value.
 func writtenBy(raw any, at origin) map[string]origin {
 	b, ok := raw.(map[string]any)
 	if !ok || len(b) == 0 {
@@ -1098,8 +1102,17 @@ func writtenBy(raw any, at origin) map[string]origin {
 	for key := range b {
 		written[key] = at
 	}
+	if params, ok := b["params"].(map[string]any); ok {
+		for name := range params {
+			written[paramKey(name)] = at
+		}
+	}
 	return written
 }
+
+// paramKey is where one parameter's origin is kept among a block's keywords. A parameter name
+// carries no dot, so it cannot be taken for a keyword.
+func paramKey(name string) string { return "params." + name }
 
 // defaultsOf reads the defaults block, which carries "execution settings, and only
 // those".

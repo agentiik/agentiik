@@ -280,3 +280,86 @@ spec:
 		t.Errorf("the order is %v", got["order"])
 	}
 }
+
+// Parameters merge by name, so a parameter is placed in the layer that wrote it, whichever layer
+// last wrote params; and a keyword a step takes from defaults is placed in the defaults block of
+// the file that wrote it, an edge's input port at the edge.
+func TestAValueTakenFromAnotherLayerIsPlacedWhereThatLayerWritesIt(t *testing.T) {
+	entry := `apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: layered }
+include:
+  - path: fragments/base.yaml
+secrets: [billing]
+steps:
+  fetch:
+    image: ghcr.io/acme/agk-fetch@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f
+    outputs: [out]
+  load:
+    extends: .base
+    needs:
+      - { step: fetch, port: out, as: rows }
+    params:
+      other: x
+    outputs: [out]
+`
+	base := `.base:
+  image: ghcr.io/acme/agk-load@sha256:0e355d4c7f028d2185b286e7d3ac914be0a588b222cb4f3a95fc00ec918ea9b1
+  params:
+    who: %s
+`
+	files := map[string]string{"agentiik.yaml": entry, "fragments/base.yaml": strings.Replace(base, "%s", "${{ item.name }}", 1)}
+	err := Check(loaded(t, files, nil))
+	var r *Refusal
+	if !errors.As(err, &r) || r.Rule != RuleExpressionItemOutsideFanOutItem {
+		t.Fatalf("the parameter reading item was refused by %v", err)
+	}
+	if want := (Position{File: "fragments/base.yaml", Line: 4, Column: 10}); r.At != want {
+		t.Errorf("the parameter reading item is refused at %s, and it is written at %s", r.At, want)
+	}
+
+	files["fragments/base.yaml"] = strings.Replace(base, "%s", "nobody", 1)
+	wf := loaded(t, files, nil)
+	m, err := brick.ParseManifest([]byte(`apiVersion: agentiik.dev/v1
+kind: Brick
+metadata: { name: load, version: 1.0.0 }
+spec:
+  inputs: { in: {} }
+  outputs: { out: {} }
+  params:
+    who: { type: string, enum: [somebody] }
+    other: { type: string }
+  runtime: { user: "65532:65532" }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifests := map[string]brick.Manifest{wf.Steps["fetch"].Image: m, wf.Steps["load"].Image: m}
+	_, err = Build(wf, manifests)
+	if !errors.As(err, &r) || r.Rule != RuleStepInputPortNotInManifest {
+		t.Fatalf("the edge's input port was refused by %v", err)
+	}
+	if want := (Position{File: "agentiik.yaml", Line: 14, Column: 39}); r.At != want {
+		t.Errorf("the edge's input port is refused at %s, and it is written at %s", r.At, want)
+	}
+
+	files["agentiik.yaml"] = strings.Replace(entry, "as: rows", "as: in", 1)
+	wf = loaded(t, files, nil)
+	_, err = Build(wf, manifests)
+	if !errors.As(err, &r) || r.Rule != RuleParamsAgainstManifest {
+		t.Fatalf("the parameter was refused by %v", err)
+	}
+	if want := (Position{File: "fragments/base.yaml", Line: 4, Column: 10}); r.At != want {
+		t.Errorf("the parameter is refused at %s, and it is written at %s", r.At, want)
+	}
+
+	files["fragments/base.yaml"] = "defaults:\n  secrets: [ledger]\n"
+	files["agentiik.yaml"] = strings.Replace(entry, "    extends: .base\n", "", 1)
+	err = Check(loaded(t, files, nil))
+	if !errors.As(err, &r) || r.Rule != RuleSecretNotDeclared || r.Step != "fetch" {
+		t.Fatalf("the secret defaults mount was refused by %v", err)
+	}
+	if want := (Position{File: "fragments/base.yaml", Line: 2, Column: 13}); r.At != want {
+		t.Errorf("the secret defaults mount is refused at %s, and it is written at %s", r.At, want)
+	}
+}

@@ -47,10 +47,10 @@ func checkAgainstManifest(wf *Workflow, name agk.Step, st Step, manifests map[st
 	// Only what the file already settles is checked here. A parameter written as an
 	// expression is a value the run has, not a value the file has, so it is validated
 	// where it is resolved, against the same schemas, by the same function.
-	if err := paramsAgainstManifest(name, st, m, st.Params, false); err != nil {
+	if key, err := paramRefusal(name, st, m, st.Params, false); err != nil {
 		var r *Refusal
 		if errors.As(err, &r) {
-			r.At = wf.StepAt(name, "params")
+			r.At = wf.StepAt(name, "params", key)
 		}
 		return err
 	}
@@ -122,13 +122,20 @@ func inputsInManifest(name agk.Step, st Step, m brick.Manifest) *Refusal {
 // "params: brick parameters, validated against the manifest schema once expressions are
 // resolved".
 func paramsAgainstManifest(name agk.Step, st Step, m brick.Manifest, params map[string]any, resolved bool) error {
+	_, err := paramRefusal(name, st, m, params, resolved)
+	return err
+}
+
+// paramRefusal is paramsAgainstManifest, answering also the parameter a refusal is about, which is
+// where Build places it.
+func paramRefusal(name agk.Step, st Step, m brick.Manifest, params map[string]any, resolved bool) (string, error) {
 	for _, key := range slices.Sorted(maps.Keys(params)) {
 		if _, ok := m.Spec.Params[key]; !ok {
 			declares := "no parameter"
 			if len(m.Spec.Params) > 0 {
 				declares = strings.Join(slices.Sorted(maps.Keys(m.Spec.Params)), ", ")
 			}
-			return refuse(RuleParamsAgainstManifest, name, "", fmt.Sprintf("the step supplies the parameter %s and the manifest of %s declares %s: a parameter is read from /agk/params.json by the brick that declared it, and one it never declared is one nothing reads", key, m.Metadata.Name, declares))
+			return key, refuse(RuleParamsAgainstManifest, name, "", fmt.Sprintf("the step supplies the parameter %s and the manifest of %s declares %s: a parameter is read from /agk/params.json by the brick that declared it, and one it never declared is one nothing reads", key, m.Metadata.Name, declares))
 		}
 	}
 
@@ -137,7 +144,7 @@ func paramsAgainstManifest(name agk.Step, st Step, m brick.Manifest, params map[
 		value, supplied := params[key]
 		if !supplied {
 			if declared.Required {
-				return refuse(RuleParamsAgainstManifest, name, "", fmt.Sprintf("the manifest of %s declares the parameter %s required and the step supplies no value: a missing one is refused when the workflow is validated rather than inside a container", m.Metadata.Name, key))
+				return key, refuse(RuleParamsAgainstManifest, name, "", fmt.Sprintf("the manifest of %s declares the parameter %s required and the step supplies no value: a missing one is refused when the workflow is validated rather than inside a container", m.Metadata.Name, key))
 			}
 			continue
 		}
@@ -154,7 +161,7 @@ func paramsAgainstManifest(name agk.Step, st Step, m brick.Manifest, params map[
 			// either way: what travels is the name the workflow declared, and the
 			// value is put in /agk/params.json by the runner, in the container.
 			if !declared.Sensitive {
-				return refuse(RuleParamsAgainstManifest, name, "", fmt.Sprintf("the parameter %s is given the secret %s and the manifest of %s does not mark it sensitive: sensitive is the only route by which a secret reaches a brick as a parameter rather than as a mounted file", key, secret.Secret, m.Metadata.Name))
+				return key, refuse(RuleParamsAgainstManifest, name, "", fmt.Sprintf("the parameter %s is given the secret %s and the manifest of %s does not mark it sensitive: sensitive is the only route by which a secret reaches a brick as a parameter rather than as a mounted file", key, secret.Secret, m.Metadata.Name))
 			}
 			continue
 		}
@@ -163,13 +170,13 @@ func paramsAgainstManifest(name agk.Step, st Step, m brick.Manifest, params map[
 		}
 		s, err := schema.NewCompiler(nil).CompileAt(m.Document(), "#/spec/params/"+key)
 		if err != nil {
-			return fmt.Errorf("graph: step %s: the manifest of %s declares the parameter %s with a schema that does not compile: %w", name, m.Metadata.Name, key, err)
+			return key, fmt.Errorf("graph: step %s: the manifest of %s declares the parameter %s with a schema that does not compile: %w", name, m.Metadata.Name, key, err)
 		}
 		if err := s.Validate(value); err != nil {
-			return refuse(RuleParamsAgainstManifest, name, "", fmt.Sprintf("the parameter %s departs from the schema the manifest of %s declares for it: %v", key, m.Metadata.Name, err))
+			return key, refuse(RuleParamsAgainstManifest, name, "", fmt.Sprintf("the parameter %s departs from the schema the manifest of %s declares for it: %v", key, m.Metadata.Name, err))
 		}
 	}
-	return nil
+	return "", nil
 }
 
 // carriesExpression says whether a value is one the run has yet to settle.

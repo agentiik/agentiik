@@ -192,6 +192,13 @@ func (w *Workflow) stepKeyAt(step agk.Step, keyword string, below ...any) Positi
 
 func (w *Workflow) stepAt(key bool, step agk.Step, keyword string, below ...any) Position {
 	at, ok := w.origins[step][keyword]
+	// A parameter merges by name, so the layer that wrote the one named may not be the last
+	// layer that wrote params.
+	if name, named := firstName(below); named && keyword == "params" {
+		if param, held := w.origins[step][paramKey(name)]; held {
+			at, ok = param, true
+		}
+	}
 	if !ok {
 		return Position{File: w.Entry()}
 	}
@@ -202,6 +209,15 @@ func (w *Workflow) stepAt(key bool, step agk.Step, keyword string, below ...any)
 		}
 	}
 	return Position{File: at.src.name}
+}
+
+// firstName is the first node named below a keyword, where it is a key.
+func firstName(below []any) (string, bool) {
+	if len(below) == 0 {
+		return "", false
+	}
+	name, ok := below[0].(string)
+	return name, ok
 }
 
 // place puts a refusal where it points, and answers it.
