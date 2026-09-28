@@ -1,0 +1,6 @@
+{
+  "rule": "step-output-not-in-manifest",
+  "file": "agentiik.yaml",
+  "line": 20,
+  "column": 9
+}

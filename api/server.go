@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"path"
 	"regexp"
 	"slices"
 	"sort"
@@ -25,8 +24,6 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
-	"github.com/agentiik/agentiik/graph"
-	"github.com/agentiik/agentiik/repo"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -332,20 +329,6 @@ const TreeMaxBytes = 4 << 20
 // read, so a tree of more is refused before its files are decoded.
 const TreeMaxFiles = 4096
 
-// TreeNameMaxBytes is the longest one segment of a tree path may be, which is NAME_MAX: 255 bytes is
-// what the filesystems a runner lays a tree out on hold a name to. A longer name is a file no
-// runner can create, and a version holding one is a version every run of which fails, so it is
-// refused at the push rather than at each of them.
-const TreeNameMaxBytes = 255
-
-// TreePathMaxBytes is the longest a tree path may be.
-//
-// Linux holds a path to PATH_MAX, 4096 bytes with the null that ends it, and a tree is laid out
-// below a directory twice over: the runner's own on the host, and /agk/repo in the container,
-// where a step opens it by name. Half of PATH_MAX leaves the other half to whichever directory
-// that is, and a workflow repository whose paths need more is not one anybody writes by hand.
-const TreePathMaxBytes = 2048
-
 // commitName is a commit as a push names one, and a push is held to it before anything is written.
 // Left to the table's own check, a commit that is not one was refused only by the insert, after
 // the tree was already in the store with nothing counting it, and answered 500 for what was the
@@ -457,21 +440,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		return
 	}
 
-	// Built before it is written, so that a version that cannot be rebuilt is refused at the
-	// push rather than discovered by the first run of it. That includes a tag no digest was
-	// resolved for, which is a push from an agk that resolves none. Built as a new version is,
-	// so a port or a workflow output past agk.PortMaxBytes, in the file, a file it includes or a
-	// manifest, is refused here, where the version is made, and never where a stored one is
-	// read back or pushed again.
-	build := version.BuildNew
-	if stored {
-		build = version.Build
-	}
-	g, err := build(v)
-	if err != nil {
-		fail(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
+	// Judged before it is written, by the one validation agk validate, agk push and a hook make,
+	// so that a version that cannot be rebuilt is refused at the push rather than discovered by
+	// the first run of it. That includes a tag no digest was resolved for, which is a push from
+	// an agk that resolves none, and every rule a version is held to where it is made: a port or
+	// a workflow output past agk.PortMaxBytes, a name the workflow's metadata gives other than
+	// the one it is pushed under, and a secret the namespace does not declare. A commit already
+	// stored is judged by the rules it was stored under and none added since.
+	//
 	// A version naming a secret is accepted only from a caller holding secret:use: "secret:use is
 	// checked when a version is pushed, against whoever pushes it, and never when the workflow
 	// runs". Writing a secret's name into a workflow is what sends its value into a container, so
@@ -479,55 +455,71 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// alone. The permission comes from the namespace's grants only, and is asked over this
 	// workflow so that a deny of it here refuses as a deny does anywhere. A 403 rather than the
 	// 404 of a refused route, since the caller holds workflow:write here and learns nothing.
-	named := secretsNamed(g.Workflow())
-	if len(named) > 0 {
-		held, err := HoldsAlso(r)(r.Context())
-		if err != nil {
-			fail(w, http.StatusInternalServerError, "the push could not be authorised")
-			return
+	// Every secret it names is then one the namespace declares, refused with 422 before anything
+	// is stored rather than at the first redemption of a step naming it, and asked after
+	// secret:use, so that only a caller allowed to write a secret's name into a workflow learns
+	// whether the namespace declares it.
+	checked, err := version.Check(r.Context(), pushedTree(p.Tree), version.Checking{
+		Entry: p.Entry, Commit: commit, Committed: true,
+		Namespace: over.Namespace, Repository: over.Workflow, Stored: stored,
+		Resolvers: version.Resolvers{
+			Pin:      pinnedBy(p),
+			Manifest: manifestsCarried(p),
+			Secrets: func(ctx context.Context) ([]string, error) {
+				var declared []db.Declaration
+				err := s.pool.In(ctx, over.Namespace, func(ctx context.Context, ns *db.NS) error {
+					var err error
+					declared, err = ns.Declarations(ctx)
+					return err
+				})
+				if err != nil {
+					return nil, &pushFault{"the namespace's secret declarations could not be read", err}
+				}
+				names := make([]string, 0, len(declared))
+				for _, d := range declared {
+					names = append(names, d.Name)
+				}
+				return names, nil
+			},
+			SecretUse: func(ctx context.Context, _ []string) (bool, error) {
+				held, err := HoldsAlso(r)(ctx)
+				if err != nil {
+					return false, &pushFault{"the push could not be authorised", err}
+				}
+				return held, nil
+			},
+		},
+	})
+	var fault *pushFault
+	var unusable *version.SecretsNotUsable
+	switch {
+	case errors.As(err, &fault):
+		s.report(fault.err)
+		fail(w, http.StatusInternalServerError, fault.said)
+		return
+	case errors.As(err, &unusable):
+		noun := "the secret"
+		if len(unusable.Named) > 1 {
+			noun = "the secrets"
 		}
-		if !held {
-			noun := "the secret"
-			if len(named) > 1 {
-				noun = "the secrets"
-			}
-			fail(w, http.StatusForbidden, fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use on %s, which a grant on the namespace %s gives and a deny on the workflow takes away, and you do not hold it there: whoever writes a secret's name into a workflow answers for its value going into a container, and running the version afterwards takes workflow:run alone", noun, strings.Join(named, ", "), over.Workflow, over.Namespace))
-			return
-		}
-	}
-	// And every secret it names is one the namespace declares: "a workflow can name only secrets
-	// its own namespace declares, so moving it elsewhere breaks the reference rather than carrying
-	// access along". Refused here with 422, before anything is stored, rather than at the first
-	// redemption of a step naming it, which ends that task with no container run, in every run of
-	// the version, once somebody has started one. Asked after secret:use, so that only a caller
-	// allowed to write a secret's name into a workflow learns whether the namespace declares it.
-	//
-	// Only here, where a version is made. A version already stored is never judged again, pushed
-	// again or started: one whose secret was undeclared after its push, or which was pushed
-	// before this was asked, still starts, and the redemption refuses the step as it did.
-	if len(named) > 0 && !stored {
-		var declared []db.Declaration
-		err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-			var err error
-			declared, err = ns.Declarations(ctx)
-			return err
-		})
-		if err != nil {
-			fail(w, http.StatusInternalServerError, "the namespace's secret declarations could not be read")
-			return
-		}
-		if refusal := undeclared(g.Workflow(), named, declared, over.Namespace); refusal != "" {
-			fail(w, http.StatusUnprocessableEntity, refusal)
-			return
-		}
-	}
-	// And so is a declaration no run of it could be bound against: an input's schema that does
-	// not compile, or names a file the commit does not carry. Every run of the version is bound
-	// against it, so a version that holds one is a version nothing can start.
-	if _, err := g.Workflow().DeclaredInputs(pushedTree(p.Tree)); err != nil {
-		fail(w, http.StatusUnprocessableEntity, err.Error())
+		fail(w, http.StatusForbidden, fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use on %s, which a grant on the namespace %s gives and a deny on the workflow takes away, and you do not hold it there: whoever writes a secret's name into a workflow answers for its value going into a container, and running the version afterwards takes workflow:run alone", noun, strings.Join(unusable.Named, ", "), over.Workflow, over.Namespace))
+		return
+	case err != nil:
+		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("version: %s@%s: %s", over.Workflow, commit, err))
 		return
 	}
+	// A digest for a tag no step names is a version whose file names one image while the push
+	// says another, and its reviewers would be reading about something that never runs.
+	for _, ref := range slices.Sorted(maps.Keys(p.Images)) {
+		if _, named := checked.Version.Images[ref]; !named {
+			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("version: %s@%s records a digest for %s, which none of its steps names by a tag", over.Workflow, commit, ref))
+			return
+		}
+	}
+	// What is recorded is what the version was judged over: every file resolution read, the
+	// manifest of every image a brick step runs and the digest every tag a step names was
+	// resolved to, and nothing else the push carried, so that a rebuild reads what was accepted.
+	v.Document, v.Includes, v.Manifests, v.Images = checked.Version.Document, checked.Version.Includes, checked.Version.Manifests, checked.Version.Images
 	// The bytes before the row, so that a version that exists names objects that exist. A
 	// push that dies between the two leaves objects nothing references, which the collector
 	// never sees and which the next push of the same files reuses; the other order would
@@ -602,61 +594,57 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	write(w, http.StatusOK, Pushed{Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Images: recorded})
 }
 
-// secretsNamed are the secrets a workflow names, sorted: its secrets block, and every one a step
-// mounts. A step may mount only what the block names, which loading the workflow holds, so the
-// steps add nothing today; they are read all the same, since this is what a push is authorised
-// by and a secret it missed would be one nobody answered for.
-func secretsNamed(wf *graph.Workflow) []string {
-	named := slices.Clone(wf.Secrets)
-	for _, st := range wf.Steps {
-		named = append(named, st.Secrets...)
-	}
-	slices.Sort(named)
-	return slices.Compact(named)
+// pushFault is a store the push had to ask that could not answer, which is the installation's
+// failure and not the pusher's: said answers it, and err is what is reported.
+type pushFault struct {
+	said string
+	err  error
 }
 
-// undeclared says which of the secrets a workflow names its namespace does not declare, and where
-// each is named: by the steps that mount it, or by the secrets block alone where no step does. It
-// answers the refusal, or nothing where every one is declared.
-func undeclared(wf *graph.Workflow, named []string, declared []db.Declaration, namespace string) string {
-	held := make(map[string]bool, len(declared))
-	for _, d := range declared {
-		held[d.Name] = true
-	}
-	var missing, where []string
-	for _, secret := range named {
-		if held[secret] {
-			continue
+func (f *pushFault) Error() string { return f.said + ": " + f.err.Error() }
+
+// pinnedBy answers the digest a push resolved a tag to, which is what the installation holds for
+// it until a namespace keeps its own pins.
+func pinnedBy(p Push) func(context.Context, string, agk.Step) (string, error) {
+	return func(_ context.Context, reference string, _ agk.Step) (string, error) {
+		if digest, ok := p.Images[reference]; ok {
+			return digest, nil
 		}
-		missing = append(missing, secret)
-		var steps []string
-		for _, name := range slices.Sorted(maps.Keys(wf.Steps)) {
-			if slices.Contains(wf.Steps[name].Secrets, secret) {
-				steps = append(steps, string(name))
+		return "", version.ErrNotHeld
+	}
+}
+
+// manifestsCarried answers the manifest a push carries for an image, by the digest a step now
+// names it by: the push keys each by the reference the workflow writes, which is a tag where the
+// push resolved one. Two tags resolved to one digest are one image, and a push carrying two
+// manifests for it is refused rather than one of them chosen.
+func manifestsCarried(p Push) func(context.Context, string, agk.Step) ([]byte, error) {
+	return func(_ context.Context, image string, _ agk.Step) ([]byte, error) {
+		var body []byte
+		for _, ref := range slices.Sorted(maps.Keys(p.Manifests)) {
+			key := ref
+			if pinned, held := p.Images[ref]; held {
+				key = pinned
 			}
+			if key != image {
+				continue
+			}
+			if body != nil && !bytes.Equal(body, p.Manifests[ref]) {
+				return nil, fmt.Errorf("the push carries two manifests for %s, one image under two tags", image)
+			}
+			body = p.Manifests[ref]
 		}
-		switch len(steps) {
-		case 0:
-			where = append(where, "the secrets block names the secret "+secret)
-		case 1:
-			where = append(where, "step "+steps[0]+" names the secret "+secret)
-		default:
-			where = append(where, "steps "+strings.Join(steps[:len(steps)-1], ", ")+" and "+steps[len(steps)-1]+" name the secret "+secret)
+		if body == nil {
+			return nil, version.ErrNotHeld
 		}
+		return body, nil
 	}
-	switch len(missing) {
-	case 0:
-		return ""
-	case 1:
-		return fmt.Sprintf("%s, which the namespace %s does not declare: a workflow can name only the secrets its own namespace declares, so that moving it elsewhere breaks the reference rather than carrying access along, and every run of this version would be refused the secret at its first redemption. Declare it with PUT /api/v1/%s/secrets/%s, or push a version that does not name it", where[0], namespace, namespace, missing[0])
-	}
-	return fmt.Sprintf("%s, none of which the namespace %s declares: a workflow can name only the secrets its own namespace declares, so that moving it elsewhere breaks the reference rather than carrying access along, and every run of this version would be refused them at their first redemption. Declare each with PUT /api/v1/%s/secrets/{name}, or push a version that does not name them", strings.Join(where, ", and "), namespace, namespace)
 }
 
-// pushedTree is the tree a push carries, as the fs.FS an input's schema resolves a reference
-// against.
-func pushedTree(files map[string]PushFile) fstest.MapFS {
-	tree := make(fstest.MapFS, len(files))
+// pushedTree is the tree a push carries, as version.Check judges it and an input's schema resolves
+// a reference against.
+func pushedTree(files map[string]PushFile) version.Files {
+	tree := make(version.Files, len(files))
 	for p, f := range files {
 		tree[p] = &fstest.MapFile{Data: f.Content, Mode: 0o444}
 	}
@@ -676,8 +664,14 @@ func checkTree(files map[string]PushFile) ([]string, int, error) {
 	paths := make([]string, 0, len(files))
 	var total int64
 	for p, f := range files {
-		if err := CheckTreePath(p); err != nil {
+		if err := version.TreePath(p); err != nil {
 			return nil, http.StatusBadRequest, err
+		}
+		if strings.ContainsRune(p, utf8.RuneError) {
+			// JSON leaves U+FFFD where a name was not UTF-8, and a name that really holds
+			// one cannot be told from one that lost its bytes on the way: until the
+			// installation hosts the repository a push carries names without it.
+			return nil, http.StatusBadRequest, fmt.Errorf("%q holds U+FFFD, which is what JSON leaves where a name was not UTF-8, and a name that really holds one cannot be told from one that lost its bytes on the way: until the installation hosts the repository a push carries names without it", p)
 		}
 		if f.Mode != "0644" && f.Mode != "0755" {
 			return nil, http.StatusBadRequest, fmt.Errorf("%s is pushed with mode %q, and a tree carries git's two, written out: 0644, or 0755 where the file is executable", p, f.Mode)
@@ -787,57 +781,6 @@ func (s *Server) storeTree(ctx context.Context, namespace string, blobs map[stri
 		}
 	}
 	return skipped, nil
-}
-
-// CheckTreePath refuses a path a container could not be given, and one that leaves the tree.
-//
-// The mount is /agk/repo, so a path escaping it is a path writing somewhere else on the host that
-// prepares the directory. It is refused here rather than there because here is where somebody is
-// watching. Exported because agk push applies it to every name of a commit before it reads a byte
-// of the tree, so that a name the installation would refuse is refused before the tree is read
-// and sent rather than after, and by the same rule rather than by a copy of it.
-func CheckTreePath(p string) error {
-	switch {
-	case p == "":
-		return errors.New("a tree file with no path")
-	case len(p) > TreePathMaxBytes:
-		return fmt.Errorf("%.64s... is a path of %d bytes, and a tree path is at most %d: laid out below a runner's directory and below /agk/repo it would be a path the host cannot name", p, len(p), TreePathMaxBytes)
-	case p == ".":
-		return errors.New("a tree file named ., which is the root of the repository and a directory rather than a file")
-	case path.IsAbs(p):
-		return fmt.Errorf("%s is absolute, and a tree path is relative to the root of the repository", p)
-	case path.Clean(p) != p:
-		return fmt.Errorf("%s is not in its cleaned form", p)
-	case p == ".." || strings.HasPrefix(p, "../"):
-		return fmt.Errorf("%s leaves the repository", p)
-	case strings.ContainsRune(p, 0):
-		return fmt.Errorf("%q carries a null byte", p)
-	case !utf8.ValidString(p) || strings.ContainsRune(p, utf8.RuneError):
-		// Git names a file with any bytes, and JSON carries UTF-8 only: a name that is not
-		// arrives with U+FFFD where its bytes were, so the file would be laid out under a
-		// name the commit does not give it, and two such names would arrive as one. The
-		// character is what is left to see, and one that was really in a name cannot be told
-		// from one that was not.
-		return fmt.Errorf("%q holds U+FFFD, which is what JSON leaves where a name was not UTF-8, and a name that really holds one cannot be told from one that lost its bytes on the way: until the installation hosts the repository a push carries names without it", p)
-	case strings.ContainsRune(p, '\\'):
-		// A separator on Windows, where a\..\..\x is a path out of the tree and C:\x
-		// and \\host\share are somewhere else entirely. A path that names one file on
-		// one host and another on the next is not a path a version can promise.
-		return fmt.Errorf("%q holds a backslash, which Windows reads as a separator: a tree path separates its directories with / alone, so that it names the same file on every host that lays it out", p)
-	}
-	for _, segment := range strings.Split(p, "/") {
-		if len(segment) > TreeNameMaxBytes {
-			return fmt.Errorf("%.64s... holds a name of %d bytes, and a filesystem holds a name to %d: no runner could create that file", p, len(segment), TreeNameMaxBytes)
-		}
-		// A segment that is .git, which a commit's tree never holds since git refuses it,
-		// and which laid out under /agk/repo would be a repository configuration, hooks
-		// and all, that any git a step runs there obeys. The rule is git's own, held in
-		// package repo, which reads the trees a push sends.
-		if repo.DotGit(segment) {
-			return fmt.Errorf("%q has a segment that is .git on some filesystem a tree is laid out on, and .git is git's own and never part of a commit's tree", p)
-		}
-	}
-	return nil
 }
 
 // Start is a manual run: the inputs, and nothing else. What version it runs is the workflow's

@@ -1,0 +1,9 @@
+# finance/common on main, one commit past v2.1.0.
+
+include:
+  - path: ./blocks/billing.yaml
+
+secrets: [billing_api]
+
+defaults:
+  retain: 90d

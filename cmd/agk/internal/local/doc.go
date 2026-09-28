@@ -182,9 +182,11 @@
 //
 // Every step is a call into a merged package and this package adds nothing to any of them.
 //
-//	1  graph.Load(os.DirFS(tree), entry, nil), then graph.Check. The nil remote map
-//	   refuses a workflow: include naming the repository and the ref it wanted, because
-//	   resolving one is reaching another repository and there is no server here.
+//	1  version.Check(ctx, os.DirFS(tree), entry named), which is graph.Load and graph.Check
+//	   and what agk push and a hook judge a version by. No remote reaches another
+//	   repository, which refuses a workflow: include naming the repository and the ref it
+//	   wanted, because resolving one is reaching another repository and there is no server
+//	   here.
 //	2  graph.Workflow.DeclaredInputs(os.DirFS(tree)), then schema.Bind, as the API binds a
 //	   server run's. A $ref resolves inside the tree and is refused when it leaves it, and
 //	   required and default are applied before a run exists, which is what

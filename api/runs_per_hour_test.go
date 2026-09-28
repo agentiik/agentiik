@@ -56,7 +56,7 @@ func TestARunPastTheRunsAnHourIsAnswered429WithRetryAfter(t *testing.T) {
 	}
 
 	// Another namespace's quota is not team-ops' own.
-	if w, _ := call(t, h, "PUT", "/api/v1/team-ops/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
+	if w, _ := call(t, h, "PUT", "/api/v1/team-ops/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPushOf(t, named(workflowDocument, "team-ops", "monthly-invoicing"))); w.Code != http.StatusOK {
 		t.Fatalf("the push to team-ops answered %d: %s", w.Code, w.Body)
 	}
 	for range 3 {

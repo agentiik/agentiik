@@ -1,0 +1,10 @@
+# The root of finance/common, a library repository: a fragment, which its own
+# hook validates as one and nothing runs.
+
+include:
+  - path: ./blocks/billing.yaml
+
+secrets: [billing_api]
+
+defaults:
+  retain: 30d

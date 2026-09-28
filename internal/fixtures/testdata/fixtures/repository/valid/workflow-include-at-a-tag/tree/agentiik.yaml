@@ -1,0 +1,26 @@
+# A workflow include reads the other repository's root agentiik.yaml, as a
+# fragment, at the commit its tag resolves to, and that file's own path
+# includes inside that repository at that commit. main has moved on since the
+# tag and is not read.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+include:
+  - workflow: finance/common
+    ref: v2.1.0
+
+steps:
+  fetch:
+    image: ghcr.io/acme/agk-fetch-orders:1.2.0
+    outputs: [out]
+
+  invoice:
+    extends: .billing-api
+    image: ghcr.io/acme/agk-invoice:1.4.0
+    needs: [fetch]
+    outputs: [out, error]

@@ -169,10 +169,8 @@
     },
     "include": {
       "title": "Includes",
-      "description": "Files and repositories merged into this one before anything else is resolved, in declaration order. Reuse applies to steps and defaults; the published surface is not included, so reading this file tells you everything the workflow exposes.",
-      "type": "array",
-      "minItems": 1,
-      "items": { "$ref": "#/$defs/include" },
+      "description": "Files and repositories merged into this one before anything else is resolved, in declaration order, each read as an included file, $defs/fragment. Reuse applies to steps and defaults; the published surface is not included, so reading this file tells you everything the workflow exposes.",
+      "$ref": "#/$defs/includes",
       "examples": [
         [{ "path": "./common-bricks.yaml" }, { "workflow": "finance/common", "ref": "v2.1.0" }]
       ]
@@ -180,25 +178,13 @@
     "vars": {
       "title": "Variables",
       "description": "Values written once and read anywhere an expression is allowed, through the vars context. They keep a currency or a threshold in a single place instead of repeated across steps. They are not secrets: they sit in the file and are readable by anyone who can read the workflow.",
-      "type": "object",
-      "propertyNames": { "$ref": "#/$defs/identifier" },
-      "additionalProperties": {
-        "description": "Value of one variable, of whatever type the expression reading it expects.",
-        "examples": ["EUR", 30]
-      },
+      "$ref": "#/$defs/vars",
       "examples": [{ "currency": "EUR", "dunning_days": 30 }]
     },
     "secrets": {
       "title": "Secrets",
       "description": "The secrets of the owning namespace this workflow uses, by name and by nothing else, resolved by the API at the last moment. Where a value lives, its provider and its path, is declared on the namespace through the API or agentiik_secret in Terraform, by a principal holding secret:write, and a namespace is confined to its own paths: a path written in this file would let anyone able to push the workflow aim it at whatever the store holds. Only secrets the owning namespace declares can be named, so moving a workflow elsewhere breaks the reference at validation instead of quietly carrying access along. A step mounts one of them by the same name.",
-      "type": "array",
-      "minItems": 1,
-      "uniqueItems": true,
-      "items": {
-        "description": "Name of one secret the owning namespace declares, written as the namespace declares it.",
-        "$ref": "#/$defs/identifier",
-        "examples": ["billing", "ledger"]
-      },
+      "$ref": "#/$defs/secrets",
       "examples": [["billing"], ["billing", "ledger"]]
     },
     "defaults": {
@@ -237,16 +223,7 @@
     "steps": {
       "title": "The graph",
       "description": "The steps of the workflow, named. The order they appear in has no bearing on scheduling: a step becomes runnable once every declared input port is satisfied, and an edge is the only form of dependency there is. A name starting with a dot is a hidden block, never executed, there to be extended.",
-      "type": "object",
-      "propertyNames": {
-        "description": "Step identifier, unique in the workflow. It names the step in needs, in expressions and in the run detail, and is held to $defs/identifier's 255 characters, since a step becomes a directory. A leading dot marks a hidden block, which is never executed, and so never a directory either.",
-        "anyOf": [
-          { "$ref": "#/$defs/identifier" },
-          { "pattern": "^\\.[A-Za-z0-9][A-Za-z0-9_-]*$" }
-        ],
-        "examples": ["normalize", "check-vat", ".api-brick"]
-      },
-      "additionalProperties": { "$ref": "#/$defs/step" },
+      "$ref": "#/$defs/steps",
       "examples": [
         {
           "normalize": {
@@ -451,9 +428,121 @@
       ],
       "examples": ["7d", { "for": "7d" }]
     },
+    "fragment": {
+      "title": "Included file",
+      "description": "A file an include names: a fragment merged into the file that includes it, never an entry point, and validated against this definition rather than against the root of this document, which is the entry point's. It carries what reuse is for, hidden blocks at its root, steps, defaults, vars, secrets and includes of its own, and none of what makes a document an entry point: no apiVersion, kind or metadata, and none of the workflow's boundary, inputs, outputs, on, mcp, concurrency or timeout, since what a workflow is given, returns, starts on, publishes and is bounded by is declared by the workflow itself, so that reading one file tells you what that workflow is. It is closed like every block the language owns, so any of those keys, and any key it does not define, is refused rather than ignored. What it writes sits under what the file including it writes, keyword by keyword, and what it includes sits under it in turn. A repository whose root agentiik.yaml is written this way is a library: another workflow includes it at a tag or a commit, its own hook validates it as a fragment, and nothing runs it.",
+      "type": "object",
+      "additionalProperties": false,
+      "examples": [
+        {
+          ".api-brick": { "timeout": "2m", "retry": { "max": 3, "on": ["transient"] }, "network": "egress", "resources": { "cpu": "0.5", "memory": "256Mi" } },
+          ".region-matrix": { "strategy": { "matrix": { "region": ["fr", "be", "ch"], "profile": ["standard", "reduced"] }, "max_parallel": 3 } }
+        },
+        {
+          "include": [{ "path": "./retry-policy.yaml" }],
+          "vars": { "currency": "EUR" },
+          "secrets": ["billing"],
+          "defaults": { "timeout": "10m", "network": "none" },
+          "steps": {
+            ".billing-api": { "network": "egress", "egress": { "allow": ["api.billing.example.com:443"] }, "secrets": ["billing"] }
+          }
+        }
+      ],
+      "properties": {
+        "include": {
+          "description": "Files and repositories this file includes in turn, resolved before it in declaration order, so that what they carry sits under what this file writes. A path include here resolves against this file's own directory, and inside the repository this file came from where a workflow include brought it.",
+          "$ref": "#/$defs/includes",
+          "examples": [[{ "path": "./retry-policy.yaml" }]]
+        },
+        "vars": {
+          "description": "Variables this file contributes, read through the vars context of the workflow including it. A name the including file writes too takes that file's value, since the including file is applied last.",
+          "$ref": "#/$defs/vars",
+          "examples": [{ "currency": "EUR" }]
+        },
+        "secrets": {
+          "description": "Secrets the steps and blocks of this file name. Names add up rather than override: a name written here and by the including file is one secret, and it is the namespace owning the workflow that runs it that has to declare it, whichever repository the name was written in.",
+          "$ref": "#/$defs/secrets",
+          "examples": [["billing"]]
+        },
+        "defaults": {
+          "description": "Settings this file contributes to the defaults of the workflow including it, keyword by keyword, under whatever the including file sets itself.",
+          "$ref": "#/$defs/defaults",
+          "examples": [{ "timeout": "10m", "network": "none" }]
+        },
+        "steps": {
+          "description": "Steps and hidden blocks this file contributes. A step written here carries its own values, above the defaults, and a step of the same name in the including file overrides it keyword by keyword; a hidden block of the same name is replaced whole.",
+          "$ref": "#/$defs/steps",
+          "examples": [{ ".billing-api": { "network": "egress", "egress": { "allow": ["api.billing.example.com:443"] }, "secrets": ["billing"] } }]
+        }
+      },
+      "patternProperties": {
+        "^\\.[A-Za-z0-9][A-Za-z0-9_-]*$": {
+          "description": "A hidden block at the root of the included file, never executed, there to be named by the extends of a step in this file or in any file including it.",
+          "$ref": "#/$defs/step",
+          "examples": [{ "timeout": "2m", "network": "egress", "retry": { "max": 3, "on": ["transient"] } }]
+        }
+      }
+    },
+    "includes": {
+      "title": "Include list",
+      "description": "The include block, as the entry point and an included file both write it: files and repositories in declaration order, each read as an included file, $defs/fragment, and merged under the file naming it.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/include" },
+      "examples": [
+        [{ "path": "./common-bricks.yaml" }, { "workflow": "finance/common", "ref": "v2.1.0" }]
+      ]
+    },
+    "vars": {
+      "title": "Variable block",
+      "description": "The vars block, as the entry point and an included file both write it: names and values, read by expressions through the vars context.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": {
+        "description": "Value of one variable, of whatever type the expression reading it expects.",
+        "examples": ["EUR", 30]
+      },
+      "examples": [{ "currency": "EUR", "dunning_days": 30 }]
+    },
+    "secrets": {
+      "title": "Secret names",
+      "description": "The secrets block, as the entry point and an included file both write it: names the owning namespace declares, each once, and nothing about where a value lives.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "description": "Name of one secret the owning namespace declares, written as the namespace declares it.",
+        "$ref": "#/$defs/identifier",
+        "examples": ["billing", "ledger"]
+      },
+      "examples": [["billing"], ["billing", "ledger"]]
+    },
+    "steps": {
+      "title": "Step block",
+      "description": "The steps block, as the entry point and an included file both write it: steps by name, with hidden blocks, whose names start with a dot, among them.",
+      "type": "object",
+      "propertyNames": {
+        "description": "Step identifier, unique in the workflow. It names the step in needs, in expressions and in the run detail, and is held to $defs/identifier's 255 characters, since a step becomes a directory. A leading dot marks a hidden block, which is never executed, and so never a directory either.",
+        "anyOf": [
+          { "$ref": "#/$defs/identifier" },
+          { "pattern": "^\\.[A-Za-z0-9][A-Za-z0-9_-]*$" }
+        ],
+        "examples": ["normalize", "check-vat", ".api-brick"]
+      },
+      "additionalProperties": { "$ref": "#/$defs/step" },
+      "examples": [
+        {
+          "normalize": {
+            "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+            "outputs": ["ok", "rejected"]
+          },
+          ".shared-egress": { "network": "egress", "egress": { "allow": ["vat.example.com:443"] } }
+        }
+      ]
+    },
     "include": {
       "title": "Include",
-      "description": "One file or repository merged into this one. A path include resolves inside the same commit, so it can never be stale and nothing has to pin it. A workflow include resolves another repository at a tag or a commit, requires workflow:read on it, and records the commit it resolved to in the run.",
+      "description": "One file or repository merged into this one, and read as an included file, $defs/fragment, never as an entry point. A path include resolves inside the same commit, so it can never be stale and nothing has to pin it. A workflow include resolves another repository at a tag or a commit, requires workflow:read on it, and records the commit it resolved to in the run.",
       "type": "object",
       "oneOf": [
         {
@@ -469,13 +558,13 @@
       "examples": [{ "path": "./common-bricks.yaml" }, { "workflow": "finance/common", "ref": "v2.1.0" }],
       "properties": {
         "path": {
-          "description": "A file of this repository, relative to the root. It travels with the commit, which is why it carries no version of its own and why a ref beside it is refused: a path include resolves inside the same commit, so it can never be stale and there is nothing for a ref to pin.",
+          "description": "A file of this repository, relative to the directory of the file naming it, which for the entry point is the root, or from the root where it starts with /. A path leaving the repository tree is refused. It travels with the commit, which is why it carries no version of its own and why a ref beside it is refused: a path include resolves inside the same commit, so it can never be stale and there is nothing for a ref to pin.",
           "type": "string",
           "minLength": 1,
-          "examples": ["./common-bricks.yaml", "./includes/defaults.yaml"]
+          "examples": ["./common-bricks.yaml", "./includes/defaults.yaml", "/includes/defaults.yaml"]
         },
         "workflow": {
-          "description": "Another workflow repository, as <namespace>/<name>. Reading it requires workflow:read on it, so an include cannot widen what its author may see.",
+          "description": "Another workflow repository, as <namespace>/<name>, whose root agentiik.yaml is read at ref. That file is written as an included file, $defs/fragment: a library repository, which its own hook validates as a fragment and nothing runs, since an entry point carries apiVersion and the rest of what a fragment refuses. Its own path includes resolve inside that repository, at that commit. Reading it requires workflow:read on it, so an include cannot widen what its author may see.",
           "$ref": "#/$defs/workflowPath",
           "examples": ["finance/common"]
         },
@@ -739,7 +828,7 @@
     },
     "defaults": {
       "title": "Defaults",
-      "description": "Settings applied to every step that does not state its own. Resolution is ordered: includes first, then extends depth first, then these defaults, then the step's own values, so a default never overrides something a step said. Graph shape is not settable here: what a step runs and what it depends on belongs to the step.",
+      "description": "Settings applied to every step that does not state its own. Resolution is ordered: includes first, which bring hidden blocks and defaults of their own, then extends depth first, then these defaults, then the step's own values, so a default never overrides something a step said. A step written in an included file carries its own values, above these defaults, and the entry point overrides it keyword by keyword. Graph shape is not settable here: what a step runs and what it depends on belongs to the step.",
       "type": "object",
       "additionalProperties": false,
       "examples": [
@@ -1353,14 +1442,14 @@
     },
     "files": {
       "title": "Files from the repository tree",
-      "description": "Narrows what the step receives from the repository tree, which it otherwise gets whole under /agk/repo/. It is an optimisation for a large repository and never a permission boundary: everything in the tree is readable by anyone who can read the workflow. The long form relocates a path to wherever a tool insists on finding it.",
+      "description": "Narrows what the step receives from the repository tree, which it otherwise gets whole under /agk/repo/. It is an optimisation for a large repository and never a permission boundary: everything in the tree is readable by anyone who can read the workflow. Each entry is a path or a glob relative to the root of the repository. A path names a file, or a directory with everything under it. A glob is matched against the path of every file of the tree, segment by segment: * matches any run of characters inside one segment, ? one character, [abc] one character of a set or a range, and ** written as a segment of its own matches zero or more whole segments, so ./sql/** is every file at any depth under sql/ and ./sql/**/*.sql every .sql file at any depth there, sql/orders.sql among them. What an entry selects is laid out where it is under /agk/repo/, unless the long form relocates it to wherever a tool insists on finding it.",
       "type": "array",
       "minItems": 1,
       "items": {
         "description": "One path taken from the tree, narrowed or relocated.",
         "oneOf": [
           {
-            "description": "Short form: a path or a glob relative to the root of the repository.",
+            "description": "Short form: a path or a glob relative to the root of the repository, laid out where it is under /agk/repo/.",
             "type": "string",
             "minLength": 1
           },
@@ -1371,19 +1460,20 @@
             "additionalProperties": false,
             "properties": {
               "from": {
-                "description": "The path or glob in the repository tree.",
+                "description": "The path or glob in the repository tree, relative to its root and read as the short form is: a file, a directory with everything under it, or every file a glob matches.",
                 "type": "string",
                 "minLength": 1,
-                "examples": ["./certs/internal-ca.pem", "./sql/**"]
+                "examples": ["./certs/internal-ca.pem", "./sql/**", "./sql/**/*.sql"]
               },
               "to": {
-                "description": "Where it is placed in the container, for a tool that will only look in one place.",
+                "description": "Where it is placed in the container, for a tool that will only look in one place, as an absolute path. For a path naming a file, the path the file takes. For a directory or a glob, the directory what it selects is placed under, each file keeping its path below the directory named, or below the glob's fixed prefix, the segments before the first one holding a wildcard: { from: ./sql/**/*.sql, to: /docker-entrypoint-initdb.d } places sql/orders.sql at /docker-entrypoint-initdb.d/orders.sql and sql/2026/q1.sql at /docker-entrypoint-initdb.d/2026/q1.sql, so that no two files one glob selects land on one path. Absolute because a relative path has nothing inside a container to be relative to, which is why the runner refuses one and the task message holds it to the same grammar.",
                 "type": "string",
+                "pattern": "^/",
                 "minLength": 1,
-                "examples": ["/etc/ssl/certs/internal-ca.pem"]
+                "examples": ["/etc/ssl/certs/internal-ca.pem", "/docker-entrypoint-initdb.d"]
               },
               "mode": {
-                "description": "The permissions it is given, as an octal string. A certificate that has to be world readable and a key that must not be are both written here.",
+                "description": "The permissions it is given, as an octal string, every file a directory or a glob selects taking the same. A certificate that has to be world readable and a key that must not be are both written here.",
                 "type": "string",
                 "pattern": "^0?[0-7]{3}$",
                 "examples": ["0444", "0600"]
@@ -1393,7 +1483,8 @@
         ]
       },
       "examples": [
-        ["./sql/**", { "from": "./certs/internal-ca.pem", "to": "/etc/ssl/certs/internal-ca.pem", "mode": "0444" }]
+        ["./sql/**", { "from": "./certs/internal-ca.pem", "to": "/etc/ssl/certs/internal-ca.pem", "mode": "0444" }],
+        [{ "from": "./sql/**/*.sql", "to": "/docker-entrypoint-initdb.d", "mode": "0444" }]
       ]
     },
     "commands": {

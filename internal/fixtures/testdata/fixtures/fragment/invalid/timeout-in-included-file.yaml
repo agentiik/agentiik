@@ -1,0 +1,11 @@
+# invalid: timeout at the root of an included file. The bound on a whole run is the
+#   workflow's own, declared where the workflow is; a step's timeout belongs in
+#   defaults or on the step.
+# refused by: the schema, which holds an included file to $defs/fragment
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+.api-brick:
+  timeout: 2m
+  network: egress
+
+timeout: 6h

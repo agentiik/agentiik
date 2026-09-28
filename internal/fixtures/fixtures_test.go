@@ -198,11 +198,53 @@ func TestWorkflowsCarriesTheWholeCorpus(t *testing.T) {
 			}
 		}
 	}
-	// The corpus the release carries: ten documents that must be accepted and
-	// fifty-nine that must be refused, of which fifteen are rules no JSON Schema can
-	// express and the evaluator owns.
-	if valid != 10 || invalid != 59 || byValidator != 15 {
-		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 10, 59 and 15", valid, invalid, byValidator)
+	// The corpus the release carries: eleven documents that must be accepted and
+	// fifty-nine that must be refused, of which fourteen are rules no JSON Schema can
+	// express and the evaluator owns. The included file carrying mcp is the fragment
+	// group's now, since it is not an entry point.
+	if valid != 11 || invalid != 59 || byValidator != 14 {
+		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 11, 59 and 14", valid, invalid, byValidator)
+	}
+}
+
+func TestTheCorporaOfSeveralDocumentsCarryTheWholeCorpus(t *testing.T) {
+	for _, c := range []struct {
+		what           string
+		read           func() ([]Case, error)
+		valid, invalid int
+	}{
+		// Hidden blocks at the root, and every key a fragment may carry; refused, each of the
+		// nine keys that make a document an entry point, and a key nothing defines.
+		{"fragments", Fragments, 2, 10},
+		// The resolution order, depth-first extends, merged scripts, a hidden step, a step of an
+		// included file over defaults, a workflow include at a tag and a stored commit; refused,
+		// every rule a pre-receive hook refuses a tree by.
+		{"repository cases", Repositories, 7, 20},
+		// The documentation's workflow as its version resolves it; refused, six records the
+		// wire does not carry.
+		{"resolved graphs", ResolvedGraphs, 1, 6},
+	} {
+		cases, err := c.read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var valid, invalid int
+		for _, f := range cases {
+			if f.Valid {
+				valid++
+				if f.Covers == "" {
+					t.Errorf("%s says nothing about what it covers", f.File)
+				}
+				continue
+			}
+			invalid++
+			if f.Rule == "" {
+				t.Errorf("%s names no rule it is refused by", f.File)
+			}
+		}
+		if valid != c.valid || invalid != c.invalid {
+			t.Errorf("the corpus holds %d valid and %d invalid %s, want %d and %d", valid, invalid, c.what, c.valid, c.invalid)
+		}
 	}
 }
 

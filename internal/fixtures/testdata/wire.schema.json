@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.agentiik.dev/wire.schema.json",
   "title": "The wire",
-  "description": "Every message that travels between the controller, the bus, the runner and the API, and the identity and access records the API keeps (principals, credentials, API tokens, grants, roles, permissions, namespaces with their quotas, and the authentication policy), in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage, $defs/taskResult or $defs/taskProgress and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
+  "description": "Every message that travels between the controller, the bus, the runner and the API, the identity and access records the API keeps (principals, credentials, API tokens, grants, roles, permissions, namespaces with their quotas, and the authentication policy), and the workflow repository's (the repository, its refs, its versions and the graph a version resolves to), in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage, $defs/taskResult or $defs/taskProgress and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
   "$defs": {
     "taskMessage": {
       "title": "Task message",
@@ -399,19 +399,21 @@
               "from": {
                 "type": "string",
                 "minLength": 1,
-                "description": "The path or glob in the repository tree, at the run's commit.",
+                "description": "The path or glob in the repository tree, at the run's commit, read as the workflow file's files reads it: a file, a directory with everything under it, or every file a glob matches, ** written as a segment of its own matching zero or more whole segments.",
                 "examples": [
                   "config/rates.json",
-                  "./sql/**"
+                  "./sql/**",
+                  "./sql/**/*.sql"
                 ]
               },
               "to": {
                 "type": "string",
                 "pattern": "^/",
                 "minLength": 1,
-                "description": "Where it is mounted in the container, an absolute path. Absent where the step asked for no relocation, as the short form of a selector never does: the file is then where it is under /agk/repo/.",
+                "description": "Where it is mounted in the container, an absolute path: the path the file takes, for a path naming a file, and for a directory or a glob the directory what it selects goes under, each file keeping its path below the directory, or below the glob's fixed prefix, the segments before the first one holding a wildcard. Absent where the step asked for no relocation, as the short form of a selector never does: the file is then where it is under /agk/repo/.",
                 "examples": [
-                  "/agk/files/rates.json"
+                  "/agk/files/rates.json",
+                  "/docker-entrypoint-initdb.d"
                 ]
               },
               "mode": {
@@ -3000,6 +3002,44 @@
         "nightly-reconcile@0f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c"
       ]
     },
+    "commit": {
+      "title": "Commit",
+      "description": "A git commit, written whole: forty lowercase hexadecimal characters, since a workflow repository holds SHA-1 objects. Whole rather than abbreviated, because a version is recorded under the name it was accepted as, and an abbreviation is a name another commit can come to share: a3f9c1e and the forty characters it abbreviates would be two versions, each free to hold its own tree.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "examples": [
+        "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+        "0f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c"
+      ]
+    },
+    "branch": {
+      "title": "Branch name",
+      "description": "A branch as a person names it, main or feature/vat-rounding, without the refs/heads/ git keeps it under. Held to git's own rules for a ref name, those of git check-ref-format, since git refuses anything else before a push reaches the server: no space or control character and none of ~ ^ : ? * [ \\, no component starting with a dot, no .. and no @{, no // and no .lock ending a component, nothing starting with - or / and nothing ending with / or ., and not @ alone.",
+      "type": "string",
+      "pattern": "^[^\\x00-\\x20\\x7f~^:?*\\[\\\\]+$",
+      "not": {
+        "pattern": "^[-/.]|/[./]|\\.\\.|@\\{|[/.]$|\\.lock(/|$)|^@$"
+      },
+      "examples": [
+        "main",
+        "master",
+        "feature/vat-rounding"
+      ]
+    },
+    "refName": {
+      "title": "Ref name",
+      "description": "A ref as git writes it in full: refs/heads/<branch> for a branch and refs/tags/<tag> for a tag, the only two kinds a workflow repository holds, the name after the prefix on the rules of $defs/branch save the two git keeps for a branch's short name, a leading - and @ alone. Full, so that a branch and a tag of one short name are two refs rather than one ambiguity.",
+      "type": "string",
+      "pattern": "^refs/(heads|tags)/[^\\x00-\\x20\\x7f~^:?*\\[\\\\]+$",
+      "not": {
+        "pattern": "^[-/.]|/[./]|\\.\\.|@\\{|[/.]$|\\.lock(/|$)|^@$"
+      },
+      "examples": [
+        "refs/heads/main",
+        "refs/tags/v2.1.0",
+        "refs/heads/feature/vat-rounding"
+      ]
+    },
     "digest": {
       "title": "Digest",
       "description": "A sha256 written as the algorithm, a colon and sixty-four hexadecimal characters. It is how an envelope, an image and an artifact are named on the wire, because a name that is the content cannot be confused with a name that merely points at it.",
@@ -3026,6 +3066,17 @@
       "examples": [
         "2026-09-10T06:12:00Z",
         "2026-09-10T06:41:09.104Z"
+      ]
+    },
+    "duration": {
+      "title": "Duration",
+      "description": "A length of time as the workflow file writes it, a number and one unit of ms, s, m, h or d, carried unchanged where a record repeats what the file wrote. The grammar is the workflow schema's $defs/duration, and tools/check.py holds the two copies together.",
+      "type": "string",
+      "pattern": "^[0-9]+(ms|s|m|h|d)$",
+      "examples": [
+        "10m",
+        "90d",
+        "500ms"
       ]
     },
     "shard": {
@@ -4643,6 +4694,1891 @@
           "kind": "break_glass_recovery",
           "at": "2026-09-27T16:40:00Z",
           "login": "alice"
+        }
+      ]
+    },
+    "repository": {
+      "title": "Workflow repository",
+      "description": "A workflow as the API answers it: the git repository Agentiik hosts for it, which is the workflow. It is addressed as <namespace>/<name>, the identity a grant, a run and a git remote share; its default branch is what a schedule, a webhook and an event run, and a run naming no ref; and its protection decides who may move that branch. Its objects are packfiles in the object store and its refs rows of the database, so nothing here is a path on a disk.",
+      "type": "object",
+      "required": [
+        "namespace",
+        "name",
+        "default_branch",
+        "protected",
+        "labels",
+        "created_at",
+        "head",
+        "clone_url"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": {
+          "$ref": "#/$defs/namespace",
+          "description": "The namespace that owns it, whose secrets, quotas and runner pools its runs reach, and no other's.",
+          "examples": [
+            "finance"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/identifier",
+          "description": "Its name in the namespace, on the grammar every name of the workflow file is written on. The entry point's metadata.name writes the same name, or a push is refused; a library's root agentiik.yaml, a fragment, writes none.",
+          "examples": [
+            "monthly-invoicing"
+          ]
+        },
+        "default_branch": {
+          "$ref": "#/$defs/branch",
+          "description": "The branch HEAD names: what a clone checks out, what schedules, webhooks and events run, and what a run naming no ref runs. main unless the repository was created naming another; a workflow from before v0.4.0 keeps the branch its first agk push named.",
+          "examples": [
+            "main",
+            "master"
+          ]
+        },
+        "protected": {
+          "type": "boolean",
+          "description": "Whether the default branch is protected: pushing to it then takes grant:manage, the permission that governs sharing, so that branch protection needs no second mechanism, where pushing to any other branch, or to the default branch of an unprotected repository, takes workflow:write. A force-push and the deletion of a ref take grant:manage whatever this says. true for a repository created from v0.4.0 unless it was created with protected: false, and false for a workflow from before v0.4.0, so that an editor's agk push keeps landing after the upgrade; whoever holds grant:manage on the workflow changes it.",
+          "examples": [
+            true,
+            false
+          ]
+        },
+        "labels": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "What metadata.labels writes in the entry point of the version a run naming no ref runs, the default branch's head where it has one: labels a search finds the workflow by, which mean nothing to the engine. Empty where there is no such version, or it writes none.",
+          "examples": [
+            {
+              "domain": "billing"
+            },
+            {}
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the repository was created: by POST /api/v1/{ns}/workflows, or, for a workflow from before v0.4.0, by its first agk push.",
+          "examples": [
+            "2026-09-28T09:00:00Z"
+          ]
+        },
+        "head": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/commit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The commit the default branch points at, or null while it is unborn: a repository nothing was pushed to yet, or a workflow whose versions agk push sent as trees, from v0.2 or v0.3, and which no git push has filled yet, whose runs naming no ref run its latest version meanwhile.",
+          "examples": [
+            "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            null
+          ]
+        },
+        "clone_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://\\S+\\.git$",
+          "description": "What git clones, fetches and pushes: <public URL>/<namespace>/<name>.git, over git's smart HTTP, with an API token as the password. Git's own protocol, which the OpenAPI document describes no further.",
+          "examples": [
+            "https://agentiik.example.com/finance/monthly-invoicing.git"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "namespace": "finance",
+          "name": "monthly-invoicing",
+          "default_branch": "main",
+          "protected": true,
+          "labels": {
+            "domain": "billing"
+          },
+          "created_at": "2026-09-28T09:00:00Z",
+          "head": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "clone_url": "https://agentiik.example.com/finance/monthly-invoicing.git"
+        },
+        {
+          "namespace": "finance",
+          "name": "vat-reconciliation",
+          "default_branch": "master",
+          "protected": false,
+          "labels": {},
+          "created_at": "2026-09-27T14:30:00Z",
+          "head": null,
+          "clone_url": "https://agentiik.example.com/finance/vat-reconciliation.git"
+        }
+      ]
+    },
+    "ref": {
+      "title": "Ref",
+      "description": "One branch or tag of a workflow repository: a row of the database rather than a file beside the objects, so that moving it is an ordinary transaction beside every other piece of state. Only branches and tags are held; HEAD is the default branch, answered on the repository and never stored as a ref.",
+      "type": "object",
+      "required": [
+        "name",
+        "commit",
+        "protected"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/refName",
+          "description": "The ref in full, as git writes it.",
+          "examples": [
+            "refs/heads/main",
+            "refs/tags/v2.1.0"
+          ]
+        },
+        "commit": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/commit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The commit it points at, an annotated tag peeled to the commit it names; null for an unborn branch, the default branch of a repository nothing was pushed to yet, which is the one ref held without a commit.",
+          "examples": [
+            "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            null
+          ]
+        },
+        "protected": {
+          "type": "boolean",
+          "description": "Whether pushing to it takes grant:manage rather than workflow:write. Only the default branch is protected, and only where its repository is. A force-push and a deletion take grant:manage on any ref, protected or not.",
+          "examples": [
+            true,
+            false
+          ]
+        },
+        "moved_by": {
+          "$ref": "#/$defs/actor",
+          "description": "Who last moved it: the principal whose push created, moved or forced it. Absent on an unborn branch, which nobody has moved.",
+          "examples": [
+            "alice",
+            "finance/nightly-sync"
+          ]
+        },
+        "moved_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it last moved, in the transaction that accepted the push. Absent exactly when moved_by is.",
+          "examples": [
+            "2026-09-28T10:12:00Z"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "commit": {
+            "type": "null"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "moved_by"
+              ]
+            },
+            {
+              "required": [
+                "moved_at"
+              ]
+            }
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "moved_by",
+          "moved_at"
+        ]
+      },
+      "examples": [
+        {
+          "name": "refs/heads/main",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "protected": true,
+          "moved_by": "alice",
+          "moved_at": "2026-09-28T10:12:00Z"
+        },
+        {
+          "name": "refs/tags/v2.1.0",
+          "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+          "protected": false,
+          "moved_by": "bob",
+          "moved_at": "2026-09-20T16:40:00Z"
+        },
+        {
+          "name": "refs/heads/main",
+          "commit": null,
+          "protected": true
+        }
+      ]
+    },
+    "version": {
+      "title": "Version",
+      "description": "A commit accepted as a version of a workflow. A version is a commit: <namespace>/<name>@<commit> names exactly one tree, permanently, and a run pins one, so a branch that moves afterwards changes nothing about it. Each commit a push leaves a branch or a tag pointing at becomes one once the hook has accepted it, and a commit the push only carries on the way is none; a workflow from before v0.4.0 keeps every version agk push sent it as a tree. Every version keeps the manifest of its tree, each file a counted object, so that a run and a replay months later read the same bytes whatever the repository does next.",
+      "type": "object",
+      "required": [
+        "commit",
+        "author",
+        "created_at",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/commit",
+          "description": "The commit, whole.",
+          "examples": [
+            "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+          ]
+        },
+        "parent": {
+          "$ref": "#/$defs/commit",
+          "description": "The commit's first parent. Absent for a root commit, and for a version sent as a tree whose agk push named none.",
+          "examples": [
+            "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d"
+          ]
+        },
+        "author": {
+          "$ref": "#/$defs/actor",
+          "description": "Who pushed it: the principal whose push was accepted, who answers for what it names, secrets included, since secret:use is checked against the pusher. The git author is in the history and may be whoever a git configuration names; operator on a version the bootstrap token pushed.",
+          "examples": [
+            "alice",
+            "finance/nightly-sync",
+            "operator"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it was accepted: the transaction that moved the ref, or recorded the tree.",
+          "examples": [
+            "2026-09-28T10:12:00Z"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "git",
+            "tree"
+          ],
+          "description": "How it arrived. git for a commit a git push carried, whose objects are in the repository's packs and which a clone holds. tree for one agk push sent as a tree before the repository's first git push, from v0.2 or v0.3, whose files alone are stored: no clone holds it unless a git push carried that commit since, and it stays runnable and replayable all the same.",
+          "examples": [
+            "git",
+            "tree"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "parent": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+          "author": "alice",
+          "created_at": "2026-09-28T10:12:00Z",
+          "source": "git"
+        },
+        {
+          "commit": "7e4c1a9b3d5f2e8c0a6b4d2f1e3c5a7b9d0f8e6c",
+          "author": "operator",
+          "created_at": "2026-09-27T14:31:00Z",
+          "source": "tree"
+        }
+      ]
+    },
+    "resolvedGraph": {
+      "title": "Resolved graph",
+      "description": "The graph a version resolves to: what its hook accepted, written down as the engine resolves it for every run of the version, what the API answers and what the console draws. The entry point is read with its includes merged in declaration order, each step's extends applied depth first, then the defaults, then the step's own values; every image a step names is written by the digest it runs, and a brick step is held to its manifest; the steps are ordered so that no edge points backwards. It is a record rather than a file, written by the engine and never by hand, and it names steps, images, ports and edges, never a value a run was given: an expression is kept as written, for a run to evaluate.",
+      "type": "object",
+      "required": [
+        "workflow",
+        "commit",
+        "includes",
+        "order",
+        "steps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {
+          "$ref": "#/$defs/identifier",
+          "description": "The name the version's entry point writes in metadata.name, which was its repository's name when it was pushed; a rename afterwards leaves it as written. The namespace is the repository's, and not part of what a commit resolves to.",
+          "examples": [
+            "monthly-invoicing"
+          ]
+        },
+        "commit": {
+          "$ref": "#/$defs/commit",
+          "description": "The commit this graph was resolved from, the version it belongs to.",
+          "examples": [
+            "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+          ]
+        },
+        "includes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "not": {
+                  "pattern": "^/|^\\./|(^|/)\\.\\.(/|$)"
+                },
+                "description": "A file of this commit's tree, as a path from its root, resolved against the file that named it.",
+                "examples": [
+                  "common-bricks.yaml",
+                  "fragments/tax.yaml"
+                ]
+              },
+              "workflow": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$",
+                "not": {
+                  "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/"
+                },
+                "description": "Another workflow repository, as <namespace>/<name>, whose root agentiik.yaml was read as a fragment.",
+                "examples": [
+                  "finance/common"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The tag or commit the include wrote.",
+                "examples": [
+                  "v2.1.0"
+                ]
+              },
+              "commit": {
+                "$ref": "#/$defs/commit",
+                "description": "The commit that ref resolved to at the push, which every run of the version records: what that repository's files were read at, its own path includes among them.",
+                "examples": [
+                  "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"
+                ]
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "path"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "workflow"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "ref"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "commit"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "workflow",
+                  "ref",
+                  "commit"
+                ],
+                "not": {
+                  "required": [
+                    "path"
+                  ]
+                }
+              }
+            ],
+            "description": "One include resolved: a file of this tree, or another repository with the commit its ref resolved to.",
+            "examples": [
+              {
+                "path": "common-bricks.yaml"
+              },
+              {
+                "workflow": "finance/common",
+                "ref": "v2.1.0",
+                "commit": "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"
+              }
+            ]
+          },
+          "description": "Every file and repository the resolution read besides the entry point, in the order they apply, what a file includes before the file itself; empty for an entry point including nothing. A workflow include carries the commit its ref resolved to, so that another repository moving a tag afterwards changes nothing this graph does.",
+          "examples": [
+            [
+              {
+                "path": "common-bricks.yaml"
+              },
+              {
+                "workflow": "finance/common",
+                "ref": "v2.1.0",
+                "commit": "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"
+              }
+            ],
+            []
+          ]
+        },
+        "inputs": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schema": {
+                "type": [
+                  "object",
+                  "boolean"
+                ],
+                "description": "The input's JSON Schema as written, uncompiled: a $ref in it names a file of this commit's tree.",
+                "examples": [
+                  {
+                    "$ref": "./schemas/order.json"
+                  }
+                ]
+              },
+              "required": {
+                "type": "boolean",
+                "description": "Whether a run supplying no value, where the input declares no default, is refused.",
+                "examples": [
+                  true
+                ]
+              },
+              "default": {
+                "description": "The value of an input a run does not supply.",
+                "examples": [
+                  []
+                ]
+              }
+            }
+          },
+          "description": "The workflow inputs as the entry point declares them, the boundary a trigger fills. Absent where it declares none.",
+          "examples": [
+            {
+              "orders": {
+                "schema": {
+                  "$ref": "./schemas/order.json"
+                },
+                "required": true
+              },
+              "customers": {
+                "default": []
+              }
+            }
+          ]
+        },
+        "outputs": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "from"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "type": "object",
+                "required": [
+                  "step",
+                  "port"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "step": {
+                    "$ref": "#/$defs/identifier",
+                    "description": "The step the envelope is taken from.",
+                    "examples": [
+                      "archive"
+                    ]
+                  },
+                  "port": {
+                    "$ref": "#/$defs/identifier",
+                    "description": "The output port of that step.",
+                    "examples": [
+                      "out"
+                    ]
+                  }
+                },
+                "description": "The one step port the output is a view of.",
+                "examples": [
+                  {
+                    "step": "archive",
+                    "port": "out"
+                  }
+                ]
+              },
+              "schema": {
+                "type": [
+                  "object",
+                  "boolean"
+                ],
+                "description": "What the output carries, as written.",
+                "examples": [
+                  {
+                    "$ref": "./schemas/invoice.json"
+                  }
+                ]
+              },
+              "retain": {
+                "type": "object",
+                "required": [
+                  "for"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "for": {
+                    "$ref": "#/$defs/duration",
+                    "description": "How long the output's artifacts stay fetchable.",
+                    "examples": [
+                      "90d"
+                    ]
+                  },
+                  "fetches": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "After how many fetches the reference is dropped.",
+                    "examples": [
+                      1
+                    ]
+                  }
+                },
+                "description": "The output's retention in the long form, whichever form the file wrote; absent where it writes none, defaults.retain then applying.",
+                "examples": [
+                  {
+                    "for": "90d"
+                  },
+                  {
+                    "for": "24h",
+                    "fetches": 1
+                  }
+                ]
+              }
+            }
+          },
+          "description": "The workflow outputs as the entry point declares them. Absent where it declares none.",
+          "examples": [
+            {
+              "archived": {
+                "from": {
+                  "step": "archive",
+                  "port": "out"
+                },
+                "retain": {
+                  "for": "90d"
+                }
+              }
+            }
+          ]
+        },
+        "on": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schedule": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "The schedule triggers as the entry point writes them, as workflow.schema.json's $defs/scheduleTrigger describes them.",
+              "examples": [
+                [
+                  {
+                    "cron": "0 6 1 * *",
+                    "timezone": "Europe/Paris"
+                  }
+                ]
+              ]
+            },
+            "webhook": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "The webhook triggers as written, as $defs/webhookTrigger there describes them.",
+              "examples": [
+                [
+                  {
+                    "path": "/invoicing",
+                    "method": "POST",
+                    "auth": "hmac"
+                  }
+                ]
+              ]
+            },
+            "event": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "The event triggers as written, as $defs/eventTrigger there describes them.",
+              "examples": [
+                [
+                  {
+                    "type": "com.example.order.approved"
+                  }
+                ]
+              ]
+            }
+          },
+          "description": "The on block as the entry point writes it, the key spelled as the file spells it: what starts a run of this version on the default branch. Absent where it declares none.",
+          "examples": [
+            {
+              "schedule": [
+                {
+                  "cron": "0 6 1 * *",
+                  "timezone": "Europe/Paris"
+                }
+              ]
+            }
+          ]
+        },
+        "mcp": {
+          "type": "object",
+          "description": "The mcp block as the entry point writes it, as workflow.schema.json describes it: the tools this version publishes. Absent where it declares none, which serves no server, and never absent where it declares an empty tool list, which serves one carrying nothing.",
+          "examples": [
+            {
+              "name": "invoicing",
+              "description": "Issue invoices and check their status.",
+              "tools": []
+            }
+          ]
+        },
+        "vars": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "description": "The variables, the includes' merged under the entry point's by name. Absent where nothing writes any.",
+          "examples": [
+            {
+              "currency": "EUR",
+              "dunning_days": 30
+            }
+          ]
+        },
+        "secrets": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "description": "The secrets the workflow names, the includes' and the entry point's, each once, in the order they were first named; what the push checked against the pusher's secret:use and the namespace's declarations. Absent where nothing names any.",
+          "examples": [
+            [
+              "billing",
+              "ledger"
+            ]
+          ]
+        },
+        "concurrency": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "group": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The name runs queue behind.",
+              "examples": [
+                "monthly-invoicing"
+              ]
+            },
+            "cancel_in_progress": {
+              "type": "boolean",
+              "description": "Whether an arriving run cancels the one going.",
+              "examples": [
+                false
+              ]
+            }
+          },
+          "description": "The concurrency policy as the entry point writes it. Absent where it writes none.",
+          "examples": [
+            {
+              "group": "monthly-invoicing",
+              "cancel_in_progress": false
+            }
+          ]
+        },
+        "timeout": {
+          "$ref": "#/$defs/duration",
+          "description": "The bound on a whole run, as the entry point writes it, held to the namespace's max_run_duration at every pass. Absent where it writes none, the quota then bounding the run.",
+          "examples": [
+            "6h"
+          ]
+        },
+        "retain": {
+          "$ref": "#/$defs/duration",
+          "description": "The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding.",
+          "examples": [
+            "7d"
+          ]
+        },
+        "order": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "description": "Every step, hidden blocks excluded, in an order no edge points backwards through: among the steps whose edges are all satisfied, the first by name. A run is not scheduled by it; a console drawing the graph and a plan printed before a run read it, and two builds of one commit give the same.",
+          "examples": [
+            [
+              "normalize",
+              "archive",
+              "check-vat"
+            ]
+          ]
+        },
+        "steps": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "kind",
+              "idempotent"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "brick",
+                  "script",
+                  "workflow"
+                ],
+                "description": "What the step runs. brick for a brick's image, held to the ports and parameters its manifest declares; script for commands run in a base image, for which no manifest is read and nothing about the ports is inferred; workflow for a call to a sub-workflow, which runs no container of its own.",
+                "examples": [
+                  "brick",
+                  "script",
+                  "workflow"
+                ]
+              },
+              "image": {
+                "$ref": "#/$defs/imageRef",
+                "description": "The image a brick or a script step runs, by digest: an image the file named by a tag is written as the digest its tag was resolved to when the version was pushed, so that a tag moved since changes nothing a run of this version runs.",
+                "examples": [
+                  "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0"
+                ]
+              },
+              "brick": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "version"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "description": "The brick's name, as its manifest's metadata.name writes it.",
+                    "examples": [
+                      "normalize-orders",
+                      "http-request"
+                    ]
+                  },
+                  "version": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+                    "description": "The brick's release, as its manifest's metadata.version writes it: what a person reads to know which release the digest holds.",
+                    "examples": [
+                      "1.4.0",
+                      "2.0.0-rc.2"
+                    ]
+                  }
+                },
+                "description": "The brick the image carries, read off the manifest the step was held to at the push. A brick step only.",
+                "examples": [
+                  {
+                    "name": "normalize-orders",
+                    "version": "1.4.0"
+                  }
+                ]
+              },
+              "workflow": {
+                "type": "object",
+                "required": [
+                  "workflow"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "workflow": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$",
+                    "not": {
+                      "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/"
+                    },
+                    "description": "The workflow called, as <namespace>/<name>.",
+                    "examples": [
+                      "finance/vat-check"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The tag, the branch or the commit it is called at, as the step wrote it; absent where it wrote none, the called workflow's default branch then answering.",
+                    "examples": [
+                      "v1.2.0"
+                    ]
+                  }
+                },
+                "description": "The sub-workflow a workflow step calls, in the long form of the step's workflow keyword whichever form the file wrote. A workflow step only.",
+                "examples": [
+                  {
+                    "workflow": "finance/vat-check",
+                    "ref": "v1.2.0"
+                  },
+                  {
+                    "workflow": "finance/vat-check"
+                  }
+                ]
+              },
+              "needs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "step",
+                    "port",
+                    "as"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "step": {
+                      "$ref": "#/$defs/identifier",
+                      "description": "The step the envelope comes from.",
+                      "examples": [
+                        "normalize"
+                      ]
+                    },
+                    "port": {
+                      "$ref": "#/$defs/identifier",
+                      "description": "Which of that step's output ports.",
+                      "examples": [
+                        "ok",
+                        "rejected"
+                      ]
+                    },
+                    "as": {
+                      "$ref": "#/$defs/identifier",
+                      "description": "The input port it arrives on here.",
+                      "examples": [
+                        "in",
+                        "orders"
+                      ]
+                    }
+                  },
+                  "description": "One edge, in the long form whichever form the file wrote: a step alone is { step, port: out, as: in }.",
+                  "examples": [
+                    {
+                      "step": "normalize",
+                      "port": "ok",
+                      "as": "in"
+                    }
+                  ]
+                },
+                "description": "The step's inbound edges, in the order the file declares them, which is the order wait_all concatenates items in. Absent for a step fed by nothing upstream.",
+                "examples": [
+                  [
+                    {
+                      "step": "normalize",
+                      "port": "ok",
+                      "as": "in"
+                    },
+                    {
+                      "step": "normalize",
+                      "port": "rejected",
+                      "as": "in"
+                    }
+                  ]
+                ]
+              },
+              "inputs": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/identifier"
+                },
+                "description": "Input ports fed from a workflow input or an expression rather than an edge, each value as written, expressions unevaluated: a run evaluates them against what it was given.",
+                "examples": [
+                  {
+                    "orders": "${{ workflow.inputs.orders }}"
+                  }
+                ]
+              },
+              "outputs": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/identifier"
+                },
+                "description": "The output ports the step publishes: for a brick, a subset of the ports its manifest declares, which the push checked.",
+                "examples": [
+                  [
+                    "ok",
+                    "rejected"
+                  ],
+                  [
+                    "out"
+                  ]
+                ]
+              },
+              "params": {
+                "type": "object",
+                "propertyNames": {
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "description": "The parameters as written, merged by name from the blocks the step extends, outermost first, then from what the step itself writes, an included file's step of the same name before the including file's, expressions unevaluated, so that a secret a parameter reads is the expression naming it and never its value. defaults carries no params.",
+                "examples": [
+                  {
+                    "currency": "${{ vars.currency }}",
+                    "endpoint": "https://vat.example.com/v2"
+                  }
+                ]
+              },
+              "if": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The condition deciding whether the step runs, an expression unevaluated.",
+                "examples": [
+                  "${{ inputs.in.count > 0 }}"
+                ]
+              },
+              "when": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "succeeded",
+                    "failed",
+                    "skipped",
+                    "always"
+                  ]
+                },
+                "description": "The upstream states the step starts on; absent where nothing wrote it, [succeeded] then applying.",
+                "examples": [
+                  [
+                    "failed"
+                  ],
+                  [
+                    "always"
+                  ]
+                ]
+              },
+              "merge": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      "zip",
+                      "first"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "join"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "join": {
+                        "type": "object",
+                        "required": [
+                          "on"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "on": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The JSON path items are matched on.",
+                            "examples": [
+                              "$.data.customer_id"
+                            ]
+                          }
+                        },
+                        "description": "A key join.",
+                        "examples": [
+                          {
+                            "on": "$.data.customer_id"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "description": "How several edges arriving on one input port are combined, spelled as the file spells it; absent for wait_all, the default, whether written or not.",
+                "examples": [
+                  "zip",
+                  {
+                    "join": {
+                      "on": "$.data.customer_id"
+                    }
+                  }
+                ]
+              },
+              "strategy": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "fan_out": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "item",
+                          "matrix"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^batch\\([1-9][0-9]*\\)$"
+                      }
+                    ],
+                    "description": "How the step is divided into shards, spelled as the file spells it, batch(n) with its size; absent for none, the default.",
+                    "examples": [
+                      "item",
+                      "batch(50)",
+                      "matrix"
+                    ]
+                  },
+                  "max_parallel": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "How many shards run at once.",
+                    "examples": [
+                      3
+                    ]
+                  },
+                  "matrix": {
+                    "type": "object",
+                    "propertyNames": {
+                      "$ref": "#/$defs/identifier"
+                    },
+                    "minProperties": 1,
+                    "additionalProperties": {
+                      "type": "array",
+                      "minItems": 1
+                    },
+                    "description": "The matrix variables and their values, one shard per combination.",
+                    "examples": [
+                      {
+                        "region": [
+                          "fr",
+                          "be",
+                          "ch"
+                        ],
+                        "profile": [
+                          "standard",
+                          "reduced"
+                        ]
+                      }
+                    ]
+                  },
+                  "fail_fast": {
+                    "type": "boolean",
+                    "description": "Whether one failing shard stops its siblings.",
+                    "examples": [
+                      true
+                    ]
+                  }
+                },
+                "description": "How the step is split into shards, as resolution left it; absent where it is the language's default, a step that does not fan out.",
+                "examples": [
+                  {
+                    "fan_out": "matrix",
+                    "matrix": {
+                      "region": [
+                        "fr",
+                        "be",
+                        "ch"
+                      ]
+                    },
+                    "max_parallel": 3
+                  }
+                ]
+              },
+              "retry": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "max": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "How many further attempts.",
+                    "examples": [
+                      3
+                    ]
+                  },
+                  "on": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "enum": [
+                        "transient",
+                        "failed",
+                        "lost",
+                        "timeout"
+                      ]
+                    },
+                    "description": "The failures worth another attempt.",
+                    "examples": [
+                      [
+                        "transient",
+                        "lost"
+                      ]
+                    ]
+                  },
+                  "backoff": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "exponential"
+                        ],
+                        "description": "The one shape the wait takes.",
+                        "examples": [
+                          "exponential"
+                        ]
+                      },
+                      "base": {
+                        "$ref": "#/$defs/duration",
+                        "description": "The first wait.",
+                        "examples": [
+                          "2s"
+                        ]
+                      },
+                      "max": {
+                        "$ref": "#/$defs/duration",
+                        "description": "The longest wait.",
+                        "examples": [
+                          "60s"
+                        ]
+                      }
+                    },
+                    "description": "How the wait between attempts grows.",
+                    "examples": [
+                      {
+                        "type": "exponential",
+                        "base": "2s",
+                        "max": "60s"
+                      }
+                    ]
+                  }
+                },
+                "description": "The retry policy, as resolution left it; absent where nothing wrote one, a failure then being final.",
+                "examples": [
+                  {
+                    "max": 3,
+                    "on": [
+                      "transient"
+                    ],
+                    "backoff": {
+                      "type": "exponential",
+                      "base": "2s",
+                      "max": "60s"
+                    }
+                  }
+                ]
+              },
+              "timeout": {
+                "$ref": "#/$defs/duration",
+                "description": "How long one shard may run.",
+                "examples": [
+                  "2m",
+                  "10m"
+                ]
+              },
+              "retain": {
+                "$ref": "#/$defs/duration",
+                "description": "How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them.",
+                "examples": [
+                  "7d"
+                ]
+              },
+              "continue_on_error": {
+                "const": true,
+                "description": "Written where a failure here leaves the run going, and absent where it does not, the default.",
+                "examples": [
+                  true
+                ]
+              },
+              "resources": {
+                "$ref": "#/$defs/resources",
+                "description": "What the step asks of its container, before the runner policy and the namespace's quotas cap it.",
+                "examples": [
+                  {
+                    "cpu": "0.5",
+                    "memory": "256Mi"
+                  }
+                ]
+              },
+              "network": {
+                "$ref": "#/$defs/network",
+                "not": {
+                  "const": "none"
+                },
+                "description": "The network posture; absent for none, the default, whether written or not.",
+                "examples": [
+                  "egress",
+                  "internal"
+                ]
+              },
+              "egress": {
+                "type": "object",
+                "required": [
+                  "allow"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "allow": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[^\\s/:]+:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})$"
+                    },
+                    "description": "The host and port pairs the runner's proxy lets the step reach.",
+                    "examples": [
+                      [
+                        "api.billing.example.com:443"
+                      ]
+                    ]
+                  }
+                },
+                "description": "The step's egress allow list, as the workflow file writes it.",
+                "examples": [
+                  {
+                    "allow": [
+                      "api.billing.example.com:443"
+                    ]
+                  }
+                ]
+              },
+              "runs_on": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[^\\s=]+=[^\\s=]+$"
+                },
+                "description": "The runner label selectors a task of the step has to match; absent where it names none, the pool default then taking it.",
+                "examples": [
+                  [
+                    "arch=amd64",
+                    "zone=dmz"
+                  ]
+                ]
+              },
+              "secrets": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/identifier"
+                },
+                "description": "The secrets mounted into the step, by name; never a value.",
+                "examples": [
+                  [
+                    "billing"
+                  ]
+                ]
+              },
+              "cache": {
+                "const": true,
+                "description": "Written where the step is memoised, and absent where it is not, the default.",
+                "examples": [
+                  true
+                ]
+              },
+              "idempotent": {
+                "type": "boolean",
+                "description": "Whether running the step again on the same inputs is safe, which decides whether a lost task is requeued and whether the step may be cached. Always written, true where nothing wrote it, as the language's default.",
+                "examples": [
+                  true,
+                  false
+                ]
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "from"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "from": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The path or glob in the repository tree.",
+                      "examples": [
+                        "./sql/**"
+                      ]
+                    },
+                    "to": {
+                      "type": "string",
+                      "pattern": "^/",
+                      "minLength": 1,
+                      "description": "Where it is placed in the container, an absolute path.",
+                      "examples": [
+                        "/etc/ssl/certs/internal-ca.pem"
+                      ]
+                    },
+                    "mode": {
+                      "type": "string",
+                      "pattern": "^0?[0-7]{3}$",
+                      "description": "The mode it is given.",
+                      "examples": [
+                        "0444"
+                      ]
+                    }
+                  },
+                  "description": "One selector, in the long form whichever form the file wrote: a short form is { from } alone.",
+                  "examples": [
+                    {
+                      "from": "./sql/**"
+                    }
+                  ]
+                },
+                "description": "What the step receives from the repository tree, narrowed or relocated, read as the workflow file's files reads it; absent where nothing narrows it and the step gets the whole tree.",
+                "examples": [
+                  [
+                    {
+                      "from": "./sql/**"
+                    },
+                    {
+                      "from": "./certs/internal-ca.pem",
+                      "to": "/etc/ssl/certs/internal-ca.pem",
+                      "mode": "0444"
+                    }
+                  ]
+                ]
+              },
+              "script": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "The commands a script step runs, in order, which is what makes it a script step.",
+                "examples": [
+                  [
+                    "python /agk/repo/scripts/normalize.py"
+                  ]
+                ]
+              },
+              "before_script": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "The commands a script step runs before script: every layer's, merged outwards in, the defaults' first and the step's own last. A script step only, since a brick runs its own entry point and a call runs no container, whatever the defaults write.",
+                "examples": [
+                  [
+                    "apk add --no-cache jq curl"
+                  ]
+                ]
+              },
+              "after_script": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "The commands a script step runs after script, failure included, merged as before_script is. A script step only, as before_script is.",
+                "examples": [
+                  [
+                    "cp /tmp/result.json /agk/out/files/ 2>/dev/null || true"
+                  ]
+                ]
+              },
+              "shell": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "The interpreter a script step's commands are handed to, always written on one, [\"/bin/sh\", \"-e\"] where nothing named another. A script step only.",
+                "examples": [
+                  [
+                    "/bin/sh",
+                    "-e"
+                  ],
+                  [
+                    "/bin/sh",
+                    "-eu",
+                    "-o",
+                    "pipefail"
+                  ]
+                ]
+              },
+              "extends": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "pattern": "^\\.[A-Za-z0-9][A-Za-z0-9_-]*$"
+                },
+                "description": "The hidden blocks the step inherits from, the one it names first and each block that one extends after it, so that a run detail can say where a setting came from. Absent for a step extending nothing.",
+                "examples": [
+                  [
+                    ".api-brick"
+                  ],
+                  [
+                    ".vat-check",
+                    ".billing-api"
+                  ]
+                ]
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "brick"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "image",
+                    "brick"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "workflow"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "script"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "before_script"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "after_script"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "shell"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "script"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "image",
+                    "script",
+                    "shell"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "workflow"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "brick"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "workflow"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "workflow"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "image"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "brick"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "script"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "before_script"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "after_script"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "shell"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "One step with every keyword resolved, includes, extends, defaults and the step's own values applied in the order the language fixes. A keyword is absent where resolution leaves the language's default and written otherwise, save idempotent and, on a script step, shell, which are always written. A step carries an image or a call and never both, and before_script, after_script and shell only where it runs a script: a brick runs its own entry point and a call runs no container, whatever the defaults write.",
+            "examples": [
+              {
+                "kind": "brick",
+                "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+                "brick": {
+                  "name": "normalize-orders",
+                  "version": "1.4.0"
+                },
+                "inputs": {
+                  "orders": "${{ workflow.inputs.orders }}"
+                },
+                "outputs": [
+                  "ok",
+                  "rejected"
+                ],
+                "params": {
+                  "currency": "${{ vars.currency }}"
+                },
+                "timeout": "2m",
+                "retry": {
+                  "max": 3,
+                  "on": [
+                    "transient"
+                  ]
+                },
+                "network": "egress",
+                "egress": {
+                  "allow": [
+                    "api.billing.example.com:443"
+                  ]
+                },
+                "resources": {
+                  "cpu": "0.5",
+                  "memory": "256Mi"
+                },
+                "idempotent": true,
+                "extends": [
+                  ".api-brick"
+                ]
+              },
+              {
+                "kind": "script",
+                "image": "alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704",
+                "needs": [
+                  {
+                    "step": "normalize",
+                    "port": "ok",
+                    "as": "in"
+                  }
+                ],
+                "outputs": [
+                  "out"
+                ],
+                "retain": "7d",
+                "files": [
+                  {
+                    "from": "./sql/**"
+                  },
+                  {
+                    "from": "./certs/internal-ca.pem",
+                    "to": "/etc/ssl/certs/internal-ca.pem",
+                    "mode": "0444"
+                  }
+                ],
+                "before_script": [
+                  "echo \"$AGK_STEP attempt $AGK_ATTEMPT\" >&2"
+                ],
+                "script": [
+                  "agk items > /tmp/rows.json",
+                  "agk emit out --from /tmp/rows.json"
+                ],
+                "shell": [
+                  "/bin/sh",
+                  "-e"
+                ],
+                "idempotent": true
+              },
+              {
+                "kind": "workflow",
+                "workflow": {
+                  "workflow": "finance/vat-check",
+                  "ref": "v1.2.0"
+                },
+                "needs": [
+                  {
+                    "step": "normalize",
+                    "port": "ok",
+                    "as": "in"
+                  }
+                ],
+                "outputs": [
+                  "out"
+                ],
+                "idempotent": true
+              }
+            ]
+          },
+          "description": "The steps, resolved, by name. Hidden blocks are not steps and are not here: what they carried is in the steps extending them, which name them in extends.",
+          "examples": [
+            {
+              "normalize": {
+                "kind": "brick",
+                "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+                "brick": {
+                  "name": "normalize-orders",
+                  "version": "1.4.0"
+                },
+                "inputs": {
+                  "orders": "${{ workflow.inputs.orders }}"
+                },
+                "outputs": [
+                  "ok",
+                  "rejected"
+                ],
+                "params": {
+                  "currency": "${{ vars.currency }}"
+                },
+                "timeout": "2m",
+                "retry": {
+                  "max": 3,
+                  "on": [
+                    "transient"
+                  ]
+                },
+                "network": "egress",
+                "egress": {
+                  "allow": [
+                    "api.billing.example.com:443"
+                  ]
+                },
+                "resources": {
+                  "cpu": "0.5",
+                  "memory": "256Mi"
+                },
+                "idempotent": true,
+                "extends": [
+                  ".api-brick"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "workflow": "monthly-invoicing",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "includes": [
+            {
+              "path": "common-bricks.yaml"
+            },
+            {
+              "workflow": "finance/common",
+              "ref": "v2.1.0",
+              "commit": "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"
+            }
+          ],
+          "inputs": {
+            "orders": {
+              "schema": {
+                "$ref": "./schemas/order.json"
+              },
+              "required": true
+            }
+          },
+          "outputs": {
+            "archived": {
+              "from": {
+                "step": "archive",
+                "port": "out"
+              },
+              "retain": {
+                "for": "90d"
+              }
+            }
+          },
+          "on": {
+            "schedule": [
+              {
+                "cron": "0 6 1 * *",
+                "timezone": "Europe/Paris"
+              }
+            ]
+          },
+          "vars": {
+            "currency": "EUR"
+          },
+          "secrets": [
+            "billing"
+          ],
+          "concurrency": {
+            "group": "monthly-invoicing",
+            "cancel_in_progress": false
+          },
+          "timeout": "6h",
+          "retain": "7d",
+          "order": [
+            "normalize",
+            "archive",
+            "check-vat"
+          ],
+          "steps": {
+            "normalize": {
+              "kind": "brick",
+              "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+              "brick": {
+                "name": "normalize-orders",
+                "version": "1.4.0"
+              },
+              "inputs": {
+                "orders": "${{ workflow.inputs.orders }}"
+              },
+              "outputs": [
+                "ok",
+                "rejected"
+              ],
+              "params": {
+                "currency": "${{ vars.currency }}"
+              },
+              "timeout": "2m",
+              "retry": {
+                "max": 3,
+                "on": [
+                  "transient"
+                ]
+              },
+              "network": "egress",
+              "egress": {
+                "allow": [
+                  "api.billing.example.com:443"
+                ]
+              },
+              "resources": {
+                "cpu": "0.5",
+                "memory": "256Mi"
+              },
+              "idempotent": true,
+              "extends": [
+                ".api-brick"
+              ]
+            },
+            "archive": {
+              "kind": "script",
+              "image": "alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704",
+              "needs": [
+                {
+                  "step": "normalize",
+                  "port": "ok",
+                  "as": "in"
+                }
+              ],
+              "outputs": [
+                "out"
+              ],
+              "retain": "7d",
+              "files": [
+                {
+                  "from": "./sql/**"
+                },
+                {
+                  "from": "./certs/internal-ca.pem",
+                  "to": "/etc/ssl/certs/internal-ca.pem",
+                  "mode": "0444"
+                }
+              ],
+              "before_script": [
+                "echo \"$AGK_STEP attempt $AGK_ATTEMPT\" >&2"
+              ],
+              "script": [
+                "agk items > /tmp/rows.json",
+                "agk emit out --from /tmp/rows.json"
+              ],
+              "shell": [
+                "/bin/sh",
+                "-e"
+              ],
+              "idempotent": true
+            },
+            "check-vat": {
+              "kind": "workflow",
+              "workflow": {
+                "workflow": "finance/vat-check",
+                "ref": "v1.2.0"
+              },
+              "needs": [
+                {
+                  "step": "normalize",
+                  "port": "ok",
+                  "as": "in"
+                }
+              ],
+              "outputs": [
+                "out"
+              ],
+              "idempotent": true
+            }
+          }
         }
       ]
     }

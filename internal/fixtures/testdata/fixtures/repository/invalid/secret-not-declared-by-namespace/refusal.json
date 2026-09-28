@@ -1,0 +1,6 @@
+{
+  "rule": "secret-not-declared-by-namespace",
+  "file": "agentiik.yaml",
+  "line": 12,
+  "column": 24
+}

@@ -3,6 +3,7 @@
   "description": "What each fixture pins. A fixture under valid/ must be accepted by the schema named beside it. A fixture under invalid/ must be refused; refused_by says by what. schema means the JSON Schema document alone refuses it, and a consumer can assert that with a validator and nothing else. validator means the documentation states the rule but JSON Schema cannot express it, because it needs the graph, the brick manifest, the included file or the expression language; those fixtures are schema valid on purpose and are refused by the workflow validator instead.",
   "schemas": {
     "workflow": "../workflow.schema.json",
+    "fragment": "../workflow.schema.json",
     "brick": "../brick.schema.json",
     "envelope": "../envelope.schema.json",
     "task-message": "../wire.schema.json",
@@ -24,13 +25,17 @@
     "permission": "../wire.schema.json",
     "namespace-record": "../wire.schema.json",
     "auth-policy": "../wire.schema.json",
-    "notification": "../wire.schema.json"
+    "notification": "../wire.schema.json",
+    "repository": "../wire.schema.json",
+    "ref": "../wire.schema.json",
+    "version": "../wire.schema.json",
+    "resolved-graph": "../wire.schema.json"
   },
   "notes": [
     "Read the fixtures with a YAML 1.2 parser. The trigger block is spelled on:, as the documentation spells it, and a YAML 1.1 parser reads that bare key as the boolean true. A loader that does so will fail every fixture carrying a trigger, and will do the same to the workflows people write.",
     "Digests are written out in full. The documentation elides them in the middle, as 9f2c1d...b7e0, which is a typographic elision and not a value; the fixtures keep the first and last characters and fill the rest so that each one is a well formed sha256.",
     "A fixture carrying a manifest key is checked against a brick manifest that lives elsewhere in this corpus. The rule it pins is about the two documents together, so neither file alone shows it.",
-    "A fixture carrying a role key is not an entry point. mcp-in-included-file.yaml is the included file itself, which is where the rule it pins can be seen at all.",
+    "An included file is a fragment and never an entry point, so the fragment group holds its fixtures to workflow.schema.json#/$defs/fragment rather than to the document's root, which is for the entry point and would refuse every one of them for lacking apiVersion. mcp-in-included-file.yaml is among them: the definition refuses mcp, as it refuses every key that makes a document an entry point.",
     "The wire is one document holding several messages, because they share a vocabulary and a $ref may not leave a document here. A group therefore names the document and the member inside it that its fixtures pin, so a fixture still pins one message rather than something the wire allows somewhere.",
     "A valid fixture is taken from the documentation's own printed message wherever the documentation prints one. The wire's first version was built from its own examples instead and refused the page's task message in four places, which is the failure this fixture exists to make impossible."
   ],
@@ -50,6 +55,11 @@
           "file": "workflow/valid/script-steps.yaml",
           "covers": "script, before_script, after_script, shell, files",
           "source": "https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick"
+        },
+        {
+          "file": "workflow/valid/files-globs.yaml",
+          "covers": "files: a directory, ** and * in a glob, a glob relocated into a directory with a mode, a file relocated to a path of its own",
+          "source": "https://agentiik.github.io/docs/#step-keywords"
         },
         {
           "file": "workflow/valid/mcp-server.yaml",
@@ -420,13 +430,6 @@
           "reference": "https://agentiik.github.io/docs/#publishing-tools"
         },
         {
-          "file": "workflow/invalid/mcp-in-included-file.yaml",
-          "rule": "An mcp block in an included file. Reuse applies to steps and defaults; the published surface is declared by the workflow that publishes it, so that reading one file tells you everything that workflow exposes. This fixture is the included file itself, named by an entry point as include: [{ path: ./common-bricks.yaml }].",
-          "refused_by": "validator",
-          "reference": "https://agentiik.github.io/docs/#publishing-tools",
-          "role": "include target, not an entry point"
-        },
-        {
           "file": "workflow/invalid/expression-unknown-root.yaml",
           "rule": "An expression reading a context root that is not exposed. The roots are workflow, run, trigger, event, vars, inputs, steps, item, matrix and secrets.",
           "refused_by": "validator",
@@ -443,6 +446,87 @@
           "rule": "A condition reading a secret. secrets is exposed to params and to secrets and nowhere else, and a secret is never reachable from a condition.",
           "refused_by": "validator",
           "reference": "https://agentiik.github.io/docs/#exposed-context"
+        },
+        {
+          "file": "workflow/invalid/files-to-relative.yaml",
+          "rule": "A file relocated to a relative path. Inside a container there is no directory a relative path could be relative to, the runner refuses one, and the task message holds that field to the same absolute grammar.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        }
+      ]
+    },
+    "fragment": {
+      "valid": [
+        {
+          "file": "fragment/valid/common-bricks.yaml",
+          "covers": "hidden blocks at the root of an included file, a matrix in a block",
+          "source": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/valid/every-key.yaml",
+          "covers": "include, vars, secrets, defaults, steps with a hidden block and a step among them, a hidden block at the root; the root agentiik.yaml of a library repository a workflow include reads"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "fragment/invalid/api-version-in-included-file.yaml",
+          "rule": "apiVersion in an included file. An included file is a fragment, not an entry point: it has no apiVersion, no kind and no metadata.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/invalid/kind-in-included-file.yaml",
+          "rule": "kind in an included file. An included file is a fragment, not an entry point: it has no apiVersion, no kind and no metadata.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/invalid/metadata-in-included-file.yaml",
+          "rule": "metadata in an included file. An included file is a fragment, not an entry point: the name and the namespace are the including workflow's, and a fragment has no metadata.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/invalid/inputs-in-included-file.yaml",
+          "rule": "inputs in an included file. What a workflow is given is its boundary, declared by the workflow itself, so that reading one file tells you what that workflow is.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/invalid/outputs-in-included-file.yaml",
+          "rule": "outputs in an included file. What a workflow returns is its boundary, declared by the workflow itself, so that reading one file tells you what that workflow is.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/invalid/on-in-included-file.yaml",
+          "rule": "on in an included file. What starts a workflow is its boundary, declared by the workflow itself, so that reading one file tells you what that workflow is.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/invalid/mcp-in-included-file.yaml",
+          "rule": "An mcp block in an included file. Reuse applies to steps and defaults; the published surface is declared by the workflow that publishes it, so that reading one file tells you everything that workflow exposes. This fixture is the included file itself, named by an entry point as include: [{ path: ./common-bricks.yaml }].",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "fragment/invalid/concurrency-in-included-file.yaml",
+          "rule": "concurrency in an included file. How runs of a workflow queue behind one another is the workflow's own, declared where the workflow is, so that reading one file tells you what that workflow is.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/invalid/timeout-in-included-file.yaml",
+          "rule": "timeout at the root of an included file. The bound on a whole run is the workflow's own, declared where the workflow is; a step's timeout belongs in defaults or on the step.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "fragment/invalid/unknown-key-in-included-file.yaml",
+          "rule": "A key an included file does not define. An included file is closed like every block the language owns, so a misspelling is refused rather than quietly doing nothing.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
         }
       ]
     },
@@ -1428,6 +1512,834 @@
           "reference": "https://agentiik.github.io/docs/#auth"
         }
       ]
+    },
+    "repository": {
+      "valid": [
+        {
+          "file": "wire/valid/repository-created.json",
+          "covers": "a repository created from v0.4.0: protected, its default branch pushed to, labels read from its entry point"
+        },
+        {
+          "file": "wire/valid/repository-from-v0-3.json",
+          "covers": "a workflow from before v0.4.0: unprotected, its default branch unborn until a git push fills it"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/repository-head-abbreviated.json",
+          "rule": "A head written as an abbreviation. A commit is written whole, since an abbreviation is a name another commit can come to share.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#api"
+        },
+        {
+          "file": "wire/invalid/repository-default-branch-with-a-space.json",
+          "rule": "A default branch git would refuse as a ref name.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#the-workflow-repository"
+        },
+        {
+          "file": "wire/invalid/repository-without-protection.json",
+          "rule": "A repository that does not say whether its default branch is protected, which decides who may move it.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#the-workflow-repository"
+        }
+      ]
+    },
+    "ref": {
+      "valid": [
+        {
+          "file": "wire/valid/ref-default-branch.json",
+          "covers": "a protected default branch and who last moved it"
+        },
+        {
+          "file": "wire/valid/ref-tag.json",
+          "covers": "a tag, peeled to its commit, moved by a service account"
+        },
+        {
+          "file": "wire/valid/ref-unborn.json",
+          "covers": "the unborn default branch of a repository nothing was pushed to"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/ref-unborn-moved.json",
+          "rule": "An unborn branch naming who moved it. Nobody has moved a branch that points at no commit.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/ref-short-name.json",
+          "rule": "A ref named without refs/heads/ or refs/tags/, which leaves a branch and a tag of one name indistinguishable.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/ref-remote-tracking.json",
+          "rule": "A remote-tracking ref. A workflow repository holds branches and tags alone.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        }
+      ]
+    },
+    "version": {
+      "valid": [
+        {
+          "file": "wire/valid/version-git.json",
+          "covers": "a commit a git push carried, with its parent and its pusher"
+        },
+        {
+          "file": "wire/valid/version-tree.json",
+          "covers": "a version agk push sent as a tree before v0.4.0, by the bootstrap token, with no parent named"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/version-source-unknown.json",
+          "rule": "A version arriving by neither git nor a tree push.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/version-without-author.json",
+          "rule": "A version naming nobody who pushed it. The pusher answers for what it names, secrets included.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        }
+      ]
+    },
+    "resolved-graph": {
+      "valid": [
+        {
+          "file": "wire/valid/resolved-graph-monthly-invoicing.json",
+          "covers": "the documentation's local run as its version resolves it: a path and a workflow include, a fan-out, two edges on one port, a script step, an extended block, outputs with retention, a schedule"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/resolved-graph-image-by-tag.json",
+          "rule": "An image by tag. A version names every image by the digest its tag was resolved to at the push, so that a tag moved since changes nothing a run runs.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/resolved-graph-image-and-call.json",
+          "rule": "A step running an image and calling a sub-workflow. A step carries an image or a call and never both.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/resolved-graph-brick-without-manifest.json",
+          "rule": "A brick step naming no brick. A brick step is held to its manifest at the push, and the graph says which release that was.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/resolved-graph-include-without-commit.json",
+          "rule": "A workflow include without the commit its ref resolved to. A run records it, so that another repository moving a tag changes nothing the version does.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/resolved-graph-relocation-relative.json",
+          "rule": "A file relocated to a relative path, which the runner refuses.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/resolved-graph-script-keywords-on-a-brick.json",
+          "rule": "A brick step carrying before_script and shell. A brick runs its own entry point, so the script keywords a defaults block writes reach a script step alone.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#storage"
+        }
+      ]
     }
+  },
+  "repositories": {
+    "description": "The repository kind. Each case is one push of a workflow repository, judged as the pre-receive hook judges the commit at a pushed tip, and it pins either the graph that commit resolves to or the one refusal it meets. A case is a directory rather than a document, because what it pins is about several documents together: the entry point and the files it includes, the repositories a workflow include reads, and what the hook reads from the installation, which the case holds as stand-ins. A case under valid/ carries expected.json and one under invalid/ refusal.json, never both. agk validate and agk push make the same checks where they reach the stores the hook reads, and a case says nothing of what they do where they do not. An invalid case says what else refuses the file its refusal is about, as the other groups say it of a document: schema where the file's own schema, the workflow's or the fragment's, refuses it too, and validator where only the hook can, a rule about the graph, the tree or the installation; every other YAML file of a case is one its schema accepts.",
+    "layout": {
+      "tree/": "The files of the pushed commit's tree, as they would be committed, each with mode 100644: the entry point at tree/agentiik.yaml where the case has one, the files it includes, and whatever else the commit carries. A YAML file there is an entry point where it is named agentiik.yaml or agentiik.yml, and a fragment otherwise. No name in a case begins with a dot or an underscore, which go:embed leaves out of an embedded tree.",
+      "tree.json": "Present where the tree holds entries that cannot be files here, listed as formats.tree describes them. The tree pushed is tree/ with them added.",
+      "case.json": "The repository and the commit pushed, and the stand-ins for the installation: the namespace's pins, brick manifests and secret declarations, the versions already recorded and the other repositories an include reads, as formats.case describes them.",
+      "manifests/": "The brick manifests the namespace's store holds, each a document valid against brick.schema.json and named by case.json's manifests.",
+      "repositories/": "The trees of the other repositories a workflow include reads, one directory per commit, named by case.json's repositories.",
+      "expected.json": "A valid case's resolved graph, valid against wire.schema.json#/$defs/resolvedGraph: what the hook records for the pushed commit, and what the API answers for it.",
+      "refusal.json": "An invalid case's refusal, as formats.refusal describes it."
+    },
+    "formats": {
+      "case": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Case",
+        "description": "What the hook is told beside the pushed tree: which repository and which commit the push is for, and what it reads from the installation. Each of the last is a stand-in for a store the installation keeps per namespace, holding exactly what the case needs and nothing a real store would add, so that a consumer builds the store from it and nothing else.",
+        "type": "object",
+        "required": [
+          "namespace",
+          "repository",
+          "commit",
+          "pins",
+          "manifests",
+          "secrets"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "namespace": {
+            "description": "The namespace the repository belongs to: what metadata.namespace has to equal where the file writes it, and whose pins, manifests and secret declarations the hook reads.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "maxLength": 255,
+            "examples": [
+              "finance"
+            ]
+          },
+          "repository": {
+            "description": "The name of the repository pushed to, which metadata.name has to equal: the name is the identity runs, grants and the git remote are addressed by, and the repository already holds one.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "maxLength": 255,
+            "examples": [
+              "monthly-invoicing"
+            ]
+          },
+          "commit": {
+            "description": "The commit at the pushed tip, whole, whose tree is tree/ with the entries of tree.json: the commit expected.json records. It is a label rather than the hash git computes from the tree, so a consumer pushing the tree with git maps the commit it gets onto this one, and so for the commits of other repositories.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$",
+            "examples": [
+              "ff18b1a50d46b1842803ffe988e0f30b7dcbb90a"
+            ]
+          },
+          "versions": {
+            "description": "Commits of this repository already recorded as versions. A push of one of them is answered as the version it is, whatever its tree holds, an entry point below the root among them, and is not judged again by a rule added after it was stored. The version is rebuilt from tree/ and the stand-ins of this case, so a stored case names every image by digest and needs neither a pin nor a manifest from them. Absent where the repository holds none.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "examples": [
+              [
+                "8fcd28921cc5b13a2adc584843d5a0d2d7ae4de6"
+              ]
+            ]
+          },
+          "pins": {
+            "description": "The namespace's image pins: each reference a step may name an image by that is not a digest, mapped to the reference by digest it was pinned to, of that reference's own repository. The hook reaches no registry, so a step naming a reference no pin holds is refused, and a step naming a digest needs none.",
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[^\\s@]+$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+            },
+            "examples": [
+              {
+                "ghcr.io/acme/agk-fetch-orders:1.2.0": "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f"
+              }
+            ]
+          },
+          "manifests": {
+            "description": "The namespace's brick manifests: each image by digest mapped to the file under manifests/ holding the manifest recorded for it, valid against brick.schema.json. A brick step is held to the manifest of its image once pinned; a script step reads none.",
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^manifests/[^/]+\\.yaml$"
+            },
+            "examples": [
+              {
+                "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f": "manifests/fetch-orders.yaml"
+              }
+            ]
+          },
+          "secrets": {
+            "description": "The names of the secrets the namespace declares, without where they live, which the hook does not read. Every secret the workflow names has to be among them.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+              "maxLength": 255
+            },
+            "examples": [
+              [
+                "billing_api",
+                "ledger"
+              ],
+              []
+            ]
+          },
+          "repositories": {
+            "description": "The other repositories a workflow include reads, by <namespace>/<name>, each with its refs and the tree at every commit they name. Absent where the tree includes none.",
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "refs",
+                "trees"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "refs": {
+                  "description": "The repository's branches and tags, each written in full and mapped to the commit it points at, a tag peeled to its commit. An include's ref is read as a tag of that name, or as a commit a tree below is given for.",
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^refs/(?:heads|tags)/\\S+$"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{40}$"
+                  },
+                  "examples": [
+                    {
+                      "refs/heads/main": "eddc6d478b40475c1eac8d65d35a12501e775a70",
+                      "refs/tags/v2.1.0": "c7972389ef8c63fa88ce6c3893d8c75ba8bbb7b3"
+                    }
+                  ]
+                },
+                "trees": {
+                  "description": "The tree of each commit a ref names, as the directory under repositories/ holding its files, the root agentiik.yaml among them.",
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[0-9a-f]{40}$"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^repositories/[^\\s]+$"
+                  },
+                  "examples": [
+                    {
+                      "c7972389ef8c63fa88ce6c3893d8c75ba8bbb7b3": "repositories/finance/common-v2.1.0"
+                    }
+                  ]
+                }
+              }
+            },
+            "examples": [
+              {
+                "finance/common": {
+                  "refs": {
+                    "refs/tags/v2.1.0": "c7972389ef8c63fa88ce6c3893d8c75ba8bbb7b3"
+                  },
+                  "trees": {
+                    "c7972389ef8c63fa88ce6c3893d8c75ba8bbb7b3": "repositories/finance/common-v2.1.0"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "namespace": "finance",
+            "repository": "monthly-invoicing",
+            "commit": "ff18b1a50d46b1842803ffe988e0f30b7dcbb90a",
+            "pins": {
+              "ghcr.io/acme/agk-fetch-orders:1.2.0": "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f"
+            },
+            "manifests": {
+              "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f": "manifests/fetch-orders.yaml"
+            },
+            "secrets": [
+              "billing_api",
+              "ledger"
+            ]
+          }
+        ]
+      },
+      "tree": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Tree listing",
+        "description": "The entries of the pushed tree that cannot be files of tree/, each with the mode git records for it: an executable file, which tree/ does not hold so that every file there is 100644, and a symbolic link, a submodule and a name that is not UTF-8, which are what the hook refuses and none of which survives being committed here: git commits a link as a link, which a checkout without symbolic links writes as a plain file and go:embed refuses to embed; a submodule would make this repository depend on another; and a name that is not UTF-8 cannot be created on a filesystem that holds names to UTF-8, macOS's among them, nor carried by a Go module. The tree a case pushes is tree/ with these entries added, and no entry names a path tree/ already holds.",
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "path",
+            "mode"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "The entry's path from the root of the tree, as bytes: a printable ASCII character other than % as itself, and any other byte as % and two uppercase hexadecimal digits, never a byte that has a character of its own, / among them, and never a null byte, which no name holds. A JSON document carries UTF-8 text alone, and a name that is not UTF-8 is what the listing is for. scripts/caf%E9.py is café.py written in Latin-1.",
+              "type": "string",
+              "pattern": "^(?:[\\x20-\\x24\\x26-\\x7e]|%(?:0[1-9A-F]|1[0-9A-F]|25|7F|[89A-F][0-9A-F]))+$",
+              "examples": [
+                "scripts/normalize.py",
+                "scripts/caf%E9.py"
+              ]
+            },
+            "mode": {
+              "description": "The mode git records for the entry: 100644 a file, 100755 an executable file, 120000 a symbolic link, 160000 a submodule.",
+              "enum": [
+                "100644",
+                "100755",
+                "120000",
+                "160000"
+              ],
+              "examples": [
+                "120000",
+                "160000"
+              ]
+            },
+            "target": {
+              "description": "What a symbolic link points to, the bytes git stores as its blob, written as path is. A link alone carries it.",
+              "type": "string",
+              "pattern": "^(?:[\\x20-\\x24\\x26-\\x7e]|%(?:0[1-9A-F]|1[0-9A-F]|25|7F|[89A-F][0-9A-F]))+$",
+              "examples": [
+                "normalize-v2.py"
+              ]
+            },
+            "commit": {
+              "description": "The commit a submodule records, whole. A submodule alone carries it.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$",
+              "examples": [
+                "c9d208d473dd28c07fb0ca270159d3acf6c88d01"
+              ]
+            },
+            "content": {
+              "description": "A file's content, as UTF-8 text. A file alone carries it.",
+              "type": "string",
+              "examples": [
+                "print(\"ok\")\n"
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "mode": {
+                    "const": "120000"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "target"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "commit"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "content"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "mode": {
+                    "const": "160000"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "commit"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "target"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "content"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "mode": {
+                    "enum": [
+                      "100644",
+                      "100755"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "content"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "target"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "commit"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "examples": [
+          [
+            {
+              "path": "scripts/normalize.py",
+              "mode": "120000",
+              "target": "../../shared/normalize.py"
+            }
+          ],
+          [
+            {
+              "path": "vendor/rounding",
+              "mode": "160000",
+              "commit": "c9d208d473dd28c07fb0ca270159d3acf6c88d01"
+            }
+          ],
+          [
+            {
+              "path": "scripts/caf%E9.py",
+              "mode": "100644",
+              "content": "print(\"ok\")\n"
+            }
+          ]
+        ]
+      },
+      "refusal": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Refusal",
+        "description": "What the hook refuses an invalid case by: one rule, and where. The hook writes it on git's error stream as file:line:column: message (rule), or as file: message (rule) where it names no place in the file, and the ref stays where it was. The message is the engine's to word and is not pinned here.",
+        "type": "object",
+        "required": [
+          "rule",
+          "file"
+        ],
+        "additionalProperties": false,
+        "dependentRequired": {
+          "line": [
+            "column"
+          ],
+          "column": [
+            "line"
+          ]
+        },
+        "properties": {
+          "rule": {
+            "description": "The rule, spelled as graph.Rule values are: the name the fixture corpus files a fixture under, where it has one. The hook refuses by more rules than package graph names today, the tree's and the installation's among them.",
+            "oneOf": [
+              {
+                "const": "include-leaves-tree",
+                "description": "A path include naming a file outside the repository tree. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "include-missing",
+                "description": "A path include naming a file the commit does not hold. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "include-cycle",
+                "description": "An include coming back to a file that is still being resolved. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "api-version-in-included-file",
+                "description": "An included file carrying apiVersion, which makes a document an entry point; spelled after the fragment group's fixture, as the engine's mcp-in-included-file is. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "inputs-in-included-file",
+                "description": "An included file declaring inputs, which are the workflow's own boundary; spelled after the fragment group's fixture, as the engine's mcp-in-included-file is. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "cycle-in-graph",
+                "description": "A cycle among the steps. The engine's package graph names it today."
+              },
+              {
+                "const": "edge-port-not-declared",
+                "description": "An edge, or a workflow output, taking a port its step does not publish. The engine's package graph names it today."
+              },
+              {
+                "const": "step-output-not-in-manifest",
+                "description": "A brick step declaring an output port its manifest does not carry. The engine's package graph names it today."
+              },
+              {
+                "const": "manifest-missing",
+                "description": "A brick step whose image has no manifest the hook can read: for the hook, none recorded in the namespace's store under the image's digest. The engine's package graph names it today."
+              },
+              {
+                "const": "port-name-251-characters",
+                "description": "A port past 250 characters, in the entry point, a file it includes or a brick manifest: a port a step publishes or is fed on, either end of an edge, the port a workflow output is taken from, a published tool's output; spelled after the workflow group's fixture that pins the same bound. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "workflow-output-251-characters",
+                "description": "A workflow output past 250 characters; spelled after the workflow group's fixture that pins the same bound. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "secret-not-declared-by-namespace",
+                "description": "A secret the workflow names, in its secrets block or an included file's, that its namespace does not declare. The engine's secret-not-declared is another rule: a step mounting a secret the secrets block does not name. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "metadata-name-not-repository",
+                "description": "A metadata.name other than the name of the repository pushed to. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "metadata-namespace-not-repository",
+                "description": "A metadata.namespace, where the file writes one, other than the namespace the repository belongs to. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "entry-point-missing",
+                "description": "A tree holding no agentiik.yaml, at its root or anywhere else. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "entry-point-below-root",
+                "description": "A tree holding no agentiik.yaml at its root and at least one below it; the refusal names the one whose path comes first in byte order. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "symlink-in-tree",
+                "description": "A symbolic link in the tree. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "submodule-in-tree",
+                "description": "A submodule in the tree. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "name-not-utf-8",
+                "description": "A name in the tree that is not UTF-8. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              },
+              {
+                "const": "image-not-pinned",
+                "description": "A step naming an image by a tag the namespace's store holds no pin for. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+              }
+            ],
+            "examples": [
+              "include-cycle",
+              "cycle-in-graph"
+            ]
+          },
+          "file": {
+            "description": "The path from the root of the tree of the file the refusal is about, or of the entry of the tree it is about, written as tree.json writes a path, which the hook writes as the bytes it stands for; for a tree without an entry point, agentiik.yaml, the file that is not there, and for one whose entry point is below the root, the file found there.",
+            "type": "string",
+            "pattern": "^(?:[\\x20-\\x24\\x26-\\x7e]|%(?:0[1-9A-F]|1[0-9A-F]|25|7F|[89A-F][0-9A-F]))+$",
+            "examples": [
+              "agentiik.yaml",
+              "fragments/second.yaml",
+              "scripts/caf%E9.py"
+            ]
+          },
+          "line": {
+            "description": "The line the refused node begins on, counted from 1, as a YAML 1.2 parser counts it: the value where the value is refused, a path an include names, a port, a name or an image; the key where writing the key at all is refused, apiVersion in an included file; and the key where the name refused is a key, a workflow output's. Absent where the refusal is about the file as a whole, an entry of the tree or something no one place in the file holds, a cycle.",
+            "type": "integer",
+            "minimum": 1,
+            "examples": [
+              12
+            ]
+          },
+          "column": {
+            "description": "The column that node begins at on its line, counted from 1 in characters. Written with line and only with it.",
+            "type": "integer",
+            "minimum": 1,
+            "examples": [
+              11
+            ]
+          }
+        },
+        "examples": [
+          {
+            "rule": "include-cycle",
+            "file": "fragments/second.yaml",
+            "line": 2,
+            "column": 11
+          },
+          {
+            "rule": "entry-point-missing",
+            "file": "agentiik.yaml"
+          }
+        ]
+      }
+    },
+    "notes": [
+      "Permissions are not part of a case. The pusher holds whatever the push needs, workflow:write, secret:use on every secret the tree names and workflow:read on every repository a workflow include reads; which of them a push needs follows from the tree, and a refusal for one missing is the API's to pin.",
+      "A case holds one fault, so that it pins one refusal: everything else in it is what a valid case holds, a pin for every image a step names by a tag, a manifest for every image a brick step runs, and a declaration for every secret the workflow names.",
+      "Rules are spelled as graph.Rule values are, the corpus's own name for the fixture pinning a rule where there is one. cycle-in-graph, edge-port-not-declared, step-output-not-in-manifest and manifest-missing are graph.Rule values today; the other names in formats.refusal are named here first, for the hook to refuse by, since it refuses by more rules than package graph names: the tree's, the installation's, the includes' and the bounds'.",
+      "The keys an included file may not carry are refused one rule each, as the fragment group files one fixture each and the engine already spells mcp-in-included-file: kind-in-included-file, metadata-in-included-file, outputs-in-included-file, on-in-included-file, concurrency-in-included-file and timeout-in-included-file, beside the two cases here. A rule joins formats.refusal with the first case that pins it.",
+      "The line and column of a refusal are checked to be where a node of the file begins, so that a position that no longer lands on a node after the file was edited fails the build rather than a consumer's test; one that lands on another node is the consumer's to catch.",
+      "A library repository, whose root agentiik.yaml is a fragment and whose tips are versions with no graph, has no case yet: expected.json is a resolved graph, and a push resolving to none needs a shape of its own, which the includes-across-repositories work settles."
+    ],
+    "valid": [
+      {
+        "case": "repository/valid/include-order",
+        "covers": "includes applied in declaration order, each over the one before it and all of them under the entry point; what a file includes applied before the file itself; a file two others include applied once, where it is first reached, whether named beside the file naming it or from the root; a hidden block of one name replaced whole by a later file's; vars merged by name, defaults keyword by keyword; every file's secrets, each once, in the order first named",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/valid/extends-depth-first",
+        "covers": "extends followed depth first, from a block in the entry point to one in an included file, and applied from the outermost block in; defaults above every block and below the step's own values; each keyword replaced whole by the next layer that writes it, resources and retry among them, and params merged by name",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/valid/scripts-outwards-in",
+        "covers": "before_script and after_script merged outwards in: the defaults' commands first, then each block's from the outermost, then the step's own; the entry point's defaults.before_script replacing the included file's, as any keyword of defaults does; a brick step under the same defaults carrying none of the script keywords; shell as the step writes it",
+        "reference": "https://agentiik.github.io/docs/#step-keywords"
+      },
+      {
+        "case": "repository/valid/hidden-step-never-executed",
+        "covers": "a step named with a leading dot is a hidden block: out of steps and order, never executed, and never held to the namespace's pins and manifests; a chain of extends from a step through a hidden step to a hidden block at the root",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/valid/fragment-step-over-defaults",
+        "covers": "a step written in an included file keeps its own values above defaults, its file's and the entry point's alike, and the entry point overrides it keyword by keyword, a keyword it does not write left as the included file wrote it; params merged by name across the two files",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/valid/workflow-include-at-a-tag",
+        "covers": "a workflow include read at the commit its tag resolves to, and not where a branch has moved since: the other repository's root agentiik.yaml read as a fragment, its own path includes resolved inside that repository at that commit, and the include recorded with the commit",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/valid/stored-commit-not-judged-again",
+        "covers": "a commit already recorded as a version, pushed again, answered as the version it is and not judged by the rules added after it was stored: a port of 251 characters, and a secret the namespace no longer declares",
+        "reference": "https://agentiik.github.io/docs/#yaml"
+      }
+    ],
+    "invalid": [
+      {
+        "case": "repository/invalid/include-leaves-tree",
+        "rule": "A path include leaving the repository tree. A path include resolves inside the same commit, and nothing outside the tree is readable at all.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/invalid/include-missing",
+        "rule": "A path include naming a file the commit does not hold. A path include resolves against the directory of the file naming it, inside the same commit, so a file elsewhere in the tree is not the one it names.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/invalid/include-cycle",
+        "rule": "An include coming back to a file that is still being resolved. A file cannot include itself, directly or through another, since its resolution would never end; the refusal names the include that closes the ring.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/invalid/api-version-in-included-file",
+        "rule": "apiVersion in an included file. An included file is a fragment, not an entry point: it has no apiVersion, no kind and no metadata.",
+        "refused_by": "schema",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/invalid/inputs-in-included-file",
+        "rule": "inputs in an included file. What a workflow is given is its boundary, declared by the workflow itself, so that reading one file tells you what that workflow is.",
+        "refused_by": "schema",
+        "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+      },
+      {
+        "case": "repository/invalid/cycle-in-graph",
+        "rule": "A cycle among the steps. Cycles are rejected at validation, before registration; looping is done by calling a sub-workflow.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#scheduling-semantics"
+      },
+      {
+        "case": "repository/invalid/edge-port-not-declared",
+        "rule": "An edge taking an output port its upstream step does not publish. An edge cannot invent a port on a step.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#graph"
+      },
+      {
+        "case": "repository/invalid/step-output-not-in-manifest",
+        "rule": "A brick step declaring an output port the manifest its namespace recorded for the image does not carry. outputs must be a subset of the ports the manifest declares.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#step-keywords"
+      },
+      {
+        "case": "repository/invalid/port-name-251-characters",
+        "rule": "A port of 251 characters, written in a file the entry point includes. A port becomes the file <name>.json, which a filesystem holds to 255 characters with its suffix, and the bound holds in the entry point, in every file it includes and in every brick manifest.",
+        "refused_by": "schema",
+        "reference": "https://agentiik.github.io/docs/#yaml"
+      },
+      {
+        "case": "repository/invalid/workflow-output-251-characters",
+        "rule": "A workflow output of 251 characters. A workflow output becomes the file <name>.json, as a port does, which a filesystem holds to 255 characters with its suffix.",
+        "refused_by": "schema",
+        "reference": "https://agentiik.github.io/docs/#yaml"
+      },
+      {
+        "case": "repository/invalid/secret-not-declared-by-namespace",
+        "rule": "A secret the secrets block names that the namespace does not declare, refused although no step mounts it. A workflow can name only the secrets its own namespace declares, so that moving it elsewhere breaks the reference rather than carrying access along.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#secrets"
+      },
+      {
+        "case": "repository/invalid/metadata-name-not-repository",
+        "rule": "A metadata.name other than the name of the repository pushed to. The name is the identity runs, grants and the git remote are addressed by, and the repository already holds one.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#the-workflow-repository"
+      },
+      {
+        "case": "repository/invalid/metadata-namespace-not-repository",
+        "rule": "A metadata.namespace other than the namespace the repository belongs to. A workflow reaches the secrets, the quotas and the runner pools of the namespace that owns it, and the file cannot move it to another.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#the-workflow-repository"
+      },
+      {
+        "case": "repository/invalid/entry-point-missing",
+        "rule": "A tree with no agentiik.yaml. The entry point is always at the root, and agentiik.yml is another file.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#the-workflow-repository"
+      },
+      {
+        "case": "repository/invalid/entry-point-below-root",
+        "rule": "A tree whose only agentiik.yaml is below its root. The entry point is always at the root; a workflow kept in a directory of a larger repository is pushed as a repository of its own, which git subtree split --prefix billing makes.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#the-workflow-repository"
+      },
+      {
+        "case": "repository/invalid/symlink-in-tree",
+        "rule": "A symbolic link in the tree. Its target would be resolved on whichever host lays the tree out, where it could point outside the repository.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#the-workflow-repository"
+      },
+      {
+        "case": "repository/invalid/submodule-in-tree",
+        "rule": "A submodule in the tree. It is another repository, and a runner holds no credential to fetch it.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#the-workflow-repository"
+      },
+      {
+        "case": "repository/invalid/name-not-utf-8",
+        "rule": "A name in the tree that is not UTF-8. A name travels as JSON text, where it would arrive as another name.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#the-workflow-repository"
+      },
+      {
+        "case": "repository/invalid/image-not-pinned",
+        "rule": "A step naming an image by a tag the namespace's store holds no pin for, a pin of another tag of the same repository beside it. A server runs every image by the digest its tag was pinned to, and the hook reaches no registry to resolve one.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#supply-chain"
+      },
+      {
+        "case": "repository/invalid/manifest-missing",
+        "rule": "A brick step naming an image by a digest the namespace's store holds no manifest for. A brick step is held to its manifest at the push, and reading one out of the image would be pulling it.",
+        "refused_by": "validator",
+        "reference": "https://agentiik.github.io/docs/#supply-chain"
+      }
+    ]
   }
 }

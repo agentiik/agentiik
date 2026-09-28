@@ -1,0 +1,16 @@
+include:
+  - path: ./shared.yaml
+
+vars:
+  region: fr
+
+secrets: [ledger]
+
+defaults:
+  retry: { max: 2, on: [transient, lost] }
+
+.api-brick:
+  timeout: 45s
+  network: egress
+  egress:
+    allow: ["api.first.example.com:443"]

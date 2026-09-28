@@ -1,0 +1,33 @@
+# A step named with a leading dot is a hidden block: never executed, and never
+# held to the installation. .retired names an image the namespace has neither
+# pinned nor recorded a manifest for, and the push is accepted all the same.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+.defaults-for-bricks:
+  timeout: 3m
+
+steps:
+  .template:
+    extends: .defaults-for-bricks
+    image: ghcr.io/acme/agk-normalize:2.0.0
+    params:
+      currency: EUR
+    outputs: [ok, rejected]
+
+  .retired:
+    image: ghcr.io/acme/agk-legacy:0.9.0
+    outputs: [out]
+
+  fetch:
+    image: ghcr.io/acme/agk-fetch-orders:1.2.0
+    outputs: [out]
+
+  normalize:
+    extends: .template
+    needs: [fetch]

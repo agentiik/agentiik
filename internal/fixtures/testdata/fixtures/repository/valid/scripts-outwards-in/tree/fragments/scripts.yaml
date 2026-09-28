@@ -1,0 +1,11 @@
+defaults:
+  before_script:
+    - echo "included defaults before, replaced" >&2
+  after_script:
+    - echo "included defaults after" >&2
+
+.tools:
+  before_script:
+    - apk add --no-cache jq
+  after_script:
+    - echo ".tools after" >&2

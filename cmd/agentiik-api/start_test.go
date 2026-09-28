@@ -682,11 +682,23 @@ func (c client) do(method, path, as string, body any) (int, map[string]any) {
 
 func aPush(t *testing.T) api.Push {
 	t.Helper()
+	return aPushOf(t, theWorkflow)
+}
+
+// aPushNamed is the ordinary push of the workflow under another name, which its file writes, as a
+// version made under that name has to.
+func aPushNamed(t *testing.T, workflow string) api.Push {
+	t.Helper()
+	return aPushOf(t, strings.Replace(theWorkflow, "name: monthly-invoicing,", "name: "+workflow+",", 1))
+}
+
+func aPushOf(t *testing.T, document string) api.Push {
+	t.Helper()
 	m, err := brick.ParseManifest([]byte(theManifest))
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree := fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(theWorkflow)}}
+	tree := fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(document)}}
 	v, err := version.Capture(tree, "agentiik.yaml", map[string]brick.Manifest{theImage: m})
 	if err != nil {
 		t.Fatal(err)
@@ -694,7 +706,7 @@ func aPush(t *testing.T) api.Push {
 	return api.Push{
 		Entry: v.Entry, Document: v.Document,
 		Includes: v.Includes, Manifests: v.Manifests, Branch: "main",
-		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(theWorkflow), Mode: "0644"}},
+		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}},
 	}
 }
 

@@ -1,0 +1,30 @@
+# Includes apply in declaration order, each over the one before it and all of
+# them under this file. What a file includes applies before the file itself, and
+# a file two others include applies once, where it is first reached: second.yaml
+# including shared.yaml again does not put back what first.yaml overrode.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+include:
+  - path: ./fragments/first.yaml
+  - path: fragments/second.yaml
+
+vars:
+  currency: EUR
+
+secrets: [billing_api]
+
+steps:
+  fetch:
+    extends: .api-brick
+    image: ghcr.io/acme/agk-fetch-orders:1.2.0
+    secrets: [billing_api]
+    params:
+      currency: ${{ vars.currency }}
+      region: ${{ vars.region }}
+    outputs: [out]

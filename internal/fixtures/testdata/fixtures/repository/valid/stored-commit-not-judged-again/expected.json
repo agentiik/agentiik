@@ -1,0 +1,31 @@
+{
+  "workflow": "monthly-invoicing",
+  "commit": "8fcd28921cc5b13a2adc584843d5a0d2d7ae4de6",
+  "includes": [],
+  "secrets": [
+    "billing_api"
+  ],
+  "order": [
+    "export"
+  ],
+  "steps": {
+    "export": {
+      "kind": "script",
+      "image": "alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704",
+      "outputs": [
+        "rejected-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "secrets": [
+        "billing_api"
+      ],
+      "idempotent": true,
+      "script": [
+        "agk items > /tmp/items.json"
+      ],
+      "shell": [
+        "/bin/sh",
+        "-e"
+      ]
+    }
+  }
+}

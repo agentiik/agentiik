@@ -1,0 +1,123 @@
+{
+  "workflow": "monthly-invoicing",
+  "commit": "61f51a3f0d599c17a2f5089db762ae5cace6f818",
+  "includes": [
+    {
+      "path": "fragments/blocks.yaml"
+    }
+  ],
+  "order": [
+    "fetch",
+    "invoice",
+    "ledger"
+  ],
+  "steps": {
+    "fetch": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f",
+      "brick": {
+        "name": "fetch-orders",
+        "version": "1.2.0"
+      },
+      "outputs": [
+        "out"
+      ],
+      "timeout": "10m",
+      "idempotent": true
+    },
+    "invoice": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-invoice@sha256:8214cabcb148ac56e69ee08e1554684f7609d08b58c4527938fdcf400be68595",
+      "brick": {
+        "name": "issue-invoices",
+        "version": "1.4.0"
+      },
+      "needs": [
+        {
+          "step": "fetch",
+          "port": "out",
+          "as": "in"
+        }
+      ],
+      "outputs": [
+        "out",
+        "error"
+      ],
+      "params": {
+        "currency": "EUR",
+        "dunning_days": 30,
+        "endpoint": "https://billing.example.com/v2"
+      },
+      "retry": {
+        "max": 5,
+        "on": [
+          "transient",
+          "lost"
+        ]
+      },
+      "timeout": "10m",
+      "resources": {
+        "memory": "512Mi"
+      },
+      "network": "egress",
+      "egress": {
+        "allow": [
+          "api.billing.example.com:443"
+        ]
+      },
+      "runs_on": [
+        "arch=amd64"
+      ],
+      "idempotent": true,
+      "extends": [
+        ".api-brick",
+        ".base"
+      ]
+    },
+    "ledger": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-ledger@sha256:0e355d4c7f028d2185b286e7d3ac914be0a588b222cb4f3a95fc00ec918ea9b1",
+      "brick": {
+        "name": "post-to-ledger",
+        "version": "3.1.0"
+      },
+      "needs": [
+        {
+          "step": "invoice",
+          "port": "out",
+          "as": "in"
+        }
+      ],
+      "outputs": [
+        "out"
+      ],
+      "params": {
+        "account": "706000",
+        "currency": "EUR"
+      },
+      "retry": {
+        "max": 3,
+        "on": [
+          "transient"
+        ],
+        "backoff": {
+          "type": "exponential",
+          "base": "2s",
+          "max": "90s"
+        }
+      },
+      "timeout": "1m",
+      "resources": {
+        "cpu": "1",
+        "memory": "1Gi"
+      },
+      "runs_on": [
+        "arch=amd64"
+      ],
+      "idempotent": true,
+      "extends": [
+        ".base"
+      ]
+    }
+  }
+}

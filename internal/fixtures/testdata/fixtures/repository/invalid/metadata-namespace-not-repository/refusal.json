@@ -1,0 +1,6 @@
+{
+  "rule": "metadata-namespace-not-repository",
+  "file": "agentiik.yaml",
+  "line": 8,
+  "column": 14
+}

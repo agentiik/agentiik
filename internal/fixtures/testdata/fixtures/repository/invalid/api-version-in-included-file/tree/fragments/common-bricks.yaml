@@ -1,0 +1,4 @@
+apiVersion: agentiik.dev/v1
+
+.api-brick:
+  timeout: 2m

@@ -10,12 +10,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/fstest"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
-	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/internal/numbertest"
 	"github.com/agentiik/agentiik/version"
@@ -57,26 +55,19 @@ steps:
 
 const orderSchema = `{"type": "array", "items": {"type": "object", "required": ["id"]}}`
 
-// declaringPush is a push of a workflow document and the files of its tree beside it.
+// declaringPush is a push of a workflow document and the files of its tree beside it. The
+// document includes nothing, so the entry point and the manifest of its one image are the whole
+// of what the version is rebuilt from, and the push carries them as agk push would, whatever the
+// installation is about to say of them.
 func declaringPush(t *testing.T, document string, files map[string]string) api.Push {
 	t.Helper()
-	m, err := brick.ParseManifest([]byte(brickManifest))
-	if err != nil {
-		t.Fatal(err)
-	}
-	tree := fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(document)}}
 	pushed := map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}}
 	for path, content := range files {
-		tree[path] = &fstest.MapFile{Data: []byte(content)}
 		pushed[path] = api.PushFile{Content: []byte(content), Mode: "0644"}
 	}
-	v, err := version.Capture(tree, "agentiik.yaml", map[string]brick.Manifest{image: m})
-	if err != nil {
-		t.Fatal(err)
-	}
 	return api.Push{
-		Entry: v.Entry, Document: v.Document,
-		Includes: v.Includes, Manifests: v.Manifests, Branch: "main", Tree: pushed,
+		Entry: "agentiik.yaml", Document: []byte(document),
+		Manifests: map[string][]byte{image: []byte(brickManifest)}, Branch: "main", Tree: pushed,
 	}
 }
 

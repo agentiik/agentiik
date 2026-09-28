@@ -46,77 +46,117 @@ func identifier(name, what, where string) error {
 	return fmt.Errorf("%s names %s %q, which is not an identifier: a name is letters, digits, hyphens and underscores, beginning with a letter or a digit, so that one name survives a URL, a directory and a tool list unchanged", where, what, name)
 }
 
-// portLengths refuses a port or a workflow output written past agk.PortMaxBytes: "a port or a
-// workflow output at most 250", since each becomes the file <name>.json and no filesystem holds
-// that name past 255 characters with its suffix.
+// newRules are the rules added since a version could be stored, applied to one entry point
+// where a version is made and never where a stored one is read back (LoadStored): a stored
+// version keeps rebuilding, and its runs and replays keep going, after an upgrade.
 //
-// It runs over what one document wrote, as it wrote it, which is every place a port is named: the
-// workflow outputs and the port each is taken from, a tool's output, and in each step and each
-// hidden block the ports it declares, the inputs it feeds and both ends of every edge. The grammar
-// and the 255 characters are the reader's already, so this is the one bound a version already
-// stored is read back without (LoadStored).
-func portLengths(outputs map[string]Output, mcp *MCP, values map[agk.Step]stepValues, blocks map[string]stepValues) error {
-	for _, name := range slices.Sorted(maps.Keys(outputs)) {
-		if err := portLength(name, "the output", "outputs"); err != nil {
-			return err
+// Two of them. A port or a workflow output is written at most agk.PortMaxBytes, "since each
+// becomes the file <name>.json and no filesystem holds that name past 255 characters with its
+// suffix", which is checked in every place a port is named: the workflow outputs and the port
+// each is taken from, a tool's output, and in each step and each hidden block the ports it
+// declares, the inputs it feeds and both ends of every edge. And a file relocated by the long
+// form of files is relocated to an absolute path, since "a relative path has nothing inside a
+// container to be relative to", which is why the runner refuses one and the task message holds
+// it to the same grammar.
+func (w *Workflow) newRules() error {
+	at := origin{src: w.src}
+	for _, name := range slices.Sorted(maps.Keys(w.Outputs)) {
+		if len(name) > agk.PortMaxBytes {
+			r := refuse(RuleWorkflowOutputPastBound, "", "", portPastBound("outputs", "the output", name))
+			r.At = at.at("outputs", name).key()
+			return r
 		}
-		if err := portLength(string(outputs[name].From.Port), "the port", "outputs."+name+".from"); err != nil {
-			return err
+		if port := w.Outputs[name].From.Port; len(port) > agk.PortMaxBytes {
+			r := refuse(RulePortPastBound, w.Outputs[name].From.Step, "", portPastBound("outputs."+name+".from", "the port", string(port)))
+			r.At = at.at("outputs", name, "from", "port").value()
+			return r
 		}
 	}
-	if mcp != nil {
-		for i, t := range mcp.Tools {
-			if t.Output != nil {
-				if err := portLength(t.Output.Output, "the workflow output", fmt.Sprintf("mcp.tools[%d].output.from", i)); err != nil {
-					return err
-				}
+	if w.MCP != nil {
+		for i, t := range w.MCP.Tools {
+			if t.Output != nil && len(t.Output.Output) > agk.PortMaxBytes {
+				r := refuse(RulePortPastBound, "", "", portPastBound(fmt.Sprintf("mcp.tools[%d].output.from", i), "the workflow output", t.Output.Output))
+				r.At = at.at("mcp", "tools", i, "output", "from").value()
+				return r
 			}
 		}
 	}
+	return newStepRules(w.values, w.blocks, w.Defaults)
+}
+
+// newStepRules is newRules over the steps, the hidden blocks and the defaults one document
+// writes, which is all of it an included file may carry.
+func newStepRules(values map[agk.Step]stepValues, blocks map[string]stepValues, defaults Defaults) error {
 	for _, name := range slices.Sorted(maps.Keys(values)) {
-		if err := stepPortLengths(values[name], "steps."+string(name)); err != nil {
+		if err := stepPortLengths(name, values[name], "steps."+string(name)); err != nil {
 			return err
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(blocks)) {
-		if err := stepPortLengths(blocks[name], name); err != nil {
+		if err := stepPortLengths("", blocks[name], name); err != nil {
+			return err
+		}
+	}
+	if err := relocatedTo(defaults, "defaults"); err != nil {
+		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		if err := relocatedTo(values[name].Defaults, "steps."+string(name)); err != nil {
+			return err
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(blocks)) {
+		if err := relocatedTo(blocks[name].Defaults, name); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// stepPortLengths is portLengths over one step or one hidden block.
-func stepPortLengths(s stepValues, where string) error {
-	for _, port := range s.Outputs {
-		if err := portLength(string(port), "the port", where+".outputs"); err != nil {
-			return err
+// stepPortLengths is the port bound over one step or one hidden block.
+func stepPortLengths(step agk.Step, s stepValues, where string) error {
+	past := func(port agk.Port, what, at string, node Position) error {
+		r := refuse(RulePortPastBound, step, "", portPastBound(at, what, string(port)))
+		r.At = node
+		return r
+	}
+	for i, port := range s.Outputs {
+		if len(port) > agk.PortMaxBytes {
+			return past(port, "the port", where+".outputs", s.written["outputs"].at("outputs", i).value())
 		}
 	}
 	for _, port := range slices.Sorted(maps.Keys(s.Inputs)) {
-		if err := portLength(string(port), "the port", where+".inputs"); err != nil {
-			return err
+		if len(port) > agk.PortMaxBytes {
+			return past(port, "the port", where+".inputs", s.written["inputs"].at("inputs", string(port)).key())
 		}
 	}
 	for i, e := range s.Needs {
 		at := fmt.Sprintf("%s.needs[%d]", where, i)
-		if err := portLength(string(e.Port), "the port", at); err != nil {
-			return err
+		edge := s.written["needs"].at("needs", i)
+		if len(e.Port) > agk.PortMaxBytes {
+			return past(e.Port, "the port", at, edge.at("port").value())
 		}
-		if err := portLength(string(e.As), "the port", at); err != nil {
-			return err
+		if len(e.As) > agk.PortMaxBytes {
+			return past(e.As, "the port", at, edge.at("as").value())
 		}
 	}
 	return nil
 }
 
-// portLength refuses one name past agk.PortMaxBytes, saying what it named and where, and
-// printing the start of it rather than all of it, as identifier does.
-func portLength(name, what, where string) error {
-	if len(name) <= agk.PortMaxBytes {
-		return nil
+// portPastBound says what named a port past agk.PortMaxBytes and where, printing the start of it
+// rather than all of it, as identifier does.
+func portPastBound(where, what, name string) string {
+	return fmt.Sprintf("%s names %s %.64s..., which is %d characters long: a port or a workflow output is at most %d, since it becomes the file <name>.json and no filesystem holds that name past %d characters", where, what, name, len(name), agk.PortMaxBytes, agk.IdentifierMaxBytes)
+}
+
+// relocatedTo refuses a file relocated to a relative path.
+func relocatedTo(d Defaults, where string) error {
+	for i, f := range d.Files {
+		if f.To != "" && !strings.HasPrefix(f.To, "/") {
+			return fmt.Errorf("%s.files[%d] relocates %s to %q, and a file is relocated to an absolute path: a relative path has nothing inside a container to be relative to, which is why the runner refuses one", where, i, f.From, f.To)
+		}
 	}
-	return fmt.Errorf("%s names %s %.64s..., which is %d characters long: a port or a workflow output is at most %d, since it becomes the file <name>.json and no filesystem holds that name past %d characters", where, what, name, len(name), agk.PortMaxBytes, agk.IdentifierMaxBytes)
+	return nil
 }
 
 // namespaceName holds a namespace to the identifier grammar and refuses the words the API
@@ -155,9 +195,9 @@ func hidden(name string) bool { return strings.HasPrefix(name, ".") }
 // <namespace>/<name> everywhere it appears, with @<ref> appended in the short form of a
 // sub-workflow call.
 //
-// It is comparable, because it is the key an already fetched include arrives under: the
-// evaluator never reaches another repository, so a caller resolves the ref and hands the
-// fragment over.
+// It is comparable, and it is what a workflow include asks Remote for: the evaluator never
+// reaches another repository, so a caller resolves the ref and hands over that repository's tree
+// at the commit it resolved to.
 type WorkflowRef struct {
 	Namespace string
 	Name      string
