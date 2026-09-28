@@ -21,9 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
-	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/graph"
 	versions "github.com/agentiik/agentiik/version"
 )
@@ -103,9 +101,15 @@ func push(ctx context.Context, e Env, args []string) int {
 		return exitRefused
 	}
 	// Before the working copy is asked about and before any of the tree is read, because a -f
-	// that names nothing is the one mistake here that neither committing nor --allow-dirty
-	// puts right.
+	// that names nothing, and one that names an entry point anywhere but at the root, are the
+	// mistakes here that neither committing nor --allow-dirty puts right. "The entry point is
+	// always at the root", and a workflow kept in a directory of a larger repository is pushed
+	// as a repository of its own.
 	if err := repo.holds(ctx, sha, path); err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+	if err := atTheRoot(repo, path); err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}
@@ -133,34 +137,24 @@ func push(ctx context.Context, e Env, args []string) int {
 
 	// And the workflow is read out of those same bytes rather than off the disk, so that the
 	// closure the version is rebuilt from and the tree a container is given cannot disagree
-	// about any file both of them hold.
-	tree := committed(files)
-	base := filepath.Base(path)
-	wf, err := loadCommitted(tree, base, filepath.Dir(path), sha, graph.Load)
-	if err != nil {
-		refusal(e.Err, err)
-		return exitRefused
-	}
-	if _, err := wf.DeclaredInputs(tree); err != nil {
-		refusal(e.Err, err)
-		return exitRefused
-	}
-
-	// Every tag is resolved to its digest, and the manifests are read the way validate reads
-	// them, out of those digests: a version the server cannot build is a version it will
+	// about any file both of them hold. It is judged by the one validation the installation
+	// and a hook judge it by, reaching what this machine reaches: each tag is resolved to its
+	// digest through the local daemon, and the manifests are read out of those digests, so
+	// that a tag moved on this machine between the two cannot pair the manifest of one image
+	// with the digest of another. A version the server cannot build is a version it will
 	// refuse, and finding that out here is cheaper.
-	images, read, code := pinned(ctx, e, wf)
-	if code != exitSucceeded {
-		return code
-	}
-
-	// The entry point is named by its path inside the tree, because a version names a path in
-	// a commit rather than on a disk.
-	captured, err := versions.Capture(tree, base, read)
+	tree := committed(files)
+	local := &daemon{e: e}
+	defer local.close()
+	checked, err := versions.Check(ctx, tree, versions.Checking{
+		Commit: sha, Committed: true, Namespace: *namespace,
+		Resolvers: versions.Resolvers{Pin: local.pin, Manifest: local.manifest},
+	})
 	if err != nil {
 		refusal(e.Err, err)
-		return exitRefused
+		return leaving(err)
 	}
+	wf, captured, images := checked.Workflow, checked.Version, checked.Version.Images
 
 	body := api.Push{
 		Entry: captured.Entry, Document: captured.Document,
@@ -211,87 +205,20 @@ func push(ctx context.Context, e Env, args []string) int {
 	return exitSucceeded
 }
 
-// pinned is what the images of a version are pushed as: the digest each image the workflow names
-// by tag was resolved to, and the manifest of every image a step is held to, by the reference as
-// the workflow writes it.
-//
-// A tag is resolved here, on the machine that built or pulled the image, because "a tag is a
-// mutable pointer, and a commit must determine what ran": the version records the digest once, so
-// every run of it runs the same bytes, and the installation, which reaches no registry, never has
-// one to resolve. A script step's base image is resolved too, since a runner pulls it by digest
-// like any other. An image the workflow already names by digest is sent as written and nothing is
-// asked about it, so a workflow of script steps pinned by hand pushes from a machine with no
-// Docker at all.
-//
-// Each digest is resolved before the manifest is read, and the manifest is read out of it, so
-// that a tag moved on this machine between the two cannot pair the manifest of one image with the
-// digest of another.
-func pinned(ctx context.Context, e Env, wf *graph.Workflow) (map[string]string, map[string]brick.Manifest, int) {
-	tagged, err := byTag(wf)
-	if err != nil {
-		refusal(e.Err, err)
-		return nil, nil, exitRefused
+// atTheRoot refuses an entry point anywhere but agentiik.yaml at the top of the repository: "the
+// entry point is always at the root", spelled so. What agk push pushes is the repository, and a
+// hook reads its root. A -f naming billing/agentiik.yaml pushed the tree of billing/ until
+// v0.4.0, which is how a version pushed that way was made, and it stays runnable; a new one is
+// pushed from a repository of its own, which the refusal names the command for.
+func atTheRoot(repo place, path string) error {
+	name := repo.prefix + filepath.Base(path)
+	switch {
+	case repo.prefix != "" && filepath.Base(path) == entryPoint:
+		return versions.EntryPointBelowRoot(name)
+	case name != entryPoint:
+		return fmt.Errorf("-f names %s, and the entry point of a repository is %s at its root, spelled so: agk push pushes the repository, whose root %s is what the installation reads", name, entryPoint, entryPoint)
 	}
-	referenced := references(wf)
-	if len(tagged) == 0 && len(referenced) == 0 {
-		return nil, map[string]brick.Manifest{}, exitSucceeded
-	}
-	d, code := imageReader(e)
-	if code != exitSucceeded {
-		return nil, nil, code
-	}
-	defer d.Close()
-
-	var images map[string]string
-	for _, r := range tagged {
-		pin, err := d.Pin(ctx, r.Step, r.Image)
-		if err != nil {
-			refusal(e.Err, err)
-			return nil, nil, leaving(err)
-		}
-		if images == nil {
-			images = map[string]string{}
-		}
-		images[r.Image] = pin
-		fmt.Fprintf(e.Out, "%s resolved to %s\n", r.Image, pin)
-	}
-
-	byDigest := make([]reference, 0, len(referenced))
-	for _, r := range referenced {
-		if pin, held := images[r.Image]; held {
-			r.Image = pin
-		}
-		byDigest = append(byDigest, r)
-	}
-	read, code := manifestsThrough(ctx, e, d, byDigest)
-	if code != exitSucceeded {
-		return nil, nil, code
-	}
-	manifests := make(map[string]brick.Manifest, len(referenced))
-	for i, r := range referenced {
-		manifests[r.Image] = read[byDigest[i].Image]
-	}
-	return images, manifests, exitSucceeded
-}
-
-// byTag are the images the workflow names by tag, each with the first step in name order that
-// names it, script steps included. A reference that writes a digest the wire does not carry is
-// refused, since a runner is handed nothing else.
-func byTag(wf *graph.Workflow) ([]reference, error) {
-	var tagged []reference
-	seen := map[string]bool{}
-	for _, name := range slices.Sorted(maps.Keys(wf.Steps)) {
-		image := wf.Steps[name].Image
-		switch {
-		case image == "" || seen[image] || agk.ImageByDigest(image):
-			continue
-		case strings.Contains(image, "@"):
-			return nil, fmt.Errorf("step %s names %s, and a digest is written sha256: and sixty-four lowercase hexadecimal characters, which is what a runner is handed", name, image)
-		}
-		seen[image] = true
-		tagged = append(tagged, reference{Image: image, Step: name})
-	}
-	return tagged, nil
+	return nil
 }
 
 // entryOf is where the entry point is on the disk.
@@ -449,33 +376,30 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 		if !found || len(fields) != 4 {
 			return nil, fmt.Errorf("the tree of %s could not be read from git: %q is not a line of its listing", short(sha), record)
 		}
-		if !utf8.ValidString(path) {
-			return nil, fmt.Errorf("%q is not a UTF-8 name, and a push carries every name as JSON text, where it would arrive as some other name", path)
-		}
-		if strings.ContainsRune(path, utf8.RuneError) {
-			// Valid UTF-8, and refused by the installation all the same: U+FFFD is what JSON
-			// leaves where a name was not, and one really in a name looks exactly like that.
-			return nil, fmt.Errorf("%s holds U+FFFD, which the installation cannot tell apart from what JSON leaves in a name that was not UTF-8: rename the file, commit the rename, then push", path)
-		}
-		// And every other rule the installation holds a name to, by its own code rather than
-		// a copy of it, so that a name it would refuse is refused here, before any of the
-		// tree is read, rather than there, after all of it was read and sent.
-		if err := api.CheckTreePath(path); err != nil {
-			return nil, fmt.Errorf("the installation would refuse a name in the tree of %s: %w", short(sha), err)
-		}
-
+		// Every rule a tree is held to, by the code the installation and a hook hold it by
+		// rather than a copy of it, so that an entry they would refuse is refused here, before
+		// any of the tree is read, rather than there, after all of it was read and sent.
 		var mode string
+		var kind fs.FileMode
 		switch fields[0] {
 		case "100644":
 			mode = "0644"
 		case "100755":
 			mode = "0755"
 		case "120000":
-			return nil, fmt.Errorf("%s is a symbolic link, and a tree carries none: its target would be resolved on whatever host lays the tree out, where it could point outside the repository. Commit the file it points to in its place", path)
+			kind = fs.ModeSymlink
 		case "160000":
-			return nil, fmt.Errorf("%s is a submodule, and a tree carries none: it is another repository, which a runner would need a credential to fetch, and a runner holds none. Commit its files into this repository, or put them in an image", path)
+			kind = fs.ModeIrregular
 		default:
 			return nil, fmt.Errorf("%s is committed with mode %s, and a tree carries a file as 100644 or 100755 and nothing else", path, fields[0])
+		}
+		if err := versions.TreeEntry(path, kind); err != nil {
+			return nil, err
+		}
+		if strings.ContainsRune(path, utf8.RuneError) {
+			// Valid UTF-8, and refused by the installation all the same: U+FFFD is what JSON
+			// leaves where a name was not, and one really in a name looks exactly like that.
+			return nil, fmt.Errorf("%s holds U+FFFD, which the installation cannot tell apart from what JSON leaves in a name that was not UTF-8: rename the file, commit the rename, then push", path)
 		}
 
 		if fields[3] == "BAD" {
@@ -615,8 +539,8 @@ func oneObject(r *bufio.Reader, object string, size int64) ([]byte, error) {
 	return content[:size], nil
 }
 
-// committed is the tree as an fs.FS, which is what the loader, the schema compiler and Capture
-// read: the bytes that travel as the tree, and no others.
+// committed is the tree as an fs.FS, which is what version.Check reads: the bytes that travel as
+// the tree, and no others.
 func committed(files map[string]api.PushFile) fstest.MapFS {
 	tree := make(fstest.MapFS, len(files))
 	for path, f := range files {
@@ -625,20 +549,19 @@ func committed(files map[string]api.PushFile) fstest.MapFS {
 	return tree
 }
 
-// loadCommitted is load, reading the commit rather than the disk: the same graph.Check, over the
-// tree that travels, after the loader the caller names.
-//
-// agk push gives graph.Load, since it is making a version. agk run on an installation gives
-// graph.LoadStored, since the commit it names is one the installation already holds as it was
-// pushed, which may be before a bound added since, and the installation starts it all the same:
-// the command reads it only for the name the version was pushed under.
-func loadCommitted(tree fs.FS, base, dir, sha string, load func(fs.FS, string, map[graph.WorkflowRef]graph.Fragment) (*graph.Workflow, error)) (*graph.Workflow, error) {
+// loadCommitted is load, reading a commit rather than the disk, for agk run on an installation: the
+// same graph.Check, over the tree that travels, read with graph.LoadStored, since the commit it
+// names is one the installation already holds as it was pushed, which may be before a rule added
+// since, and the installation starts it all the same. The command reads it only for the name the
+// version was pushed under, so it is not judged as a version about to be made, which is agk
+// push's and version.Check's.
+func loadCommitted(tree fs.FS, base, dir, sha string) (*graph.Workflow, error) {
 	// place.holds has refused a commit with nothing at the path, so what is left to say here is
 	// the commit holding a directory there.
 	if info, err := fs.Stat(tree, base); err == nil && info.IsDir() {
 		return nil, fmt.Errorf("%s is a directory in %s: -f names the entry point itself, which is %s inside it", base, short(sha), entryPoint)
 	}
-	wf, err := load(tree, base, nil)
+	wf, err := graph.LoadStored(tree, base, nil)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w. The tree read was %s at %s", err, dir, short(sha))
 	}

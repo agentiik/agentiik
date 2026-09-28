@@ -29,7 +29,7 @@ const (
 	formatMermaid = "mermaid"
 )
 
-func drawing(_ context.Context, e Env, args []string) int {
+func drawing(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk graph", "agk graph [-f <path>] [--format dot|mermaid] [-o <path>]")
 	entry := fs.String("f", "", "The entry point to draw. Defaults to "+entryPoint+" in the directory the command is run in.")
 	format := fs.String("format", formatDOT, "dot writes a digraph with a port on each side of every step; mermaid writes a flowchart LR with the ports on the edges.")
@@ -49,7 +49,7 @@ func drawing(_ context.Context, e Env, args []string) int {
 		return exitUsage
 	}
 
-	wf, _, _, err := load(e, *entry)
+	wf, _, _, err := load(ctx, e, *entry)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
