@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"strings"
 	"testing"
@@ -99,6 +100,27 @@ func TestATreeFollowsNoLinkAndOpensNoSubmodule(t *testing.T) {
 		if _, err := fsys.Open(name); err == nil {
 			t.Errorf("%s opens", name)
 		}
+	}
+}
+
+func TestAFileReadWholeIsBoundedAsWhatElseIsHeld(t *testing.T) {
+	s, st := sampleStore(t)
+	defer func(was int64) { maxHeld = was }(maxHeld)
+	maxHeld = 10 << 10
+	fsys := NewTreeFS(context.Background(), st, gitID(t, s.dir, "main^{tree}"))
+	if _, err := fs.ReadFile(fsys, "data/big.txt"); err == nil || !strings.Contains(err.Error(), "that is read whole") {
+		t.Errorf("a file larger than what is held reads whole with %v", err)
+	}
+	f, err := fsys.Open("data/big.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if n, err := io.Copy(io.Discard, f); err != nil || n < maxHeld {
+		t.Errorf("the same file opened reads as it streams: %d bytes, %v", n, err)
+	}
+	if _, err := fs.ReadFile(fsys, "agentiik.yaml"); err != nil {
+		t.Errorf("a file smaller than what is held reads with %v", err)
 	}
 }
 

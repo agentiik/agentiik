@@ -165,10 +165,10 @@ const (
 )
 
 // NewSidebandWriter answers a writer framing what is written to it as data packets on band, each
-// at most maxPkt bytes long with its four digits and its band. A write is sent as it is made,
-// in as many packets as it needs.
+// at most maxPkt bytes long with its four digits and its band, and never longer than MaxPktLen. A
+// write is sent as it is made, in as many packets as it needs.
 func NewSidebandWriter(w io.Writer, band byte, maxPkt int) io.Writer {
-	return &sidebandWriter{w: w, band: band, max: maxPkt - 5}
+	return &sidebandWriter{w: w, band: band, max: min(maxPkt, MaxPktLen) - 5}
 }
 
 type sidebandWriter struct {
@@ -179,6 +179,9 @@ type sidebandWriter struct {
 }
 
 func (s *sidebandWriter) Write(b []byte) (int, error) {
+	if s.max < 1 && len(b) > 0 {
+		return 0, fmt.Errorf("repo: a side-band packet of at most %d bytes, which carries nothing after its length and its band", s.max+5)
+	}
 	written := 0
 	for len(b) > 0 {
 		n := min(len(b), s.max)

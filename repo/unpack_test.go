@@ -529,6 +529,17 @@ func TestWhatIsHeldWholeIsBounded(t *testing.T) {
 		t.Errorf("a delta against a blob larger than what is held reads with %v", err)
 	}
 	b = &builder{}
+	b.whole(TypeTree, big[:50])
+	if err := unpackErr(t, b.all(), UnpackOptions{MaxObjectBytes: 40}); err == nil || !strings.Contains(err.Error(), "a tree of 50 bytes, more than the 40 an object may be") {
+		t.Errorf("a tree larger than artifact_max_bytes reads with %v", err)
+	}
+	b = &builder{}
+	d, _ = edit(big[:30], "twenty more bytes...")
+	b.ofs(b.whole(TypeBlob, big[:30]), d)
+	if err := unpackErr(t, b.all(), UnpackOptions{MaxObjectBytes: 40}); err == nil || !strings.Contains(err.Error(), "result is 50 bytes, more than the 40") {
+		t.Errorf("a delta whose result is larger than artifact_max_bytes reads with %v", err)
+	}
+	b = &builder{}
 	b.whole(TypeBlob, bytes.Repeat([]byte("y"), 1000))
 	if _, err := Unpack(context.Background(), bytes.NewReader(b.all()), int64(len(b.all())), io.Discard, UnpackOptions{}); err != nil {
 		t.Errorf("a blob sent whole, which is never held, is refused with %v", err)

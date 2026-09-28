@@ -182,6 +182,11 @@ func (t *TreeFS) ReadFile(name string) ([]byte, error) {
 	if !ok {
 		return nil, &fs.PathError{Op: "read", Path: name, Err: errors.New("is a directory")}
 	}
+	// Read whole is held whole, and bounded as what else is: a file of gigabytes is opened and
+	// read as it streams, or not at all.
+	if file.info.size > maxHeld {
+		return nil, &fs.PathError{Op: "read", Path: name, Err: fmt.Errorf("a file of %d bytes, more than the %d that is read whole", file.info.size, maxHeld)}
+	}
 	data := make([]byte, file.info.size)
 	if _, err := io.ReadFull(file, data); err != nil {
 		return nil, &fs.PathError{Op: "read", Path: name, Err: err}

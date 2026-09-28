@@ -107,6 +107,15 @@ func TestSidebandCarriesDataProgressAndErrors(t *testing.T) {
 		}
 	}
 
+	if _, err := NewSidebandWriter(io.Discard, BandData, 5).Write([]byte("x")); err == nil {
+		t.Error("a side-band packet with no room for data is written")
+	}
+	var big bytes.Buffer
+	NewSidebandWriter(&big, BandData, 1<<20).Write(data)
+	if _, p, _ := NewPktReader(&big).Next(); len(p)+4 != MaxPktLen {
+		t.Errorf("a side-band writer asked for packets past the largest writes one of %d bytes", len(p)+4)
+	}
+
 	var b bytes.Buffer
 	NewSidebandWriter(&b, BandData, SidebandMaxPkt).Write([]byte("half"))
 	NewSidebandWriter(&b, BandError, SidebandMaxPkt).Write([]byte("refused\n"))

@@ -189,16 +189,12 @@ func (u *unpacker) readEntry(c *counter) error {
 	}
 	e.kind, e.size = kind, size
 	switch {
-	case kind == byte(TypeBlob):
-		if size > u.opts.MaxObjectBytes {
-			return fmt.Errorf("a blob of %d bytes, more than the %d an object may be", size, u.opts.MaxObjectBytes)
-		}
-	case Type(kind).valid(), e.isDelta():
-		if size > maxHeld {
-			return fmt.Errorf("%s of %d bytes, which is held whole, and the most that is is %d", kindName(kind), size, maxHeld)
-		}
-	default:
+	case !Type(kind).valid() && !e.isDelta():
 		return fmt.Errorf("an entry of kind %d, which is none of git's", kind)
+	case Type(kind).valid() && size > u.opts.MaxObjectBytes:
+		return fmt.Errorf("%s of %d bytes, more than the %d an object may be", kindName(kind), size, u.opts.MaxObjectBytes)
+	case kind != byte(TypeBlob) && size > maxHeld:
+		return fmt.Errorf("%s of %d bytes, which is held whole, and the most that is is %d", kindName(kind), size, maxHeld)
 	}
 	switch kind {
 	case kindOfsDelta:
@@ -465,7 +461,9 @@ func (u *unpacker) apply(base []byte, k int32) ([]byte, error) {
 	delta, err := inflate(io.NewSectionReader(u.r, e.data, end-e.data), e.size)
 	if err == nil {
 		var data []byte
-		if data, err = applyDelta(base, delta, maxHeld); err == nil {
+		// What a delta resolves to is an object like any other, and bounded as one, besides being
+		// held whole.
+		if data, err = applyDelta(base, delta, min(maxHeld, u.opts.MaxObjectBytes)); err == nil {
 			return data, nil
 		}
 	}
