@@ -541,8 +541,8 @@ func oneObject(r *bufio.Reader, object string, size int64) ([]byte, error) {
 
 // committed is the tree as an fs.FS, which is what version.Check reads: the bytes that travel as
 // the tree, and no others.
-func committed(files map[string]api.PushFile) fstest.MapFS {
-	tree := make(fstest.MapFS, len(files))
+func committed(files map[string]api.PushFile) versions.Files {
+	tree := make(versions.Files, len(files))
 	for path, f := range files {
 		tree[path] = &fstest.MapFile{Data: f.Content, Mode: 0o444}
 	}

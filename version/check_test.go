@@ -3,10 +3,12 @@ package version_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/graph"
@@ -266,5 +268,34 @@ func TestAResolverThatFailsIsAnsweredAsItFailed(t *testing.T) {
 	c.Manifest = func(context.Context, string, agk.Step) ([]byte, error) { return nil, gone }
 	if _, err := version.Check(t.Context(), aRepository(), c); !errors.Is(err, gone) {
 		t.Errorf("a manifest that could not be read was answered %v", err)
+	}
+}
+
+// A tree held as its files, as a push carries one, is judged from its listing: a walk of a map finds
+// each directory's entries by reading every path, which cost seconds of processor for a push of a
+// few hundred deep paths, well inside a push's bounds, from anybody allowed to push. Walked, this
+// tree takes about a minute; listed, milliseconds, and the bound leaves room for a slow machine.
+func TestATreeOfDeepPathsIsJudgedFromItsListing(t *testing.T) {
+	files := version.Files{}
+	for name, f := range aRepository() {
+		files[name] = f
+	}
+	for i := range 1024 {
+		files[fmt.Sprintf("x%05d/", i)+strings.Repeat("d/", 500)+"f"] = &fstest.MapFile{}
+	}
+	started := time.Now()
+	if _, err := version.Check(t.Context(), files, everything()); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(started); took > 5*time.Second {
+		t.Fatalf("judging the tree took %s", took)
+	}
+
+	// And judged by the same rules as a walk would judge it: a directory of it named .git is a
+	// segment of every path below it.
+	files["vendor/.git/hooks/post-checkout"] = &fstest.MapFile{Data: []byte("#!/bin/sh\n")}
+	_, err := version.Check(t.Context(), files, everything())
+	if r := refusedBy(t, err, version.RuleDotGitInTree); r.At.File != "vendor/.git/hooks/post-checkout" {
+		t.Errorf("the .git directory is refused naming %s", r.At.File)
 	}
 }

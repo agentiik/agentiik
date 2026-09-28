@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path"
 	"slices"
 	"strings"
+	"testing/fstest"
 	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/graph"
@@ -167,8 +169,33 @@ func inTree(rule graph.Rule, name, detail string) *graph.Refusal {
 	return &graph.Refusal{Rule: rule, Detail: detail, At: graph.Position{File: name}}
 }
 
-// checkTree holds every entry of a tree to TreeEntry, in the order the tree lists them.
+// Files is a tree held as its files, by path, as a push carries one and as agk push reads one out
+// of git.
+//
+// Check judges it from its listing, path by path, rather than by walking it. An fstest.MapFS finds
+// a directory's entries by reading every path it holds, so a walk costs the files times the
+// directories, and a push of 512 empty files 500 directories deep, half a mebibyte of paths, took
+// five seconds of processor from anybody allowed to push. A path is held to TreePath segment by
+// segment, which is every directory it names, so the listing refuses what the walk did.
+type Files map[string]*fstest.MapFile
+
+// Open opens a file of the tree, or a directory, as an fstest.MapFS does.
+func (f Files) Open(name string) (fs.File, error) { return fstest.MapFS(f).Open(name) }
+
+// ReadFile reads one file without the directory scan an Open of a path it does not hold starts.
+func (f Files) ReadFile(name string) ([]byte, error) { return fstest.MapFS(f).ReadFile(name) }
+
+// checkTree holds every entry of a tree to TreeEntry: in byte order for Files, and in the order a
+// walk lists them otherwise.
 func checkTree(tree fs.FS) error {
+	if files, ok := tree.(Files); ok {
+		for _, name := range slices.Sorted(maps.Keys(files)) {
+			if err := TreeEntry(name, files[name].Mode.Type()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	return fs.WalkDir(tree, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -190,7 +217,13 @@ func entryPoint(tree fs.FS) error {
 		return fmt.Errorf("reading %s: %w", EntryPoint, err)
 	}
 	var below []string
-	err := fs.WalkDir(tree, ".", func(name string, d fs.DirEntry, err error) error {
+	if files, ok := tree.(Files); ok {
+		for name, f := range files {
+			if !f.Mode.IsDir() && name != EntryPoint && path.Base(name) == EntryPoint {
+				below = append(below, name)
+			}
+		}
+	} else if err := fs.WalkDir(tree, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -198,8 +231,7 @@ func entryPoint(tree fs.FS) error {
 			below = append(below, name)
 		}
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 	if len(below) == 0 {

@@ -641,10 +641,10 @@ func manifestsCarried(p Push) func(context.Context, string, agk.Step) ([]byte, e
 	}
 }
 
-// pushedTree is the tree a push carries, as the fs.FS an input's schema resolves a reference
-// against.
-func pushedTree(files map[string]PushFile) fstest.MapFS {
-	tree := make(fstest.MapFS, len(files))
+// pushedTree is the tree a push carries, as version.Check judges it and an input's schema resolves
+// a reference against.
+func pushedTree(files map[string]PushFile) version.Files {
+	tree := make(version.Files, len(files))
 	for p, f := range files {
 		tree[p] = &fstest.MapFile{Data: f.Content, Mode: 0o444}
 	}
