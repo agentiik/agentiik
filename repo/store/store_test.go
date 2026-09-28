@@ -285,19 +285,21 @@ func TestAPackIsWrittenOnlyAsTheBytesItsChecksumNames(t *testing.T) {
 	}
 	flipped := bytes.Clone(good)
 	flipped[len(flipped)/2] ^= 0xff
-	for what, c := range map[string]struct {
+	// The one said to be shorter first, so that the pack is recorded receiving at a size not its own.
+	for _, c := range []struct {
+		what  string
 		bytes []byte
 		size  int64
 	}{
-		"a byte changed":      {flipped, p.size},
-		"one byte short":      {good[:len(good)-1], p.size},
-		"one byte more":       {append(bytes.Clone(good), 0), p.size},
-		"said to be shorter":  {good, p.size - 1},
-		"its trailer dropped": {good[:len(good)-20], p.size - 20},
+		{"said to be shorter", good, p.size - 1},
+		{"a byte changed", flipped, p.size},
+		{"one byte short", good[:len(good)-1], p.size},
+		{"one byte more", append(bytes.Clone(good), 0), p.size},
+		{"its trailer dropped", good[:len(good)-20], p.size - 20},
 	} {
 		_, err := in.store.Put(t.Context(), in.pool, "finance", "nightly", bytes.NewReader(c.bytes), c.size, p.u)
 		if err == nil {
-			t.Errorf("a pack with %s was written", what)
+			t.Errorf("a pack with %s was written", c.what)
 		}
 	}
 	name := hex.EncodeToString(p.u.Checksum[:])
@@ -315,6 +317,18 @@ func TestAPackIsWrittenOnlyAsTheBytesItsChecksumNames(t *testing.T) {
 	if r := in.live(t); len(r.Packs) != 0 {
 		t.Errorf("a refused pack is live: %+v", r.Packs)
 	}
+
+	// The same pack written as it is, once refused for sizes that were not its own, is read back.
+	if _, err := p.file.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	written := in.put(t, p)
+	objects, err := in.store.Open(in.live(t, written.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer objects.Close()
+	holds(t, objects, objectsOf(t, dir, "HEAD"))
 	if _, err := in.store.Put(t.Context(), in.pool, "finance", "absent", bytes.NewReader(good), p.size, p.u); !errors.Is(err, db.ErrNoWorkflow) {
 		t.Errorf("a pack of no workflow answered %v", err)
 	}
