@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -172,5 +176,181 @@ func TestAnInstallationOfV025KeepsItsOperatorTokenThroughTheUpgrade(t *testing.T
 	}
 	if content, err := os.ReadFile(sha); err != nil || string(content) != theHash+"\n" {
 		t.Errorf("the hash v0.2.5's init kept was changed or removed: %q, %v", content, err)
+	}
+}
+
+// v030 is the last migration v0.3.0 carried.
+const v030 = "0048_sessions_opened_by_a_credential.sql"
+
+// An installation of v0.3.0, upgraded as its Compose file is, with nothing asked: its workflows,
+// which agk push sent as trees, become empty repositories. Every version, run and counted object is
+// kept as it was, each default branch is unborn and unprotected, so that an editor's agk push keeps
+// landing, and a run of a version pushed before the upgrade still starts. A tree pushed after it is
+// recorded as one, and moves no ref; a workflow a push creates from now on is a repository whose
+// default branch is protected.
+func TestAnInstallationOfV030KeepsItsWorkflowsAsEmptyRepositories(t *testing.T) {
+	database := freshDatabase(t)
+	ctx := t.Context()
+	admin, err := pgx.Connect(ctx, database.Admin.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.WithoutCancel(ctx))
+	if _, err := db.MigrateThrough(ctx, admin, v030); err != nil {
+		t.Fatalf("the database could not be migrated as v0.3.0 migrated it: %s", err)
+	}
+
+	// Two versions agk push of v0.3.0 sent as trees, each a run, and an editor of the workflow, as
+	// v0.3.0 stored them: the version's graph column in the shape package db writes it, its tree as
+	// a manifest of counted objects.
+	p := aPush(t)
+	graph, err := json.Marshal(map[string]any{"entry": p.Entry, "document": p.Document, "manifests": p.Manifests})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(theWorkflow))
+	digest := hex.EncodeToString(sum[:])
+	tree := fmt.Sprintf(`[{"path": "agentiik.yaml", "sha256": %q, "size": %d, "mode": "0644"}]`, digest, len(theWorkflow))
+	older, newer := strings.Repeat("1", 40), strings.Repeat("2", 40)
+	const finished, running = "01JMZ8V1P9C4XQ7K2N4D6F8H0A", "01M2AAZ9G62NQXFAFCXKRPJEH5"
+	for _, stmt := range []string{
+		`insert into namespaces (name) values ('finance')`,
+		`insert into principals (id, kind) values ('erin', 'user')`,
+		`insert into users (login, display_name) values ('erin', 'Erin')`,
+		`insert into workflows (namespace, name, default_branch) values ('finance', 'monthly-invoicing', 'master')`,
+		`insert into grants (id, namespace, workflow, principal, role, granted_by)
+		   values ('01JQ3M8T', 'finance', 'monthly-invoicing', 'erin', 'editor', 'operator')`,
+		`insert into workflow_versions (namespace, workflow, commit, parent, graph, tree, author, created_at) values
+		   ('finance', 'monthly-invoicing', '` + older + `', null, '` + string(graph) + `', '` + tree + `', 'erin', now() - interval '2 days'),
+		   ('finance', 'monthly-invoicing', '` + newer + `', '` + older + `', '` + string(graph) + `', '` + tree + `', 'erin', now() - interval '1 day')`,
+		`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs)
+		   values ('finance', 'sha256:` + digest + `', ` + fmt.Sprint(len(theWorkflow)) + `, 'application/octet-stream', 2)`,
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, files_recorded,
+		                   started_at, finished_at, expires_at) values
+		   ('finance', '` + finished + `', 'monthly-invoicing', '` + older + `', 'succeeded', 'manual', 'erin', true,
+		    now() - interval '2 days', now() - interval '2 days', now() + interval '28 days')`,
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, files_recorded, started_at)
+		   values ('finance', '` + running + `', 'monthly-invoicing', '` + newer + `', 'running', 'schedule', 'erin', true, now())`,
+	} {
+		if _, err := admin.Exec(ctx, stmt); err != nil {
+			t.Fatalf("filling the database as v0.3.0 would have: %s", err)
+		}
+	}
+	held := func(table string) []string {
+		t.Helper()
+		rows, err := admin.Query(ctx, `select (to_jsonb(t) - 'source')::text from `+pgx.Identifier{table}.Sanitize()+` t order by 1`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	before := map[string][]string{}
+	for _, table := range []string{"workflow_versions", "runs", "artifact_objects"} {
+		before[table] = held(table)
+	}
+
+	d := aPreparedDirectory(t)
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "finance", OperatorToken: theToken,
+		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
+	}
+	if err := initialize(ctx, c, d.at(time.Now().UTC())); err != nil {
+		t.Fatalf("init refused the installation v0.3.0 left: %s\n%s", err, d.out.String())
+	}
+	if !strings.Contains(d.out.String(), "applied 0049_workflow_repositories.sql") {
+		t.Errorf("init said:\n%s", d.out.String())
+	}
+	for table, was := range before {
+		if now := held(table); !slices.Equal(now, was) {
+			t.Errorf("the upgrade changed %s:\nbefore %q\nafter  %q", table, was, now)
+		}
+	}
+
+	application := database.Application
+	application.Password = config.Secret(strings.TrimSpace(d.read(t, apiDir, "database-password")))
+	dir := filepath.Join(t.TempDir(), "bus")
+	if code := run(ctx, []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
+		t.Fatal("bus-init failed")
+	}
+	s := servingSettings(t, application, dir, natsFrom(t, dir))
+	object := filepath.Join(s.API.Objects, "finance", "sha256", digest)
+	if err := os.MkdirAll(filepath.Dir(object), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(object, []byte(theWorkflow), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	serving, stop := context.WithCancel(ctx)
+	defer stop()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- serve(serving, s, ln, slog.New(slog.DiscardHandler)) }()
+	cl := client{t: t, base: "http://" + ln.Addr().String(), served: served}
+
+	pool, err := db.Open(ctx, application.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	erins := "agk_test_erin_upgraded"
+	if err := pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.MintToken(ctx, db.APIToken{ID: ulid.New(), Hash: hashOf(erins), Principal: "erin", CreatedAt: time.Now().Add(-time.Minute), ExpiresAt: time.Now().Add(time.Hour)})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repository := func(workflow string) db.Repository {
+		t.Helper()
+		var r db.Repository
+		if err := pool.In(ctx, "finance", func(ctx context.Context, n *db.NS) error {
+			var err error
+			r, err = n.Repository(ctx, workflow)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	unborn := []db.Ref{{Name: "refs/heads/master"}}
+	if r := repository("monthly-invoicing"); r.DefaultBranch != "master" || !slices.Equal(r.Refs, unborn) || len(r.Packs) != 0 {
+		t.Errorf("after the upgrade the workflow is the repository %+v", r)
+	}
+
+	// The runs v0.3.0 made read as they did, and one of a version pushed before the upgrade starts.
+	for id, state := range map[string]string{finished: "succeeded", running: "running"} {
+		if code, answer := cl.do("GET", "/api/v1/finance/runs/"+id, erins, nil); code != http.StatusOK || answer["state"] != state || answer["triggered_by"] != "erin" {
+			t.Errorf("the run %s v0.3.0 made answered %d: %v", id, code, answer)
+		}
+	}
+	if code, answer := cl.do("POST", "/api/v1/finance/workflows/monthly-invoicing/runs", erins,
+		api.Start{Commit: older, Inputs: map[string]any{"orders": []any{}}}); code != http.StatusAccepted {
+		t.Errorf("a run of a version pushed before the upgrade answered %d: %v", code, answer)
+	}
+
+	// The editor's agk push of v0.3.0 keeps landing, recorded as a tree, and moves no ref.
+	if code, answer := cl.do("PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+theCommit, erins, p); code != http.StatusOK {
+		t.Fatalf("the editor's push after the upgrade answered %d: %v", code, answer)
+	}
+	var source string
+	if err := admin.QueryRow(ctx, `select source from workflow_versions where commit = $1`, theCommit).Scan(&source); err != nil || source != db.SourceTree {
+		t.Errorf("a tree pushed after the upgrade was recorded as arrived by %q, %v", source, err)
+	}
+	if r := repository("monthly-invoicing"); !slices.Equal(r.Refs, unborn) {
+		t.Errorf("a tree push moved the refs to %+v", r.Refs)
+	}
+
+	// A workflow a push creates from now on is a repository created from v0.4.0: protected.
+	weekly := pushNaming(t, strings.Replace(theWorkflow, "name: monthly-invoicing", "name: weekly-invoicing", 1))
+	if code, answer := cl.do("PUT", "/api/v1/finance/workflows/weekly-invoicing/versions/"+theCommit, theToken, weekly); code != http.StatusOK {
+		t.Fatalf("the push creating a workflow answered %d: %v", code, answer)
+	}
+	if r := repository("weekly-invoicing"); r.DefaultBranch != "main" || !slices.Equal(r.Refs, []db.Ref{{Name: "refs/heads/main", Protected: true}}) {
+		t.Errorf("a workflow a push created after the upgrade is the repository %+v", r)
 	}
 }
