@@ -159,9 +159,14 @@ func push(ctx context.Context, e Env, args []string) int {
 	// Then, in order, what a git push needs of the installation and does not carry: the
 	// repository, created where it is not, and the digest of each tag and the manifest of
 	// each brick image, recorded in it, which is what its hook judges the push against.
-	defaultBranch := branchOf(ctx, repo.top)
-	if defaultBranch == "" {
-		defaultBranch = "main"
+	// The default branch of a repository created here is the branch the push moves, so that
+	// its first push is to the branch a clone checks out and a run naming no ref runs; a push
+	// of a tag takes the branch checked out, or main.
+	defaultBranch, pushesBranch := strings.CutPrefix(ref, "refs/heads/")
+	if !pushesBranch {
+		if defaultBranch = branchOf(ctx, repo.top); defaultBranch == "" {
+			defaultBranch = "main"
+		}
 	}
 	for _, step := range []func() error{
 		func() error { return createRepository(ctx, at, *namespace, name, defaultBranch) },
