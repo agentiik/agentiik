@@ -248,7 +248,7 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		"artifact_uploads": true, "artifact_room": true,
 		// A workflow repository's refs and packs are its workflow's, in its namespace, and so are
 		// the image pins and brick manifests its pushes are judged against.
-		"workflow_refs": true, "git_packs": true, "image_pins": true, "brick_manifests": true,
+		"workflow_refs": true, "git_packs": true, "image_pins": true, "brick_manifests": true, "step_cache": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
