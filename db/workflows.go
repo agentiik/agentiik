@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,8 +10,9 @@ import (
 )
 
 // WorkflowRecord is a workflow's repository as the API answers it: its name, its default branch and
-// whether that branch is protected, its labels, who created it and when, and the commit its default
-// branch points at.
+// whether that branch is protected, who created it and when, and the commit its default branch
+// points at. Its labels are not read here: they are what the default version's entry point writes,
+// which the API reads from that version.
 type WorkflowRecord struct {
 	Namespace string
 	Name      string
@@ -22,7 +22,6 @@ type WorkflowRecord struct {
 	// branch is ever protected.
 	Protected bool
 
-	Labels    map[string]string
 	CreatedAt time.Time
 	// CreatedBy is who created it by POST /api/v1/{ns}/workflows, empty for a workflow from
 	// before v0.4.0 or one a tree push created.
@@ -70,16 +69,15 @@ func (n *NS) CreateWorkflow(ctx context.Context, name, branch string, protected 
 // WorkflowRecord reads one workflow's repository, or ErrNoWorkflow.
 func (n *NS) WorkflowRecord(ctx context.Context, name string) (WorkflowRecord, error) {
 	w := WorkflowRecord{Namespace: n.namespace, Name: name}
-	var labels []byte
 	var by, head *string
 	var protected *bool
 	err := n.tx.QueryRow(ctx,
-		`select w.default_branch, w.labels, w.created_at, w.created_by, r.protected, r.commit
+		`select w.default_branch, w.created_at, w.created_by, r.protected, r.commit
 		 from workflows w
 		 left join workflow_refs r on r.namespace = w.namespace and r.workflow = w.name
 		   and r.ref = 'refs/heads/' || w.default_branch
 		 where w.namespace = $1 and w.name = $2`,
-		n.namespace, name).Scan(&w.DefaultBranch, &labels, &w.CreatedAt, &by, &protected, &head)
+		n.namespace, name).Scan(&w.DefaultBranch, &w.CreatedAt, &by, &protected, &head)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowRecord{}, fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, name)
 	}
@@ -88,10 +86,6 @@ func (n *NS) WorkflowRecord(ctx context.Context, name string) (WorkflowRecord, e
 	}
 	w.CreatedBy, w.Head = deref(by), deref(head)
 	w.Protected = protected != nil && *protected
-	w.Labels = map[string]string{}
-	if err := json.Unmarshal(labels, &w.Labels); err != nil {
-		return WorkflowRecord{}, fmt.Errorf("db: the labels of workflow %s could not be read: %w", name, err)
-	}
 	return w, nil
 }
 
@@ -104,8 +98,9 @@ func (n *NS) WorkflowRecord(ctx context.Context, name string) (WorkflowRecord, e
 // protected: the branch it leaves is unprotected, and an unborn one it leaves is removed, since the
 // only ref held without a commit is the default branch nothing was pushed to yet.
 //
-// Under the lock every repository writer takes first, so that a push judging the protected branch
-// and a change of it are one before the other.
+// Under the lock every repository writer takes first, which a push takes to move its refs and under
+// which it reads protection again (UpdateRefs): a push judged before a change of it is held to the
+// change all the same.
 func (n *NS) SetDefault(ctx context.Context, workflow string, branch *string, protected *bool) (WorkflowRecord, WorkflowRecord, error) {
 	if err := n.HoldRepository(ctx, workflow); err != nil {
 		return WorkflowRecord{}, WorkflowRecord{}, err

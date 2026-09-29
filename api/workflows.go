@@ -17,7 +17,9 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/repo"
+	"github.com/agentiik/agentiik/version"
 )
 
 // A workflow's repository, as the API answers it: created empty, read with the version a run naming
@@ -29,6 +31,10 @@ type WorkflowCreate struct {
 	Name          string `json:"name"`
 	DefaultBranch string `json:"default_branch,omitempty"`
 	Protected     bool   `json:"protected,omitempty"`
+
+	// branchGiven is whether the body names a default branch, so that one it names empty is
+	// refused as the branch git could not name that it is, rather than taken for main.
+	branchGiven bool
 }
 
 func (c *WorkflowCreate) field(b *body, name string) error {
@@ -36,6 +42,7 @@ func (c *WorkflowCreate) field(b *body, name string) error {
 	case "name":
 		return text(b, &c.Name)
 	case "default_branch":
+		c.branchGiven = true
 		return text(b, &c.DefaultBranch)
 	case "protected":
 		return flag(b, &c.Protected)
@@ -169,21 +176,42 @@ func (s *Server) registerWorkflows(rt *Router) error {
 	return nil
 }
 
-// repositoryOut is a workflow's repository as the wire writes it.
-func (s *Server) repositoryOut(w db.WorkflowRecord) Repository {
+// repositoryOut is a workflow's repository as the wire writes it, its labels those the version at
+// commit writes, the version a run naming no ref runs, and none where commit is empty.
+func (s *Server) repositoryOut(ctx context.Context, w db.WorkflowRecord, commit string) Repository {
 	out := Repository{
 		Namespace: w.Namespace, Name: w.Name, DefaultBranch: w.DefaultBranch, Protected: w.Protected,
-		Labels: w.Labels, CreatedAt: w.CreatedAt.UTC(),
+		Labels: s.labelsAt(ctx, w.Namespace, w.Name, commit), CreatedAt: w.CreatedAt.UTC(),
 		CloneURL: strings.TrimRight(s.publicURL, "/") + "/" + w.Namespace + "/" + w.Name + ".git",
-	}
-	if out.Labels == nil {
-		out.Labels = map[string]string{}
 	}
 	if w.Head != "" {
 		head := w.Head
 		out.Head = &head
 	}
 	return out
+}
+
+// labelsAt is what metadata.labels writes in the entry point of the version at commit, which is
+// what the wire answers as a repository's labels: labels a search finds a workflow by, read from the
+// version they were pushed in rather than kept beside it, so that they cannot say something else.
+// None where there is no such version, it writes none, or it could not be read, since labels mean
+// nothing to the engine and a repository is answered without them rather than not at all.
+func (s *Server) labelsAt(ctx context.Context, namespace, workflow, commit string) map[string]string {
+	if commit == "" || s.versions == nil {
+		return map[string]string{}
+	}
+	g, err := s.versions.Graph(ctx, namespace, workflow, commit)
+	if err != nil {
+		return map[string]string{}
+	}
+	return labelsOf(g)
+}
+
+func labelsOf(g *graph.Graph) map[string]string {
+	if labels := g.Workflow().Metadata.Labels; labels != nil {
+		return labels
+	}
+	return map[string]string{}
 }
 
 func versionOut(l db.Listed) *Version {
@@ -201,8 +229,19 @@ func checkWorkflowName(name string) error {
 	return nil
 }
 
-// checkBranch refuses a default branch git would refuse, or one past the bound a ref is held to.
+// checkBranch refuses a default branch git would refuse, or one past the bound a ref is held to. A
+// ref named refs/heads/-x or refs/heads/@ is one git keeps, but neither is a branch anybody checks
+// out by name: git reads -x as an option and @ as HEAD, and git check-ref-format --branch refuses
+// both, as the wire's branch grammar does.
 func checkBranch(branch string) error {
+	switch {
+	case branch == "":
+		return errors.New("default_branch is empty, and a branch has a name: leave the member out for main")
+	case strings.HasPrefix(branch, "-"):
+		return fmt.Errorf("%.64q is not a branch git could name: git reads a name beginning with - as an option", branch)
+	case branch == "@":
+		return errors.New(`"@" is not a branch git could name: git reads @ alone as HEAD`)
+	}
 	if err := db.CheckRef("refs/heads/" + branch); err != nil {
 		return fmt.Errorf("%.64q is not a branch git could name: %w", branch, err)
 	}
@@ -216,7 +255,7 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		fail(w, statusOf(err), err.Error())
 		return
 	}
-	if c.DefaultBranch == "" {
+	if !c.branchGiven {
 		c.DefaultBranch = "main"
 	}
 	if err := checkWorkflowName(c.Name); err != nil {
@@ -245,7 +284,7 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		fail(w, http.StatusInternalServerError, "the workflow could not be created")
 		return
 	}
-	write(w, http.StatusCreated, s.repositoryOut(created))
+	write(w, http.StatusCreated, s.repositoryOut(r.Context(), created, ""))
 }
 
 // readWorkflow answers GET /api/v1/{ns}/workflows/{name}: the repository, the version a run naming
@@ -301,10 +340,11 @@ func (s *Server) readWorkflow(w http.ResponseWriter, r *http.Request, _ Principa
 		return
 	}
 
-	detail := WorkflowDetail{Repository: s.repositoryOut(record), History: []HistoryEntry{}}
+	detail := WorkflowDetail{Repository: s.repositoryOut(r.Context(), record, ""), History: []HistoryEntry{}}
 	if head != nil {
 		detail.Version = versionOut(*head)
 		if g, err := s.versions.Graph(r.Context(), over.Namespace, over.Workflow, head.Commit); err == nil {
+			detail.Repository.Labels = labelsOf(g)
 			if resolved, err := g.Resolved(head.Commit); err == nil {
 				detail.Graph = resolved
 			}
@@ -318,7 +358,11 @@ func (s *Server) readWorkflow(w http.ResponseWriter, r *http.Request, _ Principa
 	}
 	if err != nil {
 		if status == http.StatusInternalServerError {
-			s.report(err)
+			// What went wrong is the installation's to read, in its log: a pack that could
+			// not be read names the store and the object, which the caller has no use for.
+			s.report(fmt.Errorf("api: the history of %s/%s: %w", over.Namespace, over.Workflow, err))
+			fail(w, status, "the history could not be read")
+			return
 		}
 		fail(w, status, err.Error())
 		return
@@ -545,7 +589,11 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		fail(w, http.StatusInternalServerError, "the workflow could not be changed")
 		return
 	}
-	write(w, http.StatusOK, s.repositoryOut(after))
+	head := after.Head
+	if head == "" {
+		head, _ = s.defaultCommit(r.Context(), over)
+	}
+	write(w, http.StatusOK, s.repositoryOut(r.Context(), after, head))
 }
 
 // readTree answers GET /api/v1/{ns}/workflows/{name}/tree/{ref}: the files of the version a ref
@@ -599,6 +647,10 @@ func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, o
 		return
 	}
 	name := path[0]
+	if err := version.TreePath(name); err != nil {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("path is %.200q, which no tree holds: %v", name, err))
+		return
+	}
 	for _, f := range files {
 		if f.Path != name {
 			continue
