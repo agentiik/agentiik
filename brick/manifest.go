@@ -10,6 +10,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/internal/yamlbound"
 )
 
 // ManifestPath is where a brick carries its manifest inside its image. An image becomes
@@ -225,6 +226,14 @@ func ParseManifest(doc []byte) (Manifest, error) {
 // past included, and this one is refused where a version is made rather than where one is read
 // back.
 func ParseStoredManifest(doc []byte) (Manifest, error) {
+	// Before anything decodes it, since a manifest is read out of any image a step names, and one
+	// whose aliases stand for billions of values would hold a runner, or the API judging a push,
+	// for as long as it takes to run out of memory (package yamlbound). Held where a version is
+	// read back too: a manifest standing for that much could not have been pushed in the first
+	// place, and a runner reads every one through here.
+	if err := yamlbound.Check(doc, yamlbound.MaxValues); err != nil {
+		return Manifest{}, fmt.Errorf("the manifest is refused: %w", err)
+	}
 	var v any
 	if err := yaml.Unmarshal(doc, &v); err != nil {
 		return Manifest{}, fmt.Errorf("the manifest is not a YAML document: %w", err)

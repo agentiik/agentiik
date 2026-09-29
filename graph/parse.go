@@ -14,6 +14,7 @@ import (
 	"github.com/goccy/go-yaml/parser"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/internal/yamlbound"
 	"github.com/agentiik/agentiik/schema"
 )
 
@@ -296,13 +297,17 @@ func secretOrigins(src *source, names []string) map[string]origin {
 }
 
 // document reads the file with a YAML 1.2 parser and puts what it read on JSON's own
-// terms.
+// terms, having refused one whose aliases stand for more than a person writes, which would hold
+// whoever reads it for as long as it takes to run out of memory (package yamlbound).
 //
 // The version of YAML is load bearing rather than a preference: "the trigger block is
 // spelled on:, as the documentation spells it, and a YAML 1.1 parser reads that bare key
 // as the boolean true. A loader that does so will fail every fixture carrying a trigger,
 // and will do the same to the workflows people write."
 func document(doc []byte) (map[string]any, *ast.File, error) {
+	if err := yamlbound.Check(doc, yamlbound.MaxValues); err != nil {
+		return nil, nil, err
+	}
 	var v any
 	if err := yaml.Unmarshal(doc, &v); err != nil {
 		return nil, nil, fmt.Errorf("the file is not a YAML document: %w", err)

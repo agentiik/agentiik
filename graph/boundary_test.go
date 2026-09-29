@@ -30,15 +30,18 @@ import (
 const boundaryModule = "github.com/agentiik/agentiik/"
 
 // insideTheModule is what the layout says the evaluator may reach for: the vocabulary,
-// the store, the brick contract, the schemas a user writes, the door CEL is behind, and
-// the identifier mint that door and the vocabulary share.
+// the store, the brick contract, the schemas a user writes, the door CEL is behind, the
+// identifier mint that door and the vocabulary share, and the bound on what a YAML
+// document's aliases stand for, which the entry point and a manifest are held to before
+// either is read.
 var insideTheModule = map[string]bool{
-	"agk":           true,
-	"artifact":      true,
-	"brick":         true,
-	"schema":        true,
-	"internal/expr": true,
-	"internal/ulid": true,
+	"agk":                true,
+	"artifact":           true,
+	"brick":              true,
+	"schema":             true,
+	"internal/expr":      true,
+	"internal/ulid":      true,
+	"internal/yamlbound": true,
 }
 
 // outsideTheModule is every third party package the closure may hold, each with the
