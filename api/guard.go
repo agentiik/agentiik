@@ -19,7 +19,7 @@ import (
 // Guard is what stands in front of one route.
 //
 // The interface is closed: the only things that implement it are Needs, OnRun, OnArtifact, Across,
-// OnNamespace, Public, ForRunner and Own, because its one method is unexported. A further kind of
+// OnNamespace, OnRepository, Public, ForRunner and Own, because its one method is unexported. A further kind of
 // guard is therefore a change to this file, which is a change somebody reads, rather than a struct
 // somebody writes in a handler package.
 type Guard interface {
@@ -55,6 +55,13 @@ type guard struct {
 	// scope, and seeing where its handler is given Sees: see Needs.
 	administered bool
 	seeing       bool
+
+	// repository is set on a route taking OnRepository, which names its workflow as the
+	// repository git addresses, {repository} less .git, and asks are the permissions its handler
+	// may ask about besides, over the workflow it was authorised against: see HoldsOn.
+	repository bool
+	asks       access.Set
+	asked      []Permission
 }
 
 // Needs is a route that requires one permission at one scope.
@@ -119,6 +126,42 @@ type OnRun struct {
 func (o OnRun) guards() guard {
 	return guard{permission: o.Permission, scope: Workflow, run: true, reveals: o.Reveals}
 }
+
+// OnRepository is a route of git's smart HTTP, about one workflow's repository, which requires one
+// permission over that workflow.
+//
+// Its path names the repository as git addresses it, "GET, POST /{ns}/{name}.git/*", so its pattern
+// names {namespace} and {repository}, and the router reads the workflow as {repository} less its
+// .git, which a pattern cannot write as a wildcard of its own. It never names {workflow}: a path
+// naming the workflow twice could name two.
+//
+// What a push may do depends on what it carries, command by command: "push to an ordinary branch:
+// workflow:write; push to the protected default branch, force-push, delete a ref: grant:manage", and
+// secret:use where a commit names a secret. Only the handler reads the commands, so it is given
+// HoldsOn, which asks about the permissions Asks names, for the caller the router identified, over
+// the workflow it authorised, and about nothing else.
+type OnRepository struct {
+	Permission Permission
+	Asks       []Permission
+}
+
+func (o OnRepository) guards() guard {
+	return guard{permission: o.Permission, scope: Workflow, repository: true, asks: access.SetOf(o.Asks...), asked: o.Asks}
+}
+
+// HoldsOn answers, for the route taking OnRepository serving r, whether its caller holds a
+// permission its guard names in Asks over the workflow the route was authorised against. A
+// permission the guard does not name, or a request the router did not serve, is answered false, so
+// a handler asking about something nothing declared refuses rather than accepts.
+func HoldsOn(r *http.Request) func(context.Context, Permission) (bool, error) {
+	if held, ok := r.Context().Value(onKey{}).(func(context.Context, Permission) (bool, error)); ok {
+		return held
+	}
+	return func(context.Context, Permission) (bool, error) { return false, nil }
+}
+
+// onKey is where the router leaves the question HoldsOn asks.
+type onKey struct{}
 
 // OnArtifact is a route about one artifact, named by its logical URI, which requires one permission
 // over the workflow of the run that URI names.
@@ -345,6 +388,11 @@ func (g guard) check(method, pattern string) error {
 	}
 	if g.also != "" && !g.also.Valid() {
 		return fmt.Errorf("api: %s %s needs %q as well for some requests, which is not one of the permissions the documentation names", method, pattern, g.also)
+	}
+	for _, p := range g.asked {
+		if !p.Valid() {
+			return fmt.Errorf("api: %s %s asks about %q for some requests, which is not one of the permissions the documentation names", method, pattern, p)
+		}
 	}
 	return nil
 }

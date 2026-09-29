@@ -45,8 +45,8 @@ import (
 // cancellation, secret write, runner policy change, a runner joining, its drain and revocation, and
 // namespace changes; and from v0.3.0 the identity and access events: users, their credentials, enrolment
 // links and recovery codes, the sign-ins that succeed and fail, groups and their members, service
-// accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap.
-// Approval arrives with the wait step in v0.8.0.
+// accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap;
+// and from v0.4.0 the workflow repository's. Approval arrives with the wait step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -156,6 +156,35 @@ const (
 // those suspended for holding no passkey; each password that went, and the TOTP generator beside it,
 // is recorded after it as CredentialRemove by whoever changed the policy.
 const PolicyChange = "policy.change"
+
+// The workflow repository's events of v0.4.0. ImagePin is an image tag of a repository pinned to a
+// digest, or moved to another, at POST /api/v1/{ns}/workflows/{name}/images or with a version the
+// tree push made, recorded in the namespace with the workflow as its target, the reference, the
+// image by digest and the digest it named before where it named one: a pin decides which bytes the
+// next version of the workflow runs, with its secrets. A pin named again at the digest it holds
+// changed nothing and is not recorded.
+const ImagePin = "image.pin"
+
+// ImageManifest is a brick manifest recorded for an image of a repository, or replaced by another,
+// at POST /api/v1/{ns}/workflows/{name}/images, recorded in the namespace with the workflow as its
+// target, the image, the SHA-256 of the manifest and that of the one it replaced where there was
+// one: a version made from a manifest holds what it says of the brick, its ports, its parameters and
+// where its secrets are mounted, so whoever wrote one another pusher's version was judged by is
+// named in the log for good, where the row keeps only who wrote it last. A manifest recorded again
+// with the same bytes changed nothing and is not recorded.
+const ImageManifest = "image.manifest"
+
+// RefUpdate is a ref a git push created, moved or deleted, recorded in the namespace in the push's
+// own transaction with the workflow as its target, the ref, the object it named and the one it names
+// now, and whether the move was forced; PushRefuse is a git push refused once its pusher was known
+// to hold workflow:write, recorded in a transaction of its own since the push's is not committed,
+// with the refs it asked to move and why, the rule and where it was written where the hook refused
+// it. A version pushed is not recorded, its row keeping who pushed it, and a ref's row keeps who
+// last moved it; the log is where each move and each refusal is kept for good.
+const (
+	RefUpdate  = "ref.update"
+	PushRefuse = "push.refuse"
+)
 
 // The results an entry records.
 const (

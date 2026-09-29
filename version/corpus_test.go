@@ -28,7 +28,7 @@ import (
 // expected.json writes, and an invalid one meets exactly the refusal its refusal.json names, by
 // rule, file, line and column.
 //
-// Each case holds what the installation holds as stand-ins, the namespace's pins, manifests and
+// Each case holds what the installation holds as stand-ins, the repository's pins, manifests and
 // secret declarations, the versions already recorded and the other repositories an include reads,
 // and they reach Check as the resolvers the hook will give it, so that the case and the hook read
 // the same stores. "Permissions are not part of a case": the pusher holds whatever the push needs.

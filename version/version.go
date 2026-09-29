@@ -42,6 +42,7 @@ import (
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/yamlbound"
 )
 
 // Store answers what a version's graph is.
@@ -266,6 +267,98 @@ func (w *watcher) Open(name string) (fs.File, error) {
 		return nil, err
 	}
 	return &watched{File: f, name: name, of: w}, nil
+}
+
+// ReadFile reads a file whole through the tree's own ReadFile, and records it: fs.ReadFile would
+// otherwise open it here and size its buffer by what the file says it weighs, before the tree
+// below could refuse a byte of it.
+func (w *watcher) ReadFile(name string) ([]byte, error) {
+	b, err := fs.ReadFile(w.under, name)
+	if err != nil {
+		return nil, err
+	}
+	w.mu.Lock()
+	w.read[name] = b
+	w.mu.Unlock()
+	return b, nil
+}
+
+// ReadMaxBytes is the most the validation reads out of a tree, every file it reads together: the
+// entry point, its includes and the schemas its inputs name. 16 MiB, what one YAML document may
+// weigh (yamlbound.MaxBytes), so that reading the files a version is rebuilt from never costs more
+// than one document may. A tree push carries 4 MiB of files in all, so it never comes near it; a
+// git push carries a commit whose files may be as large as an object may, and a single entry point
+// of hundreds of mebibytes, a few kilobytes once compressed, would otherwise be read whole into the
+// memory of the installation judging it.
+const ReadMaxBytes = yamlbound.MaxBytes
+
+// budgeted is a tree whose files, together, are read up to a budget, and refused past it.
+type budgeted struct {
+	under fs.FS
+
+	mu   sync.Mutex
+	left int64
+}
+
+func (b *budgeted) Open(name string) (fs.File, error) {
+	f, err := b.under.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &budgetedFile{File: f, name: name, of: b}, nil
+}
+
+// ReadFile reads a file whole, refusing one that says it weighs more than what is left before a
+// byte of it is read, and one that turns out to as it is read.
+func (b *budgeted) ReadFile(name string) ([]byte, error) {
+	f, err := b.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err == nil {
+		b.mu.Lock()
+		left := b.left
+		b.mu.Unlock()
+		if info.Size() > left {
+			return nil, readTooMuch(name)
+		}
+	}
+	return io.ReadAll(f)
+}
+
+// readTooMuch is a file past what the validation reads.
+func readTooMuch(name string) error {
+	return fmt.Errorf("%s takes what the validation reads out of a tree past %d bytes, every file it reads together: an entry point, its includes and its schemas are text a person writes and reviews", name, ReadMaxBytes)
+}
+
+type budgetedFile struct {
+	fs.File
+	name string
+	of   *budgeted
+}
+
+// Read reads at most one byte past what is left, which is how a file past it is told from one that
+// ends exactly at it.
+func (f *budgetedFile) Read(p []byte) (int, error) {
+	f.of.mu.Lock()
+	left := f.of.left
+	f.of.mu.Unlock()
+	if left < 0 {
+		return 0, readTooMuch(f.name)
+	}
+	if int64(len(p)) > left+1 {
+		p = p[:left+1]
+	}
+	n, err := f.File.Read(p)
+	f.of.mu.Lock()
+	f.of.left -= int64(n)
+	over := f.of.left < 0
+	f.of.mu.Unlock()
+	if over {
+		return 0, readTooMuch(f.name)
+	}
+	return n, err
 }
 
 // watched records a file's bytes once it has been read to the end, which is what fs.ReadFile does

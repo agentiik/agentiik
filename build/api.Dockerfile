@@ -22,12 +22,12 @@
 # or added to it in an image built from this one.
 FROM alpine:3.21 AS certificates
 
-# The directories the object store and the bus identity are mounted at, made here since scratch has
-# no mkdir, and owned by the user below. A named volume mounted over a path the image holds takes
+# The directories the object store and the bus identity are mounted at, and the one a git push is
+# spooled to while it is checked, made here since scratch has no mkdir, and owned by the user below. A named volume mounted over a path the image holds takes
 # that path's owner and mode, so a volume mounted at the first is one the API can write objects in,
 # and one mounted at the second is one bus-init can write the identity in, readable and writable by
 # that user alone, as bus-init refuses any other.
-RUN mkdir -p /var/lib/agentiik/objects && mkdir -m 700 /var/lib/agentiik/bus
+RUN mkdir -p /var/lib/agentiik/objects /var/lib/agentiik/tmp && mkdir -m 700 /var/lib/agentiik/bus
 
 FROM scratch
 
@@ -53,6 +53,11 @@ COPY --from=certificates --chown=65532:65532 /var/lib/agentiik /var/lib/agentiik
 # which a user that is not root may bind.
 USER 65532:65532
 EXPOSE 8080
+
+# Where a git push's pack is written while it is unpacked and judged, up to 2 GiB, and removed once
+# the push is answered: scratch has no /tmp, and a pack is too large to hold in memory. It is the
+# container's own layer rather than a volume, since nothing in it outlives the request.
+ENV TMPDIR=/var/lib/agentiik/tmp
 
 # serve by default, so that the image runs the API; migrate, bus-init and bus-credential are given
 # as the command instead.

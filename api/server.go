@@ -24,6 +24,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/repo/store"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -38,9 +39,13 @@ type Server struct {
 	pool     *db.Pool
 	versions *version.Store
 	objects  artifact.Objects
-	urls     artifact.Presigner
-	limits   agk.Limits
-	now      func() time.Time
+
+	// packs is where a repository's packs are kept, nil where the object store cannot read a
+	// range of an object, which git's routes then answer 503 about.
+	packs  *store.Store
+	urls   artifact.Presigner
+	limits agk.Limits
+	now    func() time.Time
 
 	// declared are the compiled input declarations of the versions runs were started of.
 	declared *declarations
@@ -113,6 +118,16 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
 	}
 	rt.ServeRuns(runsIn{o.Pool})
+	if o.Objects != nil {
+		// An object store that cannot read a range, which no installation's is, leaves the
+		// repositories unserved rather than the API unstarted: the tree push works on it.
+		if packs, err := store.New(o.Objects); err == nil {
+			s.packs = packs
+		}
+	}
+	if err := s.registerGit(rt); err != nil {
+		return nil, err
+	}
 
 	for _, r := range []struct {
 		method  string
@@ -123,6 +138,12 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		// And secret:use where the version names a secret, which only the push can tell.
 		{"PUT", "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}",
 			Needs{Permission: WorkflowWrite, Scope: Workflow, Also: SecretUse}, s.push},
+		// What a repository's pushes are judged against beyond their tree, written under what
+		// registering a version of it takes, and read under what reading it takes.
+		{"GET", "/api/v1/{namespace}/workflows/{workflow}/images",
+			Needs{Permission: WorkflowRead, Scope: Workflow}, s.listImages},
+		{"POST", "/api/v1/{namespace}/workflows/{workflow}/images",
+			Needs{Permission: WorkflowWrite, Scope: Workflow}, s.recordImages},
 		{"POST", "/api/v1/{namespace}/workflows/{workflow}/runs",
 			Needs{Permission: WorkflowRun, Scope: Workflow}, s.start},
 		// The run by the path a Location names it by, authorised over its own workflow
@@ -326,8 +347,30 @@ const TreeMaxBytes = 4 << 20
 // version runs, held in the API's memory while it is answered. At TreeMaxBytes this many files is
 // a kibibyte each on average, which is smaller than a script usually is, so a workflow reaches it
 // only by carrying a dependency tree, and that belongs in an image. It is counted as the push is
-// read, so a tree of more is refused before its files are decoded.
+// read, so a tree of more is refused before its files are decoded. A git push holds each version it
+// makes to it too, for the same reason, for as long as every task is sent every file's URL.
 const TreeMaxFiles = 4096
+
+// errGitHosts is a tree pushed as a new version of a repository git hosts.
+var errGitHosts = errors.New("git hosts the repository")
+
+// gitHosts answers errGitHosts where a git push has given the repository a branch or a tag.
+func gitHosts(ctx context.Context, ns *db.NS, workflow string) error {
+	hosted, err := ns.GitHosted(ctx, workflow)
+	if err != nil {
+		return err
+	}
+	if hosted {
+		return errGitHosts
+	}
+	return nil
+}
+
+// hostedByGit is the refusal of a tree pushed as a new version of a repository git hosts. A commit
+// already a version is still answered, as it always is, since that push makes nothing.
+func hostedByGit(over Target) string {
+	return fmt.Sprintf("git hosts %s/%s since a git push gave it a branch or a tag, and from then on a version is a commit pushed with git: a tree pushed here would be a version no ref reaches and no clone holds", over.Namespace, over.Workflow)
+}
 
 // commitName is a commit as a push names one, and a push is held to it before anything is written.
 // Left to the table's own check, a commit that is not one was refused only by the insert, after
@@ -419,6 +462,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// unchanged: it is not judged again by a rule added after it was stored, so that an agk of
 	// the release that stored it, pushing it again after an upgrade, meets no refusal it did not
 	// meet then. The rules that stood then, secret:use and the inputs' declaration, still apply.
+	//
+	// A commit that is not a version yet is refused once git hosts the repository, before
+	// anything is written: from its first branch or tag on, a version is a commit a git push
+	// carries, and a tree pushed here would be one no ref reaches and no clone holds.
 	var stored bool
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.CheckVersion(ctx, v); err != nil {
@@ -426,13 +473,17 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		}
 		_, err := ns.Version(ctx, over.Workflow, commit)
 		stored = err == nil
-		if errors.Is(err, db.ErrNoVersion) {
-			return nil
+		if !errors.Is(err, db.ErrNoVersion) {
+			return err
 		}
-		return err
+		return gitHosts(ctx, ns, over.Workflow)
 	})
 	if errors.Is(err, db.ErrOtherTree) {
 		fail(w, http.StatusConflict, otherTree)
+		return
+	}
+	if errors.Is(err, errGitHosts) {
+		fail(w, http.StatusConflict, hostedByGit(over))
 		return
 	}
 	if err != nil {
@@ -520,6 +571,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// manifest of every image a brick step runs and the digest every tag a step names was
 	// resolved to, and nothing else the push carried, so that a rebuild reads what was accepted.
 	v.Document, v.Includes, v.Manifests, v.Images = checked.Version.Document, checked.Version.Includes, checked.Version.Manifests, checked.Version.Images
+
+	// A new version records the pins it was judged with in its repository's store, where a git
+	// push of the next commit finds them. A commit already stored is that version pushed again,
+	// and records nothing: its pins may be long stale.
+	var pins db.Images
+	if !stored {
+		pins = versionPins(v)
+	}
 	// The bytes before the row, so that a version that exists names objects that exist. A
 	// push that dies between the two leaves objects nothing references, which the collector
 	// never sees and which the next push of the same files reuses; the other order would
@@ -536,9 +595,33 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		if err := ns.SaveWorkflow(ctx, over.Workflow, p.Branch); err != nil {
 			return err
 		}
-		var err error
-		if saved, err = ns.SaveVersion(ctx, v); err != nil || saved.New {
+		// The repository's lock before the version's rows, in the order a git push takes them,
+		// so that the two never wait on each other, and so that a git push giving the
+		// repository its first ref cannot land between asking whether git hosts it and the
+		// version's row.
+		if err := ns.HoldRepository(ctx, over.Workflow); err != nil {
 			return err
+		}
+		hosted := gitHosts(ctx, ns, over.Workflow)
+		if hosted != nil && !errors.Is(hosted, errGitHosts) {
+			return hosted
+		}
+		var err error
+		if saved, err = ns.SaveVersion(ctx, v); err != nil {
+			return err
+		}
+		if saved.New && hosted != nil {
+			return hosted
+		}
+		if saved.New {
+			if len(pins.Pins) == 0 {
+				return nil
+			}
+			recorded, err := ns.RecordImages(ctx, over.Workflow, string(who), v.CreatedAt, pins)
+			if err != nil {
+				return err
+			}
+			return auditImages(ctx, ns, who, over.Workflow, recorded)
 		}
 		// The same tree pushed again, which is the version already recorded, and its
 		// images are the ones its first push resolved rather than these.
@@ -550,6 +633,12 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		// Two pushes of one commit that both compared before either recorded, and this one
 		// lost. What it stored is uncounted, as it is for a push that dies before its row.
 		fail(w, http.StatusConflict, otherTree)
+		return
+	}
+	if errors.Is(err, errGitHosts) {
+		// A git push gave the repository its first ref after this one looked. What it stored
+		// is uncounted, as it is for a push that dies before its row.
+		fail(w, http.StatusConflict, hostedByGit(over))
 		return
 	}
 	if err != nil {

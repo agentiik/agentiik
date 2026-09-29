@@ -10,6 +10,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/internal/yamlbound"
 )
 
 // ManifestPath is where a brick carries its manifest inside its image. An image becomes
@@ -225,11 +226,22 @@ func ParseManifest(doc []byte) (Manifest, error) {
 // past included, and this one is refused where a version is made rather than where one is read
 // back.
 func ParseStoredManifest(doc []byte) (Manifest, error) {
+	// Before anything decodes it, since a manifest is read out of any image a step names, and one
+	// whose aliases stand for billions of values would hold a runner, or the API judging a push,
+	// for as long as it takes to run out of memory (package yamlbound). Held where a version is
+	// read back too: a manifest standing for that much could not have been pushed in the first
+	// place, and a runner reads every one through here.
+	if err := yamlbound.Check(doc); err != nil {
+		return Manifest{}, fmt.Errorf("the manifest is refused: %w", err)
+	}
 	var v any
 	if err := yaml.Unmarshal(doc, &v); err != nil {
 		return Manifest{}, fmt.Errorf("the manifest is not a YAML document: %w", err)
 	}
-	value, err := jsonValue(v, "")
+	if err := yamlbound.CheckValue(v); err != nil {
+		return Manifest{}, fmt.Errorf("the manifest is refused: %w", err)
+	}
+	value, err := jsonValue(v, nil)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -677,12 +689,12 @@ func whole(v any) (int, error) {
 // jsonValue puts a decoded YAML value on JSON's own terms, which is what every schema
 // here is written in. A mapping keyed by anything but text is refused where it is
 // written: JSON has no such key, and a manifest is a JSON document written in YAML.
-func jsonValue(v any, where string) (any, error) {
+func jsonValue(v any, where *valueAt) (any, error) {
 	switch value := v.(type) {
 	case map[string]any:
 		converted := make(map[string]any, len(value))
 		for k, sub := range value {
-			c, err := jsonValue(sub, join(where, k))
+			c, err := jsonValue(sub, where.key(k))
 			if err != nil {
 				return nil, err
 			}
@@ -696,7 +708,7 @@ func jsonValue(v any, where string) (any, error) {
 			if !ok {
 				return nil, fmt.Errorf("%s is keyed by %v, which is not text: a manifest is a JSON document written in YAML, and JSON has no key but a string", where, k)
 			}
-			c, err := jsonValue(sub, join(where, key))
+			c, err := jsonValue(sub, where.key(key))
 			if err != nil {
 				return nil, err
 			}
@@ -706,7 +718,7 @@ func jsonValue(v any, where string) (any, error) {
 	case []any:
 		converted := make([]any, len(value))
 		for i, sub := range value {
-			c, err := jsonValue(sub, fmt.Sprintf("%s[%d]", where, i))
+			c, err := jsonValue(sub, where.index(i))
 			if err != nil {
 				return nil, err
 			}
@@ -716,13 +728,6 @@ func jsonValue(v any, where string) (any, error) {
 	default:
 		return v, nil
 	}
-}
-
-func join(where, key string) string {
-	if where == "" {
-		return key
-	}
-	return where + "." + key
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -753,4 +758,33 @@ func kindOf(v any) string {
 		return "a block"
 	}
 	return "something the language does not write"
+}
+
+// valueAt is where a value sits in the document, as the path a refusal names it by, built into text
+// only where one does. Built for every value visited, a path would cost the length of every key above
+// it once per value below it, which a document holding one long key over many values makes cost
+// gigabytes; a document whose aliases repeat that key makes it worse again.
+type valueAt struct {
+	parent *valueAt
+	name   string
+	at     int
+	keyed  bool
+}
+
+func (w *valueAt) key(k string) *valueAt { return &valueAt{parent: w, name: k, keyed: true} }
+func (w *valueAt) index(i int) *valueAt  { return &valueAt{parent: w, at: i} }
+
+// String is the path as it has always been written: keys joined by dots, indexes in brackets.
+func (w *valueAt) String() string {
+	if w == nil {
+		return ""
+	}
+	parent := w.parent.String()
+	if !w.keyed {
+		return fmt.Sprintf("%s[%d]", parent, w.at)
+	}
+	if parent == "" {
+		return w.name
+	}
+	return parent + "." + w.name
 }

@@ -18,7 +18,9 @@ require (
 	// on: as the boolean true, and on: is how the language spells the trigger block, so
 	// such a parser fails every workflow that carries a trigger. It also refuses a
 	// duplicate key without being asked, and keeps the line and column a value was
-	// written at, which is what lets a refusal point at the text the author wrote.
+	// written at, which is what lets a refusal point at the text the author wrote. Package
+	// internal/yamlbound parses a document with it into its syntax tree first, where an alias is a
+	// name, to count what its aliases stand for before either package decodes it.
 	github.com/goccy/go-yaml v1.19.2
 	// PostgreSQL, used by package db, and by agentiik-api migrate, which opens with it the one
 	// connection db.Provision takes. The documentation names the database and

@@ -32,17 +32,18 @@ const driverModule = "github.com/agentiik/agentiik/"
 
 // driverMayImport is what the layout says this package's closure may hold from inside the
 // module: the vocabulary, the store, the brick contract, the evaluator whose interface it
-// fills, the schemas, the daemon client it is the only user of, and the two internals the
-// evaluator brings with it.
+// fills, the schemas, the daemon client it is the only user of, and the three internals the
+// evaluator and the brick contract bring with them.
 var driverMayImport = map[string]bool{
-	"agk":             true,
-	"artifact":        true,
-	"brick":           true,
-	"graph":           true,
-	"schema":          true,
-	"internal/docker": true,
-	"internal/expr":   true,
-	"internal/ulid":   true,
+	"agk":                true,
+	"artifact":           true,
+	"brick":              true,
+	"graph":              true,
+	"schema":             true,
+	"internal/docker":    true,
+	"internal/expr":      true,
+	"internal/ulid":      true,
+	"internal/yamlbound": true,
 }
 
 // driverMayDependOn is every third party package the closure may hold. All of them but one

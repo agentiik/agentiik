@@ -27,7 +27,7 @@ import (
 // that is not UTF-8 or is .git somewhere, no path past its bound); the entry point, at the root
 // where c names none; the entry point and everything it includes, read and resolved; the name
 // the push is made under; the graph; the declared inputs; each image a step names by a tag,
-// pinned to the digest the namespace recorded for it; each brick step, held to the manifest
+// pinned to the digest its repository recorded for it; each brick step, held to the manifest
 // recorded for its image; the secrets, against the pusher's secret:use and the namespace's
 // declarations. The first refusal is answered, placed where the value refused was written.
 //
@@ -62,7 +62,10 @@ func Check(ctx context.Context, tree fs.FS, c Checking) (*Checked, error) {
 	// construction, and the only way to be exact, since an include may itself include and
 	// working out the closure by parsing the include blocks again would be this package
 	// reimplementing resolution in order to agree with resolution.
-	watched := &watcher{under: tree, read: map[string][]byte{}}
+	//
+	// Both it and the schemas the inputs name are read within ReadMaxBytes, together.
+	limited := &budgeted{under: tree, left: ReadMaxBytes}
+	watched := &watcher{under: limited, read: map[string][]byte{}}
 	load := graph.Load
 	if c.Stored {
 		load = graph.LoadStored
@@ -86,7 +89,7 @@ func Check(ctx context.Context, tree fs.FS, c Checking) (*Checked, error) {
 	// The boundary a trigger fills, and a schema that does not compile is a workflow whose
 	// first run cannot start. Compiled against the tree rather than what resolution read,
 	// since a schema's $ref names a file of the commit, which is not an include.
-	if _, err := wf.DeclaredInputs(tree); err != nil {
+	if _, err := wf.DeclaredInputs(limited); err != nil {
 		return nil, err
 	}
 
@@ -173,7 +176,7 @@ type Checking struct {
 	Resolvers
 }
 
-// Resolvers reach what a version is judged against beyond its own tree: the namespace's stores,
+// Resolvers reach what a version is judged against beyond its own tree: the installation's stores,
 // the repositories a workflow include names and the pusher's permissions. Each is optional, and
 // one left out is a check not made, which is how agk validate, reaching none of the
 // installation's stores, makes every check it can and none it cannot.
@@ -294,7 +297,7 @@ func pinned(ctx context.Context, wf *graph.Workflow, c Checking) (map[string]str
 			digest, err = c.Pin(ctx, st.Image, name)
 			if errors.Is(err, ErrNotHeld) {
 				return nil, &graph.Refusal{Step: name, Rule: RuleImageNotPinned, At: wf.StepAt(name, "image"), Detail: fmt.Sprintf(
-					"the step names %s by a tag, and the namespace holds no digest for it: a server runs every image by the digest its tag was pinned to and reaches no registry to resolve one, so a tag is pinned by agk push, which resolves it where the image is", st.Image)}
+					"the step names %s by a tag, and its repository holds no digest for it: a server runs every image by the digest its tag was pinned to and reaches no registry to resolve one, so a tag is pinned by agk push, which resolves it where the image is", st.Image)}
 			}
 			if err != nil {
 				return nil, err

@@ -246,8 +246,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// What a namespace is writing into the store, and what it holds, counted against its own
 		// quota.
 		"artifact_uploads": true, "artifact_room": true,
-		// A workflow repository's refs and packs are its workflow's, in its namespace.
-		"workflow_refs": true, "git_packs": true,
+		// A workflow repository's refs and packs are its workflow's, in its namespace, and so are
+		// the image pins and brick manifests its pushes are judged against.
+		"workflow_refs": true, "git_packs": true, "image_pins": true, "brick_manifests": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -530,6 +531,12 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		{`insert into grants (id, namespace, workflow, principal, role, granted_by)
 		  values ('01JQ3M8T', 'finance', $1, 'alice', 'viewer', 'alice')`, []any{workflow}},
 		{`insert into workflow_refs (namespace, workflow, ref) values ('finance', $1, 'refs/heads/main')`, []any{workflow}},
+		{`insert into image_pins (namespace, workflow, reference, image, pinned_by, pinned_at)
+		  values ('finance', $1, 'ghcr.io/acme/agk-invoice:1.4.0', $2, 'alice', now())`,
+			[]any{workflow, "ghcr.io/acme/agk-invoice@sha256:" + strings.Repeat("0", 64)}},
+		{`insert into brick_manifests (namespace, workflow, image, manifest, recorded_by, recorded_at)
+		  values ('finance', $1, $2, 'kind: Brick', 'alice', now())`,
+			[]any{workflow, "ghcr.io/acme/agk-invoice@sha256:" + strings.Repeat("0", 64)}},
 	} {
 		if _, err := conn.Exec(ctx, s.sql, s.args...); err != nil {
 			t.Fatalf("%s: %s", s.sql, err)
@@ -548,6 +555,8 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		"secret_values.name":         {secret},
 		"grants.workflow":            {workflow},
 		"workflow_refs.workflow":     {workflow},
+		"image_pins.workflow":        {workflow},
+		"brick_manifests.workflow":   {workflow},
 	}
 	for _, c := range schemaColumns(t, conn) {
 		if c.typeName == "identifier" && written[c.table+"."+c.column] == nil {

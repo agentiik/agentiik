@@ -65,6 +65,9 @@ var runnerMayImport = map[string]bool{
 	"internal/docker": true,
 	"internal/expr":   true,
 	"internal/ulid":   true,
+	// The bound on what a YAML document's aliases stand for, which a manifest read out of an
+	// image is held to before the runner decodes it: an image is anybody's to build.
+	"internal/yamlbound": true,
 	// The credential grammar, which says what kind a credential is without printing it.
 	"internal/token": true,
 	// How the agent is asked to stop, which it shares with the API and the controller.

@@ -62,6 +62,10 @@ type Router struct {
 	namespaced *http.ServeMux
 	words      map[string]bool
 
+	// git holds the routes of git's smart HTTP, /{namespace}/{repository}/..., which a request is
+	// routed to by the shape of its path alone: see muxFor.
+	git *http.ServeMux
+
 	// runners is what a runner-guarded route is checked against, and is nil on an
 	// installation that serves no runner routes. A route taking ForRunner without it is
 	// refused at registration rather than at the first heartbeat.
@@ -115,6 +119,11 @@ type Route struct {
 	// of the service accounts of the namespaces it owns, or who it is, and needs no permission:
 	// see Own.
 	Own bool
+
+	// Repository is set where the route is git's, about the repository its path names, and Asks
+	// are the permissions its handler may ask about besides Permission: see OnRepository.
+	Repository bool
+	Asks       access.Set
 }
 
 // RunnerHandler is a route a runner reaches, given the machine the credential named.
@@ -131,7 +140,7 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 	}
 	holdings, _ := auth.(Holdings)
 	return &Router{
-		mux: http.NewServeMux(), namespaced: http.NewServeMux(), words: map[string]bool{},
+		mux: http.NewServeMux(), namespaced: http.NewServeMux(), git: http.NewServeMux(), words: map[string]bool{},
 		auth: auth, identify: confined(identify), holdings: holdings,
 	}, nil
 }
@@ -265,7 +274,15 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 	if guard.administered && guard.scope == Installation {
 		return fmt.Errorf("api: %s %s is an administrator's already, at the installation, and says an administrator reaches it as well", method, pattern)
 	}
-	if !guard.public && !guard.run && !guard.members {
+	if guard.repository {
+		switch {
+		case !strings.HasPrefix(pattern, "/{namespace}/{repository}/"):
+			return fmt.Errorf("api: %s %s is git's, about the repository its path names, and its pattern begins /{namespace}/{repository}/, as git addresses one", method, pattern)
+		case strings.Contains(pattern, "{workflow}"):
+			return fmt.Errorf("api: %s %s names its workflow as its repository and as {workflow} too, which a request could make two", method, pattern)
+		}
+	}
+	if !guard.public && !guard.run && !guard.members && !guard.repository {
 		if guard.scope >= Namespace && !strings.Contains(pattern, "{namespace}") {
 			return fmt.Errorf("api: %s %s is scoped to a %s and its pattern names no {namespace}", method, pattern, guard.scope)
 		}
@@ -306,6 +323,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		Public: guard.public, OfRun: guard.run, Members: guard.members, Why: guard.why,
 		Reveals: guard.reveals, Also: guard.also,
 		OrAdministrator: guard.administered, Seeing: guard.seeing,
+		Repository: guard.repository, Asks: guard.asks,
 	})
 	return nil
 }
@@ -442,6 +460,10 @@ func (rt *Router) register(method, pattern string, h http.HandlerFunc) (err erro
 		}
 	}()
 	mux, word := rt.mux, ""
+	if strings.HasPrefix(pattern, "/{namespace}/{repository}/") {
+		rt.git.HandleFunc(method+" "+pattern, h)
+		return nil
+	}
 	if rest, under := strings.CutPrefix(pattern, apiPrefix); under {
 		first, _, _ := strings.Cut(rest, "/")
 		if strings.HasPrefix(first, "{") {
@@ -485,17 +507,66 @@ func (rt *Router) Routes() []Route {
 // A route nobody registered is a 404 from the mux, which is the same answer an inaccessible one
 // gets, and that is the right accident: an installation's surface is not a thing to enumerate by
 // asking.
-func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) { rt.muxFor(r).ServeHTTP(w, r) }
+func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	mux := rt.muxFor(r)
+	if mux == rt.git {
+		rt.serveGit(w, r)
+		return
+	}
+	mux.ServeHTTP(w, r)
+}
 
-// muxFor is the mux that answers a request: the one holding the API's own words where the path's
-// first segment after /api/v1/ is one of them, and the one holding the namespaced routes for any
-// other path under /api/v1/.
+// serveGit answers a request of git's smart HTTP, authenticated by the command line's API token
+// and nothing else.
+//
+// Git sends what its credential helper holds, a user name and a password, as Basic; the password is
+// read as the token, whatever the user name, since a helper has to be given one and nothing here
+// names a principal by it. A token sent as Bearer, as http.extraHeader sends it, is read as it is.
+// A console session is not a credential here: its cookie is dropped before anything reads it, so
+// that a page a signed-in browser is sent to cannot make it clone or push. A refusal for want of a
+// credential asks for Basic, which is what makes git ask its helper, where the API asks for Bearer.
+func (rt *Router) serveGit(w http.ResponseWriter, r *http.Request) {
+	served := r.Clone(r.Context())
+	served.Header.Del("Cookie")
+	if _, password, ok := served.BasicAuth(); ok {
+		served.Header.Set("Authorization", "Bearer "+password)
+	}
+	rt.git.ServeHTTP(challenging{w}, served)
+	// The route that answered, for whoever logs or counts requests by it, as the other muxes
+	// leave it on the request they serve.
+	r.Pattern = served.Pattern
+}
+
+// challenging answers a 401 with a challenge git's credential helper meets.
+type challenging struct{ http.ResponseWriter }
+
+func (c challenging) WriteHeader(status int) {
+	if status == http.StatusUnauthorized {
+		c.Header().Set("WWW-Authenticate", `Basic realm="Agentiik"`)
+	}
+	c.ResponseWriter.WriteHeader(status)
+}
+
+// Flush lets a pack streamed to git reach it as it is written.
+func (c challenging) Flush() {
+	if f, ok := c.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// muxFor is the mux that answers a request: the one holding git's routes where the path is a
+// repository's, /{namespace}/{name}.git/ and more; the one holding the API's own words where the
+// path's first segment after /api/v1/ is one of them; and the one holding the namespaced routes for
+// any other path under /api/v1/.
 //
 // The segment is read as the mux reads it, from the escaped path and unescaped on its own, so that
 // run%73 is the word runs to both. A path the mux would clean first, /api/v1//runs or
 // /api/v1/finance/../runs, is answered by whichever mux with the redirect to its clean form, which
 // then comes back here and is routed on that.
 func (rt *Router) muxFor(r *http.Request) *http.ServeMux {
+	if gitPath(r.URL.EscapedPath()) {
+		return rt.git
+	}
 	rest, under := strings.CutPrefix(r.URL.EscapedPath(), apiPrefix)
 	if !under {
 		return rt.mux
@@ -512,6 +583,9 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 	target := Target{
 		Namespace: r.PathValue("namespace"),
 		Workflow:  r.PathValue("workflow"),
+	}
+	if g.repository {
+		target.Workflow = strings.TrimSuffix(r.PathValue("repository"), ".git")
 	}
 
 	if g.public {
@@ -624,6 +698,14 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			return false, nil
 		}
 		return rt.allow(ctx, as, g.also, asked)
+	}))
+	// Set on every route too, answered false about any permission the route did not name, over
+	// the workflow it authorised and no other.
+	r = r.WithContext(context.WithValue(r.Context(), onKey{}, func(ctx context.Context, p Permission) (bool, error) {
+		if !g.asks.Has(p) {
+			return false, nil
+		}
+		return rt.allow(ctx, as, p, asked)
 	}))
 	request := r
 	r = r.WithContext(context.WithValue(r.Context(), stillKey{}, func(ctx context.Context) (bool, error) {
@@ -861,3 +943,20 @@ func Still(r *http.Request) func(context.Context) (bool, error) {
 
 // stillKey is where the router leaves the question Still asks.
 type stillKey struct{}
+
+// gitPath says whether an escaped path is a repository's as git addresses one, /{namespace}/{name}.git/
+// and at least one segment more: what git's smart HTTP asks for, and nothing any other route of
+// the installation serves, since no namespace name holds a dot, so that no object key under
+// /objects/ and no path under /api/v1/ has a second segment ending in .git.
+func gitPath(escaped string) bool {
+	rest, ok := strings.CutPrefix(escaped, "/")
+	if !ok {
+		return false
+	}
+	namespace, rest, ok := strings.Cut(rest, "/")
+	if !ok || namespace == "" {
+		return false
+	}
+	repository, rest, ok := strings.Cut(rest, "/")
+	return ok && rest != "" && strings.HasSuffix(repository, ".git") && len(repository) > len(".git")
+}

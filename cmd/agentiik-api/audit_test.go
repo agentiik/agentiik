@@ -17,13 +17,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/audit"
+	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/totp"
 	"github.com/agentiik/agentiik/internal/webauthn/webauthntest"
+	"github.com/agentiik/agentiik/repo"
+	"github.com/agentiik/agentiik/version"
 )
 
 // Every act an installation serves is recorded in the audit log exactly once, with the action the
@@ -45,13 +49,13 @@ var reads = []string{
 	"GET /api/v1/artifacts/{uri}", "GET /api/v1/{namespace}/secrets", "GET /api/v1/{namespace}/secrets/{name}",
 	"GET /api/v1/namespaces", "GET /api/v1/namespaces/{namespace}", "GET /api/v1/namespaces/{namespace}/quotas",
 	"GET /api/v1/{namespace}/grants", "GET /api/v1/{namespace}/workflows/{workflow}/grants",
+	"GET /api/v1/{namespace}/workflows/{workflow}/images", "GET /{namespace}/{repository}/info/refs",
 	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
 	"GET /auth/sign-in", "GET /auth/enrol", "GET /auth/assets/{name}", "GET /objects/{key...}",
 }
 
 // recordsNothing are the routes that change something the audit log does not record, each with why.
 var recordsNothing = map[string]string{
-	"PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}": "a version is a commit, its row keeping who pushed it as its author, and the page's audit log names no push",
 	"POST /api/v1/me/totp":                 "a TOTP generator started counts for nothing until POST /api/v1/me/totp/confirm enrols it, which is recorded",
 	"POST /api/v1/auth/sign-out":           "a session is no credential: a sign-out ends one and gives nobody anything",
 	"DELETE /api/v1/me/notifications/{id}": "a notification is its reader's copy of an act the log recorded, and dismissing it changes no access",
@@ -62,6 +66,9 @@ var recordsNothing = map[string]string{
 	"POST /api/v1/bus/token":               "a runner's own traffic under its credential, which no principal does",
 	"PUT /objects/{key...}":                "a task's output, stored under a URL its redemption signed, and the page's audit log names no upload",
 	"POST /objects/{namespace}":            "a task's output, stored under a policy its redemption signed, and the page's audit log names no upload",
+
+	// Git's fetch is a POST only because the protocol sends what the client has in a body.
+	"POST /{namespace}/{repository}/git-upload-pack": "a fetch reads a repository and changes nothing",
 }
 
 // actor is how a step asks: bearing a token, carrying a session from the public URL's origin, or
@@ -112,6 +119,10 @@ func (s *scenario) ask(route, path string, who actor, body any, status int) *htt
 	r := httptest.NewRequestWithContext(s.t.Context(), method, path, reader)
 	if reader != nil {
 		r.Header.Set("Content-Type", "application/json")
+		// What git sends, where the route is git's.
+		if _, service, git := strings.Cut(path, ".git/"); git && strings.HasPrefix(service, "git-") {
+			r.Header.Set("Content-Type", "application/x-"+service+"-request")
+		}
 	}
 	if who.bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+who.bearer)
@@ -447,7 +458,23 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	// owners, none but her; then she shares it, pushes, keeps a secret, and starts and cancels a run.
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"carol","role":"owner"}`, http.StatusCreated)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+s.answer(w)["id"].(string)+" finance done")
-	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}", "/api/v1/finance/workflows/monthly-invoicing/versions/"+theCommit, carol, aPush(t), http.StatusOK)
+	// A version is a commit, its row keeping who pushed it as its author, and the page's audit log
+	// names no push; what it records is the pin its tag was moved to, as recording one does.
+	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}", "/api/v1/finance/workflows/monthly-invoicing/versions/"+theCommit, carol, aTaggedPush(t), http.StatusOK,
+		"image.pin carol monthly-invoicing finance done")
+	s.act("POST /api/v1/{namespace}/workflows/{workflow}/images", "/api/v1/finance/workflows/monthly-invoicing/images", carol,
+		api.RecordImages{Pins: map[string]string{"ghcr.io/acme/agk-invoice:1.5.0": theImage}, Manifests: map[string]string{theImage: theManifest}}, http.StatusOK,
+		"image.pin carol monthly-invoicing finance done", "image.manifest carol monthly-invoicing finance done")
+	// A git push, with the command line's token since git takes no session, moves a ref, recorded
+	// as ref.update; a push the hook refuses is recorded as push.refuse.
+	w = s.ask("POST /api/v1/auth/tokens", "/api/v1/auth/tokens", carol, `{"device_label":"git"}`, http.StatusCreated)
+	s.holds("POST /api/v1/auth/tokens", "api_token.create carol "+s.answer(w)["api_token"].(map[string]any)["id"].(string)+" - done")
+	carolsGit := actor{bearer: s.answer(w)["token"].(string)}
+	s.act("POST /{namespace}/{repository}/git-receive-pack", "/finance/monthly-invoicing.git/git-receive-pack", carolsGit, aGitPush(t, "main", theWorkflow), http.StatusOK,
+		"ref.update carol monthly-invoicing finance done")
+	s.act("POST /{namespace}/{repository}/git-receive-pack", "/finance/monthly-invoicing.git/git-receive-pack", carolsGit,
+		aGitPush(t, "refused", strings.ReplaceAll(theWorkflow, theImage, "ghcr.io/acme/agk-invoice:9.9.9")), http.StatusOK,
+		"push.refuse carol monthly-invoicing finance done")
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"dave","deny":"run:read_data"}`, http.StatusCreated)
 	deny := s.answer(w)["id"].(string)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+deny+" finance done")
@@ -542,4 +569,62 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 			t.Errorf("%s is listed here, and serve builds no such route", route)
 		}
 	}
+}
+
+// aTaggedPush is the ordinary push naming its image by a tag, with the digest agk push resolved it
+// to, which pins the tag in the repository.
+func aTaggedPush(t *testing.T) api.Push {
+	t.Helper()
+	const tag = "ghcr.io/acme/agk-invoice:1.4.0"
+	document := strings.ReplaceAll(theWorkflow, theImage, tag)
+	m, err := brick.ParseManifest([]byte(theManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := version.Capture(fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(document)}}, "agentiik.yaml", map[string]brick.Manifest{tag: m})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return api.Push{
+		Entry: v.Entry, Document: v.Document, Includes: v.Includes, Manifests: v.Manifests,
+		Images: map[string]string{tag: theImage}, Branch: "main",
+		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}},
+	}
+}
+
+// aGitPush is what git sends to create a branch at a commit holding the workflow document alone:
+// the command, and a pack of the blob, the tree and the commit.
+func aGitPush(t *testing.T, branch, document string) string {
+	t.Helper()
+	blob := []byte(document)
+	tree, err := repo.EncodeTree([]repo.TreeEntry{{Name: "agentiik.yaml", Mode: repo.ModeFile, ID: repo.HashObject(repo.TypeBlob, blob)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	who := repo.Signature{Name: "Carol", Email: "carol@example.com", When: 1790690400, Zone: "+0000"}
+	commit, err := (&repo.Commit{Tree: repo.HashObject(repo.TypeTree, tree), Author: who, Committer: who, Message: "the workflow\n"}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pack bytes.Buffer
+	w, err := repo.NewPackWriter(&pack, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []struct {
+		t    repo.Type
+		data []byte
+	}{{repo.TypeBlob, blob}, {repo.TypeTree, tree}, {repo.TypeCommit, commit}} {
+		if _, err := w.Add(o.t, o.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	command, err := repo.AppendPkt(nil, []byte(strings.Repeat("0", 40)+" "+repo.HashObject(repo.TypeCommit, commit).String()+" refs/heads/"+branch+"\x00report-status\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(command) + "0000" + pack.String()
 }

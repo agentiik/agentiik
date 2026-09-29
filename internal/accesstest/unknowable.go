@@ -60,7 +60,7 @@ func (f *Fixture) financial(pattern string) map[string]string {
 	document := sha256.Sum256([]byte(fmt.Sprintf(workflowDocument, Invoicing, Finance)))
 	named := absent()
 	maps.Copy(named, map[string]string{
-		"namespace": Finance, "ns": Finance, "workflow": Invoicing, "run": run,
+		"namespace": Finance, "ns": Finance, "workflow": Invoicing, "repository": Invoicing + ".git", "run": run,
 		"uri":   url.PathEscape("agk://run/" + run + "/normalize/ok/invoice.pdf"),
 		"login": "carol", "group": TeamFinance, "pool": "default",
 		"key": Finance + "/sha256/" + hex.EncodeToString(document[:]),

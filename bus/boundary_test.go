@@ -42,6 +42,9 @@ var busMayImport = map[string]bool{
 	"schema":        true,
 	"internal/expr": true,
 	"internal/ulid": true,
+	// The bound on what a YAML document's aliases stand for, which the evaluator and the brick
+	// contract hold what they read to.
+	"internal/yamlbound": true,
 	// The TLS floor every connection holds, and which address may go without TLS.
 	"internal/tlsfloor": true,
 }

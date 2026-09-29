@@ -577,6 +577,10 @@ func (f *Fixture) Ask(ctx context.Context, method, path string, as Asker, body a
 	}
 	if reader != nil {
 		r.Header.Set("Content-Type", "application/json")
+		// What git sends, where the route is git's.
+		if _, service, git := strings.Cut(path, ".git/"); git && strings.HasPrefix(service, "git-") {
+			r.Header.Set("Content-Type", "application/x-"+service+"-request")
+		}
 	}
 	switch {
 	case as.Bearer != "":

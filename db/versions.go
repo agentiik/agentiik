@@ -188,13 +188,77 @@ func (n *NS) SaveWorkflow(ctx context.Context, name, branch string) error {
 // the same code an artifact and an envelope are counted by, so the three cannot disagree about
 // what an object is kept for.
 func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
+	saved, err := n.SaveVersions(ctx, []Version{v})
+	if err != nil {
+		return Saved{}, err
+	}
+	return saved[0], nil
+}
+
+// SaveVersions records several versions in one transaction, each as SaveVersion records it, and
+// raises the references of all of them in one pass, in digest order. Raised version by version,
+// each in its own order, a push recording two versions and another push recording one could lock
+// the rows of the objects they share in two orders, and deadlock.
+func (n *NS) SaveVersions(ctx context.Context, vs []Version) ([]Saved, error) {
+	type raising struct {
+		digest string
+		size   int64
+		of     int
+	}
+	var raises []raising
+	out := make([]Saved, len(vs))
+	for i, v := range vs {
+		tree, isNew, err := n.insertVersion(ctx, v)
+		if err != nil {
+			return nil, err
+		}
+		if !isNew {
+			continue
+		}
+		out[i].New = true
+		// One reference per distinct digest of the version: a tree holding two identical
+		// files names one object.
+		sizes := map[string]int64{}
+		for _, f := range tree {
+			sizes[f.SHA256] = f.Size
+		}
+		for digest, size := range sizes {
+			raises = append(raises, raising{digest: digest, size: size, of: i})
+		}
+	}
+	// In digest order, and in the order of the versions for one digest, because each raise locks
+	// the row it counts.
+	slices.SortFunc(raises, func(a, b raising) int {
+		if c := strings.Compare(a.digest, b.digest); c != 0 {
+			return c
+		}
+		return a.of - b.of
+	})
+	for _, r := range raises {
+		again, created, err := raise(ctx, n.tx, n.namespace, "sha256:"+r.digest, r.size, treeMediaType)
+		if err != nil {
+			return nil, err
+		}
+		if again {
+			out[r.of].MustWriteBytes = append(out[r.of].MustWriteBytes, r.digest)
+		}
+		if created {
+			out[r.of].Recorded = append(out[r.of].Recorded, r.digest)
+		}
+	}
+	return out, nil
+}
+
+// insertVersion writes a version's row, and answers its tree sorted and whether the row is new: a
+// commit recorded already with this tree is not, and one recorded with another is ErrOtherTree.
+func (n *NS) insertVersion(ctx context.Context, v Version) ([]TreeFile, bool, error) {
 	switch {
 	case v.Workflow == "" || v.Commit == "":
-		return Saved{}, fmt.Errorf("db: a version of %q at %q", v.Workflow, v.Commit)
+		return nil, false, fmt.Errorf("db: a version of %q at %q", v.Workflow, v.Commit)
 	case v.Entry == "" || len(v.Document) == 0:
-		return Saved{}, fmt.Errorf("db: version %s@%s carries no entry point, and what is stored is what it takes to rebuild it", v.Workflow, v.Commit)
+		return nil, false, fmt.Errorf("db: version %s@%s carries no entry point, and what is stored is what it takes to rebuild it", v.Workflow, v.Commit)
 	case v.Author == "":
-		return Saved{}, fmt.Errorf("db: version %s@%s has no author", v.Workflow, v.Commit)
+		return nil, false, fmt.Errorf("db: version %s@%s has no author", v.Workflow, v.Commit)
 	}
 	source := v.Source
 	switch source {
@@ -202,19 +266,19 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 		source = SourceTree
 	case SourceGit, SourceTree:
 	default:
-		return Saved{}, fmt.Errorf("db: version %s@%s arrived by %q, where a version arrives by git or as a tree", v.Workflow, v.Commit, v.Source)
+		return nil, false, fmt.Errorf("db: version %s@%s arrived by %q, where a version arrives by git or as a tree", v.Workflow, v.Commit, v.Source)
 	}
 
 	tree, err := sortedTree(v.Tree)
 	if err != nil {
-		return Saved{}, fmt.Errorf("db: version %s@%s: %w", v.Workflow, v.Commit, err)
+		return nil, false, fmt.Errorf("db: version %s@%s: %w", v.Workflow, v.Commit, err)
 	}
 	body, err := json.Marshal(stored{
 		Entry: v.Entry, Document: v.Document,
 		Includes: v.Includes, Manifests: v.Manifests, Images: v.Images,
 	})
 	if err != nil {
-		return Saved{}, fmt.Errorf("db: version %s@%s could not be written: %w", v.Workflow, v.Commit, err)
+		return nil, false, fmt.Errorf("db: version %s@%s could not be written: %w", v.Workflow, v.Commit, err)
 	}
 	// A nil tree is null in the column rather than an empty list: an empty list would be a
 	// commit with no files, and a version that said nothing about its files is not that.
@@ -222,7 +286,7 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 	if tree != nil {
 		encoded, err := json.Marshal(tree)
 		if err != nil {
-			return Saved{}, fmt.Errorf("db: the tree of %s@%s could not be written: %w", v.Workflow, v.Commit, err)
+			return nil, false, fmt.Errorf("db: the tree of %s@%s could not be written: %w", v.Workflow, v.Commit, err)
 		}
 		column = encoded
 	}
@@ -236,42 +300,16 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 		 on conflict (namespace, workflow, commit) do nothing`,
 		n.namespace, v.Workflow, v.Commit, nilIfEmpty(v.Parent), body, column, v.Author, created, source)
 	if err != nil {
-		return Saved{}, fmt.Errorf("db: version %s@%s could not be recorded: %w", v.Workflow, v.Commit, err)
+		return nil, false, fmt.Errorf("db: version %s@%s could not be recorded: %w", v.Workflow, v.Commit, err)
 	}
 
 	if tag.RowsAffected() == 0 {
 		// Already there, which CheckVersion had usually said before anything was written.
 		// Asked again here because two pushes of one commit can both have asked before
 		// either recorded, and this is the answer the second of them gets.
-		return Saved{}, compareTree(ctx, n.tx, n.namespace, v.Workflow, v.Commit, tree)
+		return nil, false, compareTree(ctx, n.tx, n.namespace, v.Workflow, v.Commit, tree)
 	}
-
-	out := Saved{New: true}
-	// One reference per distinct digest, in digest order. Per digest because a tree holding
-	// two identical files names one object, and in order because each raise locks the row it
-	// counts: two pushes sharing objects and locking them in two orders would deadlock.
-	sizes := map[string]int64{}
-	for _, f := range tree {
-		sizes[f.SHA256] = f.Size
-	}
-	digests := make([]string, 0, len(sizes))
-	for digest := range sizes {
-		digests = append(digests, digest)
-	}
-	slices.Sort(digests)
-	for _, digest := range digests {
-		again, created, err := raise(ctx, n.tx, n.namespace, "sha256:"+digest, sizes[digest], treeMediaType)
-		if err != nil {
-			return Saved{}, err
-		}
-		if again {
-			out.MustWriteBytes = append(out.MustWriteBytes, digest)
-		}
-		if created {
-			out.Recorded = append(out.Recorded, digest)
-		}
-	}
-	return out, nil
+	return tree, true, nil
 }
 
 // CheckVersion answers what SaveVersion would refuse a version for, and records nothing.
