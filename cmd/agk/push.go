@@ -63,7 +63,7 @@ func push(ctx context.Context, e Env, args []string) int {
 	entry := fs.String("f", "", "The entry point to push. Defaults to "+entryPoint+" in the directory the command is run in.")
 	namespace := fs.String("namespace", "", "The namespace to register the workflow in.")
 	server := fs.String("server", "", "The installation to push to. "+serverDefault)
-	commit := fs.String("commit", "", "The commit to push: a hash, a branch or a tag the repository holds. Defaults to HEAD.")
+	commit := fs.String("commit", "", "The commit to push: a hash, a branch or a tag the repository holds. Defaults to HEAD, the branch checked out.")
 	dirty := fs.Bool("allow-dirty", false, "Push although the working tree has uncommitted changes. The commit is pushed as it was committed either way, so this says the changes are meant to stay behind.")
 	branch := fs.String("branch", "", "The branch the push leaves at the commit. Defaults to the branch --commit names, or the branch checked out.")
 	if code, ok := parse(fs, args); !ok {
@@ -191,25 +191,38 @@ func push(ctx context.Context, e Env, args []string) int {
 	}
 	if refs[ref] == object {
 		fmt.Fprintf(e.Out, "%s/%s %s is at %s already, on %s\n", *namespace, name, ref, short(sha), where)
-		// A commit a ref is left at is a version, and its first push settled its images: a
-		// tag moved since was recorded above for the next commit, and no run of this one
-		// names it. Said, because the lines above say each tag was resolved, and somebody
-		// pushing again to pick up an image they fixed under the same tag would otherwise
-		// believe it was picked up.
-		if len(images) > 0 {
-			fmt.Fprintf(e.Err, "%s/%s@%s was already pushed, and every run of it keeps the digests its first push resolved %s to, whatever they name now: running what a tag names now takes a new commit\n",
-				*namespace, name, short(sha), strings.Join(slices.Sorted(maps.Keys(images)), ", "))
-		}
+		keptDigests(e, *namespace, name, sha, images)
 		return exitSucceeded
 	}
 	tips := make([]string, 0, len(refs))
+	already := false
 	for _, id := range refs {
 		tips = append(tips, id)
+		already = already || id == sha
 	}
 	have, err := heldHere(ctx, repo.top, tips)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
+	}
+	// A move git would make only with --force is not made: see aheadOf.
+	if old, held := refs[ref]; held {
+		if err := aheadOf(ctx, repo.top, ref, old, object, sha); err != nil {
+			refusal(e.Err, err)
+			return exitRefused
+		}
+	}
+	if below, err := shallowBelow(ctx, repo.top, sha, have); err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	} else if below != "" {
+		refusal(e.Err, fmt.Errorf("this clone is shallow, and the installation lacks the history below %s, which a version's commit reaches and this clone does not hold: git fetch --unshallow, and push again", short(below)))
+		return exitRefused
+	}
+	// Whether the commit is a version already, pushed under another ref or under one since
+	// moved on, for what keptDigests says; asked only where the workflow names a tag.
+	if !already && len(images) > 0 {
+		already = isVersion(ctx, at, *namespace, name, sha)
 	}
 	result, err := sendPack(ctx, e, at, repo.top, repository, ref, refs[ref], object, have)
 	if err != nil {
@@ -222,6 +235,9 @@ func push(ctx context.Context, e Env, args []string) int {
 	}
 
 	fmt.Fprintf(e.Out, "%s/%s@%s pushed to %s as %s\n", *namespace, name, short(sha), where, ref)
+	if already {
+		keptDigests(e, *namespace, name, sha, images)
+	}
 	fmt.Fprintf(e.Out, "%s, %s, %s, %s, %s\n",
 		counted(len(wf.Steps), "step", "steps"),
 		counted(len(tree.files), "file", "files"),
@@ -229,6 +245,19 @@ func push(ctx context.Context, e Env, args []string) int {
 		counted(len(local.texts), "manifest", "manifests"),
 		counted(len(images), "tag resolved to its digest", "tags resolved to their digests"))
 	return exitSucceeded
+}
+
+// keptDigests says that a commit pushed before keeps the images its first push resolved: a version
+// is a commit, and its first push settled its images, so a tag moved since was recorded for the next
+// commit and no run of this one names it. Said, because the lines before it say each tag was
+// resolved, and somebody pushing again to pick up an image they fixed under the same tag would
+// otherwise believe it was picked up.
+func keptDigests(e Env, namespace, name, sha string, images map[string]string) {
+	if len(images) == 0 {
+		return
+	}
+	fmt.Fprintf(e.Err, "%s/%s@%s was already pushed, and every run of it keeps the digests its first push resolved %s to, whatever they name now: running what a tag names now takes a new commit\n",
+		namespace, name, short(sha), strings.Join(slices.Sorted(maps.Keys(images)), ", "))
 }
 
 // leavingRemote is how a push the installation did not answer, or refused, leaves.
