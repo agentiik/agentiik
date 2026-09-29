@@ -110,7 +110,7 @@ func newTreeDir(workRoot string, id agk.TaskID) (string, error) {
 // A file above artifact_max_bytes is refused as it arrives, since a tree file is an object of the
 // store like any other and the store holds none larger. Files of one digest are fetched once and
 // copied, since they are one object.
-func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir string, entries []TreeEntry, l agk.Limits) (err error) {
+func layOutTree(ctx context.Context, objects artifact.Objects, namespace string, kept *cache, dir string, entries []TreeEntry, l agk.Limits) (err error) {
 	defer func() {
 		if err != nil {
 			if left := os.RemoveAll(dir); left != nil {
@@ -160,7 +160,7 @@ func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir st
 	for range min(treeFetchers, len(digests)) {
 		wg.Go(func() {
 			for digest := range work {
-				if err := writeObject(ctx, objects, namespace, dir, digest, byDigest[digest], l); err != nil {
+				if err := writeObject(ctx, objects, namespace, kept, dir, digest, byDigest[digest], l); err != nil {
 					fail(err)
 				}
 			}
@@ -209,8 +209,30 @@ func mkdirTree(dir, rel string) error {
 	return nil
 }
 
-// writeObject fetches one object and writes it at every path of the tree that names it.
-func writeObject(ctx context.Context, objects artifact.Objects, namespace, dir, digest string, at []TreeEntry, l agk.Limits) error {
+// writeObject fetches one object and writes it at every path of the tree that names it, from the
+// namespace's cache where there is one, which fetches it only where it holds none.
+func writeObject(ctx context.Context, objects artifact.Objects, namespace string, kept *cache, dir, digest string, at []TreeEntry, l agk.Limits) error {
+	if kept != nil {
+		for _, e := range at {
+			name := filepath.Join(dir, filepath.FromSlash(e.laidAt()))
+			// Twice at the most: an object the prune took between the cache answering
+			// for it and the tree linking it is fetched again, once.
+			var err error
+			for range 2 {
+				var from string
+				if from, err = kept.held(ctx, objects, namespace, digest, e, l); err != nil {
+					return err
+				}
+				if err = place(from, name, e, l); err == nil || !errors.Is(err, fs.ErrNotExist) {
+					break
+				}
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	r, err := objects.Open(ctx, artifact.Key(namespace, digest))
 	if err != nil {
 		return fmt.Errorf("runner: the tree file %s could not be fetched: %w", at[0].Path, err)

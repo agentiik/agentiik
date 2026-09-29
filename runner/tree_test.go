@@ -40,7 +40,7 @@ func TestAnExecutableTreeFileStaysExecutable(t *testing.T) {
 		"scripts/run.sh":   {"#!/bin/sh\necho by owner alone\n", "0700"},
 	})
 	dir := emptyDir(t)
-	if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err != nil {
+	if err := layOutTree(t.Context(), o, "finance", nil, dir, entries, agk.DefaultLimits()); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]os.FileMode{"entry.sh": 0o555, "lib.sh": 0o444, "run.sh": 0o555} {
@@ -66,7 +66,7 @@ func TestATreeFileArrivesAsItWasCommitted(t *testing.T) {
 	s := newObjectStore(t)
 	entries, o := treeOf(t, s, map[string]file{"templates/invoice.txt": {committed, "0644"}})
 	dir := emptyDir(t)
-	if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err != nil {
+	if err := layOutTree(t.Context(), o, "finance", nil, dir, entries, agk.DefaultLimits()); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "templates", "invoice.txt")); err != nil || string(b) != committed {
@@ -83,7 +83,7 @@ func TestATreePathOutsideTheRepositoryIsRefused(t *testing.T) {
 			entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}})
 			entries[0].Path = path
 			dir := emptyDir(t)
-			if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err == nil {
+			if err := layOutTree(t.Context(), o, "finance", nil, dir, entries, agk.DefaultLimits()); err == nil {
 				t.Fatal("the tree was laid out")
 			}
 			if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
@@ -97,13 +97,13 @@ func TestATreePathOutsideTheRepositoryIsRefused(t *testing.T) {
 	t.Run("twice", func(t *testing.T) {
 		entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}})
 		entries = append(entries, entries[0])
-		if err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, agk.DefaultLimits()); err == nil {
+		if err := layOutTree(t.Context(), o, "finance", nil, emptyDir(t), entries, agk.DefaultLimits()); err == nil {
 			t.Fatal("a path named twice was laid out")
 		}
 	})
 	t.Run("a file under a file", func(t *testing.T) {
 		entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}, "a/b": {"y", "0644"}})
-		if err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, agk.DefaultLimits()); err == nil {
+		if err := layOutTree(t.Context(), o, "finance", nil, emptyDir(t), entries, agk.DefaultLimits()); err == nil {
 			t.Fatal("a file was laid out as a directory of another")
 		}
 	})
@@ -162,7 +162,7 @@ func TestATreeIsOpenToTheContainerWhateverTheUmask(t *testing.T) {
 	s := newObjectStore(t)
 	entries, o := treeOf(t, s, map[string]file{"src/pkg/main.py": {"print(1)\n", "0644"}, "src/deep/er/x": {"x", "0644"}})
 	dir := emptyDir(t)
-	if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err != nil {
+	if err := layOutTree(t.Context(), o, "finance", nil, dir, entries, agk.DefaultLimits()); err != nil {
 		t.Fatal(err)
 	}
 	for _, rel := range []string{".", "src", "src/pkg", "src/deep", "src/deep/er"} {
@@ -182,7 +182,7 @@ func TestATreeFileAboveTheObjectLimitIsRefused(t *testing.T) {
 	entries, o := treeOf(t, s, map[string]file{"big": {strings.Repeat("x", 64), "0644"}})
 	l := agk.DefaultLimits()
 	l.ArtifactMaxBytes = 32
-	err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, l)
+	err := layOutTree(t.Context(), o, "finance", nil, emptyDir(t), entries, l)
 	if !errors.Is(err, ErrNotAsNamed) {
 		t.Errorf("a file above artifact_max_bytes answered %v", err)
 	}
