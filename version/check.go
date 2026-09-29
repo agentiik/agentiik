@@ -64,15 +64,29 @@ func Check(ctx context.Context, tree fs.FS, c Checking) (*Checked, error) {
 	// reimplementing resolution in order to agree with resolution.
 	//
 	// Both it and the schemas the inputs name are read within ReadMaxBytes, together.
-	limited := &budgeted{under: tree, left: ReadMaxBytes}
+	// A workflow include's files are read within the same budget and recorded the same way, by
+	// the reference the file wrote, since they are what the graph is rebuilt from as much as a
+	// file of this tree is.
+	limited := &budgeted{under: tree, of: &budget{left: ReadMaxBytes}}
 	watched := &watcher{under: limited, read: map[string][]byte{}}
+	var reached *reaching
+	var remote graph.Remote
+	if c.Include != nil {
+		reached = &reaching{ctx: ctx, include: c.Include, budget: limited.of, read: map[string]*library{}}
+		remote = reached
+	}
+
+	// A repository's root file written as a fragment is a library's: "a library repository,
+	// which its own hook validates as a fragment and nothing runs".
+	if entry == EntryPoint {
+		if doc, err := fs.ReadFile(watched, entry); err == nil && graph.IsLibrary(doc) {
+			return checkLibrary(watched, remote, reached, c)
+		}
+	}
+
 	load := graph.Load
 	if c.Stored {
 		load = graph.LoadStored
-	}
-	var remote graph.Remote
-	if c.Include != nil {
-		remote = reaching{ctx: ctx, include: c.Include}
 	}
 	wf, err := load(watched, entry, remote)
 	if err != nil {
@@ -102,7 +116,7 @@ func Check(ctx context.Context, tree fs.FS, c Checking) (*Checked, error) {
 		return nil, err
 	}
 
-	checked := &Checked{Workflow: wf, Commit: c.Commit, Version: db.Version{Entry: entry, Includes: map[string][]byte{}, Manifests: map[string][]byte{}}}
+	checked := &Checked{Workflow: wf, Included: wf.Included(), Commit: c.Commit, Version: db.Version{Entry: entry, Includes: map[string][]byte{}, Manifests: map[string][]byte{}}}
 	if len(pins) > 0 {
 		checked.Version.Images = pins
 	}
@@ -131,17 +145,54 @@ func Check(ctx context.Context, tree fs.FS, c Checking) (*Checked, error) {
 		return nil, err
 	}
 
-	for p, body := range watched.read {
-		if p == entry {
-			checked.Version.Document = body
-			continue
-		}
-		checked.Version.Includes[p] = body
-	}
-	if checked.Version.Document == nil {
-		return nil, fmt.Errorf("version: the entry point %s was not read", entry)
+	if err := checked.recordRead(watched, reached); err != nil {
+		return nil, err
 	}
 	return checked, nil
+}
+
+// checkLibrary judges a library's commit: its root file read as a fragment and everything it
+// includes resolved, as graph.LoadLibrary sets out, and nothing else. No step of it runs, so no
+// image is pinned, no manifest held and no secret asked about: a step it writes is judged where a
+// workflow includes it, by that workflow's push, whose pusher answers for every secret the
+// library names as for the ones the workflow does, since SecretsNamed reads them all.
+func checkLibrary(watched *watcher, remote graph.Remote, reached *reaching, c Checking) (*Checked, error) {
+	load := graph.LoadLibrary
+	if c.Stored {
+		load = graph.LoadStoredLibrary
+	}
+	included, err := load(watched, remote)
+	if err != nil {
+		return nil, err
+	}
+	checked := &Checked{Library: true, Included: included, Commit: c.Commit, Version: db.Version{Entry: EntryPoint, Library: true, Includes: map[string][]byte{}}}
+	if err := checked.recordRead(watched, reached); err != nil {
+		return nil, err
+	}
+	return checked, nil
+}
+
+// recordRead puts in the version what resolution read: the entry point, every file of this tree
+// it included and every file of each library a workflow include reached.
+func (c *Checked) recordRead(watched *watcher, reached *reaching) error {
+	entry := c.Version.Entry
+	for p, body := range watched.read {
+		if p == entry {
+			c.Version.Document = body
+			continue
+		}
+		c.Version.Includes[p] = body
+	}
+	if c.Version.Document == nil {
+		return fmt.Errorf("version: the entry point %s was not read", entry)
+	}
+	if reached != nil && len(reached.read) > 0 {
+		c.Version.Libraries = make(map[string]db.LibraryFiles, len(reached.read))
+		for ref, l := range reached.read {
+			c.Version.Libraries[ref] = db.LibraryFiles{Commit: l.commit, Files: maps.Clone(l.files.read)}
+		}
+	}
+	return nil
 }
 
 // Checking is what Check is told beside the tree.
@@ -213,10 +264,18 @@ var ErrNotHeld = errors.New("version: not held")
 
 // Checked is a tree Check accepted: the workflow as it resolved, the graph where manifests were
 // reached, and the version it would be made of.
+//
+// A library's commit is accepted as a library, Library set, with no workflow and no graph: its
+// root file is a fragment, which nothing runs.
 type Checked struct {
 	Workflow *graph.Workflow
 	Graph    *graph.Graph
 	Commit   string
+	Library  bool
+
+	// Included is every include resolution applied, in the order it applied them, each workflow
+	// include with the commit its ref resolved to.
+	Included []graph.Included
 
 	// Version is what a version holds to be rebuilt with nothing in reach: the entry point and
 	// every file resolution read, the manifest of every image a brick step runs by the reference
@@ -248,14 +307,30 @@ func (e *SecretsNotUsable) Error() string {
 	return fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use: whoever writes a secret's name into a workflow answers for its value going into a container", noun, strings.Join(e.Named, ", "))
 }
 
-// reaching is Include as graph.Remote, under the context of the check.
+// reaching is Include as graph.Remote, under the context of the check, and what each library it
+// reached was read of, by the reference the file wrote.
 type reaching struct {
 	ctx     context.Context
 	include func(context.Context, graph.WorkflowRef) (fs.FS, string, error)
+	budget  *budget
+	read    map[string]*library
 }
 
-func (r reaching) Include(ref graph.WorkflowRef) (fs.FS, string, error) {
-	return r.include(r.ctx, ref)
+// library is one library a workflow include reached: the commit its ref resolved to, and its files
+// as they were read.
+type library struct {
+	commit string
+	files  *watcher
+}
+
+func (r *reaching) Include(ref graph.WorkflowRef) (fs.FS, string, error) {
+	fsys, commit, err := r.include(r.ctx, ref)
+	if err != nil {
+		return nil, "", err
+	}
+	files := &watcher{under: &budgeted{under: fsys, of: r.budget}, read: map[string][]byte{}}
+	r.read[ref.String()] = &library{commit: commit, files: files}
+	return files, commit, nil
 }
 
 // underItsName holds the file's metadata to where the push is made.

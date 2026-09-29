@@ -209,6 +209,9 @@ type WorkflowRef struct {
 	Ref       string
 }
 
+// String is the reference as <namespace>/<name>@<ref>, the ref left out where there is none.
+func (r WorkflowRef) String() string { return r.text() }
+
 // text writes the reference back the way the file writes it.
 func (r WorkflowRef) text() string {
 	s := r.Namespace + "/" + r.Name

@@ -63,6 +63,53 @@ type Remote interface {
 // agentiik.yaml, written as a fragment".
 const libraryEntry = "agentiik.yaml"
 
+// LoadLibrary reads a library repository's root agentiik.yaml as a fragment and resolves what it
+// includes, which is what "its own hook validates as a fragment" means: the file read on a
+// fragment's terms, every path include inside the tree and every workflow include reached through
+// remote, each at most once and none coming back to a file still being resolved. It answers what
+// was included, in the order it applied.
+//
+// Nothing else is held of it. A step the library writes may extend a block the workflow including
+// it declares, or be completed by that workflow's defaults, so the steps are resolved where the
+// library is included, against everything the workflow reaches, and never on their own here.
+func LoadLibrary(fsys fs.FS, remote Remote) ([]Included, error) {
+	return loadLibrary(fsys, remote, ParseFragment)
+}
+
+// LoadStoredLibrary is LoadLibrary for a library already stored, with the rules it was stored
+// under, as LoadStored is Load's.
+func LoadStoredLibrary(fsys fs.FS, remote Remote) ([]Included, error) {
+	return loadLibrary(fsys, remote, parseFragment)
+}
+
+func loadLibrary(fsys fs.FS, remote Remote, fragment func([]byte) (*Fragment, error)) ([]Included, error) {
+	if fsys == nil {
+		return nil, fmt.Errorf("the library cannot be loaded: its root %s is read out of the tree of a commit", libraryEntry)
+	}
+	doc, err := fs.ReadFile(fsys, libraryEntry)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", libraryEntry, err)
+	}
+	f, err := fragment(doc)
+	if err != nil {
+		return nil, inFile(err, libraryEntry)
+	}
+	f.src.name = libraryEntry
+	held := &included{
+		blocks:   map[string]stepValues{},
+		values:   map[agk.Step]stepValues{},
+		vars:     Vars{},
+		visited:  map[string]bool{},
+		open:     map[string]bool{libraryEntry: true},
+		fragment: fragment,
+		remote:   remote,
+	}
+	if err := held.gather(fileTree{fsys: fsys}, ".", f.include, f.includeAt); err != nil {
+		return nil, err
+	}
+	return held.applied, nil
+}
+
 // load is Load and LoadStored, reading the entry point with workflow and every file it includes
 // with fragment.
 func load(fsys fs.FS, entry string, remote Remote, workflow func([]byte) (*Workflow, error), fragment func([]byte) (*Fragment, error)) (*Workflow, error) {

@@ -201,6 +201,28 @@ func ParseFragment(doc []byte) (*Fragment, error) {
 	return f, nil
 }
 
+// IsLibrary says whether a repository's root file is written as a library's: a fragment, which
+// another workflow includes and nothing runs, rather than an entry point.
+//
+// It is told apart by what makes an entry point and a fragment never carries: apiVersion, kind and
+// metadata, the three keys that say what a document is and what it is called. A root file carrying
+// any one of them is an entry point, read as one and refused as one where it lacks the others, so
+// that a workflow that forgot its apiVersion is told so rather than taken for a library nothing
+// runs. A document that cannot be read is no library either, and the entry point's reading refuses
+// it.
+func IsLibrary(doc []byte) bool {
+	root, _, err := document(doc)
+	if err != nil {
+		return false
+	}
+	for _, key := range []string{"apiVersion", "kind", "metadata"} {
+		if _, ok := root[key]; ok {
+			return false
+		}
+	}
+	return true
+}
+
 // parseFragment is ParseFragment less the rules added since a version could be stored, which is
 // how a fragment a stored version carries is read back (LoadStored).
 func parseFragment(doc []byte) (*Fragment, error) {

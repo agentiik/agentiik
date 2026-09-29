@@ -184,12 +184,16 @@ type Listed struct {
 	Author    string
 	CreatedAt time.Time
 	Source    string
+
+	// Library says the commit is a library's, which nothing runs.
+	Library bool
 }
 
 // VersionsAt reads, of the commits given, those that are versions of the workflow, by commit.
 func (n *NS) VersionsAt(ctx context.Context, workflow string, commits []string) (map[string]Listed, error) {
 	rows, err := n.tx.Query(ctx,
-		`select commit, parent, author, created_at, source from workflow_versions
+		`select commit, parent, author, created_at, source, coalesce((graph->>'library')::boolean, false)
+		 from workflow_versions
 		 where namespace = $1 and workflow = $2 and commit = any($3)`,
 		n.namespace, workflow, commits)
 	if err != nil {
@@ -224,7 +228,8 @@ func (n *NS) TreeVersions(ctx context.Context, workflow, from string, limit int)
 		}
 	}
 	rows, err := n.tx.Query(ctx,
-		`select commit, parent, author, created_at, source from workflow_versions
+		`select commit, parent, author, created_at, source, coalesce((graph->>'library')::boolean, false)
+		 from workflow_versions
 		 where namespace = $1 and workflow = $2 and source = 'tree'
 		   and ($3 = '' or (created_at, commit) <= ($4, $3))
 		 order by created_at desc, commit desc
@@ -248,7 +253,7 @@ func (n *NS) TreeVersions(ctx context.Context, workflow, from string, limit int)
 func scanListed(row pgx.CollectableRow) (Listed, error) {
 	var l Listed
 	var parent *string
-	err := row.Scan(&l.Commit, &parent, &l.Author, &l.CreatedAt, &l.Source)
+	err := row.Scan(&l.Commit, &parent, &l.Author, &l.CreatedAt, &l.Source, &l.Library)
 	l.Parent = deref(parent)
 	return l, err
 }
