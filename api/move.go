@@ -22,15 +22,14 @@ func movingSentence(over Target) string {
 	return fmt.Sprintf("%s/%s is being moved to another namespace, and is frozen until the move is carried out: its pushes, runs, replays and changes are refused meanwhile, and it answers at its new place once it is done", over.Namespace, over.Workflow)
 }
 
-// movable judges a move of over, which will be called name, to target, and answers false once it has
-// said why it is refused.
-//
-// The secrets first: "refused where it names a secret the target does not declare", which the
-// versions its branches and tags point at say, or the latest version a tree push recorded while no
-// git push has given it any: what a run naming no commit, or naming a branch or a tag, runs. A
-// commit named by its hash, which no ref points at, is judged at its redemption as a version is
-// after a declaration it names is removed. Then everything db.Pool.CheckMove refuses.
-func (s *Server) movable(w http.ResponseWriter, ctx context.Context, over Target, name, target string) bool {
+// movable judges the secrets a move of over to target is refused for, and answers false once it has
+// said why: "refused where it names a secret the target does not declare", which the versions its
+// branches and tags point at say, or the latest version a tree push recorded while no git push has
+// given it any: what a run naming no commit, or naming a branch or a tag, runs. A commit named by its
+// hash, which no ref points at, is judged at its redemption as a version is after a declaration it
+// names is removed. Everything else a move is refused for is judged as it is asked, in the
+// transaction that asks it (db.Pool.AskMove).
+func (s *Server) movable(w http.ResponseWriter, ctx context.Context, over Target, target string) bool {
 	missing, err := s.undeclaredIn(ctx, over, target)
 	if err != nil {
 		s.report(fmt.Errorf("api: the secrets %s/%s names could not be read: %w", over.Namespace, over.Workflow, err))
@@ -46,16 +45,23 @@ func (s *Server) movable(w http.ResponseWriter, ctx context.Context, over Target
 			over.Namespace, over.Workflow, plural(missing, "the secret", "the secrets"), target, them, target))
 		return false
 	}
-	return s.moveRefusal(w, s.pool.CheckMove(ctx, over.Namespace, over.Workflow, name, target), over, name, target)
+	return true
 }
 
-// askMove asks the move of over to target, and answers 202 with where the workflow will be read
-// once it is carried out.
-func (s *Server) askMove(w http.ResponseWriter, ctx context.Context, who Principal, over Target, target string) {
-	if !s.moveRefusal(w, s.pool.AskMove(ctx, over.Namespace, over.Workflow, target, string(who), s.now()), over, over.Workflow, target) {
+// askMove asks the move of over to target, with what else the request changes, and answers 202 with
+// where the workflow will be read once it is carried out, under name, the name it has then. What
+// change was refused for is answered by refused, and the move refused changes nothing.
+func (s *Server) askMove(w http.ResponseWriter, ctx context.Context, who Principal, over Target, name, target string, change db.Change, refused func(error) bool) {
+	err := s.pool.AskMove(ctx, over.Namespace, over.Workflow, target, string(who), s.now(), change)
+	var besides *db.ChangeRefused
+	if errors.As(err, &besides) {
+		refused(besides.Err)
 		return
 	}
-	w.Header().Set("Location", fmt.Sprintf("/api/v1/%s/workflows/%s", target, over.Workflow))
+	if !s.moveRefusal(w, err, over, name, target) {
+		return
+	}
+	w.Header().Set("Location", fmt.Sprintf("/api/v1/%s/workflows/%s", target, name))
 	w.WriteHeader(http.StatusAccepted)
 }
 

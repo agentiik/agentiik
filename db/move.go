@@ -102,37 +102,53 @@ func (n *NS) Moving(ctx context.Context, workflow string) error {
 	return moving(ctx, n.tx, n.namespace, workflow)
 }
 
+// Change is what a request asking a move changes besides, made first in the move's transaction and
+// in the workflow's namespace, so that a move refused changes nothing: "each field is under its own
+// permission, and a request naming several changes nothing unless every one of them is held". It
+// answers the name the workflow has once it is made, which is the name the move holds in the
+// target, and the audit records it makes, which are appended last.
+type Change func(ctx context.Context, ns *NS) (name string, records []audit.Record, err error)
+
+// ChangeRefused is what a Change was refused for, told apart from what the move is refused for,
+// since both can be a name taken: the change's in the namespace the workflow is in, the move's in
+// the target.
+type ChangeRefused struct{ Err error }
+
+func (e *ChangeRefused) Error() string { return e.Err.Error() }
+func (e *ChangeRefused) Unwrap() error { return e.Err }
+
 // AskMove judges a move of a workflow to target and, where it may be made, holds its name there and
-// freezes it until the controller carries it out.
+// freezes it until the controller carries it out. change, where it is not nil, is made first, and
+// is undone with everything else where the move is refused.
 //
 // In one transaction on the installation, since it reads both namespaces: the workflow's row under
 // the lock every writer of its repository takes, then the name in the target under the lock every
-// creation of a name takes. It is refused, in this order: ErrNoWorkflow; ErrWorkflowMoving where a
-// move of it was asked already; ErrNoNamespace where the target does not exist; ErrRunsGoing while a
-// run of it has not finished; SharedOutputs where one of its runs and a run of another workflow
-// share outputs a cache hit republished; ErrWorkflowExists or ErrWorkflowPurging where the target
-// holds the name; NoRoomToMove where the target's max_artifact_bytes cannot hold its live artifacts.
+// creation of a name takes. It is refused, in this order: ChangeRefused; ErrNoWorkflow;
+// ErrWorkflowMoving where a move of it was asked already; ErrNoNamespace where the target does not
+// exist; ErrRunsGoing while a run of it has not finished; SharedOutputs where one of its runs and a
+// run of another workflow share outputs a cache hit republished; ErrWorkflowExists or
+// ErrWorkflowPurging where the target holds the name; NoRoomToMove where the target's
+// max_artifact_bytes cannot hold its live artifacts beside those of the moves asked to it before.
 //
 // Its cache entries go at once, which it could not be refused for: a cache is what it costs to make
 // an output again, and an entry another workflow's run found while this one waits would be outputs
 // shared across the move.
-func (p *Pool) AskMove(ctx context.Context, namespace, workflow, target, by string, at time.Time) error {
-	return p.askMove(ctx, namespace, workflow, workflow, target, by, at, false)
-}
-
-// CheckMove is AskMove judging the move and changing nothing, for a request that changes the
-// workflow in other ways as well and makes none of its changes where the move would be refused.
-// name is what the workflow will be called by then, the name it takes in the target.
-func (p *Pool) CheckMove(ctx context.Context, namespace, workflow, name, target string) error {
-	return p.askMove(ctx, namespace, workflow, name, target, "", time.Time{}, true)
-}
-
-// errJudged ends the transaction CheckMove judged the move in, so that it writes nothing.
-var errJudged = errors.New("db: the move was judged and nothing written")
-
-func (p *Pool) askMove(ctx context.Context, namespace, workflow, name, target, by string, at time.Time, dry bool) error {
-	err := p.Installation(ctx, WorkflowMove, func(ctx context.Context, w *Wide) error {
+func (p *Pool) AskMove(ctx context.Context, namespace, workflow, target, by string, at time.Time, change Change) error {
+	return p.Installation(ctx, WorkflowMove, func(ctx context.Context, w *Wide) error {
 		tx := w.tx
+		var records []audit.Record
+		if change != nil {
+			var refused error
+			if err := w.within(ctx, namespace, func(ctx context.Context, ns *NS) error {
+				workflow, records, refused = change(ctx, ns)
+				return refused
+			}); err != nil {
+				if refused != nil {
+					return &ChangeRefused{Err: refused}
+				}
+				return err
+			}
+		}
 		var one int
 		err := tx.QueryRow(ctx,
 			`select 1 from workflows where namespace = $1 and name = $2 and deleted_at is null for no key update`,
@@ -165,26 +181,23 @@ func (p *Pool) askMove(ctx context.Context, namespace, workflow, name, target, b
 		if err := sharedOutputs(ctx, tx, namespace, workflow); err != nil {
 			return err
 		}
-		if err := nameKept(ctx, tx, target, name); err != nil {
+		if err := nameKept(ctx, tx, target, workflow); err != nil {
 			return err
 		}
 		var held, purging bool
 		if err := tx.QueryRow(ctx,
 			`select count(*) > 0, coalesce(bool_or(deleted_at is not null), false) from workflows where namespace = $1 and name = $2`,
-			target, name).Scan(&held, &purging); err != nil {
-			return fmt.Errorf("db: whether %s/%s is taken could not be read: %w", target, name, err)
+			target, workflow).Scan(&held, &purging); err != nil {
+			return fmt.Errorf("db: whether %s/%s is taken could not be read: %w", target, workflow, err)
 		}
 		switch {
 		case purging:
-			return fmt.Errorf("%w: %s/%s", ErrWorkflowPurging, target, name)
+			return fmt.Errorf("%w: %s/%s", ErrWorkflowPurging, target, workflow)
 		case held:
-			return fmt.Errorf("%w: %s/%s", ErrWorkflowExists, target, name)
+			return fmt.Errorf("%w: %s/%s", ErrWorkflowExists, target, workflow)
 		}
 		if err := roomToMove(ctx, tx, namespace, workflow, target); err != nil {
 			return err
-		}
-		if dry {
-			return errJudged
 		}
 		if _, err := tx.Exec(ctx,
 			`insert into workflow_moves (namespace, workflow, target, asked_by, asked_at) values ($1, $2, $3, $4, $5)`,
@@ -202,12 +215,13 @@ func (p *Pool) askMove(ctx context.Context, namespace, workflow, name, target, b
 			namespace, workflow); err != nil {
 			return fmt.Errorf("db: the cache entries of %s could not be let go: %w", workflow, err)
 		}
+		for _, r := range records {
+			if err := w.AuditIn(ctx, namespace, r); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
-	if errors.Is(err, errJudged) {
-		return nil
-	}
-	return err
 }
 
 // sharedOutputs refuses a workflow one of whose runs republished outputs a run of another workflow
@@ -235,7 +249,10 @@ func sharedOutputs(ctx context.Context, tx pgx.Tx, namespace, workflow string) e
 
 // roomToMove refuses a move whose target's max_artifact_bytes cannot hold the workflow's live
 // artifacts beside what it holds, each digest counted once, as the quota counts one, and those the
-// target holds already not at all.
+// target holds already not at all. The moves asked to the target and not yet carried out bring
+// theirs too, and are counted with this one's: two moves asked one after the other, each within the
+// quota alone, would otherwise be carried out beyond it together. The moves into one target are
+// judged one at a time for that, under a lock on the target no other write takes.
 func roomToMove(ctx context.Context, tx pgx.Tx, namespace, workflow, target string) error {
 	var limit *int64
 	if err := tx.QueryRow(ctx, `select max_artifact_bytes from namespaces where name = $1`, target).Scan(&limit); err != nil {
@@ -244,6 +261,9 @@ func roomToMove(ctx context.Context, tx pgx.Tx, namespace, workflow, target stri
 	if limit == nil {
 		return nil
 	}
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1, 57))`, "moves-into:"+target); err != nil {
+		return fmt.Errorf("db: the moves into %s could not be held: %w", target, err)
+	}
 	var held, bringing int64
 	if err := tx.QueryRow(ctx, `
 		with held as (`+heldBytes(" and namespace = $1", " and namespace = $1")+`),
@@ -251,7 +271,11 @@ func roomToMove(ctx context.Context, tx pgx.Tx, namespace, workflow, target stri
 		  select a.digest, max(a.size_bytes) as bytes
 		  from artifacts a
 		  join runs r on r.namespace = a.namespace and r.id = a.run_id
-		  where r.namespace = $2 and r.workflow = $3 and a.status = 'live' and a.expires_at > now()
+		  join (select $2::text as namespace, $3::text as workflow
+		        union
+		        select namespace, workflow from workflow_moves where target = $1) as m
+		    on m.namespace = r.namespace and m.workflow = r.workflow
+		  where a.status = 'live' and a.expires_at > now()
 		  group by a.digest
 		)
 		select (select coalesce(sum(bytes), 0) from held)::bigint,
@@ -306,9 +330,14 @@ func (p *Pool) Moves(ctx context.Context, batch int) ([]Move, error) {
 // of the objects the workflow's rows count, without the sha256: they are stored under, the keys of
 // its logs, and the names of its packs. Ready is false while it cannot be carried out yet, a run of
 // it not finished or a pack of it being collected, and the copying waits with it.
+//
+// Indexed are the keys of Logs whose chunks were indexed as they were read, whose objects were
+// written then: the move is carried out only where no other chunk has been indexed since, which a
+// task still stopping as its run ended can ship, and which the copy could not have seen.
 type MoveObjects struct {
 	Digests []string
 	Logs    []string
+	Indexed []string
 	Packs   []string
 	Ready   bool
 }
@@ -335,6 +364,9 @@ func (p *Pool) ObjectsOf(ctx context.Context, m Move) (MoveObjects, error) {
 		if out.Logs, err = movingLogs(ctx, w.tx, m); err != nil {
 			return err
 		}
+		if out.Indexed, err = indexedLogs(ctx, w.tx, m.Namespace, m.Workflow); err != nil {
+			return err
+		}
 		rows, err := w.tx.Query(ctx, `
 			select name from git_packs
 			where namespace = $1 and repository = $2 and state in ('live', 'superseded')
@@ -355,8 +387,10 @@ func (p *Pool) ObjectsOf(ctx context.Context, m Move) (MoveObjects, error) {
 }
 
 // moveReady says whether a move can be carried out now: no run of the workflow unfinished, since a
-// run let in before the move was asked may still be finishing, and no pack of its repository being
-// collected, whose files the collection is deleting under the source's keys.
+// run let in before the move was asked may still be finishing; no pack of its repository being
+// collected, whose files the collection is deleting under the source's keys; and no outputs shared
+// with a run of another workflow, which a cache hit the controller had found as the move was asked
+// can still have republished, and which the move waits out as it would have been refused for them.
 func moveReady(ctx context.Context, tx pgx.Tx, m Move) (bool, error) {
 	var waiting bool
 	err := tx.QueryRow(ctx, `
@@ -366,7 +400,33 @@ func moveReady(ctx context.Context, tx pgx.Tx, m Move) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("db: whether the move of %s can be carried out could not be read: %w", m.Workflow, err)
 	}
-	return !waiting, nil
+	if waiting {
+		return false, nil
+	}
+	var shared *SharedOutputs
+	switch err := sharedOutputs(ctx, tx, m.Namespace, m.Workflow); {
+	case errors.As(err, &shared):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
+}
+
+// indexedLogs are the keys of the chunks the logs of the workflow's runs hold in namespace, in the
+// order of the keys: those the store was written at, since a chunk is indexed once its object is
+// written and not before.
+func indexedLogs(ctx context.Context, tx pgx.Tx, namespace, workflow string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		select distinct c.object_key from task_log_chunks c
+		join tasks t on t.namespace = c.namespace and t.id = c.task_id
+		join runs r on r.namespace = t.namespace and r.id = t.run_id
+		where r.namespace = $1 and r.workflow = $2 and c.object_key is not null
+		order by 1`, namespace, workflow)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
 // movedCount is how many times the workflow's rows count one object, and what it is.
@@ -565,9 +625,16 @@ type Moved struct {
 // the expiry of its runs and artifacts is brought within the target's max_retention_days; and the
 // move is recorded as workflow.update in both namespaces, as the one who asked for it.
 //
-// The objects are copied under the target's keys before it, and it is Done false, having changed
-// nothing, while the move is not ready or no longer asked.
-func (p *Pool) CompleteMove(ctx context.Context, m Move, grace time.Duration) (Moved, error) {
+// The objects are copied under the target's keys before it, those ObjectsOf read as copied, and it
+// is Done false, having changed nothing, while the move is not ready or no longer asked, and where a
+// chunk of its logs was indexed since copied was read, which the next pass copies.
+//
+// The logs of the workflow's runs and its live artifacts are held first, in that order, which is
+// the order a shipment holds a log and then its task in: a shipment writing a chunk finishes before
+// the move reads what it counts and rewrites, and one after it waits for the move and is then
+// refused, its runner shipping it again under the target's keys; and a fetch that would spend an
+// artifact's last fetch cannot retire it between the move counting it and letting it go.
+func (p *Pool) CompleteMove(ctx context.Context, m Move, copied MoveObjects, grace time.Duration) (Moved, error) {
 	var out Moved
 	err := p.Installation(ctx, WorkflowMove, func(ctx context.Context, w *Wide) error {
 		out = Moved{}
@@ -587,6 +654,22 @@ func (p *Pool) CompleteMove(ctx context.Context, m Move, grace time.Duration) (M
 		ready, err := moveReady(ctx, tx, m)
 		if err != nil || !ready {
 			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			select 1 from task_logs l
+			join tasks t on t.namespace = l.namespace and t.id = l.task_id
+			join runs r on r.namespace = t.namespace and r.id = t.run_id
+			where r.namespace = $1 and r.workflow = $2
+			order by l.task_id
+			for update of l`, m.Namespace, m.Workflow); err != nil {
+			return fmt.Errorf("db: the logs of %s could not be held: %w", m.Workflow, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			select 1 from artifacts a
+			join runs r on r.namespace = a.namespace and r.id = a.run_id
+			where r.namespace = $1 and r.workflow = $2 and a.status = 'live'
+			for update of a`, m.Namespace, m.Workflow); err != nil {
+			return fmt.Errorf("db: the artifacts of %s could not be held: %w", m.Workflow, err)
 		}
 
 		counted, err := w.movingCounts(ctx, m)
@@ -671,6 +754,17 @@ func (p *Pool) CompleteMove(ctx context.Context, m Move, grace time.Duration) (M
 			m.Namespace, m.Workflow, m.Target); err != nil {
 			return fmt.Errorf("db: %s could not be moved to %s: %w", m.Workflow, m.Target, err)
 		}
+		// Every task of the workflow's runs is held now, as the rows followed the workflow's, and a
+		// shipment that held one first has finished: whatever it indexed is read here.
+		indexed, err := indexedLogs(ctx, tx, m.Target, m.Workflow)
+		if err != nil {
+			return err
+		}
+		for _, key := range indexed {
+			if _, found := slices.BinarySearch(copied.Indexed, key); !found {
+				return errIndexedSince
+			}
+		}
 
 		// The logs under the target's keys, which the copy wrote.
 		for _, table := range []string{"task_log_chunks", "task_log_objects"} {
@@ -683,6 +777,20 @@ func (p *Pool) CompleteMove(ctx context.Context, m Move, grace time.Duration) (M
 				m.Namespace, m.Target, m.Workflow); err != nil {
 				return fmt.Errorf("db: the logs of %s could not be moved: %w", m.Workflow, err)
 			}
+		}
+
+		// What an earlier move of the workflow left under the target's keys is what its rows name
+		// again, and is kept: a workflow moved back within the grace names the very copies the
+		// first move left there, which the copy found held and did not write again.
+		back := make([]string, 0, len(left))
+		for _, key := range left {
+			if to, ok := strings.CutPrefix(key, m.Namespace+"/"); ok {
+				back = append(back, m.Target+"/"+to)
+			}
+		}
+		if _, err := tx.Exec(ctx,
+			`delete from moved_objects where namespace = $1 and key = any($2)`, m.Target, back); err != nil {
+			return fmt.Errorf("db: what an earlier move left in %s could not be kept: %w", m.Target, err)
 		}
 
 		// Kept no longer than the target keeps anything: "retain is capped by the namespace quota
@@ -720,11 +828,18 @@ func (p *Pool) CompleteMove(ctx context.Context, m Move, grace time.Duration) (M
 		}
 		return w.AuditIn(ctx, m.Target, record)
 	})
+	if errors.Is(err, errIndexedSince) {
+		return Moved{}, nil
+	}
 	if err != nil {
 		return Moved{}, fmt.Errorf("db: the move of %s/%s to %s could not be carried out: %w", m.Namespace, m.Workflow, m.Target, err)
 	}
 	return out, nil
 }
+
+// errIndexedSince ends a move's transaction where a chunk of its logs was indexed after its objects
+// were read, whose object the copy could not have seen.
+var errIndexedSince = errors.New("db: a chunk of the workflow's logs was indexed since its objects were copied")
 
 // MovedObject is a key a move left under the namespace it left.
 type MovedObject struct {

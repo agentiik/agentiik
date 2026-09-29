@@ -21,9 +21,10 @@ import (
 // what a version, an envelope and an artifact name, the chunks of its logs and its packs, and only
 // then changes the rows (db.Pool.CompleteMove), which from then on name the copies. A copy already
 // under the target's key is not made again, which also makes a move that died half copied cheap to
-// take up. What was copied stays under the source's keys for the grace, for a read or a fetch that
-// began before the rows changed: the objects counted as the source lets them go, the logs and packs
-// kept in moved_objects until movedGone deletes them.
+// take up, or one carried out the pass after a chunk a task still stopping shipped was indexed. What
+// was copied stays under the source's keys for the grace, for a read or a fetch that began before
+// the rows changed: the objects counted as the source lets them go, the logs and packs kept in
+// moved_objects until movedGone deletes them, unless a move back names them again first.
 
 // moves carries out the moves asked, each once its runs have finished and its packs are settled.
 func (p *Purger) moves(ctx context.Context, out *Purged) (bool, error) {
@@ -76,7 +77,7 @@ func (p *Purger) move(ctx context.Context, m db.Move) (bool, error) {
 		}
 	}
 
-	moved, err := p.Pool.CompleteMove(ctx, m, p.grace())
+	moved, err := p.Pool.CompleteMove(ctx, m, objects, p.grace())
 	if err != nil || !moved.Done {
 		return false, err
 	}
