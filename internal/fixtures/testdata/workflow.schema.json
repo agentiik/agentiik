@@ -569,10 +569,10 @@
           "examples": ["finance/common"]
         },
         "ref": {
-          "description": "Tag or commit the included repository is read at. It is required because a moving ref would let another repository change what this workflow does without this commit changing.",
+          "description": "Tag or commit the included repository is read at: a tag, by its name or in full, or a commit written whole that a branch or a tag of the library was pushed to, which is a version its hook judged. It is required because a moving ref would let another repository change what this workflow does without this commit changing, so a branch is refused. A commit abbreviated is refused too: an abbreviation is a name another commit of the library can come to share, and the file would then name two. The version records the commit it resolved to, and every run of it names that commit.",
           "type": "string",
           "minLength": 1,
-          "examples": ["v2.1.0", "a3f9c1e"]
+          "examples": ["v2.1.0", "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"]
         }
       }
     },
@@ -1473,7 +1473,7 @@
                 "examples": ["/etc/ssl/certs/internal-ca.pem", "/docker-entrypoint-initdb.d"]
               },
               "mode": {
-                "description": "The permissions it is given, as an octal string, every file a directory or a glob selects taking the same. A certificate that has to be world readable and a key that must not be are both written here.",
+                "description": "The permissions it is given, as an octal string, every file a directory or a glob selects taking the same. It decides whether the file is executable, and never who may read it: every file a step is given is laid out readable by anybody and writable by nobody, 0444 or 0555, since the container reads it through a read-only bind as the image's user, in a remapped range the runner does not know, and a narrower mode would keep the file from the step that asked for it. What must not be readable by everything in the container is a secret, which has its own store and its own mount.",
                 "type": "string",
                 "pattern": "^0?[0-7]{3}$",
                 "examples": ["0444", "0600"]

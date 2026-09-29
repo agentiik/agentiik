@@ -8,7 +8,7 @@
 # The build context is the directory holding the script, which is this one in the repository:
 #
 #   docker buildx build --platform linux/amd64,linux/arm64 -f build/postgres-upgrade.Dockerfile \
-#     --build-arg VERSION=0.3.0 --build-arg REVISION=$(git rev-parse HEAD) build
+#     --build-arg VERSION=0.4.0 --build-arg REVISION=$(git rev-parse HEAD) build
 #
 # .github/workflows/release.yml builds it so and pushes it for both architectures: as X.Y.Z and
 # vX.Y.Z at a release tag, as latest too when that is the highest release, and as dev at every

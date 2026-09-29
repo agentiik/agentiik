@@ -343,10 +343,10 @@ type Pushed struct {
 // TreeMaxBytes is the largest tree a push carries, counting its paths as well as its files.
 //
 // It is a limit of this push rather than a rule about repositories. The tree travels inline, in
-// one JSON document and in base64, until the installation hosts the repository and a push is
-// git's own smart HTTP, which v0.4.0 brings and which takes the limit away with the transport that
-// needed it. Until then the whole request is held in memory on its way through, and four
-// mebibytes of entry point, fragments and scripts is a great deal of workflow. A tree above it is
+// one JSON document and in base64, the whole request held in memory on its way through; a push over
+// git's own smart HTTP, which the installation serves from v0.4.0 and agk push speaks, carries no
+// such limit, which stays with the transport that needed it. Four mebibytes of entry point,
+// fragments and scripts is a great deal of workflow. A tree above it is
 // usually carrying something that belongs in an image or in an artifact, and the refusal says so.
 //
 // The paths count because they are the part of a tree that is paid for again after the push:

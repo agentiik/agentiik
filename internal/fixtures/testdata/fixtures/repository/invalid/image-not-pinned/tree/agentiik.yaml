@@ -1,4 +1,4 @@
-# normalize names a tag the namespace's store holds no pin for. A pin of
+# normalize names a tag the repository's store holds no pin for. A pin of
 # another tag of the same repository pins nothing here.
 
 apiVersion: agentiik.dev/v1
