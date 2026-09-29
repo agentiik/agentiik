@@ -36,4 +36,8 @@ create policy step_cache_by_namespace on step_cache
 -- A task a hit ended rather than a container: the run whose task published what it republished,
 -- which the run detail names, so that a person reading a step that took no time and ran on no
 -- runner is told why and where its outputs were made.
-alter table tasks add column memoised_from ulid;
+--
+-- Text held to the ulid grammar by a check rather than typed ulid, for the reason 0055 gives for
+-- runs: a column of a domain carrying a check is added by rewriting every row, and tasks is the
+-- largest table an upgrade meets.
+alter table tasks add column memoised_from text check (memoised_from is null or memoised_from::ulid is not null);

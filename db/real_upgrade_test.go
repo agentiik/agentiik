@@ -442,12 +442,14 @@ func TestAWorkflowOfV030BecomesAnEmptyRepositoryWithEveryVersionItHeld(t *testin
 	}
 
 	// Every row as it is stored, where it is stored and by which transaction: a row written again,
-	// even with the same values, moves or changes its xmin.
-	rows := func(table, without string) []string {
+	// even with the same values, moves or changes its xmin. Less the columns the migrations after
+	// v0.3.0 add, source and a run's replay_of and replay_from, which a row v0.3.0 wrote reads as
+	// their default without being written again.
+	rows := func(table string) []string {
 		t.Helper()
 		var out []string
-		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - '%s')::text
-		                                         from %s t order by 1`, without, pgx.Identifier{table}.Sanitize()))
+		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - array['source', 'replay_of', 'replay_from'])::text
+		                                         from %s t order by 1`, pgx.Identifier{table}.Sanitize()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -459,14 +461,14 @@ func TestAWorkflowOfV030BecomesAnEmptyRepositoryWithEveryVersionItHeld(t *testin
 	}
 	before := map[string][]string{}
 	for _, table := range []string{"workflow_versions", "runs", "artifact_objects"} {
-		before[table] = rows(table, "source")
+		before[table] = rows(table)
 	}
 
 	if _, err := Provision(ctx, conn, role, "test"); err != nil {
 		t.Fatalf("the upgrade was refused on a database v0.3.0 filled: %s", err)
 	}
 	for table, was := range before {
-		if now := rows(table, "source"); !slices.Equal(now, was) {
+		if now := rows(table); !slices.Equal(now, was) {
 			t.Errorf("the upgrade wrote %s again:\nbefore %q\nafter  %q", table, was, now)
 		}
 	}
