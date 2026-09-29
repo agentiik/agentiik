@@ -66,6 +66,11 @@ func validate(ctx context.Context, e Env, args []string) int {
 		refusal(e.Err, inTree(err, dir))
 		return leaving(err)
 	}
+	if checked.Library {
+		fmt.Fprintf(e.Out, "%s is a library's root, a fragment other workflows include and nothing runs, and it resolves: %s\n",
+			base, counted(len(checked.Included), "include", "includes"))
+		return exitSucceeded
+	}
 	wf := checked.Workflow
 
 	fmt.Fprintln(e.Out, resolved(wf))

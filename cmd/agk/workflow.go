@@ -47,6 +47,9 @@ func load(ctx context.Context, e Env, entry string) (*graph.Workflow, fs.FS, str
 	if err != nil {
 		return nil, nil, "", inTree(err, dir)
 	}
+	if checked.Library {
+		return nil, nil, "", fmt.Errorf("%s is a library's root, written as a fragment, which other workflows include and nothing runs: there is no graph to draw or run, and agk validate judges it", filepath.Join(dir, base))
+	}
 	return checked.Workflow, fsys, dir, nil
 }
 
