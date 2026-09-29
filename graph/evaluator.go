@@ -1265,8 +1265,15 @@ func fedItemID(step agk.Step, port agk.Port, at int) string {
 // parameters and the digests of the input envelopes concatenated, prefixed by the
 // namespace".
 //
-// It is computed here and looked up nowhere: "a cache entry is invalidated when an
-// artifact it would hand back has expired", and expiry is the store's knowledge.
+// An input envelope is digested as its items, its meta left out. The meta says which run,
+// step and attempt produced the batch and when, so the same items published by two runs
+// are two envelopes, and a key over the whole of each would differ in every run and never
+// be found again: a cache that only a replay could hit. The items are what the step reads,
+// their identifiers among them, which a brick derives from the payload where "two runs
+// over the same input" are to be comparable.
+//
+// It is computed here and looked up by the controller, since "a cache entry is invalidated
+// when an artifact it would hand back has expired", and expiry is the store's knowledge.
 func cacheKey(namespace, image string, params map[string]any, in map[agk.Port]agk.Envelope) (string, error) {
 	key := sha256.New()
 	write := func(s string) {
@@ -1283,7 +1290,7 @@ func cacheKey(namespace, image string, params map[string]any, in map[agk.Port]ag
 
 	// Port by port, in name order, so that one set of inputs has one key.
 	for _, port := range slices.Sorted(maps.Keys(in)) {
-		doc, err := agk.EncodeValue(in[port])
+		doc, err := agk.EncodeValue(in[port].Items)
 		if err != nil {
 			return "", fmt.Errorf("the envelope on port %s: %w", port, err)
 		}

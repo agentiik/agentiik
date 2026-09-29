@@ -706,6 +706,35 @@ steps:
 	}
 }
 
+// An input envelope is keyed by its items and never by its meta, which names the run that
+// produced it and when: the same items from two runs are one key, and other items another.
+func TestTheCacheKeyReadsTheItemsAndNotWhereTheyCameFrom(t *testing.T) {
+	items := []agk.Item{{ID: "INV-1", Data: map[string]any{"total": 12.5}, Files: []agk.File{}}}
+	first := agk.Envelope{Meta: agk.Meta{RunID: "01JMZ8V1P9C4", Step: "fetch", Port: "ok", Attempt: 1, Count: 1, ProducedAt: runAt}, Items: items}
+	second := first
+	second.Meta = agk.Meta{RunID: "01JMZ9ZZZZZZ", Step: "fetch", Port: "ok", Attempt: 2, Count: 1, ProducedAt: runAt.Add(time.Hour)}
+	params := map[string]any{"currency": "EUR"}
+	a, err := cacheKey("finance", image, params, map[agk.Port]agk.Envelope{"in": first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := cacheKey("finance", image, params, map[agk.Port]agk.Envelope{"in": second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Errorf("the same items from two runs are the keys %s and %s", a, b)
+	}
+	other := second
+	other.Items = []agk.Item{{ID: "INV-2", Data: map[string]any{"total": 12.5}, Files: []agk.File{}}}
+	if c, _ := cacheKey("finance", image, params, map[agk.Port]agk.Envelope{"in": other}); c == a {
+		t.Error("another item is the same key")
+	}
+	if d, _ := cacheKey("payroll", image, params, map[agk.Port]agk.Envelope{"in": first}); d == a {
+		t.Error("another namespace is the same key")
+	}
+}
+
 // A run cancelled by a principal ends there, and the tasks in flight are named so that
 // something can stop them.
 func TestACancelledRunNamesWhatIsStillRunning(t *testing.T) {
