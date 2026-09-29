@@ -146,9 +146,10 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		guard   Guard
 		handler Handler
 	}{
-		// And secret:use where the version names a secret, which only the push can tell.
+		// And secret:use where the version names a secret, and workflow:read on each workflow
+		// it includes, which only the push can tell.
 		{"PUT", "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}",
-			Needs{Permission: WorkflowWrite, Scope: Workflow, Also: SecretUse}, s.push},
+			Needs{Permission: WorkflowWrite, Scope: Workflow, Also: SecretUse, Includes: true}, s.push},
 		// What a repository's pushes are judged against beyond their tree, written under what
 		// registering a version of it takes, and read under what reading it takes.
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/images",
@@ -529,6 +530,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		Resolvers: version.Resolvers{
 			Pin:      pinnedBy(p),
 			Manifest: manifestsCarried(p),
+			Include:  s.includeOf(r),
 			Secrets: func(ctx context.Context) ([]string, error) {
 				var declared []db.Declaration
 				err := s.pool.In(ctx, over.Namespace, func(ctx context.Context, ns *db.NS) error {
@@ -584,6 +586,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// manifest of every image a brick step runs and the digest every tag a step names was
 	// resolved to, and nothing else the push carried, so that a rebuild reads what was accepted.
 	v.Document, v.Includes, v.Manifests, v.Images = checked.Version.Document, checked.Version.Includes, checked.Version.Manifests, checked.Version.Images
+	v.Library, v.Libraries = checked.Version.Library, checked.Version.Libraries
 
 	// A new version records the pins it was judged with in its repository's store, where a git
 	// push of the next commit finds them. A commit already stored is that version pushed again,
@@ -1013,6 +1016,10 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		if errors.Is(err, db.ErrNoVersion) {
 			// The same answer an inaccessible one gets, for the same reason.
 			fail(w, http.StatusNotFound, "no such thing, or not yours")
+			return
+		}
+		if errors.Is(err, version.ErrLibrary) {
+			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("%s at %s is a library: its root agentiik.yaml is written as a fragment, which other workflows include and nothing runs", over.Workflow, start.commit))
 			return
 		}
 		fail(w, http.StatusInternalServerError, "the version could not be read")

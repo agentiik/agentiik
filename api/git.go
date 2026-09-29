@@ -62,9 +62,10 @@ func (s *Server) registerGit(rt *Router) error {
 			OnRepository{Permission: WorkflowRead}, s.uploadPack},
 		// A push takes workflow:write, grant:manage for what only an owner may do to a ref, and
 		// secret:use where a commit it carries names a secret; which of them depends on the
-		// commands, which only the handler reads.
+		// commands, which only the handler reads. And workflow:read on each workflow a commit
+		// it carries includes, which only the hook reads.
 		{"POST", "/{namespace}/{repository}/" + receivePack,
-			OnRepository{Permission: WorkflowRead, Asks: []Permission{WorkflowWrite, GrantManage, SecretUse}}, s.receivePack},
+			OnRepository{Permission: WorkflowRead, Asks: []Permission{WorkflowWrite, GrantManage, SecretUse}, Includes: true}, s.receivePack},
 	} {
 		if err := rt.Handle(r.method, r.pattern, r.guard, r.handler); err != nil {
 			return err

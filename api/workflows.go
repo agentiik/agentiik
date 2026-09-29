@@ -98,6 +98,10 @@ type Version struct {
 	Author    string    `json:"author"`
 	CreatedAt time.Time `json:"created_at"`
 	Source    string    `json:"source"`
+
+	// Library is set where the commit is a library's, which other workflows include and nothing
+	// runs, and is absent otherwise.
+	Library bool `json:"library,omitempty"`
 }
 
 // HistoryEntry is one commit of the default branch's first-parent history, openapi.json's
@@ -217,7 +221,7 @@ func labelsOf(g *graph.Graph) map[string]string {
 }
 
 func versionOut(l db.Listed) *Version {
-	return &Version{Commit: l.Commit, Parent: l.Parent, Author: l.Author, CreatedAt: l.CreatedAt.UTC(), Source: l.Source}
+	return &Version{Commit: l.Commit, Parent: l.Parent, Author: l.Author, CreatedAt: l.CreatedAt.UTC(), Source: l.Source, Library: l.Library}
 }
 
 // checkWorkflowName refuses a name a workflow cannot have, as the tree push refuses one.
