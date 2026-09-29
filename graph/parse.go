@@ -305,14 +305,17 @@ func secretOrigins(src *source, names []string) map[string]origin {
 // as the boolean true. A loader that does so will fail every fixture carrying a trigger,
 // and will do the same to the workflows people write."
 func document(doc []byte) (map[string]any, *ast.File, error) {
-	if err := yamlbound.Check(doc, yamlbound.MaxValues); err != nil {
+	if err := yamlbound.Check(doc); err != nil {
 		return nil, nil, err
 	}
 	var v any
 	if err := yaml.Unmarshal(doc, &v); err != nil {
 		return nil, nil, fmt.Errorf("the file is not a YAML document: %w", err)
 	}
-	value, err := jsonLike(v, "")
+	if err := yamlbound.CheckValue(v); err != nil {
+		return nil, nil, err
+	}
+	value, err := jsonLike(v, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1939,12 +1942,12 @@ func keysOf(m map[string]any) []string {
 // would make both of those a conversion somebody has to remember. And a number keeps the
 // way it was written, which is what an expression reads: one written without a fraction
 // or an exponent is an int, and any other a double.
-func jsonLike(v any, where string) (any, error) {
+func jsonLike(v any, where *valueAt) (any, error) {
 	switch value := v.(type) {
 	case map[string]any:
 		converted := make(map[string]any, len(value))
 		for k, sub := range value {
-			c, err := jsonLike(sub, pathOf(where, k))
+			c, err := jsonLike(sub, where.key(k))
 			if err != nil {
 				return nil, err
 			}
@@ -1958,7 +1961,7 @@ func jsonLike(v any, where string) (any, error) {
 			if !ok {
 				return nil, fmt.Errorf("%s is keyed by %v, which is not text: every name in the file is written on one grammar, and a key that is not text cannot be on it", where, k)
 			}
-			c, err := jsonLike(sub, pathOf(where, key))
+			c, err := jsonLike(sub, where.key(key))
 			if err != nil {
 				return nil, err
 			}
@@ -1968,7 +1971,7 @@ func jsonLike(v any, where string) (any, error) {
 	case []any:
 		converted := make([]any, len(value))
 		for i, sub := range value {
-			c, err := jsonLike(sub, fmt.Sprintf("%s[%d]", where, i))
+			c, err := jsonLike(sub, where.index(i))
 			if err != nil {
 				return nil, err
 			}
@@ -1992,13 +1995,6 @@ func jsonLike(v any, where string) (any, error) {
 	default:
 		return v, nil
 	}
-}
-
-func pathOf(where, key string) string {
-	if where == "" {
-		return key
-	}
-	return where + "." + key
 }
 
 // kindOf says what a value is in the file's own terms, so that a refusal about the wrong
@@ -2030,4 +2026,33 @@ func keyPath(where, key string) string {
 		return where + "'s " + key
 	}
 	return where + "." + key
+}
+
+// valueAt is where a value sits in the document, as the path a refusal names it by, built into text
+// only where one does. Built for every value visited, a path would cost the length of every key above
+// it once per value below it, which a document holding one long key over many values makes cost
+// gigabytes; a document whose aliases repeat that key makes it worse again.
+type valueAt struct {
+	parent *valueAt
+	name   string
+	at     int
+	keyed  bool
+}
+
+func (w *valueAt) key(k string) *valueAt { return &valueAt{parent: w, name: k, keyed: true} }
+func (w *valueAt) index(i int) *valueAt  { return &valueAt{parent: w, at: i} }
+
+// String is the path as it has always been written: keys joined by dots, indexes in brackets.
+func (w *valueAt) String() string {
+	if w == nil {
+		return ""
+	}
+	parent := w.parent.String()
+	if !w.keyed {
+		return fmt.Sprintf("%s[%d]", parent, w.at)
+	}
+	if parent == "" {
+		return w.name
+	}
+	return parent + "." + w.name
 }

@@ -40,3 +40,14 @@ func TestAManifestWhoseAliasesStandForBillionsIsRefusedBeforeItIsRead(t *testing
 		}
 	}
 }
+
+// A scalar repeated by its aliases is weighed wherever it is repeated: a manifest of 136 KB naming a
+// scalar of 128 KiB 1,600 times, which held ParseManifest for seconds and gigabytes, is refused.
+func TestAManifestRepeatingALongScalarIsRefused(t *testing.T) {
+	doc := "apiVersion: agentiik.dev/v1\nkind: Brick\nmetadata: {name: invoice, version: 1.0.0}\nspec:\n  definitions:\n" +
+		"    s: {description: &x " + strings.Repeat("A", 128<<10) + "}\n" +
+		"    d: {examples: [" + strings.TrimSuffix(strings.Repeat("*x, ", 1600), ", ") + "]}\n"
+	if _, err := brick.ParseManifest([]byte(doc)); err == nil || !strings.Contains(err.Error(), "aliases") {
+		t.Errorf("a manifest naming a long scalar 1,600 times was read: %v", err)
+	}
+}
