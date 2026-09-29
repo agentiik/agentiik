@@ -145,6 +145,11 @@ type Purged struct {
 	// Deleted is what the purge of deleted workflows removed: their runs, their versions, and the
 	// workflows gone whole, whose names are free from then on.
 	Deleted db.DeletedPurge
+
+	// Moved are the workflows moved to another namespace, and MovedLeft the files those moves had
+	// left under the namespaces they left that were deleted once the grace had passed.
+	Moved     int
+	MovedLeft int
 }
 
 // Removed says whether the pass removed anything retention decides: a reference, a run's
@@ -152,7 +157,7 @@ type Purged struct {
 // is not.
 func (p Purged) Removed() bool {
 	return p.Artifacts+p.Runs+p.Logs+p.Orphans+p.Objects+p.Repacked+p.Packs+
-		p.Deleted.Runs+p.Deleted.Versions+p.Deleted.Workflows > 0
+		p.Deleted.Runs+p.Deleted.Versions+p.Deleted.Workflows+p.Moved+p.MovedLeft > 0
 }
 
 // Purger runs the purges and the collection.
@@ -240,6 +245,7 @@ func (p *Purger) Pass(ctx context.Context) (Purged, error) {
 		call func(context.Context, *Purged) (bool, error)
 	}{
 		{"the purge of deleted workflows", p.deleted},
+		{"the moves of workflows between namespaces", p.moves},
 		{"the artifact purge", p.artifacts},
 		{"the envelope purge", p.envelopes},
 		{"the log purge", p.logs},
@@ -250,6 +256,7 @@ func (p *Purger) Pass(ctx context.Context) (Purged, error) {
 		{"the collection", p.collect},
 		{"the repack", p.repack},
 		{"the collection of packs", p.collectPacks},
+		{"the deletion of what moves left", p.movedGone},
 	} {
 		for range p.calls() {
 			if err := ctx.Err(); err != nil {
