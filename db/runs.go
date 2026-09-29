@@ -478,6 +478,10 @@ type TaskRow struct {
 	FinishedAt   time.Time
 	Deadline     time.Time
 	PublishedAt  time.Time
+
+	// MemoisedFrom is the run whose task published what a cache hit republished for this one,
+	// which no container ran.
+	MemoisedFrom agk.RunID
 }
 
 // SaveDecision writes one pass, or refuses it because the run has moved.
@@ -721,8 +725,8 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 	err = w.tx.QueryRow(ctx,
 		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, requeue, state,
 		                    runner, exit_code, log_uri, log_lines, log_truncated,
-		                    dispatched_at, started_at, finished_at, deadline, published_at, usage)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		                    dispatched_at, started_at, finished_at, deadline, published_at, usage, memoised_from)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		 on conflict (namespace, idempotency_key, requeue) do update
 		 set state = case when tasks.state = 'lost'
 		                   and excluded.state in ('pending', 'dispatched', 'running', 'publishing')
@@ -746,13 +750,14 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		     finished_at = coalesce(excluded.finished_at, tasks.finished_at),
 		     deadline = coalesce(excluded.deadline, tasks.deadline),
 		     published_at = coalesce(tasks.published_at, excluded.published_at),
-		     usage = case when excluded.usage = '{}'::jsonb then tasks.usage else excluded.usage end
+		     usage = case when excluded.usage = '{}'::jsonb then tasks.usage else excluded.usage end,
+		     memoised_from = coalesce(excluded.memoised_from, tasks.memoised_from)
 		 returning state, finished_at`,
 		namespace, ulid.New(), string(run), string(t.Step), t.Attempt, shardIndex, shardOf, t.Requeue,
 		t.State.String(), nilIfEmpty(t.Runner), t.ExitCode, log,
 		nilIfZeroInt(t.LogLines), t.LogCut,
 		nilIfZero(t.DispatchedAt), nilIfZero(t.StartedAt), nilIfZero(t.FinishedAt),
-		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage).Scan(&held, &finished)
+		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage, nilIfEmpty(string(t.MemoisedFrom))).Scan(&held, &finished)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
 	}

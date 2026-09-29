@@ -243,7 +243,11 @@ type Result struct {
 	// reading 0, the code of success.
 	NoExitCode bool `json:"no_exit_code,omitempty"`
 
-	Outputs map[agk.Port]agk.Envelope `json:"outputs,omitempty"`
+	Outputs map[agk.Port]agk.Envelope
+
+	// MemoisedFrom is the run a cache hit republished these outputs from, for a success no
+	// container reported: "a hit republishes the same envelopes without starting a container".
+	MemoisedFrom agk.RunID `json:"outputs,omitempty"`
 
 	DispatchedAt time.Time `json:"dispatched_at,omitzero"`
 	StartedAt    time.Time `json:"started_at,omitzero"`

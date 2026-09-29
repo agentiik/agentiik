@@ -707,31 +707,46 @@ steps:
 }
 
 // An input envelope is keyed by its items and never by its meta, which names the run that
-// produced it and when: the same items from two runs are one key, and other items another.
+// produced it and when: the same items from two runs are one key, and other items another. A
+// script step's commands are in the key beside its image, which two script steps share.
 func TestTheCacheKeyReadsTheItemsAndNotWhereTheyCameFrom(t *testing.T) {
 	items := []agk.Item{{ID: "INV-1", Data: map[string]any{"total": 12.5}, Files: []agk.File{}}}
 	first := agk.Envelope{Meta: agk.Meta{RunID: "01JMZ8V1P9C4", Step: "fetch", Port: "ok", Attempt: 1, Count: 1, ProducedAt: runAt}, Items: items}
 	second := first
 	second.Meta = agk.Meta{RunID: "01JMZ9ZZZZZZ", Step: "fetch", Port: "ok", Attempt: 2, Count: 1, ProducedAt: runAt.Add(time.Hour)}
-	params := map[string]any{"currency": "EUR"}
-	a, err := cacheKey("finance", image, params, map[agk.Port]agk.Envelope{"in": first})
-	if err != nil {
-		t.Fatal(err)
+	task := func(in agk.Envelope) Task {
+		return Task{Image: image, Params: map[string]any{"currency": "EUR"}, Inputs: map[agk.Port]agk.Envelope{"in": in}, Outputs: []agk.Port{"ok"}}
 	}
-	b, err := cacheKey("finance", image, params, map[agk.Port]agk.Envelope{"in": second})
-	if err != nil {
-		t.Fatal(err)
+	keyOf := func(namespace string, task Task) string {
+		k, err := cacheKey(namespace, task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
 	}
-	if a != b {
+	a := keyOf("finance", task(first))
+	if b := keyOf("finance", task(second)); a != b {
 		t.Errorf("the same items from two runs are the keys %s and %s", a, b)
 	}
 	other := second
 	other.Items = []agk.Item{{ID: "INV-2", Data: map[string]any{"total": 12.5}, Files: []agk.File{}}}
-	if c, _ := cacheKey("finance", image, params, map[agk.Port]agk.Envelope{"in": other}); c == a {
+	if keyOf("finance", task(other)) == a {
 		t.Error("another item is the same key")
 	}
-	if d, _ := cacheKey("payroll", image, params, map[agk.Port]agk.Envelope{"in": first}); d == a {
+	if keyOf("payroll", task(first)) == a {
 		t.Error("another namespace is the same key")
+	}
+	scripted := task(first)
+	scripted.Script = []string{"sort -u < /agk/in/in/items.json > /agk/out/ports/ok.json"}
+	otherScript := scripted
+	otherScript.Script = []string{"rm -rf /agk/out"}
+	if keyOf("finance", scripted) == a || keyOf("finance", scripted) == keyOf("finance", otherScript) {
+		t.Error("two scripts on one image are one key")
+	}
+	moreOutputs := task(first)
+	moreOutputs.Outputs = []agk.Port{"ok", "rejected"}
+	if keyOf("finance", moreOutputs) == a {
+		t.Error("a step publishing another port is the same key")
 	}
 }
 

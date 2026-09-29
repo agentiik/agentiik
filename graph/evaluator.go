@@ -338,6 +338,7 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 	// and a failed shard's ports are the empty envelopes the step publishes for it.
 	if shardVerdict(r.State, r.ExitCode) == agk.VerdictSucceeded {
 		sh.Ports = r.Outputs
+		sh.MemoisedFrom = r.MemoisedFrom
 	}
 
 	if r.State.Terminal() && shardVerdict(r.State, r.ExitCode) == agk.VerdictFailed {
@@ -702,6 +703,8 @@ func (e *Evaluator) dispatch(plan *Plan, now time.Time) (bool, error) {
 				broke = true
 				continue
 			}
+			ss.Shards[i].CacheKey = task.CacheKey
+			e.s.Steps[name] = ss
 			plan.Start = append(plan.Start, task)
 			slots--
 		}
@@ -901,7 +904,7 @@ func (e *Evaluator) task(name agk.Step, st *Step, sh shard, state ShardState, no
 	// the resolved parameters and the digests of the input envelopes", prefixed by the
 	// namespace so that it never crosses a boundary.
 	if st.Cache && st.Idempotent {
-		key, err := cacheKey(e.s.Run.Namespace, st.Image, params, sh.Inputs)
+		key, err := cacheKey(e.s.Run.Namespace, t)
 		if err != nil {
 			return Task{}, fmt.Errorf("graph: step %s: the cache key: %w", name, err)
 		}
@@ -1272,25 +1275,39 @@ func fedItemID(step agk.Step, port agk.Port, at int) string {
 // their identifiers among them, which a brick derives from the payload where "two runs
 // over the same input" are to be comparable.
 //
-// It is computed here and looked up by the controller, since "a cache entry is invalidated
-// when an artifact it would hand back has expired", and expiry is the store's knowledge.
-func cacheKey(namespace, image string, params map[string]any, in map[agk.Port]agk.Envelope) (string, error) {
+// A script step's commands, its shell and the ports it publishes are in the key beside the
+// image. The image of a script step is a toolbox, alpine or python, which two steps doing two
+// different things share, so a key without the script would hand one step the other's
+// outputs. A brick's code is its image, and a brick step writes none of these.
+//
+// It is computed here and looked up by the controller, which adds what only it can read, the
+// files of the tree the step is handed, since "a cache entry is invalidated when an artifact
+// it would hand back has expired", and expiry is the store's knowledge.
+func cacheKey(namespace string, t Task) (string, error) {
 	key := sha256.New()
 	write := func(s string) {
 		key.Write([]byte(s))
 		key.Write([]byte{0})
 	}
-	write(image)
+	write(t.Image)
+	code, err := agk.EncodeValue(map[string]any{
+		"script": t.Script, "before_script": t.BeforeScript, "after_script": t.AfterScript,
+		"shell": t.Shell, "outputs": t.Outputs,
+	})
+	if err != nil {
+		return "", fmt.Errorf("the step's script: %w", err)
+	}
+	write(string(code))
 
-	resolved, err := agk.EncodeValue(params)
+	resolved, err := agk.EncodeValue(t.Params)
 	if err != nil {
 		return "", fmt.Errorf("the resolved parameters: %w", err)
 	}
 	write(string(resolved))
 
 	// Port by port, in name order, so that one set of inputs has one key.
-	for _, port := range slices.Sorted(maps.Keys(in)) {
-		doc, err := agk.EncodeValue(in[port].Items)
+	for _, port := range slices.Sorted(maps.Keys(t.Inputs)) {
+		doc, err := agk.EncodeValue(t.Inputs[port].Items)
 		if err != nil {
 			return "", fmt.Errorf("the envelope on port %s: %w", port, err)
 		}
