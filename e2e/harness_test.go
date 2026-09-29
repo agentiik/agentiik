@@ -100,7 +100,7 @@ func TestAOneStepWorkflowRunsToSucceededAndEachRunnerHoldsItsOwnIdentityAlone(t 
 	// What each runner holds at rest, once the task's own directory is gone. A task's
 	// directory holds the tree while its brick runs, and is removed when it has ended, which
 	// may be a moment after the run is read as succeeded.
-	held := append(in.held, heldValue{"the workflow's repository", document})
+	held := append(in.held, heldValue{theRepository, document})
 	for _, r := range in.Runners {
 		var last []string
 		eventually(in.ctx, t, 30*time.Second, "runner "+r.Name+" held its identity alone", func() error {
@@ -244,11 +244,18 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 	held := []heldValue{
 		{"the presign key", "cHJlc2lnbi1rZXk="},
 		{"the database URL", "postgres://agentiik@/agentiik?host=/tmp/agk-e2e-1/postgres"},
-		{"the workflow's repository", "apiVersion: agentiik.dev/v1\nkind: Workflow\n"},
+		{theRepository, "apiVersion: agentiik.dev/v1\nkind: Workflow\n"},
 	}
 	forbidden := []string{"agk-e2e-1-objects", "agk-e2e-1-api", "/tmp/agk-e2e-1/postgres"}
 	if broken := aRunnerAtRest().breaches(public, held, forbidden); len(broken) != 0 {
 		t.Fatalf("a runner holding its identity alone broke %q", broken)
+	}
+	// The objects a runner keeps for the trees it lays out are the repository's files by design,
+	// under their digests, and hold nothing else.
+	keeping := aRunnerAtRest()
+	keeping.Files["/var/lib/agentiik/work/.objects/e2e/"+strings.Repeat("5", 64)] = []byte("apiVersion: agentiik.dev/v1\nkind: Workflow\nsteps: {}\n")
+	if broken := keeping.breaches(public, held, forbidden); len(broken) != 0 {
+		t.Fatalf("a runner keeping the objects of a tree broke %q", broken)
 	}
 
 	for _, c := range []struct {
@@ -274,6 +281,12 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 			h.Files["/var/lib/agentiik/work/t1/copy"] = []byte("apiVersion: agentiik.dev/v1\nkind: Workflow\nsteps: {}\n")
 		}, "holds the workflow's repository"},
 		{"the presign key", func(h *Holdings) { h.Files["/var/lib/agentiik/work/leak"] = []byte("key=cHJlc2lnbi1rZXk=") }, "holds the presign key"},
+		{"the presign key among the kept objects", func(h *Holdings) {
+			h.Files["/var/lib/agentiik/work/.objects/e2e/"+strings.Repeat("a", 64)] = []byte("key=cHJlc2lnbi1rZXk=")
+		}, "holds the presign key"},
+		{"the workflow's text named as the repository names it", func(h *Holdings) {
+			h.Files["/var/lib/agentiik/work/.objects/e2e/agentiik.yaml"] = nil
+		}, "never holds a repository"},
 		{"a bus credential file", func(h *Holdings) {
 			h.Files["/var/lib/agentiik/bus.creds"] = []byte("-----BEGIN NATS USER JWT-----\n")
 		}, "a NATS credential file"},
