@@ -50,6 +50,7 @@ var reads = []string{
 	"GET /api/v1/namespaces", "GET /api/v1/namespaces/{namespace}", "GET /api/v1/namespaces/{namespace}/quotas",
 	"GET /api/v1/{namespace}/grants", "GET /api/v1/{namespace}/workflows/{workflow}/grants",
 	"GET /api/v1/{namespace}/workflows/{workflow}/images", "GET /{namespace}/{repository}/info/refs",
+	"GET /api/v1/{namespace}/workflows/{workflow}", "GET /api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
 	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
 	"GET /auth/sign-in", "GET /auth/enrol", "GET /auth/assets/{name}", "GET /objects/{key...}",
 }
@@ -475,6 +476,14 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.act("POST /{namespace}/{repository}/git-receive-pack", "/finance/monthly-invoicing.git/git-receive-pack", carolsGit,
 		aGitPush(t, "refused", strings.ReplaceAll(theWorkflow, theImage, "ghcr.io/acme/agk-invoice:9.9.9")), http.StatusOK,
 		"push.refuse carol monthly-invoicing finance done")
+	// A repository created empty is recorded as workflow.create; its default branch protected, as
+	// ref.protect, and named another, as workflow.update.
+	s.act("POST /api/v1/{namespace}/workflows", "/api/v1/finance/workflows", carol, `{"name":"vat-reconciliation"}`, http.StatusCreated,
+		"workflow.create carol vat-reconciliation finance done")
+	s.act("PATCH /api/v1/{namespace}/workflows/{workflow}", "/api/v1/finance/workflows/monthly-invoicing", carol, `{"protected":true}`, http.StatusOK,
+		"ref.protect carol monthly-invoicing finance done")
+	s.act("PATCH /api/v1/{namespace}/workflows/{workflow}", "/api/v1/finance/workflows/vat-reconciliation", carol, `{"default_branch":"trunk"}`, http.StatusOK,
+		"workflow.update carol vat-reconciliation finance done")
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"dave","deny":"run:read_data"}`, http.StatusCreated)
 	deny := s.answer(w)["id"].(string)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+deny+" finance done")

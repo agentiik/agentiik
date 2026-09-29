@@ -1,0 +1,696 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/audit"
+	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/repo"
+)
+
+// A workflow's repository, as the API answers it: created empty, read with the version a run naming
+// no ref runs and a page of its history, its tree read at a ref, and its default branch named and
+// protected. Renaming, moving and deleting one are routes of their own to come.
+
+// WorkflowCreate is what POST /api/v1/{ns}/workflows reads, openapi.json's workflowCreate.
+type WorkflowCreate struct {
+	Name          string `json:"name"`
+	DefaultBranch string `json:"default_branch,omitempty"`
+	Protected     bool   `json:"protected,omitempty"`
+}
+
+func (c *WorkflowCreate) field(b *body, name string) error {
+	switch name {
+	case "name":
+		return text(b, &c.Name)
+	case "default_branch":
+		return text(b, &c.DefaultBranch)
+	case "protected":
+		return flag(b, &c.Protected)
+	}
+	return unknown(name)
+}
+
+// WorkflowUpdate is what PATCH /api/v1/{ns}/workflows/{name} reads, openapi.json's workflowUpdate:
+// each member it holds, and nothing it leaves out.
+type WorkflowUpdate struct {
+	Name          *string `json:"name,omitempty"`
+	Namespace     *string `json:"namespace,omitempty"`
+	DefaultBranch *string `json:"default_branch,omitempty"`
+	Protected     *bool   `json:"protected,omitempty"`
+}
+
+func (u *WorkflowUpdate) field(b *body, name string) error {
+	var s string
+	switch name {
+	case "name":
+		u.Name = &s
+		return text(b, u.Name)
+	case "namespace":
+		u.Namespace = &s
+		return text(b, u.Namespace)
+	case "default_branch":
+		u.DefaultBranch = &s
+		return text(b, u.DefaultBranch)
+	case "protected":
+		u.Protected = new(bool)
+		return flag(b, u.Protected)
+	}
+	return unknown(name)
+}
+
+// Repository is a workflow's repository, wire.schema.json's repository.
+type Repository struct {
+	Namespace     string            `json:"namespace"`
+	Name          string            `json:"name"`
+	DefaultBranch string            `json:"default_branch"`
+	Protected     bool              `json:"protected"`
+	Labels        map[string]string `json:"labels"`
+	CreatedAt     time.Time         `json:"created_at"`
+	// Head is the commit the default branch points at, null while it is unborn.
+	Head     *string `json:"head"`
+	CloneURL string  `json:"clone_url"`
+}
+
+// Version is a commit accepted as a version, wire.schema.json's version.
+type Version struct {
+	Commit    string    `json:"commit"`
+	Parent    string    `json:"parent,omitempty"`
+	Author    string    `json:"author"`
+	CreatedAt time.Time `json:"created_at"`
+	Source    string    `json:"source"`
+}
+
+// GitAuthor is who a commit says wrote it, as its git configuration named them.
+type GitAuthor struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// HistoryEntry is one commit of the default branch's first-parent history, openapi.json's
+// historyEntry, and the version it is where it is one.
+type HistoryEntry struct {
+	Commit     string     `json:"commit"`
+	Parent     string     `json:"parent,omitempty"`
+	Author     *GitAuthor `json:"author,omitempty"`
+	AuthoredAt string     `json:"authored_at,omitempty"`
+	Subject    string     `json:"subject,omitempty"`
+	Version    *Version   `json:"version,omitempty"`
+}
+
+// WorkflowDetail is what GET /api/v1/{ns}/workflows/{name} answers, openapi.json's workflowDetail.
+type WorkflowDetail struct {
+	Repository Repository      `json:"repository"`
+	Version    *Version        `json:"version,omitempty"`
+	Graph      json.RawMessage `json:"graph,omitempty"`
+	History    []HistoryEntry  `json:"history"`
+	Next       string          `json:"next,omitempty"`
+}
+
+// Tree is the files of the commit a ref names, openapi.json's tree.
+type Tree struct {
+	Commit  string     `json:"commit"`
+	Entries []TreeFile `json:"entries"`
+}
+
+// TreeFile is one file of a tree, openapi.json's treeEntry.
+type TreeFile struct {
+	Path   string `json:"path"`
+	Mode   string `json:"mode"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+// workflowBodyMaxBytes bounds what the create and change routes read: a name, a branch and a
+// flag, a few hundred bytes, with room for a branch of the 1,024 bytes a ref may be.
+const workflowBodyMaxBytes = 8 << 10
+
+// historyDefault and historyMost are how many commits a page of history lists where limit is left
+// out and at the most, as GET /api/v1/runs lists runs.
+const (
+	historyDefault = 50
+	historyMost    = 500
+)
+
+// wholeCommit is a commit named in full, as a version is.
+var wholeCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// registerWorkflows registers the repository's routes.
+func (s *Server) registerWorkflows(rt *Router) error {
+	for _, r := range []struct {
+		method, pattern string
+		guard           Guard
+		handler         Handler
+	}{
+		// What registering a version takes, at the namespace, so that an editor creates the
+		// repository its first push needs.
+		{"POST", "/api/v1/{namespace}/workflows",
+			Needs{Permission: WorkflowWrite, Scope: Namespace}, s.createWorkflow},
+		{"GET", "/api/v1/{namespace}/workflows/{workflow}",
+			Needs{Permission: WorkflowRead, Scope: Workflow}, s.readWorkflow},
+		// grant:manage besides, for the default branch and its protection, which decide who
+		// may move what production runs; a caller without it is answered as one who cannot
+		// read the workflow is.
+		{"PATCH", "/api/v1/{namespace}/workflows/{workflow}",
+			Needs{Permission: WorkflowRead, Scope: Workflow, Also: GrantManage}, s.updateWorkflow},
+		{"GET", "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
+			Needs{Permission: WorkflowRead, Scope: Workflow}, s.readTree},
+	} {
+		if err := rt.Handle(r.method, r.pattern, r.guard, r.handler); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// repositoryOut is a workflow's repository as the wire writes it.
+func (s *Server) repositoryOut(w db.WorkflowRecord) Repository {
+	out := Repository{
+		Namespace: w.Namespace, Name: w.Name, DefaultBranch: w.DefaultBranch, Protected: w.Protected,
+		Labels: w.Labels, CreatedAt: w.CreatedAt.UTC(),
+		CloneURL: strings.TrimRight(s.publicURL, "/") + "/" + w.Namespace + "/" + w.Name + ".git",
+	}
+	if out.Labels == nil {
+		out.Labels = map[string]string{}
+	}
+	if w.Head != "" {
+		head := w.Head
+		out.Head = &head
+	}
+	return out
+}
+
+func versionOut(l db.Listed) *Version {
+	return &Version{Commit: l.Commit, Parent: l.Parent, Author: l.Author, CreatedAt: l.CreatedAt.UTC(), Source: l.Source}
+}
+
+// checkWorkflowName refuses a name a workflow cannot have, as the tree push refuses one.
+func checkWorkflowName(name string) error {
+	switch {
+	case len(name) > agk.IdentifierMaxBytes:
+		return fmt.Errorf("a workflow name is at most %d characters and this one is %d: one name has to survive a URL, a directory and a tool list unchanged, and no directory holds a longer one", agk.IdentifierMaxBytes, len(name))
+	case !workflowName.MatchString(name):
+		return fmt.Errorf("%.64q is not a workflow name: a workflow is named the way the workflow file names everything, letters, digits, hyphens and underscores beginning with a letter or a digit, so that one name survives a URL, a directory and a tool list unchanged", name)
+	}
+	return nil
+}
+
+// checkBranch refuses a default branch git would refuse, or one past the bound a ref is held to.
+func checkBranch(branch string) error {
+	if err := db.CheckRef("refs/heads/" + branch); err != nil {
+		return fmt.Errorf("%.64q is not a branch git could name: %w", branch, err)
+	}
+	return nil
+}
+
+// createWorkflow answers POST /api/v1/{ns}/workflows: an empty repository, its default branch unborn.
+func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	var c WorkflowCreate
+	if err := readAtMost(r, &c, workflowBodyMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
+	}
+	if c.DefaultBranch == "" {
+		c.DefaultBranch = "main"
+	}
+	if err := checkWorkflowName(c.Name); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := checkBranch(c.DefaultBranch); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var created db.WorkflowRecord
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		if created, err = ns.CreateWorkflow(ctx, c.Name, c.DefaultBranch, c.Protected, string(who), s.now()); err != nil {
+			return err
+		}
+		return ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.WorkflowCreate, Target: c.Name, Result: audit.Done,
+			Detail: map[string]any{"default_branch": c.DefaultBranch, "protected": c.Protected}})
+	})
+	if errors.Is(err, db.ErrWorkflowExists) {
+		fail(w, http.StatusConflict, fmt.Sprintf("%s holds a workflow named %s already: a name is one workflow in its namespace", over.Namespace, c.Name))
+		return
+	}
+	if err != nil {
+		s.report(fmt.Errorf("api: workflow %s/%s could not be created: %w", over.Namespace, c.Name, err))
+		fail(w, http.StatusInternalServerError, "the workflow could not be created")
+		return
+	}
+	write(w, http.StatusCreated, s.repositoryOut(created))
+}
+
+// readWorkflow answers GET /api/v1/{ns}/workflows/{name}: the repository, the version a run naming
+// no ref runs with its graph, and a page of the default branch's history.
+func (s *Server) readWorkflow(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
+	q := r.URL.Query()
+	from := q.Get("from")
+	if from != "" && !wholeCommit.MatchString(from) {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("from is %.64q, and a page of history starts at a commit named in full, forty lowercase hexadecimal characters", from))
+		return
+	}
+	limit := historyDefault
+	if written := q.Get("limit"); written != "" {
+		n, err := strconv.Atoi(written)
+		if err != nil || n < 1 || n > historyMost {
+			fail(w, http.StatusBadRequest, fmt.Sprintf("limit is %.16q, and a page lists from 1 to %d commits", written, historyMost))
+			return
+		}
+		limit = n
+	}
+
+	var record db.WorkflowRecord
+	var repository db.Repository
+	var head *db.Listed
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		if record, err = ns.WorkflowRecord(ctx, over.Workflow); err != nil {
+			return err
+		}
+		if record.Head == "" {
+			latest, _, err := ns.TreeVersions(ctx, over.Workflow, "", 1)
+			if err == nil && len(latest) == 1 {
+				head = &latest[0]
+			}
+			return err
+		}
+		if repository, err = ns.Repository(ctx, over.Workflow); err != nil {
+			return err
+		}
+		at, err := ns.VersionsAt(ctx, over.Workflow, []string{record.Head})
+		if v, held := at[record.Head]; held {
+			head = &v
+		}
+		return err
+	})
+	if errors.Is(err, db.ErrNoWorkflow) {
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	}
+	if err != nil {
+		s.report(err)
+		fail(w, http.StatusInternalServerError, "the workflow could not be read")
+		return
+	}
+
+	detail := WorkflowDetail{Repository: s.repositoryOut(record), History: []HistoryEntry{}}
+	if head != nil {
+		detail.Version = versionOut(*head)
+		if g, err := s.versions.Graph(r.Context(), over.Namespace, over.Workflow, head.Commit); err == nil {
+			if resolved, err := g.Resolved(head.Commit); err == nil {
+				detail.Graph = resolved
+			}
+		}
+	}
+	var status int
+	if record.Head == "" {
+		detail.History, detail.Next, status, err = s.treeHistory(r.Context(), over, from, limit)
+	} else {
+		detail.History, detail.Next, status, err = s.gitHistory(r.Context(), over, repository, record.Head, from, limit)
+	}
+	if err != nil {
+		if status == http.StatusInternalServerError {
+			s.report(err)
+		}
+		fail(w, status, err.Error())
+		return
+	}
+	write(w, http.StatusOK, detail)
+}
+
+// errNotInHistory is a page asked from a commit the history listed does not hold.
+var errNotInHistory = errors.New("from names no commit of the default branch's history: a page starts at a commit the page before named as next")
+
+// treeHistory is a page of the versions a tree push recorded, newest first: the history of a
+// workflow no git push has filled.
+func (s *Server) treeHistory(ctx context.Context, over Target, from string, limit int) ([]HistoryEntry, string, int, error) {
+	var listed []db.Listed
+	var next string
+	err := s.pool.In(ctx, over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		listed, next, err = ns.TreeVersions(ctx, over.Workflow, from, limit)
+		return err
+	})
+	if errors.Is(err, db.ErrNoVersion) {
+		return nil, "", http.StatusNotFound, errNotInHistory
+	}
+	if err != nil {
+		return nil, "", http.StatusInternalServerError, errors.New("the history could not be read")
+	}
+	history := make([]HistoryEntry, 0, len(listed))
+	for _, l := range listed {
+		history = append(history, HistoryEntry{Commit: l.Commit, Parent: l.Parent, Version: versionOut(l)})
+	}
+	return history, next, http.StatusOK, nil
+}
+
+// gitHistory is a page of the default branch's first-parent history, newest first, from from or its
+// head, each commit that is a version marked.
+//
+// from has to be on that history, which is found by walking it from the head: a page is asked from
+// the next the page before named, and a commit off the branch, or of another repository, is not a
+// page of this one.
+func (s *Server) gitHistory(ctx context.Context, over Target, repository db.Repository, head, from string, limit int) ([]HistoryEntry, string, int, error) {
+	if s.packs == nil {
+		return nil, "", http.StatusServiceUnavailable, errors.New(noPacks)
+	}
+	objects, err := s.objectsOf(repository)
+	if err != nil {
+		return nil, "", http.StatusInternalServerError, errors.New("the history could not be read")
+	}
+	defer objects.Close()
+
+	at, err := repo.ParseID(head)
+	if err != nil {
+		return nil, "", http.StatusInternalServerError, errors.New("the history could not be read")
+	}
+	commitOf := func(id repo.ID) (*repo.Commit, error) {
+		_, data, err := repo.ReadObject(ctx, objects, id, repo.MaxParsedBytes)
+		if err != nil {
+			return nil, err
+		}
+		return repo.ParseCommit(data)
+	}
+	if from != "" {
+		want, err := repo.ParseID(from)
+		if err != nil {
+			return nil, "", http.StatusBadRequest, err
+		}
+		for at != want {
+			c, err := commitOf(at)
+			if err != nil {
+				return nil, "", http.StatusInternalServerError, fmt.Errorf("the history could not be read: %w", err)
+			}
+			if len(c.Parents) == 0 {
+				return nil, "", http.StatusNotFound, errNotInHistory
+			}
+			at = c.Parents[0]
+		}
+	}
+
+	var history []HistoryEntry
+	var next string
+	for !at.IsZero() {
+		if len(history) == limit {
+			next = at.String()
+			break
+		}
+		c, err := commitOf(at)
+		if err != nil {
+			return nil, "", http.StatusInternalServerError, fmt.Errorf("the history could not be read: %w", err)
+		}
+		e := HistoryEntry{
+			Commit:     at.String(),
+			Author:     &GitAuthor{Name: c.Author.Name, Email: c.Author.Email},
+			AuthoredAt: authoredAt(c.Author),
+			Subject:    subjectOf(c.Message),
+		}
+		at = repo.ID{}
+		if len(c.Parents) > 0 {
+			e.Parent = c.Parents[0].String()
+			at = c.Parents[0]
+		}
+		history = append(history, e)
+	}
+
+	commits := make([]string, len(history))
+	for i, e := range history {
+		commits[i] = e.Commit
+	}
+	var versions map[string]db.Listed
+	err = s.pool.In(ctx, over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		versions, err = ns.VersionsAt(ctx, over.Workflow, commits)
+		return err
+	})
+	if err != nil {
+		return nil, "", http.StatusInternalServerError, errors.New("the history could not be read")
+	}
+	for i := range history {
+		if v, held := versions[history[i].Commit]; held {
+			history[i].Version = versionOut(v)
+		}
+	}
+	if history == nil {
+		history = []HistoryEntry{}
+	}
+	return history, next, http.StatusOK, nil
+}
+
+// authoredAt is when a commit says it was written, in the offset it was written in, as git log shows
+// it.
+func authoredAt(s repo.Signature) string {
+	offset := 0
+	if len(s.Zone) == 5 {
+		hours, err1 := strconv.Atoi(s.Zone[1:3])
+		minutes, err2 := strconv.Atoi(s.Zone[3:5])
+		if err1 == nil && err2 == nil {
+			offset = hours*3600 + minutes*60
+			if s.Zone[0] == '-' {
+				offset = -offset
+			}
+		}
+	}
+	return time.Unix(s.When, 0).In(time.FixedZone(s.Zone, offset)).Format(time.RFC3339)
+}
+
+// subjectOf is a commit message's first line, as git log --oneline shows it.
+func subjectOf(message string) string {
+	message = strings.TrimLeft(message, "\n")
+	subject, _, _ := strings.Cut(message, "\n")
+	return strings.TrimRight(subject, " \t\r")
+}
+
+// updateWorkflow answers PATCH /api/v1/{ns}/workflows/{name}: its default branch named, protected
+// or left unprotected.
+func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	var u WorkflowUpdate
+	if err := readAtMost(r, &u, workflowBodyMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
+	}
+	switch {
+	case u.Name != nil || u.Namespace != nil:
+		fail(w, http.StatusBadRequest, "this installation does not rename or move a workflow yet: name and namespace are read by a later release of v0.4.0's work, and default_branch and protected are what it changes")
+		return
+	case u.DefaultBranch == nil && u.Protected == nil:
+		fail(w, http.StatusBadRequest, "the request names nothing to change: default_branch, protected, or both")
+		return
+	}
+	if u.DefaultBranch != nil {
+		if err := checkBranch(*u.DefaultBranch); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	owns, err := HoldsAlso(r)(r.Context())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the change could not be authorised")
+		return
+	}
+	if !owns {
+		// Answered as a workflow the caller cannot see is, as the page says, since what it
+		// would change is decided by whoever may share it.
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	}
+	var before, after db.WorkflowRecord
+	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		if before, after, err = ns.SetDefault(ctx, over.Workflow, u.DefaultBranch, u.Protected); err != nil {
+			return err
+		}
+		if before.DefaultBranch != after.DefaultBranch {
+			if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: over.Workflow, Result: audit.Done,
+				Detail: map[string]any{"default_branch": after.DefaultBranch, "was": map[string]any{"default_branch": before.DefaultBranch}}}); err != nil {
+				return err
+			}
+		}
+		// The protection of the branch that is the default now, as it was before: a branch
+		// named the default carries the repository's protection over from the one it replaces.
+		was := before.Protected
+		if before.DefaultBranch != after.DefaultBranch {
+			was = false
+		}
+		if was != after.Protected {
+			return ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: over.Workflow, Result: audit.Done,
+				Detail: map[string]any{"ref": "refs/heads/" + after.DefaultBranch, "protected": after.Protected, "was": was}})
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, db.ErrNoWorkflow):
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	case errors.Is(err, db.ErrNoBranch):
+		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("%s holds no branch %s: the default branch is one the repository holds, since HEAD names it and a clone checks it out, and only a repository nothing was pushed to names the branch its first push will create", over.Workflow, *u.DefaultBranch))
+		return
+	case err != nil:
+		s.report(fmt.Errorf("api: workflow %s/%s could not be changed: %w", over.Namespace, over.Workflow, err))
+		fail(w, http.StatusInternalServerError, "the workflow could not be changed")
+		return
+	}
+	write(w, http.StatusOK, s.repositoryOut(after))
+}
+
+// readTree answers GET /api/v1/{ns}/workflows/{name}/tree/{ref}: the files of the version a ref
+// names, or with ?path= one file's bytes.
+func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
+	ref := r.PathValue("ref")
+	var commit string
+	var files []db.TreeFile
+	status := http.StatusOK
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		// Whether the workflow is there first, so that a ref asked of one that is not is
+		// answered as the workflow is, whatever the ref.
+		if _, err := ns.WorkflowRecord(ctx, over.Workflow); err != nil {
+			return err
+		}
+		var why error
+		commit, status, why = resolveRef(ctx, ns, over.Workflow, ref)
+		if why != nil {
+			return why
+		}
+		var err error
+		files, err = ns.Tree(ctx, over.Workflow, commit)
+		if errors.Is(err, db.ErrNoVersion) || errors.Is(err, db.ErrNoTree) {
+			status = http.StatusNotFound
+			return fmt.Errorf("%.200s names %s, which is no version whose files are kept", ref, commit)
+		}
+		return err
+	})
+	if errors.Is(err, db.ErrNoWorkflow) {
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	}
+	if err != nil {
+		if status == http.StatusOK {
+			s.report(err)
+			fail(w, http.StatusInternalServerError, "the tree could not be read")
+			return
+		}
+		fail(w, status, err.Error())
+		return
+	}
+	slices.SortFunc(files, func(a, b db.TreeFile) int { return strings.Compare(a.Path, b.Path) })
+
+	path, asked := r.URL.Query()["path"]
+	if !asked {
+		tree := Tree{Commit: commit, Entries: make([]TreeFile, 0, len(files))}
+		for _, f := range files {
+			tree.Entries = append(tree.Entries, TreeFile{Path: f.Path, Mode: f.Mode, Size: f.Size, SHA256: f.SHA256})
+		}
+		write(w, http.StatusOK, tree)
+		return
+	}
+	name := path[0]
+	for _, f := range files {
+		if f.Path != name {
+			continue
+		}
+		if s.objects == nil {
+			fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and a file of a tree is read from it")
+			return
+		}
+		body, err := s.objects.Open(r.Context(), artifact.Key(over.Namespace, f.SHA256))
+		if err != nil {
+			s.report(fmt.Errorf("api: %s of %s/%s@%s: %w", name, over.Namespace, over.Workflow, commit, err))
+			fail(w, http.StatusInternalServerError, "the file could not be read")
+			return
+		}
+		defer body.Close()
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.FormatInt(f.Size, 10))
+		w.Header().Set("ETag", `"`+f.SHA256+`"`)
+		w.WriteHeader(http.StatusOK)
+		io.Copy(w, body)
+		return
+	}
+	for _, f := range files {
+		if strings.HasPrefix(f.Path, name+"/") {
+			fail(w, http.StatusNotFound, fmt.Sprintf("%.200s is a directory of the tree, and path names a file: the listing names every file of the tree", name))
+			return
+		}
+	}
+	fail(w, http.StatusNotFound, fmt.Sprintf("the tree at %.200s holds no file %.200s", ref, name))
+}
+
+// resolveRef is the commit a ref names in a workflow's repository: a branch or a tag by its short
+// name or in full, or a commit named in full that is a version. It answers the status and the
+// sentence of a ref naming nothing, or two things.
+func resolveRef(ctx context.Context, ns *db.NS, workflow, ref string) (string, int, error) {
+	if wholeCommit.MatchString(ref) {
+		if _, err := ns.Version(ctx, workflow, ref); err != nil {
+			if errors.Is(err, db.ErrNoVersion) {
+				return "", http.StatusNotFound, fmt.Errorf("%s is no version of the workflow", ref)
+			}
+			return "", http.StatusOK, err
+		}
+		return ref, http.StatusOK, nil
+	}
+	repository, err := ns.Repository(ctx, workflow)
+	if err != nil {
+		return "", http.StatusOK, err
+	}
+	held := map[string]db.Ref{}
+	for _, r := range repository.Refs {
+		held[r.Name] = r
+	}
+	candidates := []string{ref}
+	if !strings.HasPrefix(ref, "refs/") {
+		candidates = []string{"refs/heads/" + ref, "refs/tags/" + ref}
+	}
+	var found []db.Ref
+	for _, name := range candidates {
+		if r, ok := held[name]; ok && r.Commit != "" {
+			found = append(found, r)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return "", http.StatusNotFound, fmt.Errorf("%.200s names no branch, no tag and no version of the workflow", ref)
+	case 1:
+		return found[0].Commit, http.StatusOK, nil
+	}
+	return "", http.StatusBadRequest, fmt.Errorf("%.200s is both a branch and a tag of the workflow: name the one meant in full, refs/heads/%.200s or refs/tags/%.200s", ref, ref, ref)
+}
+
+// defaultCommit is the commit a run naming none runs: the default branch's head, or while it is
+// unborn the latest version a tree push recorded, or ErrNoVersion where there is neither.
+func (s *Server) defaultCommit(ctx context.Context, over Target) (string, error) {
+	var commit string
+	err := s.pool.In(ctx, over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		record, err := ns.WorkflowRecord(ctx, over.Workflow)
+		if err != nil {
+			return err
+		}
+		if record.Head != "" {
+			commit = record.Head
+			return nil
+		}
+		latest, _, err := ns.TreeVersions(ctx, over.Workflow, "", 1)
+		if err != nil {
+			return err
+		}
+		if len(latest) == 0 {
+			return fmt.Errorf("%w: %s/%s has no version to run", db.ErrNoVersion, over.Namespace, over.Workflow)
+		}
+		commit = latest[0].Commit
+		return nil
+	})
+	return commit, err
+}

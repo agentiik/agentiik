@@ -141,6 +141,13 @@ var Cases = []Case{
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants", Permission: api.GrantManage, Scope: api.Workflow, OrAdministrator: true, Seeing: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants/{id}", Permission: api.GrantManage, Scope: api.Workflow}, Makes: "grant"},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}", Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse}, Refused: true},
+	// A repository created under what registering a version takes, at the namespace; read and its
+	// tree read under workflow:read; its default branch and protection changed under grant:manage
+	// besides, which only the handler asks, since which a change needs is in its body.
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows", Permission: api.WorkflowWrite, Scope: api.Namespace}, Refused: true},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow}},
+	{Route: api.Route{Method: "PATCH", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow, Also: api.GrantManage}, Refused: true},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/images", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/images", Permission: api.WorkflowWrite, Scope: api.Workflow}, Refused: true},
 	// Git's smart HTTP, answered to the command line's token alone: clone and fetch take

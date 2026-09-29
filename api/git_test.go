@@ -55,7 +55,7 @@ func servingGit(t *testing.T, auth api.Authorizer) *gitServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: store, Objects: artifact.Dir(t.TempDir())}); err != nil {
+	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: store, Objects: artifact.Dir(t.TempDir()), PublicURL: "https://agentiik.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
