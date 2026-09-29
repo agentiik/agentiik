@@ -519,6 +519,7 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		{`insert into runs (namespace, id, workflow, commit, trigger)
 		  values ('finance', $1, $2, 'a3f9c1e', 'manual')`, []any{run, workflow}},
 		{`insert into steps (namespace, run_id, step) values ('finance', $1, $2)`, []any{run, step}},
+		{`insert into step_cache (namespace, key, run_id, step, ports) values ('finance', 'finance/sha256/0', $1, $2, '[]')`, []any{run, step}},
 		{`insert into tasks (namespace, id, run_id, step, attempt)
 		  values ('finance', '01JMZ8V1PC7K3M0', $1, $2, 1)`, []any{run, step}},
 		{`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at)
@@ -549,6 +550,7 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		"runs.workflow":              {workflow},
 		"steps.step":                 {step},
 		"tasks.step":                 {step},
+		"step_cache.step":            {step},
 		"artifacts.step":             {step},
 		"artifacts.port":             {port},
 		"secret_declarations.name":   {secret},
