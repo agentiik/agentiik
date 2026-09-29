@@ -59,9 +59,10 @@ const (
 )
 
 func push(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk push", "agk push [-f <path>] --namespace <namespace> [--server <url>] [--commit <commit>] [--branch <branch>] [--allow-dirty]")
+	fs := flags(e, "agk push", "agk push [-f <path>] --namespace <namespace> [--name <name>] [--server <url>] [--commit <commit>] [--branch <branch>] [--allow-dirty]")
 	entry := fs.String("f", "", "The entry point to push. Defaults to "+entryPoint+" in the directory the command is run in.")
 	namespace := fs.String("namespace", "", "The namespace to register the workflow in.")
+	named := fs.String("name", "", "The repository to push to. Defaults to the entry point's metadata.name, which a library's root file, a fragment, does not write; given for a workflow, it has to be that name.")
 	server := fs.String("server", "", "The installation to push to. "+serverDefault)
 	commit := fs.String("commit", "", "The commit to push: a hash, a branch or a tag the repository holds. Defaults to HEAD, the branch checked out.")
 	dirty := fs.Bool("allow-dirty", false, "Push although the working tree has uncommitted changes. The commit is pushed as it was committed either way, so this says the changes are meant to stay behind.")
@@ -142,19 +143,27 @@ func push(ctx context.Context, e Env, args []string) int {
 	// reaching what this machine reaches: each tag is resolved to its digest through the local
 	// daemon, and the manifests are read out of those digests, so that a tag moved on this
 	// machine between the two cannot pair the manifest of one image with the digest of another.
-	// A version the hook will refuse is refused here, before anything is recorded or sent.
+	// A workflow include reads its library on the installation, as the hook will. A version the
+	// hook will refuse is refused here, before anything is recorded or sent.
 	local := &daemon{e: e}
 	defer local.close()
 	checked, err := versions.Check(ctx, tree, versions.Checking{
-		Commit: sha, Committed: true, Namespace: *namespace,
-		Resolvers: versions.Resolvers{Pin: local.pin, Manifest: local.manifest},
+		Commit: sha, Committed: true, Namespace: *namespace, Repository: *named,
+		Resolvers: versions.Resolvers{Pin: local.pin, Manifest: local.manifest, Include: at.include},
 	})
 	if err != nil {
 		refusal(e.Err, err)
 		return leaving(err)
 	}
 	wf, images := checked.Workflow, checked.Version.Images
-	name := string(wf.Metadata.Name)
+	name := *named
+	switch {
+	case checked.Library && name == "":
+		refusal(e.Err, fmt.Errorf("%s at %s is a library's root, written as a fragment, which writes no metadata.name: --name names the repository it is pushed to", entryPoint, short(sha)))
+		return exitRefused
+	case !checked.Library:
+		name = string(wf.Metadata.Name)
+	}
 
 	// Then, in order, what a git push needs of the installation and does not carry: the
 	// repository, created where it is not, and the digest of each tag and the manifest of
@@ -235,6 +244,12 @@ func push(ctx context.Context, e Env, args []string) int {
 	}
 
 	fmt.Fprintf(e.Out, "%s/%s@%s pushed to %s as %s\n", *namespace, name, short(sha), where, ref)
+	if checked.Library {
+		fmt.Fprintf(e.Out, "a library, which other workflows include and nothing runs: %s, %s\n",
+			counted(len(tree.files), "file", "files"),
+			counted(len(checked.Version.Includes), "included file", "included files"))
+		return exitSucceeded
+	}
 	if already {
 		keptDigests(e, *namespace, name, sha, images)
 	}
