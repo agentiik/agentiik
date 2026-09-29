@@ -348,7 +348,8 @@ func purger(pool *db.Pool, dir string, ctl *controller.Controller, term db.Term,
 					"artifacts", p.Artifacts, "runs", p.Runs, "logs", p.Logs, "uploads", p.Uploads,
 					"orphans", p.Orphans, "objects", p.Objects, "bytes", p.Bytes,
 					"repacked", p.Repacked, "packs", p.Packs, "pack_bytes", p.PackBytes,
-					"deleted_runs", p.Deleted.Runs, "deleted_versions", p.Deleted.Versions, "deleted_workflows", p.Deleted.Workflows)
+					"deleted_runs", p.Deleted.Runs, "deleted_versions", p.Deleted.Versions, "deleted_workflows", p.Deleted.Workflows,
+					"moved_workflows", p.Moved, "moved_left", p.MovedLeft)
 			}
 			if p.Recorded > 0 {
 				log.Info("the purges recorded the artifact files of finished runs a v0.2 controller left unrecorded", "runs", p.Recorded)
