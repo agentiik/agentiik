@@ -1411,3 +1411,21 @@ func TestAPortPastItsBoundIsRefusedBeforeThePushIsSent(t *testing.T) {
 		t.Errorf("the refusal reads %q", errs)
 	}
 }
+
+// A repository a push creates takes the branch the push moves as its default, so that its first
+// push is to the branch a clone checks out and a run naming no ref runs, whichever branch is
+// checked out here.
+func TestARepositoryAPushCreatesTakesThePushedBranchAsItsDefault(t *testing.T) {
+	dir := repository(t)
+	in := aPushStandIn(t, http.StatusOK)
+	code, out, errs := pushAgainst(dir, in.server.URL, "--branch", "release")
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	if len(in.created) != 1 || in.created[0].DefaultBranch != "release" {
+		t.Errorf("the repository was created as %+v", in.created)
+	}
+	if head := in.git(in.bare("monthly-invoicing"), "symbolic-ref", "HEAD"); head != "refs/heads/release" {
+		t.Errorf("the repository's HEAD names %s", head)
+	}
+}

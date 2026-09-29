@@ -309,7 +309,9 @@ func TestTheDefaultBranchIsNamedAndProtectedByWhoeverHoldsGrantManage(t *testing
 			updated++
 		}
 	}
-	if protected != 2 || updated != 1 {
+	// Protected once, then moved: the branch that took the protection over and the branch that
+	// lost it, each once.
+	if protected != 3 || updated != 1 {
 		t.Errorf("the changes are recorded as %d ref.protect and %d workflow.update", protected, updated)
 	}
 }

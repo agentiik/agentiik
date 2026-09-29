@@ -520,11 +520,18 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 				return err
 			}
 		}
-		// The protection of the branch that is the default now, as it was before: a branch
-		// named the default carries the repository's protection over from the one it replaces.
+		// Each branch whose protection changed, as it was and as it is: the one that is the
+		// default now, which carries the repository's protection over from the one it
+		// replaces, and the one it replaced, which loses it.
 		was := before.Protected
 		if before.DefaultBranch != after.DefaultBranch {
 			was = false
+			if before.Protected {
+				if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: over.Workflow, Result: audit.Done,
+					Detail: map[string]any{"ref": "refs/heads/" + before.DefaultBranch, "protected": false, "was": true}}); err != nil {
+					return err
+				}
+			}
 		}
 		if was != after.Protected {
 			return ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: over.Workflow, Result: audit.Done,
