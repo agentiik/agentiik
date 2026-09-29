@@ -165,7 +165,7 @@ func (s *Server) registerWorkflows(rt *Router) error {
 		// may move what production runs; a caller without it is answered as one who cannot
 		// read the workflow is.
 		{"PATCH", "/api/v1/{namespace}/workflows/{workflow}",
-			Needs{Permission: WorkflowRead, Scope: Workflow, Also: GrantManage}, s.updateWorkflow},
+			Needs{Permission: WorkflowRead, Scope: Workflow, Also: GrantManage, Asks: []Permission{WorkflowWrite}}, s.updateWorkflow},
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
 			Needs{Permission: WorkflowRead, Scope: Workflow}, s.readTree},
 		{"DELETE", "/api/v1/{namespace}/workflows/{workflow}",
@@ -519,21 +519,28 @@ func subjectOf(message string) string {
 	return strings.TrimRight(subject, " \t\r")
 }
 
-// updateWorkflow answers PATCH /api/v1/{ns}/workflows/{name}: its default branch named, protected
-// or left unprotected.
+// updateWorkflow answers PATCH /api/v1/{ns}/workflows/{name}: the workflow renamed, its default
+// branch named, protected or left unprotected, or any of them at once.
 func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	var u WorkflowUpdate
 	if err := readAtMost(r, &u, workflowBodyMaxBytes); err != nil {
 		fail(w, statusOf(err), err.Error())
 		return
 	}
+	branching := u.DefaultBranch != nil || u.Protected != nil
 	switch {
-	case u.Name != nil || u.Namespace != nil:
-		fail(w, http.StatusBadRequest, "this installation does not rename or move a workflow yet: name and namespace are read by a later release of v0.4.0's work, and default_branch and protected are what it changes")
+	case u.Namespace != nil:
+		fail(w, http.StatusBadRequest, "this installation does not move a workflow to another namespace yet: namespace is read by a later release of v0.4.0's work, and name, default_branch and protected are what it changes")
 		return
-	case u.DefaultBranch == nil && u.Protected == nil:
-		fail(w, http.StatusBadRequest, "the request names nothing to change: default_branch, protected, or both")
+	case u.Name == nil && !branching:
+		fail(w, http.StatusBadRequest, "the request names nothing to change: name, default_branch, protected, or any of them")
 		return
+	}
+	if u.Name != nil {
+		if err := checkWorkflowName(*u.Name); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if u.DefaultBranch != nil {
 		if err := checkBranch(*u.DefaultBranch); err != nil {
@@ -541,25 +548,53 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 			return
 		}
 	}
-	owns, err := HoldsAlso(r)(r.Context())
-	if err != nil {
-		fail(w, http.StatusInternalServerError, "the change could not be authorised")
-		return
+	// "Each field under its own permission, every one of them held or nothing changed": a
+	// rename under workflow:write, the default branch and its protection under grant:manage. A
+	// caller lacking one is answered as a workflow it cannot see is, as the page says, since
+	// what it would change is decided by whoever holds that permission.
+	for _, needed := range []struct {
+		asked bool
+		holds func(context.Context) (bool, error)
+	}{
+		{u.Name != nil, func(ctx context.Context) (bool, error) { return HoldsOn(r)(ctx, WorkflowWrite) }},
+		{branching, HoldsAlso(r)},
+	} {
+		if !needed.asked {
+			continue
+		}
+		held, err := needed.holds(r.Context())
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "the change could not be authorised")
+			return
+		}
+		if !held {
+			fail(w, http.StatusNotFound, "no such thing, or not yours")
+			return
+		}
 	}
-	if !owns {
-		// Answered as a workflow the caller cannot see is, as the page says, since what it
-		// would change is decided by whoever may share it.
-		fail(w, http.StatusNotFound, "no such thing, or not yours")
-		return
-	}
+	name := over.Workflow
 	var before, after db.WorkflowRecord
-	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		if u.Name != nil && *u.Name != over.Workflow {
+			if err := ns.RenameWorkflow(ctx, over.Workflow, *u.Name); err != nil {
+				return err
+			}
+			name = *u.Name
+			if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: name, Result: audit.Done,
+				Detail: map[string]any{"name": name, "was": map[string]any{"name": over.Workflow}}}); err != nil {
+				return err
+			}
+		}
 		var err error
-		if before, after, err = ns.SetDefault(ctx, over.Workflow, u.DefaultBranch, u.Protected); err != nil {
+		if !branching {
+			after, err = ns.WorkflowRecord(ctx, name)
+			return err
+		}
+		if before, after, err = ns.SetDefault(ctx, name, u.DefaultBranch, u.Protected); err != nil {
 			return err
 		}
 		if before.DefaultBranch != after.DefaultBranch {
-			if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: over.Workflow, Result: audit.Done,
+			if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: name, Result: audit.Done,
 				Detail: map[string]any{"default_branch": after.DefaultBranch, "was": map[string]any{"default_branch": before.DefaultBranch}}}); err != nil {
 				return err
 			}
@@ -571,14 +606,14 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		if before.DefaultBranch != after.DefaultBranch {
 			was = false
 			if before.Protected {
-				if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: over.Workflow, Result: audit.Done,
+				if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: name, Result: audit.Done,
 					Detail: map[string]any{"ref": "refs/heads/" + before.DefaultBranch, "protected": false, "was": true}}); err != nil {
 					return err
 				}
 			}
 		}
 		if was != after.Protected {
-			return ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: over.Workflow, Result: audit.Done,
+			return ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: name, Result: audit.Done,
 				Detail: map[string]any{"ref": "refs/heads/" + after.DefaultBranch, "protected": after.Protected, "was": was}})
 		}
 		return nil
@@ -586,6 +621,12 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	switch {
 	case errors.Is(err, db.ErrNoWorkflow):
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	case errors.Is(err, db.ErrWorkflowExists):
+		fail(w, http.StatusConflict, fmt.Sprintf("%s holds a workflow named %s already: a name is one workflow in its namespace", over.Namespace, *u.Name))
+		return
+	case errors.Is(err, db.ErrWorkflowPurging):
+		fail(w, http.StatusConflict, fmt.Sprintf("a workflow named %s was deleted from %s and is still being purged: the name is free once its runs, versions and packs are gone", *u.Name, over.Namespace))
 		return
 	case errors.Is(err, db.ErrNoBranch):
 		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("%s holds no branch %s: the default branch is one the repository holds, since HEAD names it and a clone checks it out, and only a repository nothing was pushed to names the branch its first push will create", over.Workflow, *u.DefaultBranch))
@@ -597,7 +638,7 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	}
 	head := after.Head
 	if head == "" {
-		head, _ = s.defaultCommit(r.Context(), over)
+		head, _ = s.defaultCommit(r.Context(), Target{Namespace: over.Namespace, Workflow: name})
 	}
 	write(w, http.StatusOK, s.repositoryOut(r.Context(), after, head))
 }

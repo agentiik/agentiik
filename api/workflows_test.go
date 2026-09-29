@@ -299,7 +299,7 @@ func TestTheDefaultBranchIsNamedAndProtectedByWhoeverHoldsGrantManage(t *testing
 		"a branch it does not hold": {"default_branch": "nothing"},
 		"a branch read as a flag":   {"default_branch": "-x"},
 		"a branch read as HEAD":     {"default_branch": "@"},
-		"a rename":                  {"name": "invoicing"},
+		"a move":                    {"namespace": "team-ops"},
 		"nothing":                   {},
 	} {
 		want := http.StatusBadRequest
@@ -374,5 +374,78 @@ func TestAWorkflowDeletedIsAbsentFromTheAnswerOn(t *testing.T) {
 	}
 	if !deleted {
 		t.Error("the deletion is not recorded")
+	}
+}
+
+// "A rename answers 200 and carries everything at once: versions, refs, runs, grants and triggers
+// answer at the new name from the answer on, the old name is free", under workflow:write; a caller
+// without it is answered as one who cannot see the workflow, a name held refused with 409, and a push
+// is held to the new name in metadata.name from then on.
+func TestARenameCarriesEverythingToTheNewNameAtOnce(t *testing.T) {
+	g := servingGit(t, holdingRepositories())
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	commit := work.commit("first")
+	work.must("push", "-q", "origin", "main")
+	run := func() string {
+		w, started := call(t, g.h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", map[string]any{"inputs": map[string]any{"orders": []any{}}})
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("a run answered %d: %s", w.Code, w.Body)
+		}
+		return started["run"].(string)
+	}()
+
+	const at = "/api/v1/finance/workflows/monthly-invoicing"
+	if w, _ := call(t, g.h, "PATCH", at, "bob", map[string]any{"name": "invoicing"}); w.Code != http.StatusNotFound {
+		t.Errorf("a reader renaming the workflow answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, g.h, "POST", "/api/v1/finance/workflows", "alice", map[string]any{"name": "payroll"}); w.Code != http.StatusCreated {
+		t.Fatalf("creating another workflow answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, g.h, "PATCH", at, "alice", map[string]any{"name": "payroll"}); w.Code != http.StatusConflict {
+		t.Errorf("a rename to a name held answered %d: %s", w.Code, w.Body)
+	}
+	w, answer := call(t, g.h, "PATCH", at, "alice", map[string]any{"name": "invoicing"})
+	if w.Code != http.StatusOK || answer["name"] != "invoicing" || answer["head"] != commit ||
+		answer["clone_url"] != "https://agentiik.example.com/finance/invoicing.git" {
+		t.Fatalf("the rename answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, g.h, "GET", at, "bob", nil); w.Code != http.StatusNotFound {
+		t.Errorf("the old name answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, g.h, "GET", "/api/v1/finance/workflows/invoicing/tree/main", "bob", nil); w.Code != http.StatusOK {
+		t.Errorf("the tree at the new name answered %d: %s", w.Code, w.Body)
+	}
+	if w, detail := call(t, g.h, "GET", "/api/v1/runs/"+run, "alice", nil); w.Code != http.StatusOK || detail["workflow"] != "invoicing" || detail["commit"] != commit {
+		t.Errorf("the run started before the rename reads %d: %s", w.Code, w.Body)
+	}
+
+	// git follows the new name, and a push is held to it.
+	if out, err := work.run("fetch", "origin"); err == nil || !strings.Contains(out, "not found") {
+		t.Errorf("a fetch at the old name is answered:\n%s", out)
+	}
+	work.must("remote", "set-url", "origin", g.remoteOf("alice", "invoicing"))
+	work.must("fetch", "-q", "origin")
+	work.write("scripts/a.sh", "true\n")
+	work.commit("second, still named monthly-invoicing")
+	if out, err := work.run("push", "origin", "main"); err == nil || !strings.Contains(out, "metadata-name-not-repository") {
+		t.Errorf("a push still writing the old name is answered:\n%s", out)
+	}
+	work.write("agentiik.yaml", named(workflowDocument, "finance", "invoicing"))
+	work.commit("third, named invoicing")
+	work.must("push", "-q", "origin", "main")
+
+	var renamed bool
+	for _, e := range audited(t, g.pool) {
+		if e.Action == audit.WorkflowUpdate && e.Target == "invoicing" && e.Actor == "alice" {
+			renamed = true
+		}
+	}
+	if !renamed {
+		t.Error("the rename is not recorded")
+	}
+	// The old name is free.
+	if w, _ := call(t, g.h, "POST", "/api/v1/finance/workflows", "alice", map[string]any{"name": "monthly-invoicing"}); w.Code != http.StatusCreated {
+		t.Errorf("a workflow created under the old name answered %d: %s", w.Code, w.Body)
 	}
 }

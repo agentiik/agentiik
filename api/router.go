@@ -120,8 +120,9 @@ type Route struct {
 	// see Own.
 	Own bool
 
-	// Repository is set where the route is git's, about the repository its path names, and Asks
-	// are the permissions its handler may ask about besides Permission: see OnRepository.
+	// Repository is set where the route is git's, about the repository its path names. Asks are
+	// the permissions its handler may ask about besides Permission, git's or a PATCH's whose
+	// fields are each under their own: see HoldsOn.
 	Repository bool
 	Asks       access.Set
 }
