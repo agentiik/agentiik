@@ -579,29 +579,31 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	name := over.Workflow
 	var before, after db.WorkflowRecord
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		// What the change records, appended once everything else is done: an append takes the
+		// head of the audit chain until the transaction ends, and holding it while the
+		// branches are locked would keep every other act of the installation waiting.
+		var records []audit.Record
 		if u.Name != nil && *u.Name != over.Workflow {
 			if err := ns.RenameWorkflow(ctx, over.Workflow, *u.Name); err != nil {
 				return err
 			}
 			name = *u.Name
-			if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: name, Result: audit.Done,
-				Detail: map[string]any{"name": name, "was": map[string]any{"name": over.Workflow}}}); err != nil {
-				return err
-			}
+			records = append(records, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: name, Result: audit.Done,
+				Detail: map[string]any{"name": name, "was": map[string]any{"name": over.Workflow}}})
 		}
 		var err error
 		if !branching {
-			after, err = ns.WorkflowRecord(ctx, name)
-			return err
+			if after, err = ns.WorkflowRecord(ctx, name); err != nil {
+				return err
+			}
+			return appendAll(ctx, ns, records)
 		}
 		if before, after, err = ns.SetDefault(ctx, name, u.DefaultBranch, u.Protected); err != nil {
 			return err
 		}
 		if before.DefaultBranch != after.DefaultBranch {
-			if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: name, Result: audit.Done,
-				Detail: map[string]any{"default_branch": after.DefaultBranch, "was": map[string]any{"default_branch": before.DefaultBranch}}}); err != nil {
-				return err
-			}
+			records = append(records, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: name, Result: audit.Done,
+				Detail: map[string]any{"default_branch": after.DefaultBranch, "was": map[string]any{"default_branch": before.DefaultBranch}}})
 		}
 		// Each branch whose protection changed, as it was and as it is: the one that is the
 		// default now, which carries the repository's protection over from the one it
@@ -610,17 +612,15 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		if before.DefaultBranch != after.DefaultBranch {
 			was = false
 			if before.Protected {
-				if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: name, Result: audit.Done,
-					Detail: map[string]any{"ref": "refs/heads/" + before.DefaultBranch, "protected": false, "was": true}}); err != nil {
-					return err
-				}
+				records = append(records, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: name, Result: audit.Done,
+					Detail: map[string]any{"ref": "refs/heads/" + before.DefaultBranch, "protected": false, "was": true}})
 			}
 		}
 		if was != after.Protected {
-			return ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: name, Result: audit.Done,
+			records = append(records, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: name, Result: audit.Done,
 				Detail: map[string]any{"ref": "refs/heads/" + after.DefaultBranch, "protected": after.Protected, "was": was}})
 		}
-		return nil
+		return appendAll(ctx, ns, records)
 	})
 	switch {
 	case errors.Is(err, db.ErrNoWorkflow):
@@ -645,6 +645,17 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		head, _ = s.defaultCommit(r.Context(), Target{Namespace: over.Namespace, Workflow: name})
 	}
 	write(w, http.StatusOK, s.repositoryOut(r.Context(), after, head))
+}
+
+// appendAll appends records to the audit log in the order given, as the last statements of the
+// transaction.
+func appendAll(ctx context.Context, ns *db.NS, records []audit.Record) error {
+	for _, rec := range records {
+		if err := ns.Audit(ctx, rec); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // deleteWorkflow answers DELETE /api/v1/{ns}/workflows/{name}: the workflow absent from the answer
