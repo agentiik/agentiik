@@ -12,6 +12,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/token"
 )
 
@@ -278,17 +279,47 @@ type Artifact struct {
 	URL    string  `json:"url"`
 }
 
-// TreeEntry is one file of the repository, where it goes under /agk/repo, and the URL that fetches
-// it.
+// TreeEntry is one file of the repository, its path in the tree, the mode it is laid out with, the
+// URL that fetches it and, where the step's files relocate it, the absolute path it is bound at
+// instead of under /agk/repo.
 //
-// The shape is the wire's, entry for entry. It carries no to, the relocation the long form of a
-// step's files asks for, because narrowing and relocating are not served yet and every file here
-// goes where its path says.
+// The shape is the wire's, entry for entry. A file relocated to two places is two entries.
 type TreeEntry struct {
 	Path   string `json:"path"`
 	Mode   string `json:"mode"`
 	SHA256 string `json:"sha256"`
 	URL    string `json:"url"`
+	To     string `json:"to,omitempty"`
+}
+
+// placedTree is a version's tree as a step's files select it: every file where it goes, with the
+// mode the selector gives it or the one git records. A tree two files of which the selectors put
+// in one place cannot be laid out, and asking again will not change that.
+func placedTree(files []db.GrantFile, tree []db.TreeFile) ([]TreeEntry, error) {
+	selectors := make([]graph.FileSelector, 0, len(files))
+	for _, f := range files {
+		selectors = append(selectors, graph.FileSelector{From: f.From, To: f.To, Mode: f.Mode})
+	}
+	paths := make([]string, 0, len(tree))
+	byPath := make(map[string]db.TreeFile, len(tree))
+	for _, f := range tree {
+		paths = append(paths, f.Path)
+		byPath[f.Path] = f
+	}
+	placed, err := graph.Place(selectors, paths)
+	if err != nil {
+		return nil, fmt.Errorf("the step's files cannot be laid out: %w", err)
+	}
+	entries := make([]TreeEntry, 0, len(placed))
+	for _, p := range placed {
+		f := byPath[p.Path]
+		e := TreeEntry{Path: p.Path, Mode: f.Mode, SHA256: f.SHA256, To: p.To}
+		if p.Mode != "" {
+			e.Mode = p.Mode
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
 }
 
 // Secret is a name, the path the value goes at, and the value, which exists in this answer and
@@ -330,9 +361,8 @@ type Grant struct {
 	Inputs  []Input  `json:"inputs"`
 	Secrets []Secret `json:"secrets"`
 
-	// Tree is the whole of the commit's tree, which is what a step that says nothing about
-	// files is given. Narrowing it by a step's files is the controller's to add, and until it
-	// does every task of a version is handed the same list.
+	// Tree is the commit's tree as the step's files select it, and the whole of it for a step
+	// that says nothing about files.
 	Tree []TreeEntry `json:"tree"`
 
 	Uploads Uploads `json:"uploads"`
@@ -413,13 +443,20 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		out.Inputs = append(out.Inputs, port)
 	}
 
-	// The files of the version the scope names, each minted exactly as an artifact's URL is.
-	for _, f := range tree {
+	// The files of the version the scope names, narrowed and relocated by the step's files, each
+	// minted exactly as an artifact's URL is. The runner evaluates no path rule: every entry is
+	// a file and the place it goes, so that "a narrowed step downloads only what it asked for".
+	placed, err := placedTree(got.Scope.Files, tree)
+	if err != nil {
+		return Grant{}, neverAnswerable{err.Error()}
+	}
+	for _, f := range placed {
 		url, err := fetch(f.SHA256)
 		if err != nil {
 			return Grant{}, err
 		}
-		out.Tree = append(out.Tree, TreeEntry{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, URL: url})
+		f.URL = url
+		out.Tree = append(out.Tree, f)
 	}
 
 	// Signed for the namespace the grant was issued in, never one the runner names, and expiring

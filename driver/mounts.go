@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -119,7 +120,7 @@ func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, store *art
 		return nil, err
 	}
 
-	repoMounts, err := repoBinds(t, repo)
+	repoMounts, err := repoBinds(ctx, t, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +273,12 @@ func stdinPort(t graph.Task) (agk.Port, bool) {
 // arrives is a directory. What does belong here is the long form's other half, which
 // "relocates a path to wherever a tool insists on finding it": a tool that will only read
 // /etc/ssl/certs/internal-ca.pem has to find it there, and a bind is what puts it there.
-func repoBinds(t graph.Task, repo string) ([]docker.Mount, error) {
+//
+// A tree a runner laid out comes with its relocations placed, one bound file each, since the
+// redemption expanded the step's files over the version's tree. The working tree of agk run
+// --local comes with none, and the step's files are read over it here, with graph.Place, so that
+// a glob or a directory relocated locally lands where it lands on a server.
+func repoBinds(ctx context.Context, t graph.Task, repo string) ([]docker.Mount, error) {
 	if repo == "" {
 		// A task with no repository tree behind it mounts nothing, which is a brick
 		// test whose case carries no repo/ directory and any caller that has no tree
@@ -281,6 +287,16 @@ func repoBinds(t graph.Task, repo string) ([]docker.Mount, error) {
 		return nil, nil
 	}
 	mounts := []docker.Mount{bind(repo, RepoDir, true)}
+	if s := sourcesOf(ctx); s.Repo != "" && s.Repo == repo {
+		for _, b := range s.Bound {
+			if !path.IsAbs(b.Target) {
+				return nil, fault(t.Step, nil, ChargePlatform, "files: the tree binds a file at %q, which is not absolute", b.Target)
+			}
+			mounts = append(mounts, bind(b.Source, path.Clean(b.Target), true))
+		}
+		return mounts, nil
+	}
+	relocating := false
 	for _, f := range t.Files {
 		if f.To == "" {
 			continue
@@ -288,13 +304,57 @@ func repoBinds(t graph.Task, repo string) ([]docker.Mount, error) {
 		if !path.IsAbs(f.To) {
 			return nil, fault(t.Step, nil, ChargeBrick, "files: %q relocates a path to %q, which is not absolute: the long form of a selector names where in the container a tool insists on finding the file", f.From, f.To)
 		}
-		source, err := inside(repo, f.From)
+		if _, err := inside(repo, f.From); err != nil {
+			return nil, fault(t.Step, nil, ChargeBrick, "files: %v", err)
+		}
+		relocating = true
+	}
+	if !relocating {
+		return mounts, nil
+	}
+	files, err := workingFiles(repo)
+	if err != nil {
+		return nil, fault(t.Step, err, ChargePlatform, "files: the working tree %s could not be listed", repo)
+	}
+	placed, err := graph.Place(t.Files, files)
+	if err != nil {
+		return nil, fault(t.Step, nil, ChargeBrick, "%v", err)
+	}
+	for _, p := range placed {
+		if p.To == "" {
+			continue
+		}
+		source, err := inside(repo, p.Path)
 		if err != nil {
 			return nil, fault(t.Step, nil, ChargeBrick, "files: %v", err)
 		}
-		mounts = append(mounts, bind(source, path.Clean(f.To), true))
+		mounts = append(mounts, bind(source, p.To, true))
 	}
 	return mounts, nil
+}
+
+// workingFiles is every file of a working tree as a path from its root, sorted, leaving out the
+// repository itself, .git, which no version carries.
+func workingFiles(root string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(at string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, at)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		switch {
+		case d.IsDir() && rel == ".git":
+			return filepath.SkipDir
+		case d.Type().IsRegular():
+			files = append(files, rel)
+		}
+		return nil
+	})
+	return files, err
 }
 
 // inside resolves one path of a selector against the tree and refuses one that leaves

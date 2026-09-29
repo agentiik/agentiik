@@ -58,6 +58,22 @@ func TestAnExecutableTreeFileStaysExecutable(t *testing.T) {
 	}
 }
 
+// "A file in the tree is bytes, never a template: no interpolation, no expression evaluation, no
+// per-run rendering." What a step reads under /agk/repo is what was committed, an expression and
+// a variable a template engine would fill in among it.
+func TestATreeFileArrivesAsItWasCommitted(t *testing.T) {
+	committed := "${{ steps.fetch.outputs.invoices }}\n$AGK_RUN ${AGK_REPO} {{ .Namespace }} %s\n\x00\xff"
+	s := newObjectStore(t)
+	entries, o := treeOf(t, s, map[string]file{"templates/invoice.txt": {committed, "0644"}})
+	dir := emptyDir(t)
+	if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "templates", "invoice.txt")); err != nil || string(b) != committed {
+		t.Errorf("the file reads %q: %v", b, err)
+	}
+}
+
 // A path that leaves /agk/repo, names it twice or is not written as it cleans to is refused, and
 // nothing of the tree is left.
 func TestATreePathOutsideTheRepositoryIsRefused(t *testing.T) {

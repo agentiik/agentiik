@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/agentiik/agentiik/db"
@@ -12,6 +13,24 @@ import (
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/jackc/pgx/v5"
 )
+
+// The step's files are written into the scope as the workflow wrote them, which is what the
+// redemption narrows and relocates the version's tree by, and a step with none writes none, which
+// is the whole tree.
+func TestTheScopeNamesTheStepsFiles(t *testing.T) {
+	task := graph.Task{
+		Run: decidedRun, Step: "load", Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+		Files: []graph.FileSelector{{From: "./sql/**"}, {From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem", Mode: "0444"}},
+	}
+	want := []db.GrantFile{{From: "./sql/**"}, {From: "./certs/internal-ca.pem", To: "/etc/ssl/certs/internal-ca.pem", Mode: "0444"}}
+	if got := scopeOf(task, nil).Files; !slices.Equal(got, want) {
+		t.Errorf("the scope names the files %+v, want %+v", got, want)
+	}
+	task.Files = nil
+	if written, _ := json.Marshal(scopeOf(task, nil)); json.Valid(written) && strings.Contains(string(written), "files") {
+		t.Errorf("a step with no files writes %s", written)
+	}
+}
 
 // "the controller names which secret a task may have and never sees its value." What it names is
 // written into the grant's scope, and the redemption answers from that scope and from nothing
