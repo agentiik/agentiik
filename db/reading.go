@@ -102,6 +102,11 @@ type TaskSummary struct {
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
 
+	// MemoisedFrom is the run whose task published what a cache hit republished for this one:
+	// "a hit republishes the same envelopes without starting a container", so no runner and no
+	// exit code are named, and this says where the outputs were made.
+	MemoisedFrom agk.RunID `json:"memoised_from,omitempty"`
+
 	// Inputs are the envelopes the task was handed on its input ports, by digest as a step's
 	// ports are, from the grant it was dispatched with. A task never dispatched has none.
 	Inputs map[agk.Port]Envelope `json:"inputs,omitempty"`
@@ -255,7 +260,7 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 	// dispatch it was prepared for was handed.
 	rows, err := n.tx.Query(ctx, `
 		select t.idempotency_key, t.step, t.state, t.attempt, t.shard_index, t.shard_of,
-		       t.runner, t.exit_code, t.started_at, t.finished_at,
+		       t.runner, t.exit_code, t.started_at, t.finished_at, t.memoised_from,
 		       (select g.scope->'inputs' from task_grants g
 		        where g.namespace = t.namespace and g.task_id = t.id
 		        order by g.created_at desc limit 1),
@@ -274,11 +279,11 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		var t TaskSummary
 		var state string
 		var index, of *int
-		var runner *string
+		var runner, memoised *string
 		var started, finished, purged *time.Time
 		var handed []byte
 		if err := rows.Scan(&t.Task, &t.Step, &state, &t.Attempt, &index, &of,
-			&runner, &t.ExitCode, &started, &finished, &handed, &purged); err != nil {
+			&runner, &t.ExitCode, &started, &finished, &memoised, &handed, &purged); err != nil {
 			return nil, err
 		}
 		if t.Inputs, err = inputsHanded(handed, purged); err != nil {
@@ -292,6 +297,9 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		}
 		if runner != nil {
 			t.Runner = *runner
+		}
+		if memoised != nil {
+			t.MemoisedFrom = agk.RunID(*memoised)
 		}
 		if started != nil {
 			t.StartedAt = *started

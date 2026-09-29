@@ -313,6 +313,23 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 	}
 
+	// A cached task whose entry is found is ended by it, republished and started nowhere, before
+	// the quota is asked, since it holds no slot. A hit may make a step downstream runnable, so
+	// the plan that follows is looked up, and refused where its pool will not run it, in turn.
+	trees := map[string][]db.TreeFile{}
+	for {
+		var hit bool
+		if plan, hit, err = co.memoised(ctx, ev, e.Namespace, plan, trees, now); err != nil {
+			return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
+		}
+		if !hit {
+			break
+		}
+		if plan, err = refuseUnpooled(ev, e.Namespace, ns.Quotas.AllowedRunnerPools, pools, plan, now); err != nil {
+			return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
+		}
+	}
+
 	// What a namespace may hold at once bounds what leaves here, and it bounds it before the
 	// decision is written rather than after, so that the row says what was handed out. A task
 	// held back is not refused: it stays pending in the evaluator's state, which is what
@@ -805,6 +822,7 @@ func taskOf(run agk.RunID, step agk.Step, sh graph.ShardState) db.TaskRow {
 		DispatchedAt: sh.DispatchedAt,
 		StartedAt:    sh.StartedAt,
 		FinishedAt:   sh.FinishedAt,
+		MemoisedFrom: sh.MemoisedFrom,
 	}
 	// A code is written for every ending that carries one. The evaluator reads a code only for a
 	// task that succeeded or failed, since a stop and not the code decided the verdict of one

@@ -361,6 +361,14 @@ func (p *Pool) PurgeEnvelopes(ctx context.Context, batch int) (int, error) {
 			where r.namespace = g.namespace and r.id = g.id`, namespaces, runs); err != nil {
 			return err
 		}
+		// And the cache entries naming these runs' envelopes, which have nothing left to
+		// republish: "a cache entry pointing at an expired artifact is not a hit".
+		if _, err := w.tx.Exec(ctx, `
+			delete from step_cache c
+			using unnest($1::text[], $2::text[]) as g(namespace, id)
+			where c.namespace = g.namespace and c.run_id = g.id`, namespaces, runs); err != nil {
+			return err
+		}
 		purged = len(dueRuns)
 		return nil
 	})

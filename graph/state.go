@@ -120,6 +120,15 @@ type ShardState struct {
 	// concatenated port by port into what the step publishes.
 	Ports map[agk.Port]agk.Envelope `json:"ports,omitempty"`
 
+	// MemoisedFrom is the run whose task published what a cache hit republished for this
+	// shard, which no container ran.
+	MemoisedFrom agk.RunID `json:"memoised_from,omitempty"`
+
+	// CacheKey is the memoisation key the shard's current attempt was handed out with, where
+	// its step is cached, so that whoever records its ending can remember what it published
+	// under the key it was asked for by, without building the task again.
+	CacheKey string `json:"cache_key,omitempty"`
+
 	// The four moments a task passes through. DispatchedAt is what fixes the
 	// deadline, because the deadline runs from the moment the work became somebody's
 	// and not from the moment it was decided on. NextAttemptAt is when the shard may

@@ -281,6 +281,15 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	news = retried(news, g, map[shardKey]int{{step, shard}: before.Attempt}, state)
 	news = runEnded(news, e.Namespace, e.Workflow, e.State, state, e.CreatedAt)
 
+	// A cached step's task that succeeded on a container is remembered under the key it was
+	// handed out with, with the tree it was handed, in the transaction that records it.
+	var memo *graph.Task
+	if after, _ := shardOf(state, step, shard); before.CacheKey != "" && after.Task == agk.TaskSucceeded && after.MemoisedFrom == "" && before.Attempt == after.Attempt {
+		if st, ok := g.Step(step); ok {
+			memo = &graph.Task{CacheKey: before.CacheKey, Files: st.Files}
+		}
+	}
+
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
@@ -299,8 +308,27 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 			Envelopes: referencesOf(doc),
 			Artifacts: artifactsOf(g, state),
 			Retain:    runRetain(g),
-		}); err != nil || !bind {
+		}); err != nil {
 			return err
+		}
+		if memo != nil {
+			// A version kept no tree before v0.2 recorded one, and a key made without it
+			// would be found by a task of another tree: such a success is not remembered.
+			tree, err := w.Tree(ctx, e.Namespace, state.Run.Workflow, state.Run.Commit)
+			switch {
+			case errors.Is(err, db.ErrNoTree) || errors.Is(err, db.ErrNoVersion):
+			case err != nil:
+				return err
+			default:
+				if key, err := memoKey(e.Namespace, *memo, tree); err == nil {
+					if err := w.Memoise(ctx, e.Namespace, memoOf(key, run, step, a.Outputs)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if !bind {
+			return nil
 		}
 		// After the decision rather than before it, so that the run's row is locked before
 		// the task's, in the order every pass takes them. A runner that redeemed the
