@@ -57,6 +57,14 @@
 // what lets a fetch that began before a repack read on through the packs it replaced. See
 // store.Store.Repack for what a repack keeps.
 //
+// # Deleted workflows
+//
+// A workflow deleted is absent from the answer on, and its rows are the controller's to take: a
+// pass brings the expiry of its runs to now, which the purges after it act on as on any other, then
+// deletes the runs they are done with, then the versions once no run is left, letting go of what
+// their trees name, hands its packs to the collection, and deletes the workflow once nothing names
+// it. See db.Pool.PurgeDeleted.
+//
 // # What v0.2 left
 //
 // Backfill records the files v0.2 recorded nothing for, from the envelopes of the runs it finished,
@@ -133,13 +141,18 @@ type Purged struct {
 	Repacked  int
 	Packs     int
 	PackBytes int64
+
+	// Deleted is what the purge of deleted workflows removed: their runs, their versions, and the
+	// workflows gone whole, whose names are free from then on.
+	Deleted db.DeletedPurge
 }
 
 // Removed says whether the pass removed anything retention decides: a reference, a run's
 // envelopes, a log, an orphan or an object. Forgetting writes that have lapsed is bookkeeping, and
 // is not.
 func (p Purged) Removed() bool {
-	return p.Artifacts+p.Runs+p.Logs+p.Orphans+p.Objects+p.Repacked+p.Packs > 0
+	return p.Artifacts+p.Runs+p.Logs+p.Orphans+p.Objects+p.Repacked+p.Packs+
+		p.Deleted.Runs+p.Deleted.Versions+p.Deleted.Workflows > 0
 }
 
 // Purger runs the purges and the collection.
@@ -226,6 +239,7 @@ func (p *Purger) Pass(ctx context.Context) (Purged, error) {
 		what string
 		call func(context.Context, *Purged) (bool, error)
 	}{
+		{"the purge of deleted workflows", p.deleted},
 		{"the artifact purge", p.artifacts},
 		{"the envelope purge", p.envelopes},
 		{"the log purge", p.logs},
@@ -257,6 +271,17 @@ func (p *Purger) Pass(ctx context.Context) (Purged, error) {
 		}
 	}
 	return out, errors.Join(failed...)
+}
+
+// deleted takes the deleted workflows a step further: see db.Pool.PurgeDeleted. First in a pass, so
+// that the expiry it brings forward is acted on by the purges after it in the same pass.
+func (p *Purger) deleted(ctx context.Context, out *Purged) (bool, error) {
+	d, full, err := p.Pool.PurgeDeleted(ctx, p.batch())
+	out.Deleted.Runs += d.Runs
+	out.Deleted.Versions += d.Versions
+	out.Deleted.Packs += d.Packs
+	out.Deleted.Workflows += d.Workflows
+	return full, err
 }
 
 // artifacts retires the references past their retain.

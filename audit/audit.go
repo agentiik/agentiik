@@ -191,10 +191,13 @@ const (
 // WorkflowUpdate is a workflow changed at PATCH /api/v1/{ns}/workflows/{name}, with what changed,
 // as it was and as it stands; and RefProtect is the protection of a repository's default branch
 // changed, beside it, with the branch, whether it is protected now and whether it was, since
-// protection decides who may move the branch production runs.
+// protection decides who may move the branch production runs. WorkflowDelete is a workflow deleted
+// at DELETE /api/v1/{ns}/workflows/{name}, with how many of its runs still going were asked to
+// cancel: the purge that follows is the controller's, and the entry is the act.
 const (
 	WorkflowCreate = "workflow.create"
 	WorkflowUpdate = "workflow.update"
+	WorkflowDelete = "workflow.delete"
 	RefProtect     = "ref.protect"
 )
 

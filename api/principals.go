@@ -167,6 +167,9 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 		if over.Namespace == "" {
 			return bootstrapped && what == GrantManage, nil
 		}
+		if gone, err := p.deleted(ctx, over); err != nil || gone {
+			return false, err
+		}
 		return bootstrapped && access.Owner.Permissions().Has(what), nil
 	case principal.Ref == "":
 		return false, nil
@@ -174,17 +177,43 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 		return admin && what == GrantManage, nil
 	}
 
+	// A workflow deleted is absent from its deletion on: nobody holds anything over it, and every
+	// route about it, git's included, answers it as one that is not there. Asked in the question
+	// that reads the grants, so that a deleted workflow is refused after as many questions as any.
 	var grants []access.Grant
+	var gone bool
 	p.questions.Add(1)
 	err = p.pool.In(ctx, over.Namespace, func(ctx context.Context, n *db.NS) error {
+		if over.Workflow != "" {
+			var err error
+			if gone, err = n.Deleted(ctx, over.Workflow); err != nil || gone {
+				return err
+			}
+		}
 		var err error
 		grants, err = n.AccessGrantsFor(ctx, principal, over.Workflow, now)
 		return err
 	})
-	if err != nil {
+	if err != nil || gone {
 		return false, err
 	}
 	return access.Holds(principal, grants, what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}, now)
+}
+
+// deleted says whether the workflow over names is deleted, in a question of its own: the bootstrap
+// operator's, whose grants are none to read.
+func (p *Principals) deleted(ctx context.Context, over Target) (bool, error) {
+	if over.Workflow == "" {
+		return false, nil
+	}
+	var gone bool
+	p.questions.Add(1)
+	err := p.pool.In(ctx, over.Namespace, func(ctx context.Context, n *db.NS) error {
+		var err error
+		gone, err = n.Deleted(ctx, over.Workflow)
+		return err
+	})
+	return gone, err
 }
 
 // Principals is an Among. The router finds one by asking, and asks an authorizer that is not one
@@ -209,10 +238,23 @@ func (p *Principals) AllowAmong(ctx context.Context, who Principal, what Permiss
 		return nil, err
 	}
 	var grants []access.Grant
-	if who != BootstrapOperator && principal.Ref != "" {
+	var workflows [][2]string
+	for _, target := range over {
+		if nameable(target) && target.Workflow != "" {
+			workflows = append(workflows, [2]string{target.Namespace, target.Workflow})
+		}
+	}
+	deleted := map[[2]string]bool{}
+	if (who != BootstrapOperator && principal.Ref != "") || (who == BootstrapOperator && len(workflows) > 0) {
 		p.questions.Add(1)
 		err := p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
 			var err error
+			if deleted, err = w.DeletedAmong(ctx, workflows); err != nil {
+				return err
+			}
+			if who == BootstrapOperator {
+				return nil
+			}
 			grants, err = w.AccessGrantsAcross(ctx, principal, now)
 			return err
 		})
@@ -223,6 +265,7 @@ func (p *Principals) AllowAmong(ctx context.Context, who Principal, what Permiss
 	for i, target := range over {
 		switch {
 		case !nameable(target):
+		case target.Workflow != "" && deleted[[2]string{target.Namespace, target.Workflow}]:
 		case who == BootstrapOperator && target.Namespace == "":
 			held[i] = bootstrapped && what == GrantManage
 		case who == BootstrapOperator:

@@ -63,6 +63,7 @@ type counted struct {
 	repacked         *metrics.Counter
 	packsCollected   *metrics.Counter
 	packBytes        *metrics.Counter
+	workflowsPurged  *metrics.Counter
 
 	// term is the term this process leads under, and nil while it stands by. The gauges are read
 	// through its fence, as every read of a controller is.
@@ -117,9 +118,11 @@ func newCounted(b *bus.Bus, log *slog.Logger) *counted {
 		"Packs of workflow repositories deleted from the object store: superseded by a repack, or never made live by the push that wrote them, the grace period after.")
 	c.packBytes = r.Counter("agentiik_packs_collected_bytes_total",
 		"The bytes of the packs deleted from the object store.")
+	c.workflowsPurged = r.Counter("agentiik_workflows_purged_total",
+		"Workflows deleted whose purge ended: their runs, versions and packs gone, their row deleted and their name free.")
 	// Written at zero from the start, since they carry no label to be first seen with, so that a
 	// rate over them is one from the first scrape.
-	for _, counter := range []*metrics.Counter{c.artifactsExpired, c.runsPurged, c.logsPurged, c.orphansFound, c.objectsCollected, c.bytesCollected, c.repacked, c.packsCollected, c.packBytes} {
+	for _, counter := range []*metrics.Counter{c.artifactsExpired, c.runsPurged, c.logsPurged, c.orphansFound, c.objectsCollected, c.bytesCollected, c.repacked, c.packsCollected, c.packBytes, c.workflowsPurged} {
 		counter.Add(0)
 	}
 
@@ -193,6 +196,7 @@ func (c *counted) purged(p purge.Purged) {
 	c.repacked.Add(float64(p.Repacked))
 	c.packsCollected.Add(float64(p.Packs))
 	c.packBytes.Add(float64(p.PackBytes))
+	c.workflowsPurged.Add(float64(p.Deleted.Workflows))
 }
 
 // lead says this process leads under term, until the function it answers is called.

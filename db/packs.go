@@ -123,7 +123,7 @@ func (p *Pool) Repackable(ctx context.Context, most, batch int) ([]Target, error
 		rows, err := w.tx.Query(ctx, `
 			select w.namespace, w.name from git_packs g
 			join workflows w on w.namespace = g.namespace and w.repository = g.repository
-			where g.state = 'live'
+			where g.state = 'live' and w.deleted_at is null
 			group by w.namespace, w.name
 			having count(*) > $1
 			order by count(*) desc, w.namespace, w.name
@@ -158,7 +158,7 @@ type Target struct {
 func (n *NS) Repacked(ctx context.Context, workflow, name string, replaced []string) error {
 	var key string
 	err := n.tx.QueryRow(ctx,
-		`select repository from workflows where namespace = $1 and name = $2 for no key update`,
+		`select repository from workflows where namespace = $1 and name = $2 and deleted_at is null for no key update`,
 		n.namespace, workflow).Scan(&key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, workflow)
