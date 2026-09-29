@@ -769,10 +769,11 @@ func otherTreeRefusal(over Target, commit repo.ID) *pushRefusal {
 }
 
 // resolvers are what the hook reaches beyond a commit's tree: the repository's pins and manifests,
-// the namespace's secret declarations and the pusher's secret:use. A workflow include is refused
-// until workflow includes arrive: a resolver left out is a check that refuses.
+// the namespace's secret declarations, the pusher's secret:use, and each library a workflow
+// include names, under the pusher's workflow:read on it.
 func (s *Server) resolvers(r *http.Request, over Target) version.Resolvers {
 	return version.Resolvers{
+		Include: s.includeOf(r),
 		Pin: func(ctx context.Context, reference string, _ agk.Step) (string, error) {
 			var image string
 			err := s.pool.In(ctx, over.Namespace, func(ctx context.Context, ns *db.NS) error {

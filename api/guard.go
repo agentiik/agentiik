@@ -62,6 +62,10 @@ type guard struct {
 	repository bool
 	asks       access.Set
 	asked      []Permission
+
+	// includes is set on a route whose request may carry a workflow include, whose handler may
+	// then ask whether its caller reads the workflow one names: see HoldsToInclude.
+	includes bool
 }
 
 // Needs is a route that requires one permission at one scope.
@@ -97,12 +101,16 @@ type Needs struct {
 	// another namespace, which it answers as absent where the caller does not see that
 	// namespace, so that asking teaches nobody a namespace exists.
 	Seeing bool
+
+	// Includes is set on a route whose request may carry a workflow include: see HoldsToInclude.
+	Includes bool
 }
 
 func (n Needs) guards() guard {
 	return guard{
 		permission: n.Permission, scope: n.Scope, reveals: n.Reveals, also: n.Also,
 		administered: n.OrAdministrator, seeing: n.Seeing, asks: access.SetOf(n.Asks...), asked: n.Asks,
+		includes: n.Includes,
 	}
 }
 
@@ -148,11 +156,34 @@ func (o OnRun) guards() guard {
 type OnRepository struct {
 	Permission Permission
 	Asks       []Permission
+
+	// Includes is set on a route whose request may carry a workflow include: see HoldsToInclude.
+	Includes bool
 }
 
 func (o OnRepository) guards() guard {
-	return guard{permission: o.Permission, scope: Workflow, repository: true, asks: access.SetOf(o.Asks...), asked: o.Asks}
+	return guard{permission: o.Permission, scope: Workflow, repository: true, asks: access.SetOf(o.Asks...), asked: o.Asks, includes: o.Includes}
 }
+
+// HoldsToInclude answers, for the route serving r, whether its caller holds workflow:read over
+// another workflow, which may be of another namespace: "a workflow include must carry ref, a tag or
+// a commit, and needs workflow:read on that repository", so that an include cannot widen what its
+// author may see. It is answered false about every workflow on a route whose guard does not set
+// Includes, and on a request the router did not serve, so a handler asking where nothing declared
+// it refuses rather than reads.
+//
+// It is the one question a handler may ask about a target the route was not authorised against,
+// and it asks about workflow:read alone: what a push may read of another repository is exactly what
+// its pusher could have read of it themselves.
+func HoldsToInclude(r *http.Request) Holds {
+	if held, ok := r.Context().Value(includesKey{}).(Holds); ok {
+		return held
+	}
+	return func(context.Context, Target) (bool, error) { return false, nil }
+}
+
+// includesKey is where the router leaves the question HoldsToInclude asks.
+type includesKey struct{}
 
 // HoldsOn answers, for the route taking OnRepository or Needs serving r, whether its caller holds a
 // permission its guard names in Asks over the target the route was authorised against. A

@@ -700,6 +700,17 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		}
 		return rt.allow(ctx, as, g.also, asked)
 	}))
+	// Set on every route too, answered false about every workflow where the route does not take
+	// workflow includes, and about a target that names no workflow where it does.
+	r = r.WithContext(context.WithValue(r.Context(), includesKey{}, Holds(func(ctx context.Context, over Target) (bool, error) {
+		if !g.includes {
+			return false, nil
+		}
+		if over.Namespace == "" || over.Workflow == "" {
+			return false, fmt.Errorf("api: a workflow include names a workflow, and %q/%q names none", over.Namespace, over.Workflow)
+		}
+		return rt.allow(ctx, as, WorkflowRead, over)
+	})))
 	// Set on every route too, answered false about any permission the route did not name, over
 	// the workflow it authorised and no other.
 	r = r.WithContext(context.WithValue(r.Context(), onKey{}, func(ctx context.Context, p Permission) (bool, error) {
