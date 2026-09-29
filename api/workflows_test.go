@@ -262,6 +262,60 @@ func TestTheTreeAtARefIsListedAndAFileOfItRead(t *testing.T) {
 	}
 }
 
+// "A ref other than the default branch": a run asked for by a branch or a tag, by its short name or
+// in full, or by a whole commit, is pinned to the commit the ref names when it is asked for, which
+// the answer names; a ref naming nothing is 404, a name a branch and a tag both hold 400, and so is
+// a request naming a commit and a ref. run.trigger records the ref beside the commit.
+func TestARunIsStartedAtARefAndPinnedToTheCommitItNames(t *testing.T) {
+	g := servingGit(t, holdingRepositories())
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	first := work.commit("first")
+	work.must("tag", "release")
+	work.must("branch", "both")
+	work.must("tag", "both")
+	work.must("checkout", "-q", "-b", "feature")
+	work.write("scripts/a.sh", "true\n")
+	second := work.commit("second")
+	work.must("push", "-q", "origin", "main", "feature", "release", "refs/heads/both", "refs/tags/both")
+
+	const at = "/api/v1/finance/workflows/monthly-invoicing"
+	inputs := map[string]any{"orders": []any{}}
+	for ref, want := range map[string]string{
+		"feature": second, "refs/heads/feature": second, "release": first, "refs/tags/release": first, first: first, "refs/heads/both": first,
+	} {
+		w, started := call(t, g.h, "POST", at+"/runs", "alice", map[string]any{"ref": ref, "inputs": inputs})
+		if w.Code != http.StatusAccepted || started["commit"] != want {
+			t.Errorf("a run at %s answered %d, not the commit %s: %s", ref, w.Code, want, w.Body)
+			continue
+		}
+		if w, detail := call(t, g.h, "GET", "/api/v1/runs/"+started["run"].(string), "alice", nil); w.Code != http.StatusOK || detail["commit"] != want {
+			t.Errorf("the run at %s reads %d: %s", ref, w.Code, w.Body)
+		}
+		got := audited(t, g.pool)
+		if d := detailOf(t, got[len(got)-1]); got[len(got)-1].Action != audit.RunTrigger || d["ref"] != ref || d["commit"] != want {
+			t.Errorf("the run at %s is recorded as %s with %v", ref, got[len(got)-1].Action, d)
+		}
+	}
+	for name, c := range map[string]struct {
+		body map[string]any
+		want int
+	}{
+		"a ref naming nothing":           {map[string]any{"ref": "nothing"}, http.StatusNotFound},
+		"a commit that is no version":    {map[string]any{"ref": strings.Repeat("1", 40)}, http.StatusNotFound},
+		"a branch and a tag of one name": {map[string]any{"ref": "both"}, http.StatusBadRequest},
+		"a commit and a ref":             {map[string]any{"ref": "feature", "commit": first}, http.StatusBadRequest},
+	} {
+		c.body["inputs"] = inputs
+		if w, _ := call(t, g.h, "POST", at+"/runs", "alice", c.body); w.Code != c.want {
+			t.Errorf("%s answered %d, not %d: %s", name, w.Code, c.want, w.Body)
+		}
+	}
+	if w, _ := call(t, g.h, "POST", "/api/v1/finance/workflows/nothing/runs", "alice", map[string]any{"ref": "main"}); w.Code != http.StatusNotFound {
+		t.Errorf("a ref of a workflow that is not there answered %d: %s", w.Code, w.Body)
+	}
+}
+
 // "Names its default branch and protects it, default_branch and protected under grant:manage, a
 // branch the repository does not hold refused with 422 ... a change of protection as ref.protect."
 func TestTheDefaultBranchIsNamedAndProtectedByWhoeverHoldsGrantManage(t *testing.T) {

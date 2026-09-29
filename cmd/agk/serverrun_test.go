@@ -53,6 +53,7 @@ type standIn struct {
 	outputs  map[string]string
 	start    int
 	refusal  string
+	commit   string
 }
 
 func (s *standIn) serve(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +78,11 @@ func (s *standIn) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Location", "/api/v1/finance/runs/"+aRun)
 		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte(`{"run":"` + aRun + `","state":"queued"}`))
+		answer := map[string]string{"run": aRun, "state": "queued"}
+		if s.commit != "" {
+			answer["commit"] = s.commit
+		}
+		json.NewEncoder(w).Encode(answer)
 	case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/cancel"):
 		s.cancels++
 		w.WriteHeader(http.StatusAccepted)
@@ -389,6 +394,53 @@ func TestACommitNeverPushedIsRefusedSayingSo(t *testing.T) {
 	}
 }
 
+// --ref is resolved by the installation, which may hold a branch this clone never fetched: it is
+// sent as given, with no commit, the workflow named by HEAD, and the commit the installation
+// pinned the run to is said. Nothing is said of the working tree, which nobody takes for what
+// the installation holds.
+func TestARunAtARefIsResolvedByTheInstallation(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", inputsWorkflow)
+	commitAll(t, dir, "inputs")
+	write(t, dir, "agentiik.yaml", inputsWorkflow+"\n# an edit\n")
+	pinned := "b7e2d41" + strings.Repeat("0", 33)
+	s := &standIn{commit: pinned, readings: []db.RunDetail{runReading(agk.Succeeded, agk.VerdictSucceeded, aTask(agk.TaskSucceeded, new(0)))}}
+	url := installationAt(t, s)
+
+	code, out, errs := against(t.Context(), dir, url, "run", "--namespace", "finance", "--ref", "feature/vat-rounding", "--input", "orders=[]")
+	if code != exitSucceeded {
+		t.Fatalf("a run at a ref answered %d: %s%s", code, out, errs)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, named := s.started["commit"]; named || s.started["ref"] != "feature/vat-rounding" || s.path != "/api/v1/finance/workflows/monthly-invoicing/runs" {
+		t.Errorf("the run was asked for at %s with %v", s.path, s.started)
+	}
+	if want := "run " + aRun + " of finance/monthly-invoicing@b7e2d41, where feature/vat-rounding stands, started at " + url; !strings.Contains(errs, want) {
+		t.Errorf("the narration does not say %q:\n%s", want, errs)
+	}
+	if strings.Contains(errs, "uncommitted") {
+		t.Errorf("a run at a ref speaks of the working tree:\n%s", errs)
+	}
+}
+
+// A ref the installation does not hold is refused in its words, saying where refs come from.
+func TestARefTheInstallationDoesNotHoldIsRefusedInItsWords(t *testing.T) {
+	dir := repository(t)
+	s := &standIn{start: http.StatusNotFound, refusal: `{"error":"feature/gone names no branch, no tag and no version of the workflow"}`}
+	url := installationAt(t, s)
+
+	code, _, errs := against(t.Context(), dir, url, "run", "--namespace", "finance", "--ref", "feature/gone")
+	if code != exitRefused {
+		t.Fatalf("a ref never pushed answered %d: %s", code, errs)
+	}
+	for _, want := range []string{"finance/monthly-invoicing at feature/gone: feature/gone names no branch", "agk push, or git"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("the refusal does not say %q: %s", want, errs)
+		}
+	}
+}
+
 // Each flag names one kind of run, and a flag of the other kind is refused rather than dropped.
 func TestAFlagOfTheOtherKindOfRunIsRefused(t *testing.T) {
 	dir := repository(t)
@@ -401,6 +453,8 @@ func TestAFlagOfTheOtherKindOfRunIsRefused(t *testing.T) {
 		{[]string{"run", "--namespace", "finance", "--dir", "elsewhere"}, "runner"},
 		{[]string{"run", "--local", "--namespace", "finance"}, "--namespace"},
 		{[]string{"run", "--local", "--commit", "HEAD"}, "--commit"},
+		{[]string{"run", "--local", "--ref", "main"}, "--ref"},
+		{[]string{"run", "--namespace", "finance", "--commit", "HEAD", "--ref", "main"}, "a run is of one commit"},
 	} {
 		code, _, errs := against(t.Context(), dir, "https://agentiik.example.com", c.args...)
 		if code != exitUsage {
