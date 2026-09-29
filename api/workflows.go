@@ -23,8 +23,8 @@ import (
 )
 
 // A workflow's repository, as the API answers it: created empty, read with the version a run naming
-// no ref runs and a page of its history, its tree read at a ref, and its default branch named and
-// protected. Renaming, moving and deleting one are routes of their own to come.
+// no ref runs and a page of its history, its tree read at a ref, its default branch named and
+// protected, and deleted. Renaming and moving one are to come.
 
 // WorkflowCreate is what POST /api/v1/{ns}/workflows reads, openapi.json's workflowCreate.
 type WorkflowCreate struct {
@@ -168,6 +168,8 @@ func (s *Server) registerWorkflows(rt *Router) error {
 			Needs{Permission: WorkflowRead, Scope: Workflow, Also: GrantManage}, s.updateWorkflow},
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
 			Needs{Permission: WorkflowRead, Scope: Workflow}, s.readTree},
+		{"DELETE", "/api/v1/{namespace}/workflows/{workflow}",
+			Needs{Permission: WorkflowDelete, Scope: Workflow}, s.deleteWorkflow},
 	} {
 		if err := rt.Handle(r.method, r.pattern, r.guard, r.handler); err != nil {
 			return err
@@ -277,6 +279,10 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	})
 	if errors.Is(err, db.ErrWorkflowExists) {
 		fail(w, http.StatusConflict, fmt.Sprintf("%s holds a workflow named %s already: a name is one workflow in its namespace", over.Namespace, c.Name))
+		return
+	}
+	if errors.Is(err, db.ErrWorkflowPurging) {
+		fail(w, http.StatusConflict, fmt.Sprintf("a workflow named %s was deleted from %s and is still being purged: the name is free once its runs, versions and packs are gone, a day after its deletion at the soonest", c.Name, over.Namespace))
 		return
 	}
 	if err != nil {
@@ -594,6 +600,39 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		head, _ = s.defaultCommit(r.Context(), over)
 	}
 	write(w, http.StatusOK, s.repositoryOut(r.Context(), after, head))
+}
+
+// deleteWorkflow answers DELETE /api/v1/{ns}/workflows/{name}: the workflow absent from the answer
+// on, its runs still going asked to cancel, the data of every run expiring now, and the rest the
+// leading controller's to purge, which is why the answer is 202 and says nothing more.
+func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	if n, _ := io.ReadFull(io.LimitReader(r.Body, 1), make([]byte, 1)); n > 0 {
+		fail(w, http.StatusBadRequest, "DELETE reads no body, and this request sends one: what is deleted is the workflow the path names, whole")
+		return
+	}
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		cancelled, err := ns.DeleteWorkflow(ctx, over.Workflow, string(who), s.now())
+		if err != nil {
+			return err
+		}
+		for _, run := range cancelled {
+			if err := ns.NotifyRun(ctx, run); err != nil {
+				return err
+			}
+		}
+		return ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.WorkflowDelete, Target: over.Workflow, Result: audit.Done,
+			Detail: map[string]any{"runs_cancelled": len(cancelled)}})
+	})
+	switch {
+	case errors.Is(err, db.ErrNoWorkflow):
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	case err != nil:
+		s.report(fmt.Errorf("api: workflow %s/%s could not be deleted: %w", over.Namespace, over.Workflow, err))
+		fail(w, http.StatusInternalServerError, "the workflow could not be deleted")
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // readTree answers GET /api/v1/{ns}/workflows/{name}/tree/{ref}: the files of the version a ref

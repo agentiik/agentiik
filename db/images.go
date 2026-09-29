@@ -356,12 +356,12 @@ func (n *NS) HoldRepository(ctx context.Context, workflow string) error {
 	return n.workflowHeld(ctx, workflow, "for no key update")
 }
 
-// workflowHeld answers ErrNoWorkflow where the namespace holds no workflow of that name, taking the
-// lock given on its row where it does.
+// workflowHeld answers ErrNoWorkflow where the namespace holds no workflow of that name, or one
+// deleted, which is absent from its deletion on, taking the lock given on its row where it does.
 func (n *NS) workflowHeld(ctx context.Context, workflow, lock string) error {
 	var one int
 	err := n.tx.QueryRow(ctx,
-		`select 1 from workflows where namespace = $1 and name = $2 `+lock,
+		`select 1 from workflows where namespace = $1 and name = $2 and deleted_at is null `+lock,
 		n.namespace, workflow).Scan(&one)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, workflow)

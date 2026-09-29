@@ -484,6 +484,9 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"ref.protect carol monthly-invoicing finance done")
 	s.act("PATCH /api/v1/{namespace}/workflows/{workflow}", "/api/v1/finance/workflows/vat-reconciliation", carol, `{"default_branch":"trunk"}`, http.StatusOK,
 		"workflow.update carol vat-reconciliation finance done")
+	// And deleted, as workflow.delete.
+	s.act("DELETE /api/v1/{namespace}/workflows/{workflow}", "/api/v1/finance/workflows/vat-reconciliation", carol, nil, http.StatusAccepted,
+		"workflow.delete carol vat-reconciliation finance done")
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"dave","deny":"run:read_data"}`, http.StatusCreated)
 	deny := s.answer(w)["id"].(string)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+deny+" finance done")

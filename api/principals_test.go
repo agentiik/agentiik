@@ -495,3 +495,35 @@ func TestThroughTheRouterATokenReachesOnlyWhatItsScopeKeeps(t *testing.T) {
 		t.Errorf("no credential answered %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// A workflow deleted is held by nobody from its deletion on, whatever the grants say, the bootstrap
+// operator's owner included, and one at a time as among several: every route about it answers it as
+// one that is not there. Its namespace, and the namespace's other workflows, are held as before.
+func TestAWorkflowDeletedIsHeldByNobody(t *testing.T) {
+	in := somePrincipals(t)
+	const bootstrap = "agk_op_3q2Z7x9Kf1LmQ8vR4tYw6pBn0sDhJc5A"
+	in.withBootstrap(t, bootstrap)
+	if !in.holds(t, "alice", api.WorkflowRead, invoicingTarget) || !in.holds(t, api.BootstrapOperator, api.WorkflowRead, invoicingTarget) {
+		t.Fatal("before its deletion the workflow is not held as the grants say")
+	}
+	if err := in.pool.In(t.Context(), "finance", func(ctx context.Context, n *db.NS) error {
+		_, err := n.DeleteWorkflow(ctx, "monthly-invoicing", "dave", in.now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range []api.Principal{"alice", api.BootstrapOperator} {
+		for _, p := range []api.Permission{api.WorkflowRead, api.RunRead, api.WorkflowDelete} {
+			if in.holds(t, who, p, invoicingTarget) {
+				t.Errorf("%s holds %s over the workflow deleted", who, p)
+			}
+		}
+		if !in.holds(t, who, api.WorkflowRead, payrollTarget) || !in.holds(t, who, api.WorkflowWrite, financeTarget) {
+			t.Errorf("%s no longer holds what it held over the namespace and its other workflow", who)
+		}
+		held, err := in.p.AllowAmong(t.Context(), who, api.WorkflowRead, []api.Target{invoicingTarget, payrollTarget})
+		if err != nil || len(held) != 2 || held[0] || !held[1] {
+			t.Errorf("among the deleted workflow and another, %s holds %v: %v", who, held, err)
+		}
+	}
+}

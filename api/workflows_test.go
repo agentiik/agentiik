@@ -24,7 +24,7 @@ func holdingRepositories() api.Authorizer {
 	return granted{
 		"alice": {{api.WorkflowRead, finance}, {api.WorkflowWrite, finance}, {api.WorkflowRun, finance}, {api.RunRead, finance}},
 		"bob":   {{api.WorkflowRead, finance}},
-		"owner": {{api.WorkflowRead, finance}, {api.WorkflowWrite, finance}, {api.GrantManage, finance}, {api.SecretUse, finance}},
+		"owner": {{api.WorkflowRead, finance}, {api.WorkflowWrite, finance}, {api.GrantManage, finance}, {api.SecretUse, finance}, {api.WorkflowDelete, finance}},
 	}
 }
 
@@ -324,5 +324,55 @@ func TestTheDefaultBranchIsNamedAndProtectedByWhoeverHoldsGrantManage(t *testing
 	// lost it, each once.
 	if protected != 3 || updated != 1 {
 		t.Errorf("the changes are recorded as %d ref.protect and %d workflow.update", protected, updated)
+	}
+}
+
+// "Deletes the workflow with its runs: answered as absent from then on ... 202, since the purge follows
+// the answer. Requires workflow:delete." A body is refused before anything is deleted, a caller
+// without workflow:delete is answered as one who cannot see it, and from the answer on the workflow
+// is absent to its routes and to git, its name refused a new workflow while it is purged.
+func TestAWorkflowDeletedIsAbsentFromTheAnswerOn(t *testing.T) {
+	g := servingGit(t, holdingRepositories())
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	work.commit("first")
+	work.must("push", "-q", "origin", "main")
+
+	const at = "/api/v1/finance/workflows/monthly-invoicing"
+	if w, _ := call(t, g.h, "DELETE", at, "alice", nil); w.Code != http.StatusNotFound {
+		t.Errorf("an editor deleting the workflow answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, g.h, "DELETE", at, "owner", map[string]any{}); w.Code != http.StatusBadRequest {
+		t.Errorf("a deletion sending a body answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, g.h, "GET", at, "bob", nil); w.Code != http.StatusOK {
+		t.Fatalf("a deletion refused deleted the workflow: %d %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, g.h, "DELETE", at, "owner", nil); w.Code != http.StatusAccepted || w.Body.Len() != 0 {
+		t.Fatalf("the owner deleting the workflow answered %d: %s", w.Code, w.Body)
+	}
+	for _, path := range []string{at, at + "/tree/main"} {
+		if w, _ := call(t, g.h, "GET", path, "bob", nil); w.Code != http.StatusNotFound {
+			t.Errorf("GET %s after the deletion answered %d: %s", path, w.Code, w.Body)
+		}
+	}
+	if out, err := work.run("fetch", "origin"); err == nil || !strings.Contains(out, "not found") {
+		t.Errorf("a fetch after the deletion is answered:\n%s", out)
+	}
+	if w, _ := call(t, g.h, "DELETE", at, "owner", nil); w.Code != http.StatusNotFound {
+		t.Errorf("deleting it again answered %d: %s", w.Code, w.Body)
+	}
+	w, _ := call(t, g.h, "POST", "/api/v1/finance/workflows", "owner", map[string]any{"name": "monthly-invoicing"})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "still being purged") {
+		t.Errorf("a workflow created under the name answered %d: %s", w.Code, w.Body)
+	}
+	var deleted bool
+	for _, e := range audited(t, g.pool) {
+		if e.Action == audit.WorkflowDelete && e.Target == "monthly-invoicing" && e.Actor == "owner" {
+			deleted = true
+		}
+	}
+	if !deleted {
+		t.Error("the deletion is not recorded")
 	}
 }

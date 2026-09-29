@@ -34,6 +34,10 @@ type WorkflowRecord struct {
 // ErrWorkflowExists is a workflow created under a name its namespace holds already.
 var ErrWorkflowExists = errors.New("db: the namespace holds a workflow of that name")
 
+// ErrWorkflowPurging is a workflow created under the name of one deleted whose purge has not ended:
+// the name is free once the purge has removed the workflow's row, and not before.
+var ErrWorkflowPurging = errors.New("db: a workflow deleted under that name is still being purged")
+
 // ErrNoBranch is a default branch named that the repository does not hold, where it holds commits.
 var ErrNoBranch = errors.New("db: the repository holds no such branch")
 
@@ -56,6 +60,12 @@ func (n *NS) CreateWorkflow(ctx context.Context, name, branch string, protected 
 		return WorkflowRecord{}, fmt.Errorf("db: workflow %s could not be created: %w", name, err)
 	}
 	if tag.RowsAffected() == 0 {
+		var purging bool
+		if err := n.tx.QueryRow(ctx,
+			`select deleted_at is not null from workflows where namespace = $1 and name = $2`,
+			n.namespace, name).Scan(&purging); err == nil && purging {
+			return WorkflowRecord{}, fmt.Errorf("%w: %s/%s", ErrWorkflowPurging, n.namespace, name)
+		}
 		return WorkflowRecord{}, fmt.Errorf("%w: %s/%s", ErrWorkflowExists, n.namespace, name)
 	}
 	if _, err := n.tx.Exec(ctx,
@@ -76,7 +86,7 @@ func (n *NS) WorkflowRecord(ctx context.Context, name string) (WorkflowRecord, e
 		 from workflows w
 		 left join workflow_refs r on r.namespace = w.namespace and r.workflow = w.name
 		   and r.ref = 'refs/heads/' || w.default_branch
-		 where w.namespace = $1 and w.name = $2`,
+		 where w.namespace = $1 and w.name = $2 and w.deleted_at is null`,
 		n.namespace, name).Scan(&w.DefaultBranch, &w.CreatedAt, &by, &protected, &head)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowRecord{}, fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, name)

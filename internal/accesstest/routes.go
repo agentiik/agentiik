@@ -148,6 +148,9 @@ var Cases = []Case{
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	{Route: api.Route{Method: "PATCH", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow, Also: api.GrantManage}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}", Permission: api.WorkflowRead, Scope: api.Workflow}},
+	// Deleted under workflow:delete, which only an owner holds; a body is refused before anything
+	// is deleted, which is what the probe sends.
+	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowDelete, Scope: api.Workflow}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/images", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/images", Permission: api.WorkflowWrite, Scope: api.Workflow}, Refused: true},
 	// Git's smart HTTP, answered to the command line's token alone: clone and fetch take

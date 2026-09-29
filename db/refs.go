@@ -147,7 +147,7 @@ var ErrNoPack = errors.New("db: that pack is not receiving")
 func (n *NS) Repository(ctx context.Context, workflow string) (Repository, error) {
 	r := Repository{Namespace: n.namespace, Workflow: workflow}
 	err := n.tx.QueryRow(ctx,
-		`select repository, default_branch from workflows where namespace = $1 and name = $2`,
+		`select repository, default_branch from workflows where namespace = $1 and name = $2 and deleted_at is null`,
 		n.namespace, workflow).Scan(&r.Key, &r.DefaultBranch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Repository{}, fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, workflow)
@@ -249,7 +249,7 @@ func (n *NS) UpdateRefs(ctx context.Context, workflow, by string, at time.Time, 
 
 	var branch string
 	err := n.tx.QueryRow(ctx,
-		`select default_branch from workflows where namespace = $1 and name = $2 for no key update`,
+		`select default_branch from workflows where namespace = $1 and name = $2 and deleted_at is null for no key update`,
 		n.namespace, workflow).Scan(&branch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, workflow)
@@ -420,7 +420,7 @@ func (n *NS) ReceivePack(ctx context.Context, workflow string, p Pack) (string, 
 	}
 	var key string
 	err := n.tx.QueryRow(ctx,
-		`select repository from workflows where namespace = $1 and name = $2`,
+		`select repository from workflows where namespace = $1 and name = $2 and deleted_at is null`,
 		n.namespace, workflow).Scan(&key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, workflow)
@@ -462,7 +462,7 @@ func (n *NS) ReceivePack(ctx context.Context, workflow string, p Pack) (string, 
 func (n *NS) PackLive(ctx context.Context, workflow, name string) error {
 	var key string
 	err := n.tx.QueryRow(ctx,
-		`select repository from workflows where namespace = $1 and name = $2 for no key update`,
+		`select repository from workflows where namespace = $1 and name = $2 and deleted_at is null for no key update`,
 		n.namespace, workflow).Scan(&key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, workflow)

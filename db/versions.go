@@ -160,8 +160,21 @@ func (n *NS) SaveWorkflow(ctx context.Context, name, branch string) error {
 	if err != nil {
 		return fmt.Errorf("db: workflow %s could not be recorded: %w", name, err)
 	}
+	if tag.RowsAffected() == 0 {
+		// Held already: a workflow deleted is absent from its deletion on, and takes no version.
+		var deleted bool
+		if err := n.tx.QueryRow(ctx,
+			`select deleted_at is not null from workflows where namespace = $1 and name = $2`,
+			n.namespace, name).Scan(&deleted); err != nil {
+			return fmt.Errorf("db: workflow %s could not be read: %w", name, err)
+		}
+		if deleted {
+			return fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, name)
+		}
+		return nil
+	}
 	head := "refs/heads/" + branch
-	if tag.RowsAffected() == 0 || checkRef(head) != nil {
+	if checkRef(head) != nil {
 		return nil
 	}
 	if _, err := n.tx.Exec(ctx,
