@@ -77,6 +77,11 @@ type Needs struct {
 	// calls for it, which only its handler can tell: see HoldsAlso.
 	Also Permission
 
+	// Asks are further permissions its handler may ask about, over the target the route was
+	// authorised against, where what a request carries needs several of them: see HoldsOn. The
+	// PATCH of a workflow is one, whose each field is under its own permission.
+	Asks []Permission
+
 	// OrAdministrator is set where an administrator reaches the route as well, whatever they
 	// hold at its scope: an installation power over every namespace, asked as every
 	// administrator's route asks it, as grant:manage at the installation through a credential
@@ -97,7 +102,7 @@ type Needs struct {
 func (n Needs) guards() guard {
 	return guard{
 		permission: n.Permission, scope: n.Scope, reveals: n.Reveals, also: n.Also,
-		administered: n.OrAdministrator, seeing: n.Seeing,
+		administered: n.OrAdministrator, seeing: n.Seeing, asks: access.SetOf(n.Asks...), asked: n.Asks,
 	}
 }
 
@@ -149,8 +154,8 @@ func (o OnRepository) guards() guard {
 	return guard{permission: o.Permission, scope: Workflow, repository: true, asks: access.SetOf(o.Asks...), asked: o.Asks}
 }
 
-// HoldsOn answers, for the route taking OnRepository serving r, whether its caller holds a
-// permission its guard names in Asks over the workflow the route was authorised against. A
+// HoldsOn answers, for the route taking OnRepository or Needs serving r, whether its caller holds a
+// permission its guard names in Asks over the target the route was authorised against. A
 // permission the guard does not name, or a request the router did not serve, is answered false, so
 // a handler asking about something nothing declared refuses rather than accepts.
 func HoldsOn(r *http.Request) func(context.Context, Permission) (bool, error) {

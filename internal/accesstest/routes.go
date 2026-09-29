@@ -142,11 +142,12 @@ var Cases = []Case{
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants/{id}", Permission: api.GrantManage, Scope: api.Workflow}, Makes: "grant"},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}", Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse}, Refused: true},
 	// A repository created under what registering a version takes, at the namespace; read and its
-	// tree read under workflow:read; its default branch and protection changed under grant:manage
-	// besides, which only the handler asks, since which a change needs is in its body.
+	// tree read under workflow:read; renamed under workflow:write, and its default branch and
+	// protection changed under grant:manage, besides, which only the handler asks, since which a
+	// change needs is in its body.
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows", Permission: api.WorkflowWrite, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow}},
-	{Route: api.Route{Method: "PATCH", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow, Also: api.GrantManage}, Refused: true},
+	{Route: api.Route{Method: "PATCH", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow, Also: api.GrantManage, Asks: access.SetOf(api.WorkflowWrite)}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	// Deleted under workflow:delete, which only an owner holds; a body is refused before anything
 	// is deleted, which is what the probe sends.
