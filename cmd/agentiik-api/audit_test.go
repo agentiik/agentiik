@@ -17,13 +17,16 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/audit"
+	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/totp"
 	"github.com/agentiik/agentiik/internal/webauthn/webauthntest"
+	"github.com/agentiik/agentiik/version"
 )
 
 // Every act an installation serves is recorded in the audit log exactly once, with the action the
@@ -45,13 +48,13 @@ var reads = []string{
 	"GET /api/v1/artifacts/{uri}", "GET /api/v1/{namespace}/secrets", "GET /api/v1/{namespace}/secrets/{name}",
 	"GET /api/v1/namespaces", "GET /api/v1/namespaces/{namespace}", "GET /api/v1/namespaces/{namespace}/quotas",
 	"GET /api/v1/{namespace}/grants", "GET /api/v1/{namespace}/workflows/{workflow}/grants",
+	"GET /api/v1/{namespace}/workflows/{workflow}/images",
 	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
 	"GET /auth/sign-in", "GET /auth/enrol", "GET /auth/assets/{name}", "GET /objects/{key...}",
 }
 
 // recordsNothing are the routes that change something the audit log does not record, each with why.
 var recordsNothing = map[string]string{
-	"PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}": "a version is a commit, its row keeping who pushed it as its author, and the page's audit log names no push",
 	"POST /api/v1/me/totp":                 "a TOTP generator started counts for nothing until POST /api/v1/me/totp/confirm enrols it, which is recorded",
 	"POST /api/v1/auth/sign-out":           "a session is no credential: a sign-out ends one and gives nobody anything",
 	"DELETE /api/v1/me/notifications/{id}": "a notification is its reader's copy of an act the log recorded, and dismissing it changes no access",
@@ -447,7 +450,13 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	// owners, none but her; then she shares it, pushes, keeps a secret, and starts and cancels a run.
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"carol","role":"owner"}`, http.StatusCreated)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+s.answer(w)["id"].(string)+" finance done")
-	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}", "/api/v1/finance/workflows/monthly-invoicing/versions/"+theCommit, carol, aPush(t), http.StatusOK)
+	// A version is a commit, its row keeping who pushed it as its author, and the page's audit log
+	// names no push; what it records is the pin its tag was moved to, as recording one does.
+	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}", "/api/v1/finance/workflows/monthly-invoicing/versions/"+theCommit, carol, aTaggedPush(t), http.StatusOK,
+		"image.pin carol monthly-invoicing finance done")
+	s.act("POST /api/v1/{namespace}/workflows/{workflow}/images", "/api/v1/finance/workflows/monthly-invoicing/images", carol,
+		api.RecordImages{Pins: map[string]string{"ghcr.io/acme/agk-invoice:1.5.0": theImage}}, http.StatusOK,
+		"image.pin carol monthly-invoicing finance done")
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"dave","deny":"run:read_data"}`, http.StatusCreated)
 	deny := s.answer(w)["id"].(string)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+deny+" finance done")
@@ -541,5 +550,26 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		if !served[route] {
 			t.Errorf("%s is listed here, and serve builds no such route", route)
 		}
+	}
+}
+
+// aTaggedPush is the ordinary push naming its image by a tag, with the digest agk push resolved it
+// to, which pins the tag in the repository.
+func aTaggedPush(t *testing.T) api.Push {
+	t.Helper()
+	const tag = "ghcr.io/acme/agk-invoice:1.4.0"
+	document := strings.ReplaceAll(theWorkflow, theImage, tag)
+	m, err := brick.ParseManifest([]byte(theManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := version.Capture(fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(document)}}, "agentiik.yaml", map[string]brick.Manifest{tag: m})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return api.Push{
+		Entry: v.Entry, Document: v.Document, Includes: v.Includes, Manifests: v.Manifests,
+		Images: map[string]string{tag: theImage}, Branch: "main",
+		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}},
 	}
 }

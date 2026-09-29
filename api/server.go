@@ -123,6 +123,12 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		// And secret:use where the version names a secret, which only the push can tell.
 		{"PUT", "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}",
 			Needs{Permission: WorkflowWrite, Scope: Workflow, Also: SecretUse}, s.push},
+		// What a repository's pushes are judged against beyond their tree, written under what
+		// registering a version of it takes, and read under what reading it takes.
+		{"GET", "/api/v1/{namespace}/workflows/{workflow}/images",
+			Needs{Permission: WorkflowRead, Scope: Workflow}, s.listImages},
+		{"POST", "/api/v1/{namespace}/workflows/{workflow}/images",
+			Needs{Permission: WorkflowWrite, Scope: Workflow}, s.recordImages},
 		{"POST", "/api/v1/{namespace}/workflows/{workflow}/runs",
 			Needs{Permission: WorkflowRun, Scope: Workflow}, s.start},
 		// The run by the path a Location names it by, authorised over its own workflow
@@ -520,6 +526,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// manifest of every image a brick step runs and the digest every tag a step names was
 	// resolved to, and nothing else the push carried, so that a rebuild reads what was accepted.
 	v.Document, v.Includes, v.Manifests, v.Images = checked.Version.Document, checked.Version.Includes, checked.Version.Manifests, checked.Version.Images
+
+	// A new version records the pins it was judged with in its repository's store, where a git
+	// push of the next commit finds them. A commit already stored is that version pushed again,
+	// and records nothing: its pins may be long stale.
+	var pins db.Images
+	if !stored {
+		pins = versionPins(v)
+	}
 	// The bytes before the row, so that a version that exists names objects that exist. A
 	// push that dies between the two leaves objects nothing references, which the collector
 	// never sees and which the next push of the same files reuses; the other order would
@@ -537,8 +551,18 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 			return err
 		}
 		var err error
-		if saved, err = ns.SaveVersion(ctx, v); err != nil || saved.New {
+		if saved, err = ns.SaveVersion(ctx, v); err != nil {
 			return err
+		}
+		if saved.New {
+			if len(pins.Pins) == 0 {
+				return nil
+			}
+			moved, err := ns.RecordImages(ctx, over.Workflow, string(who), v.CreatedAt, pins)
+			if err != nil {
+				return err
+			}
+			return auditPins(ctx, ns, who, over.Workflow, moved)
 		}
 		// The same tree pushed again, which is the version already recorded, and its
 		// images are the ones its first push resolved rather than these.

@@ -45,8 +45,8 @@ import (
 // cancellation, secret write, runner policy change, a runner joining, its drain and revocation, and
 // namespace changes; and from v0.3.0 the identity and access events: users, their credentials, enrolment
 // links and recovery codes, the sign-ins that succeed and fail, groups and their members, service
-// accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap.
-// Approval arrives with the wait step in v0.8.0.
+// accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap;
+// and from v0.4.0 the workflow repository's. Approval arrives with the wait step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -156,6 +156,15 @@ const (
 // those suspended for holding no passkey; each password that went, and the TOTP generator beside it,
 // is recorded after it as CredentialRemove by whoever changed the policy.
 const PolicyChange = "policy.change"
+
+// The workflow repository's events of v0.4.0. ImagePin is an image tag of a repository pinned to a
+// digest, or moved to another, at POST /api/v1/{ns}/workflows/{name}/images or with a version the
+// tree push made, recorded in the namespace with the workflow as its target, the reference, the
+// image by digest and the digest it named before where it named one: a pin decides which bytes the
+// next version of the workflow runs, with its secrets. A pin named again at the digest it holds
+// changed nothing and is not recorded, and neither is a brick manifest recorded, which is a fact
+// about an image by digest that never changes, and whose row keeps who recorded it.
+const ImagePin = "image.pin"
 
 // The results an entry records.
 const (

@@ -43,8 +43,9 @@ type Case struct {
 // namespace's record is read "to an administrator and to a principal holding a grant in it", and
 // drain and revoke "require grant:manage at installation scope", which is what an administrator
 // holds there; a secret's declarations take workflow:read at namespace scope and writing one
-// secret:write there; a push workflow:write, and secret:use where it names a secret; starting a run
-// and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
+// secret:write there; a push workflow:write, and secret:use where it names a secret; recording a
+// repository's image pins and brick manifests workflow:write, and reading them workflow:read;
+// starting a run and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
 // being envelope contents that run:read_data alone reveals; outputs, a step's inputs and outputs and
 // an artifact run:read_data. Registration is authenticated by the join token in its body, the
 // runner's own routes by the runner credential alone, and the object store by the signature in the
@@ -139,6 +140,8 @@ var Cases = []Case{
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants", Permission: api.GrantManage, Scope: api.Workflow, OrAdministrator: true, Seeing: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants/{id}", Permission: api.GrantManage, Scope: api.Workflow}, Makes: "grant"},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}", Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse}, Refused: true},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/images", Permission: api.WorkflowRead, Scope: api.Workflow}},
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/images", Permission: api.WorkflowWrite, Scope: api.Workflow}, Refused: true},
 
 	// Runs and their data.
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/runs", Permission: api.WorkflowRun, Scope: api.Workflow}, Refused: true},
