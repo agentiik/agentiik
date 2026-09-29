@@ -49,6 +49,9 @@ func TestARepositoryIsCreatedEmptyAndItsProtectionHoldsFromItsFirstPush(t *testi
 		"a name held":              map[string]any{"name": "vat-reconciliation"},
 		"a name off grammar":       map[string]any{"name": "-vat"},
 		"a branch git refuses":     map[string]any{"name": "other", "default_branch": "a..b"},
+		"a branch read as a flag":  map[string]any{"name": "other", "default_branch": "-x"},
+		"a branch read as HEAD":    map[string]any{"name": "other", "default_branch": "@"},
+		"an empty branch":          map[string]any{"name": "other", "default_branch": ""},
 		"a field it does not read": map[string]any{"name": "other", "labels": map[string]any{}},
 	} {
 		want := http.StatusBadRequest
@@ -93,7 +96,7 @@ func TestARepositoryIsCreatedEmptyAndItsProtectionHoldsFromItsFirstPush(t *testi
 func TestAWorkflowIsReadWithItsHeadItsGraphAndItsHistory(t *testing.T) {
 	g := servingGit(t, holdingRepositories())
 	work := g.newClone("alice")
-	work.write("agentiik.yaml", workflowDocument)
+	work.write("agentiik.yaml", strings.Replace(workflowDocument, "namespace: finance }", "namespace: finance, labels: { team: billing } }", 1))
 	first := work.commit("first")
 	work.write("scripts/a.sh", "true\n")
 	second := work.commit("second, which no ref is left at")
@@ -109,6 +112,9 @@ func TestAWorkflowIsReadWithItsHeadItsGraphAndItsHistory(t *testing.T) {
 	repository := answer["repository"].(map[string]any)
 	if repository["head"] != third {
 		t.Errorf("the head is %v, where main is %s", repository["head"], third)
+	}
+	if labels, _ := repository["labels"].(map[string]any); labels["team"] != "billing" {
+		t.Errorf("the labels are %v, where the head writes team: billing", repository["labels"])
 	}
 	if v, _ := answer["version"].(map[string]any); v["commit"] != third || v["source"] != "git" {
 		t.Errorf("the version a run naming no ref runs is %v", answer["version"])
@@ -246,9 +252,12 @@ func TestTheTreeAtARefIsListedAndAFileOfItRead(t *testing.T) {
 	if res.StatusCode != http.StatusOK || string(got) != "print('normalize')\n" {
 		t.Errorf("a file of the tree answered %d: %q", res.StatusCode, got)
 	}
-	for _, path := range []string{"scripts", "nothing.py"} {
-		if w, _ := call(t, g.h, "GET", tree+"main?path="+path, "bob", nil); w.Code != http.StatusNotFound {
-			t.Errorf("?path=%s answered %d: %s", path, w.Code, w.Body)
+	for path, want := range map[string]int{
+		"scripts": http.StatusNotFound, "nothing.py": http.StatusNotFound,
+		"../agentiik.yaml": http.StatusBadRequest, "/agentiik.yaml": http.StatusBadRequest, "scripts//normalize.py": http.StatusBadRequest,
+	} {
+		if w, _ := call(t, g.h, "GET", tree+"main?path="+path, "bob", nil); w.Code != want {
+			t.Errorf("?path=%s answered %d, not %d: %s", path, w.Code, want, w.Body)
 		}
 	}
 }
@@ -288,6 +297,8 @@ func TestTheDefaultBranchIsNamedAndProtectedByWhoeverHoldsGrantManage(t *testing
 
 	for name, body := range map[string]map[string]any{
 		"a branch it does not hold": {"default_branch": "nothing"},
+		"a branch read as a flag":   {"default_branch": "-x"},
+		"a branch read as HEAD":     {"default_branch": "@"},
 		"a rename":                  {"name": "invoicing"},
 		"nothing":                   {},
 	} {
