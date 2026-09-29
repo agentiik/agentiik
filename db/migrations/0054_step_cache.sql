@@ -16,7 +16,7 @@ create table step_cache (
   namespace  text not null,
   key        text not null check (octet_length(key) <= 512),
   run_id     ulid not null,
-  step       name not null,
+  step       identifier not null,
   -- [{port, digest, items, size}], one per port the step published, the digest written
   -- sha256:<hex> as the envelopes of a run's document are.
   ports      jsonb not null check (jsonb_typeof(ports) = 'array'),
