@@ -610,6 +610,10 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	if err != nil {
 		return nil, err
 	}
+	// The run is of the workflow its row names, which a rename moves: its document named the
+	// workflow as it was called when the run started, and a task planned from it would carry that
+	// name into its grant, whose redemption would find no version under it.
+	state.Run.Workflow = e.Workflow
 	ev, err := graph.New(g, state, co.limits, co.requeues, bound)
 	if err != nil {
 		return nil, fmt.Errorf("controller: run %s could not be resumed: %w", e.Run, err)
