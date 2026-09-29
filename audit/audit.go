@@ -186,6 +186,18 @@ const (
 	PushRefuse = "push.refuse"
 )
 
+// WorkflowCreate is an empty repository created at POST /api/v1/{ns}/workflows, recorded in the
+// namespace with the workflow as its target, its default branch and whether it is protected;
+// WorkflowUpdate is a workflow changed at PATCH /api/v1/{ns}/workflows/{name}, with what changed,
+// as it was and as it stands; and RefProtect is the protection of a repository's default branch
+// changed, beside it, with the branch, whether it is protected now and whether it was, since
+// protection decides who may move the branch production runs.
+const (
+	WorkflowCreate = "workflow.create"
+	WorkflowUpdate = "workflow.update"
+	RefProtect     = "ref.protect"
+)
+
 // The results an entry records.
 const (
 	// Done is an act that changed something.

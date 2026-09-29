@@ -85,12 +85,12 @@ func (f *Fixture) financial(pattern string) map[string]string {
 }
 
 // identities are the parameters that say which thing a route is about, in the order its path names
-// them, as against the step, the port and the commit, which say which part of it.
+// them, as against the step, the port, the commit and the ref, which say which part of it.
 func identities(pattern string) []string {
 	var out []string
 	for _, m := range parameter.FindAllStringSubmatch(pattern, -1) {
 		switch m[1] {
-		case "step", "port", "commit":
+		case "step", "port", "commit", "ref":
 		default:
 			out = append(out, m[1])
 		}

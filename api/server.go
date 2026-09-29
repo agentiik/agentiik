@@ -40,6 +40,9 @@ type Server struct {
 	versions *version.Store
 	objects  artifact.Objects
 
+	// publicURL is the address the installation is reached at, which a clone_url is made of.
+	publicURL string
+
 	// packs is where a repository's packs are kept, nil where the object store cannot read a
 	// range of an object, which git's routes then answer 503 about.
 	packs  *store.Store
@@ -87,6 +90,10 @@ type ServerOptions struct {
 	// position". Without it a stop waits for streams that may never end on their own.
 	Stopping <-chan struct{}
 
+	// PublicURL is the address the installation is reached at, which a repository's clone_url is
+	// made of: git clones <PublicURL>/<namespace>/<name>.git.
+	PublicURL string
+
 	// Trouble is where a log stream says that a chunk the API wrote could not be read back, which
 	// its reader is shown as a gap and whoever runs the installation has to explain. One with
 	// nowhere to put it drops it, as RunnerOptions.Trouble does.
@@ -116,6 +123,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	s := &Server{
 		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now, declared: &declarations{},
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
+		publicURL: o.PublicURL,
 	}
 	rt.ServeRuns(runsIn{o.Pool})
 	if o.Objects != nil {
@@ -126,6 +134,9 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		}
 	}
 	if err := s.registerGit(rt); err != nil {
+		return nil, err
+	}
+	if err := s.registerWorkflows(rt); err != nil {
 		return nil, err
 	}
 
@@ -941,8 +952,19 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		return
 	}
 	if start.commit == "" {
-		fail(w, http.StatusBadRequest, "a run is pinned to a commit and this one names none")
-		return
+		// "A run naming no ref runs the default branch's head": the commit it points at, or,
+		// while it is unborn, the latest version a tree push recorded. The run is pinned to
+		// that commit from here on, whatever the branch does next.
+		commit, err := s.defaultCommit(r.Context(), over)
+		if errors.Is(err, db.ErrNoWorkflow) || errors.Is(err, db.ErrNoVersion) {
+			fail(w, http.StatusNotFound, "no such thing, or not yours")
+			return
+		}
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "the version could not be read")
+			return
+		}
+		start.commit = commit
 	}
 
 	g, err := s.versions.Graph(r.Context(), over.Namespace, over.Workflow, start.commit)

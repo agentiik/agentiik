@@ -299,7 +299,7 @@ var staticAssets = map[string]bool{"GET /auth/assets/{name}": true}
 func (x *tenants) present(route string) map[string]string {
 	named := map[string]string{
 		"namespace": "finance", "ns": "finance", "workflow": "monthly-invoicing", "repository": "monthly-invoicing.git", "run": x.run,
-		"step": "normalize", "port": "ok", "commit": theCommit, "login": "alice", "group": "auditors",
+		"step": "normalize", "port": "ok", "commit": theCommit, "ref": theCommit, "login": "alice", "group": "auditors",
 		"runner": x.runner, "pool": "dmz", "key": x.object,
 		"uri": url.PathEscape("agk://run/" + x.run + "/normalize/ok/invoice.pdf"),
 	}
@@ -332,7 +332,7 @@ func absent() map[string]string {
 	nowhere := strings.ToLower(ulid.New())
 	named := map[string]string{
 		"namespace": "nowhere", "ns": "nowhere", "workflow": "nothing", "repository": "nothing.git", "run": ulid.New(),
-		"step": "normalize", "port": "ok", "commit": theCommit, "login": "nobody", "group": "nobody",
+		"step": "normalize", "port": "ok", "commit": theCommit, "ref": theCommit, "login": "nobody", "group": "nobody",
 		"runner": nowhere, "pool": "nowhere", "key": "nowhere/sha256/" + strings.Repeat("0", 64),
 		"uri":  url.PathEscape("agk://run/" + ulid.New() + "/normalize/ok/invoice.pdf"),
 		"name": "nothing", "id": ulid.New(),
@@ -346,7 +346,7 @@ func identities(pattern string) []string {
 	var out []string
 	for _, m := range parameter.FindAllStringSubmatch(pattern, -1) {
 		switch m[1] {
-		case "step", "port", "commit":
+		case "step", "port", "commit", "ref":
 		default:
 			out = append(out, m[1])
 		}

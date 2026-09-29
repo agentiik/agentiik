@@ -281,7 +281,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 
 	if _, err := api.NewServer(rt, api.ServerOptions{
-		Pool: pool, Versions: versions, Objects: objects, URLs: signed, Stopping: stopping, Now: s.now,
+		Pool: pool, Versions: versions, Objects: objects, URLs: signed, Stopping: stopping, Now: s.now, PublicURL: s.PublicURL,
 		Trouble: func(err error) { log.Warn("a log stream could not read back a chunk the API wrote", "error", err) },
 	}); err != nil {
 		return nil, err
