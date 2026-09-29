@@ -20,6 +20,9 @@ func (n *NS) RenameWorkflow(ctx context.Context, workflow, to string) error {
 	if err := n.HoldRepository(ctx, workflow); err != nil {
 		return err
 	}
+	if err := nameKept(ctx, n.tx, n.namespace, to); err != nil {
+		return err
+	}
 	var held, purging bool
 	if err := n.tx.QueryRow(ctx,
 		`select count(*) > 0, coalesce(bool_or(deleted_at is not null), false) from workflows where namespace = $1 and name = $2`,

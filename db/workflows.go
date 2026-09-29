@@ -52,6 +52,9 @@ func (n *NS) CreateWorkflow(ctx context.Context, name, branch string, protected 
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	if err := nameKept(ctx, n.tx, n.namespace, name); err != nil {
+		return WorkflowRecord{}, err
+	}
 	tag, err := n.tx.Exec(ctx,
 		`insert into workflows (namespace, name, default_branch, created_by, created_at) values ($1, $2, $3, $4, $5)
 		 on conflict (namespace, name) do nothing`,

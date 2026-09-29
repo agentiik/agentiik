@@ -176,6 +176,9 @@ func (n *NS) SaveWorkflow(ctx context.Context, name, branch string) error {
 	if branch == "" {
 		branch = "main"
 	}
+	if err := nameKept(ctx, n.tx, n.namespace, name); err != nil {
+		return err
+	}
 	tag, err := n.tx.Exec(ctx,
 		`insert into workflows (namespace, name, default_branch) values ($1, $2, $3)
 		 on conflict (namespace, name) do nothing`,

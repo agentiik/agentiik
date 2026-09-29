@@ -257,6 +257,9 @@ func (n *NS) UpdateRefs(ctx context.Context, workflow, by string, at time.Time, 
 	if err != nil {
 		return fmt.Errorf("db: the repository of %s could not be locked: %w", workflow, err)
 	}
+	if err := moving(ctx, n.tx, n.namespace, workflow); err != nil {
+		return err
+	}
 
 	for _, m := range moves {
 		if m.deletes && m.ref == "refs/heads/"+branch {
@@ -428,6 +431,10 @@ func (n *NS) ReceivePack(ctx context.Context, workflow string, p Pack) (string, 
 	if err != nil {
 		return "", fmt.Errorf("db: the repository of %s could not be read: %w", workflow, err)
 	}
+	// Said before a byte of the pack is written, since the push would be refused where it lands.
+	if err := moving(ctx, n.tx, n.namespace, workflow); err != nil {
+		return "", err
+	}
 	tag, err := n.tx.Exec(ctx,
 		`insert into git_packs (namespace, repository, name, size, objects)
 		 values ($1, $2, $3, $4, $5)
@@ -469,6 +476,9 @@ func (n *NS) PackLive(ctx context.Context, workflow, name string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("db: the repository of %s could not be locked: %w", workflow, err)
+	}
+	if err := moving(ctx, n.tx, n.namespace, workflow); err != nil {
+		return err
 	}
 	tag, err := n.tx.Exec(ctx,
 		`update git_packs set state = 'live'
