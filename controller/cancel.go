@@ -69,6 +69,11 @@ func (co *Core) cancel(ctx context.Context, run agk.RunID, why refused) error {
 	if err != nil {
 		return fmt.Errorf("controller: the graph of run %s could not be resolved: %w", run, err)
 	}
+	if len(e.Document) == 0 {
+		// A run ended before anything decided it starts nothing, reused or not, and a replay
+		// refused for what it could not reuse would be refused again reading it.
+		e.ReplayOf, e.ReplayFrom = "", ""
+	}
 	now := co.now().UTC()
 	ev, err := co.resume(ctx, e, g, now)
 	if err != nil {

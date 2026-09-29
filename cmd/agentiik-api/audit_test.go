@@ -28,6 +28,7 @@ import (
 	"github.com/agentiik/agentiik/internal/webauthn/webauthntest"
 	"github.com/agentiik/agentiik/repo"
 	"github.com/agentiik/agentiik/version"
+	"github.com/jackc/pgx/v5"
 )
 
 // Every act an installation serves is recorded in the audit log exactly once, with the action the
@@ -509,6 +510,18 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.holds("POST /api/v1/{namespace}/workflows/{workflow}/runs", "run.trigger carol "+run+" finance done")
 	s.act("POST /api/v1/runs/{run}/cancel", "/api/v1/runs/"+run+"/cancel", carol, nil, http.StatusAccepted,
 		"run.cancel carol "+run+" finance done")
+	// Ended, as the controller would end it, the run is replayed, which is a run started.
+	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(t.Context())
+	if _, err := admin.Exec(t.Context(),
+		`update runs set state = 'cancelled', started_at = coalesce(started_at, now()), finished_at = now() where id = $1`, run); err != nil {
+		t.Fatal(err)
+	}
+	w = s.ask("POST /api/v1/runs/{run}/replay", "/api/v1/runs/"+run+"/replay", carol, nil, http.StatusAccepted)
+	s.holds("POST /api/v1/runs/{run}/replay", "run.trigger carol "+s.answer(w)["run"].(string)+" finance done")
 
 	// finance comes to forbid passwords, which takes erin's, erin holding a role there.
 	w = s.act("POST /api/v1/users", "/api/v1/users", carol, `{"login":"erin"}`, http.StatusCreated,
