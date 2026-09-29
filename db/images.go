@@ -358,6 +358,8 @@ func (n *NS) HoldRepository(ctx context.Context, workflow string) error {
 
 // workflowHeld answers ErrNoWorkflow where the namespace holds no workflow of that name, or one
 // deleted, which is absent from its deletion on, taking the lock given on its row where it does.
+// Taking one, it is about to write the workflow, which a move asked and not carried out refuses,
+// ErrWorkflowMoving.
 func (n *NS) workflowHeld(ctx context.Context, workflow, lock string) error {
 	var one int
 	err := n.tx.QueryRow(ctx,
@@ -368,6 +370,9 @@ func (n *NS) workflowHeld(ctx context.Context, workflow, lock string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("db: workflow %s could not be read: %w", workflow, err)
+	}
+	if lock != "" {
+		return moving(ctx, n.tx, n.namespace, workflow)
 	}
 	return nil
 }

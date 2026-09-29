@@ -122,6 +122,12 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	if err != nil {
 		return err
 	}
+	// The workflow's row, under a lock a move's own lock on it waits for and that waits for a
+	// move's: a run is created before a move is asked, and the move counts it, or after, and is
+	// refused, never between the two.
+	if err := n.workflowHeld(ctx, r.Workflow, "for share"); err != nil {
+		return err
+	}
 	if err := n.withinRunsPerHour(ctx); err != nil {
 		return err
 	}
