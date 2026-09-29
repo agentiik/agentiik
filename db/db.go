@@ -238,6 +238,12 @@ const (
 	// read. A decision about one namespace reads that namespace's grants through In.
 	Authorisation Reason = "the grants one principal holds across the namespaces"
 
+	// WorkflowMove is a workflow moved from one namespace to another, which no handle on one of
+	// them can do: the move is asked in the source, holds its name in the target, and is carried
+	// out by the controller that leads, which re-keys the workflow's rows from the one to the
+	// other and counts its objects in the target as it lets them go in the source.
+	WorkflowMove Reason = "a workflow moved from one namespace to another"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"

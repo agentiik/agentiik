@@ -249,6 +249,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// A workflow repository's refs and packs are its workflow's, in its namespace, and so are
 		// the image pins and brick manifests its pushes are judged against.
 		"workflow_refs": true, "git_packs": true, "image_pins": true, "brick_manifests": true, "step_cache": true,
+		// A move asked, held in its workflow's namespace and seen from its target's, and the files a
+		// move left in the namespace it left, until they are deleted.
+		"workflow_moves": true, "move_targets": true, "moved_objects": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -329,10 +332,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 // declared: a new escape is a line somebody adds here, not a habit that spreads.
 func TestEveryEscapeIsNamed(t *testing.T) {
 	declared := map[string]bool{}
-	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, SchemaUpgrade} {
+	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, SchemaUpgrade} {
 		declared[string(r)] = true
 	}
-	if len(declared) != 14 {
+	if len(declared) != 15 {
 		t.Fatalf("two reasons share a string: %v", declared)
 	}
 
@@ -355,7 +358,7 @@ func TestEveryEscapeIsNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := map[string]bool{"ControllerSweep": true, "Purge": true, "Collect": true,
-		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "LogShipment": true, "RunRoute": true, "RunListing": true, "AuditLog": true, "NamespaceAdministration": true, "Identity": true, "Authorisation": true, "SchemaUpgrade": true}
+		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "LogShipment": true, "RunRoute": true, "RunListing": true, "AuditLog": true, "NamespaceAdministration": true, "Identity": true, "Authorisation": true, "WorkflowMove": true, "SchemaUpgrade": true}
 	for u := range used {
 		if !names[u] {
 			t.Errorf("Installation is called with %s, which is not a declared Reason: an escape from the namespace has to be one of the named few", u)
@@ -436,7 +439,9 @@ func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
 	}
 	// A column called name is the name of what its row is, and whether the workflow file
 	// writes it depends on the row, so every table with one is decided about here.
-	fileNames := map[string]bool{"workflows": true, "secret_declarations": true, "secret_values": true}
+	fileNames := map[string]bool{"workflows": true, "secret_declarations": true, "secret_values": true,
+		// The name a workflow moving to a namespace holds there, which is the workflow's.
+		"move_targets": true}
 	otherNames := map[string]string{
 		"namespaces":        "a namespace is held to a narrower grammar of its own",
 		"runner_pools":      "a pool is named by an administrator, not by the workflow file",
@@ -520,6 +525,9 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		  values ('finance', $1, $2, 'a3f9c1e', 'manual')`, []any{run, workflow}},
 		{`insert into steps (namespace, run_id, step) values ('finance', $1, $2)`, []any{run, step}},
 		{`insert into step_cache (namespace, key, run_id, step, ports) values ('finance', 'finance/sha256/0', $1, $2, '[]')`, []any{run, step}},
+		{`insert into namespaces (name) values ('team-ops')`, nil},
+		{`insert into workflow_moves (namespace, workflow, target, asked_by) values ('finance', $1, 'team-ops', 'alice')`, []any{workflow}},
+		{`insert into move_targets (namespace, name, from_namespace) values ('team-ops', $1, 'finance')`, []any{workflow}},
 		{`insert into tasks (namespace, id, run_id, step, attempt)
 		  values ('finance', '01JMZ8V1PC7K3M0', $1, $2, 1)`, []any{run, step}},
 		{`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at)
@@ -550,6 +558,8 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		"runs.workflow":              {workflow},
 		"steps.step":                 {step},
 		"tasks.step":                 {step},
+		"workflow_moves.workflow":    {workflow},
+		"move_targets.name":          {workflow},
 		"step_cache.step":            {step},
 		"artifacts.step":             {step},
 		"artifacts.port":             {port},
