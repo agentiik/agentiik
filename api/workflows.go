@@ -167,9 +167,9 @@ func (s *Server) registerWorkflows(rt *Router) error {
 			Needs{Permission: WorkflowRead, Scope: Workflow}, s.readWorkflow},
 		// grant:manage besides, for the default branch and its protection, which decide who
 		// may move what production runs; a caller without it is answered as one who cannot
-		// read the workflow is.
+		// read the workflow is. And who owns which namespace, for a move between two.
 		{"PATCH", "/api/v1/{namespace}/workflows/{workflow}",
-			Needs{Permission: WorkflowRead, Scope: Workflow, Also: GrantManage, Asks: []Permission{WorkflowWrite}}, s.updateWorkflow},
+			Needs{Permission: WorkflowRead, Scope: Workflow, Also: GrantManage, Asks: []Permission{WorkflowWrite}, Owning: true}, s.updateWorkflow},
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
 			Needs{Permission: WorkflowRead, Scope: Workflow}, s.readTree},
 		{"DELETE", "/api/v1/{namespace}/workflows/{workflow}",
@@ -532,13 +532,16 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		return
 	}
 	branching := u.DefaultBranch != nil || u.Protected != nil
-	switch {
-	case u.Namespace != nil:
-		fail(w, http.StatusBadRequest, "this installation does not move a workflow to another namespace yet: namespace is read by a later release of v0.4.0's work, and name, default_branch and protected are what it changes")
+	moving := u.Namespace != nil && *u.Namespace != over.Namespace
+	if u.Name == nil && !branching && !moving {
+		fail(w, http.StatusBadRequest, "the request names nothing to change: name, namespace, default_branch, protected, or any of them")
 		return
-	case u.Name == nil && !branching:
-		fail(w, http.StatusBadRequest, "the request names nothing to change: name, default_branch, protected, or any of them")
-		return
+	}
+	if moving {
+		if err := NamespaceRef(*u.Namespace); err != nil {
+			fail(w, http.StatusBadRequest, fmt.Sprintf("namespace is %.64q: %v", *u.Namespace, err))
+			return
+		}
 	}
 	if u.Name != nil {
 		if err := checkWorkflowName(*u.Name); err != nil {
@@ -553,15 +556,22 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		}
 	}
 	// "Each field under its own permission, every one of them held or nothing changed": a
-	// rename under workflow:write, the default branch and its protection under grant:manage. A
-	// caller lacking one is answered as a workflow it cannot see is, as the page says, since
-	// what it would change is decided by whoever holds that permission.
+	// rename under workflow:write, the default branch and its protection under grant:manage, a
+	// move under workflow:write and ownership of both namespaces, "move between namespaces the
+	// principal owns on both sides". A caller lacking one is answered as a workflow it cannot
+	// see is, as the page says, since what it would change is decided by whoever holds that
+	// permission; and a target it does not own as one that does not exist, so that asking
+	// teaches nobody which namespaces there are.
+	owns := func(namespace string) func(context.Context) (bool, error) {
+		return func(ctx context.Context) (bool, error) { return Owns(r)(ctx, namespace) }
+	}
 	for _, needed := range []struct {
 		asked bool
 		holds func(context.Context) (bool, error)
 	}{
-		{u.Name != nil, func(ctx context.Context) (bool, error) { return HoldsOn(r)(ctx, WorkflowWrite) }},
+		{u.Name != nil || moving, func(ctx context.Context) (bool, error) { return HoldsOn(r)(ctx, WorkflowWrite) }},
 		{branching, HoldsAlso(r)},
+		{moving, owns(over.Namespace)},
 	} {
 		if !needed.asked {
 			continue
@@ -577,6 +587,29 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		}
 	}
 	name := over.Workflow
+	if u.Name != nil {
+		name = *u.Name
+	}
+	if moving {
+		if held, err := owns(*u.Namespace)(r.Context()); err != nil {
+			fail(w, http.StatusInternalServerError, "the change could not be authorised")
+			return
+		} else if !held {
+			fail(w, http.StatusNotFound, fmt.Sprintf("there is no namespace %s you own: a workflow moves between namespaces its mover owns on both sides", *u.Namespace))
+			return
+		}
+		// Judged whole before anything else the request names is changed, so that a move
+		// refused refuses the request: the secrets the versions its refs point at name, then
+		// everything the move itself is refused for.
+		if !s.movable(w, r.Context(), over, name, *u.Namespace) {
+			return
+		}
+		if u.Name == nil && !branching {
+			s.askMove(w, r.Context(), who, over, *u.Namespace)
+			return
+		}
+	}
+	name = over.Workflow
 	var before, after db.WorkflowRecord
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		// What the change records, appended once everything else is done: an append takes the
@@ -626,6 +659,9 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	case errors.Is(err, db.ErrNoWorkflow):
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
 		return
+	case errors.Is(err, db.ErrWorkflowMoving):
+		fail(w, http.StatusConflict, movingSentence(over))
+		return
 	case errors.Is(err, db.ErrWorkflowExists):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s holds a workflow named %s already: a name is one workflow in its namespace", over.Namespace, *u.Name))
 		return
@@ -638,6 +674,10 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	case err != nil:
 		s.report(fmt.Errorf("api: workflow %s/%s could not be changed: %w", over.Namespace, over.Workflow, err))
 		fail(w, http.StatusInternalServerError, "the workflow could not be changed")
+		return
+	}
+	if moving {
+		s.askMove(w, r.Context(), who, Target{Namespace: over.Namespace, Workflow: name}, *u.Namespace)
 		return
 	}
 	head := after.Head
@@ -682,6 +722,9 @@ func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	switch {
 	case errors.Is(err, db.ErrNoWorkflow):
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	case errors.Is(err, db.ErrWorkflowMoving):
+		fail(w, http.StatusConflict, movingSentence(over))
 		return
 	case err != nil:
 		s.report(fmt.Errorf("api: workflow %s/%s could not be deleted: %w", over.Namespace, over.Workflow, err))

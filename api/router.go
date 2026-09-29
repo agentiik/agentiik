@@ -711,6 +711,19 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		}
 		return rt.allow(ctx, as, WorkflowRead, over)
 	})))
+	// Set on every route too, answered false about every namespace where the route does not ask
+	// who owns what.
+	r = r.WithContext(context.WithValue(r.Context(), ownsKey{}, func(ctx context.Context, namespace string) (bool, error) {
+		owners, can := rt.auth.(Owners)
+		if !g.owning || !can || as.Scope.Narrows() {
+			return false, nil
+		}
+		owned, err := owners.Owned(ctx, as.Principal)
+		if err != nil {
+			return false, err
+		}
+		return slices.Contains(owned, namespace), nil
+	}))
 	// Set on every route too, answered false about any permission the route did not name, over
 	// the workflow it authorised and no other.
 	r = r.WithContext(context.WithValue(r.Context(), onKey{}, func(ctx context.Context, p Permission) (bool, error) {

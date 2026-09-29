@@ -127,6 +127,10 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, who Principal, o
 			Detail: detail,
 		})
 	})
+	if errors.Is(err, db.ErrWorkflowMoving) {
+		fail(w, http.StatusConflict, movingSentence(Target{Namespace: over.Namespace, Workflow: d.Workflow}))
+		return
+	}
 	var reached *db.RunsPerHourReached
 	if errors.As(err, &reached) {
 		w.Header().Set("Retry-After", strconv.Itoa(reached.Seconds()))

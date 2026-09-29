@@ -657,6 +657,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		fail(w, http.StatusConflict, hostedByGit(over))
 		return
 	}
+	if errors.Is(err, db.ErrWorkflowMoving) {
+		fail(w, http.StatusConflict, movingSentence(over))
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the version could not be recorded")
 		return
@@ -1052,6 +1056,10 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 			Detail: triggered(over.Workflow, start.commit, start.ref),
 		})
 	})
+	if errors.Is(err, db.ErrWorkflowMoving) {
+		fail(w, http.StatusConflict, movingSentence(over))
+		return
+	}
 	var reached *db.RunsPerHourReached
 	if errors.As(err, &reached) {
 		// "Past it the API answers 429 with Retry-After, the seconds until the oldest run
