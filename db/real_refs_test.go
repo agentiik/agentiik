@@ -724,3 +724,67 @@ func TestAPushJudgedBeforeARefWasProtectedIsHeldToTheProtection(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// A repack's pack is made live in place of the packs that were live when it began, which are then
+// superseded, under the lock a push takes to move its refs: a pack a push made live meanwhile stays
+// live. A repository is due a repack once it holds more live packs than the bound.
+func TestARepackReplacesThePacksItReadAndNoneAPushMadeLiveSince(t *testing.T) {
+	pool, super := repositories(t)
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	in := func(fn func(ctx context.Context, n *NS) error) error { return pool.In(t.Context(), "finance", fn) }
+	const c4 = "4444444444444444444444444444444444444444"
+	for _, name := range []string{c1, c2, c3, c4} {
+		if err := in(func(ctx context.Context, n *NS) error {
+			_, err := n.ReceivePack(ctx, "nightly", Pack{Name: name, Size: 1})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{c1, c2} {
+		if err := in(func(ctx context.Context, n *NS) error { return n.PackLive(ctx, "nightly", name) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due, err := pool.Repackable(t.Context(), 1, 10)
+	if err != nil || len(due) != 1 || due[0] != (Target{Namespace: "finance", Workflow: "nightly"}) {
+		t.Errorf("the repositories due a repack at more than one live pack are %v, %v", due, err)
+	}
+	if due, err := pool.Repackable(t.Context(), 2, 10); err != nil || len(due) != 0 {
+		t.Errorf("the repositories due a repack at more than two live packs are %v, %v", due, err)
+	}
+
+	// c3 is the repack's pack, written from c1 and c2; c4 a push's, made live while it was written.
+	if err := in(func(ctx context.Context, n *NS) error { return n.PackLive(ctx, "nightly", c4) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := in(func(ctx context.Context, n *NS) error { return n.Repacked(ctx, "nightly", c3, []string{c1, c2}) }); err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]string{}
+	rows, err := conn.Query(t.Context(), `select name, state from git_packs where (state = 'superseded') = (superseded_at is not null)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var name, state string
+		if err := rows.Scan(&name, &state); err != nil {
+			t.Fatal(err)
+		}
+		states[name] = state
+	}
+	rows.Close()
+	want := map[string]string{c1: "superseded", c2: "superseded", c3: "live", c4: "live"}
+	for name, state := range want {
+		if states[name] != state {
+			t.Errorf("after the repack %s is %q, not %s", name, states[name], state)
+		}
+	}
+	if err := in(func(ctx context.Context, n *NS) error { return n.Repacked(ctx, "nightly", c1, []string{c3}) }); !errors.Is(err, ErrNoPack) {
+		t.Errorf("a superseded pack made live by a repack answered %v", err)
+	}
+}

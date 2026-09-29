@@ -36,6 +36,9 @@ type gitServer struct {
 	url   string
 	pool  *db.Pool
 	super string
+
+	// objects is the directory of the built-in store the server keeps its packs in.
+	objects string
 }
 
 func servingGit(t *testing.T, auth api.Authorizer) *gitServer {
@@ -55,7 +58,8 @@ func servingGit(t *testing.T, auth api.Authorizer) *gitServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: store, Objects: artifact.Dir(t.TempDir()), PublicURL: "https://agentiik.example.com"}); err != nil {
+	objects := t.TempDir()
+	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: store, Objects: artifact.Dir(objects), PublicURL: "https://agentiik.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
@@ -69,7 +73,7 @@ func servingGit(t *testing.T, auth api.Authorizer) *gitServer {
 	}
 	server := httptest.NewServer(rt)
 	t.Cleanup(server.Close)
-	return &gitServer{t: t, h: rt, url: server.URL, pool: pool, super: super}
+	return &gitServer{t: t, h: rt, url: server.URL, pool: pool, super: super, objects: objects}
 }
 
 // remote is the repository's URL, with the principal as the password git sends, which is how a

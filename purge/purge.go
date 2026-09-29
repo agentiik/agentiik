@@ -48,6 +48,15 @@
 // whose files are still to be recorded is not walked, since those files would be taken for
 // orphans.
 //
+// # Packs
+//
+// A workflow repository's packs are the one thing in the store no count keeps: git_packs names them,
+// and a repository gains one with every push that sends objects. A pass repacks the repositories
+// holding more than db.RepackAbove live packs into one each, and collects the packs a repack
+// superseded, and those a push wrote and never made live, once they are past the grace, which is
+// what lets a fetch that began before a repack read on through the packs it replaced. See
+// store.Store.Repack for what a repack keeps.
+//
 // # What v0.2 left
 //
 // Backfill records the files v0.2 recorded nothing for, from the envelopes of the runs it finished,
@@ -63,6 +72,7 @@ import (
 
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/repo/store"
 )
 
 // Every is how often a pass comes round, a constant rather than a setting.
@@ -116,12 +126,21 @@ type Purged struct {
 	// Objects are the objects deleted from the store, and Bytes their size.
 	Objects int
 	Bytes   int64
+
+	// Repacked are the repositories whose live packs were written into one, and Packs the packs
+	// deleted from the store, superseded by a repack or never made live by a push, PackBytes
+	// their size.
+	Repacked  int
+	Packs     int
+	PackBytes int64
 }
 
 // Removed says whether the pass removed anything retention decides: a reference, a run's
 // envelopes, a log, an orphan or an object. Forgetting writes that have lapsed is bookkeeping, and
 // is not.
-func (p Purged) Removed() bool { return p.Artifacts+p.Runs+p.Logs+p.Orphans+p.Objects > 0 }
+func (p Purged) Removed() bool {
+	return p.Artifacts+p.Runs+p.Logs+p.Orphans+p.Objects+p.Repacked+p.Packs > 0
+}
 
 // Purger runs the purges and the collection.
 type Purger struct {
@@ -145,8 +164,13 @@ type Purger struct {
 	Calls int
 
 	// Grace is how long an object sits at a count of zero before it is collected, db.DefaultGrace
-	// where zero.
+	// where zero, and how long a pack a repack superseded, or one a push never made live, is kept
+	// before its files are deleted.
 	Grace time.Duration
+
+	// Packs is the store of the workflow repositories' packs, which the repack writes and the
+	// collection deletes from; none repacks and collects no pack.
+	Packs *store.Store
 
 	// Passed is told what each pass of Run removed, nothing included, and Trouble why one did not
 	// finish, before Passed is told of it.
@@ -185,7 +209,8 @@ func (p *Purger) Run(ctx context.Context) {
 }
 
 // Pass runs each purge in turn, then records what v0.2 left, then the orphan sweep and the
-// collection, and answers what it removed. A Purger passes once at a time.
+// collection, then the repack and the collection of packs, and answers what it removed. A Purger
+// passes once at a time.
 //
 // A purge that fails is said in the error and ends that purge's part of the pass, and the next
 // one goes on: an object store refusing to delete a log is no reason to leave references past
@@ -209,6 +234,8 @@ func (p *Purger) Pass(ctx context.Context) (Purged, error) {
 		{"the recording of the files v0.2 left", p.backfill},
 		{"the orphan sweep", p.orphans},
 		{"the collection", p.collect},
+		{"the repack", p.repack},
+		{"the collection of packs", p.collectPacks},
 	} {
 		for range p.calls() {
 			if err := ctx.Err(); err != nil {
@@ -317,6 +344,54 @@ func (p *Purger) collect(ctx context.Context, out *Purged) (bool, error) {
 	}
 	if refused != nil {
 		return false, refused
+	}
+	return len(claimed) == p.batch(), nil
+}
+
+// repack writes the live packs of one repository holding more than db.RepackAbove into one pack,
+// the one holding most first, a call at a time, since each reads every pack of its repository twice.
+func (p *Purger) repack(ctx context.Context, out *Purged) (bool, error) {
+	if p.Packs == nil {
+		return false, nil
+	}
+	due, err := p.Pool.Repackable(ctx, db.RepackAbove, 1)
+	if err != nil || len(due) == 0 {
+		return false, err
+	}
+	if _, _, err := p.Packs.Repack(ctx, p.Pool, due[0].Namespace, due[0].Workflow); err != nil {
+		return false, err
+	}
+	out.Repacked++
+	return true, nil
+}
+
+// collectPacks claims the packs past the grace that no fetch reads any more, deletes their files
+// from the store and forgets them. A pack whose files could not be deleted stays claimed, and the
+// next pass deletes them again.
+func (p *Purger) collectPacks(ctx context.Context, out *Purged) (bool, error) {
+	if p.Packs == nil {
+		return false, nil
+	}
+	claimed, err := p.Pool.CollectablePacks(ctx, p.Grace, p.batch())
+	if err != nil || len(claimed) == 0 {
+		return false, err
+	}
+	var gone []db.RepositoryPack
+	var refused []error
+	for _, pack := range claimed {
+		if err := p.Packs.Collect(ctx, pack); err != nil {
+			refused = append(refused, err)
+			continue
+		}
+		gone = append(gone, pack)
+		out.Packs++
+		out.PackBytes += pack.Size
+	}
+	if _, err := p.Pool.PacksCollected(ctx, gone); err != nil {
+		refused = append(refused, err)
+	}
+	if len(refused) > 0 {
+		return false, errors.Join(refused...)
 	}
 	return len(claimed) == p.batch(), nil
 }

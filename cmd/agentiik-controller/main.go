@@ -22,6 +22,7 @@ import (
 	"github.com/agentiik/agentiik/internal/otlp"
 	"github.com/agentiik/agentiik/internal/stopsignal"
 	"github.com/agentiik/agentiik/purge"
+	"github.com/agentiik/agentiik/repo/store"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -326,8 +327,15 @@ func verifier(trail db.AuditTrail, batch int, log *slog.Logger) func(context.Con
 // asking the fence before every call, counting what each pass removed in counts, where there are
 // any, and saying it in log where it removed anything.
 func purger(pool *db.Pool, dir string, ctl *controller.Controller, term db.Term, counts *counted, log *slog.Logger) *purge.Purger {
+	objects := artifact.Dir(dir)
+	// The packs of the workflow repositories are read a range at a time, which the built-in store
+	// is: were it not, nothing would repack or collect them, and the logs would say why.
+	packs, err := store.New(objects)
+	if err != nil {
+		log.Warn("the packs of workflow repositories are neither repacked nor collected", "error", err)
+	}
 	return &purge.Purger{
-		Pool: pool, Objects: artifact.Dir(dir),
+		Pool: pool, Objects: objects, Packs: packs,
 		Leading: func(ctx context.Context) error {
 			return ctl.Fenced(ctx, term, func(context.Context, *db.Wide) error { return nil })
 		},
@@ -338,7 +346,8 @@ func purger(pool *db.Pool, dir string, ctl *controller.Controller, term db.Term,
 			if p.Removed() {
 				log.Info("the purges removed what had run out",
 					"artifacts", p.Artifacts, "runs", p.Runs, "logs", p.Logs, "uploads", p.Uploads,
-					"orphans", p.Orphans, "objects", p.Objects, "bytes", p.Bytes)
+					"orphans", p.Orphans, "objects", p.Objects, "bytes", p.Bytes,
+					"repacked", p.Repacked, "packs", p.Packs, "pack_bytes", p.PackBytes)
 			}
 			if p.Recorded > 0 {
 				log.Info("the purges recorded the artifact files of finished runs a v0.2 controller left unrecorded", "runs", p.Recorded)

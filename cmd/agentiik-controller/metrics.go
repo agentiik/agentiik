@@ -60,6 +60,9 @@ type counted struct {
 	orphansFound     *metrics.Counter
 	objectsCollected *metrics.Counter
 	bytesCollected   *metrics.Counter
+	repacked         *metrics.Counter
+	packsCollected   *metrics.Counter
+	packBytes        *metrics.Counter
 
 	// term is the term this process leads under, and nil while it stands by. The gauges are read
 	// through its fence, as every read of a controller is.
@@ -108,9 +111,15 @@ func newCounted(b *bus.Bus, log *slog.Logger) *counted {
 		"Objects the collection deleted from the object store: counted by nothing for the grace period, named by no live artifact, and written by no upload under way.")
 	c.bytesCollected = r.Counter("agentiik_objects_collected_bytes_total",
 		"The bytes of the objects the collection deleted from the object store.")
+	c.repacked = r.Counter("agentiik_repositories_repacked_total",
+		"Workflow repositories whose live packs, past sixteen, the repack wrote into one pack, the ones it replaced then kept for the grace period for the fetches reading them.")
+	c.packsCollected = r.Counter("agentiik_packs_collected_total",
+		"Packs of workflow repositories deleted from the object store: superseded by a repack, or never made live by the push that wrote them, the grace period after.")
+	c.packBytes = r.Counter("agentiik_packs_collected_bytes_total",
+		"The bytes of the packs deleted from the object store.")
 	// Written at zero from the start, since they carry no label to be first seen with, so that a
 	// rate over them is one from the first scrape.
-	for _, counter := range []*metrics.Counter{c.artifactsExpired, c.runsPurged, c.logsPurged, c.orphansFound, c.objectsCollected, c.bytesCollected} {
+	for _, counter := range []*metrics.Counter{c.artifactsExpired, c.runsPurged, c.logsPurged, c.orphansFound, c.objectsCollected, c.bytesCollected, c.repacked, c.packsCollected, c.packBytes} {
 		counter.Add(0)
 	}
 
@@ -181,6 +190,9 @@ func (c *counted) purged(p purge.Purged) {
 	c.orphansFound.Add(float64(p.Orphans))
 	c.objectsCollected.Add(float64(p.Objects))
 	c.bytesCollected.Add(float64(p.Bytes))
+	c.repacked.Add(float64(p.Repacked))
+	c.packsCollected.Add(float64(p.Packs))
+	c.packBytes.Add(float64(p.PackBytes))
 }
 
 // lead says this process leads under term, until the function it answers is called.

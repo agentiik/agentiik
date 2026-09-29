@@ -166,7 +166,8 @@ const (
 	Purge Reason = "a retention purge"
 
 	// Collect is the garbage collector, over objects whose reference count reached
-	// zero.
+	// zero, and over the packs of workflow repositories: those a repack superseded or a push
+	// never made live, and the repositories due a repack.
 	Collect Reason = "collecting objects nothing references"
 
 	// RunnerInventory is the runner table, which belongs to the installation: a

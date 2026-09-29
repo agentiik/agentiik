@@ -134,6 +134,14 @@ type installation struct {
 
 func anInstallation(t *testing.T) *installation {
 	t.Helper()
+	in, _ := anInstallationWithItsSuperuser(t)
+	return in
+}
+
+// anInstallationWithItsSuperuser is anInstallation, and the superuser's address of its database, for
+// a test to set what no role of the installation writes.
+func anInstallationWithItsSuperuser(t *testing.T) (*installation, string) {
+	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
 	if _, err := conn.Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
@@ -149,7 +157,7 @@ func anInstallation(t *testing.T) *installation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &installation{dir: dir, pool: pool, store: s}
+	return &installation{dir: dir, pool: pool, store: s}, super
 }
 
 // live makes a pack Put wrote live, as the push's transaction does, and answers the repository.
