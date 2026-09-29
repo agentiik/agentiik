@@ -460,11 +460,11 @@ func TestARunOfACommitNobodyPushedIsNotFound(t *testing.T) {
 		t.Errorf("a run of a commit nobody pushed answered %d", w.Code)
 	}
 
-	// And one with no commit at all is a bad request rather than a 404: the caller has not
-	// asked about something that might exist.
+	// And one naming no commit runs the default branch's head, or the latest version a tree
+	// push recorded, and of a workflow holding neither there is nothing to run: the same 404.
 	w, _ = call(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", api.Start{})
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("a run pinned to nothing answered %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("a run naming no commit of a workflow holding no version answered %d", w.Code)
 	}
 }
 
