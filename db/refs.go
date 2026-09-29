@@ -334,6 +334,11 @@ var (
 	refForbidden = regexp.MustCompile(`/[./]|\.\.|@\{|[/.]$|\.lock(/|$)`)
 )
 
+// CheckRef refuses a ref a repository cannot hold: anything but a branch or a tag, a name git
+// refuses, and a name past MaxRefBytes, as the table refuses it, so that a push is refused before
+// anything is written rather than by the table in the middle of it.
+func CheckRef(ref string) error { return checkRef(ref) }
+
 // checkRef refuses a ref the table would: anything but a branch or a tag, a name git refuses, and a
 // name past MaxRefBytes.
 func checkRef(ref string) error {

@@ -24,6 +24,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/repo/store"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -38,9 +39,13 @@ type Server struct {
 	pool     *db.Pool
 	versions *version.Store
 	objects  artifact.Objects
-	urls     artifact.Presigner
-	limits   agk.Limits
-	now      func() time.Time
+
+	// packs is where a repository's packs are kept, nil where the object store cannot read a
+	// range of an object, which git's routes then answer 503 about.
+	packs  *store.Store
+	urls   artifact.Presigner
+	limits agk.Limits
+	now    func() time.Time
 
 	// declared are the compiled input declarations of the versions runs were started of.
 	declared *declarations
@@ -113,6 +118,16 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
 	}
 	rt.ServeRuns(runsIn{o.Pool})
+	if o.Objects != nil {
+		// An object store that cannot read a range, which no installation's is, leaves the
+		// repositories unserved rather than the API unstarted: the tree push works on it.
+		if packs, err := store.New(o.Objects); err == nil {
+			s.packs = packs
+		}
+	}
+	if err := s.registerGit(rt); err != nil {
+		return nil, err
+	}
 
 	for _, r := range []struct {
 		method  string

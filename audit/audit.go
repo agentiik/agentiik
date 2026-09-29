@@ -174,6 +174,18 @@ const ImagePin = "image.pin"
 // with the same bytes changed nothing and is not recorded.
 const ImageManifest = "image.manifest"
 
+// RefUpdate is a ref a git push created, moved or deleted, recorded in the namespace in the push's
+// own transaction with the workflow as its target, the ref, the object it named and the one it names
+// now, and whether the move was forced; PushRefuse is a git push refused once its pusher was known
+// to hold workflow:write, recorded in a transaction of its own since the push's is not committed,
+// with the refs it asked to move and why, the rule and where it was written where the hook refused
+// it. A version pushed is not recorded, its row keeping who pushed it, and a ref's row keeps who
+// last moved it; the log is where each move and each refusal is kept for good.
+const (
+	RefUpdate  = "ref.update"
+	PushRefuse = "push.refuse"
+)
+
 // The results an entry records.
 const (
 	// Done is an act that changed something.

@@ -107,7 +107,7 @@ func (f *Fixture) targets(c Case) []Target {
 			runs = append(runs, Target{namespace, workflow, f.Runs[key]})
 		}
 		return runs
-	case strings.Contains(c.Pattern, "{workflow}"):
+	case strings.Contains(c.Pattern, "{workflow}") || strings.Contains(c.Pattern, "{repository}"):
 		return []Target{{Finance, Invoicing, ""}, {Finance, Payroll, ""}, {HR, Onboarding, ""}, {HR, Offboarding, ""}}
 	case c.Scope == api.Installation && !c.Own:
 		return []Target{{}}
@@ -133,6 +133,10 @@ func (f *Fixture) lets(c Case, as Asker, at Target, h Holding) bool {
 	switch {
 	case !h.Opens || c.Runner:
 		return false
+	case c.Repository && as.Bearer == "":
+		// Git is answered with the command line's token alone, and a session is no credential
+		// there.
+		return false
 	case c.Owned && c.Makes == "token" && as.Principal == NightlySync:
 		// The token made is finance/nightly-sync's own, which it revokes as its own.
 		return true
@@ -157,7 +161,7 @@ func (f *Fixture) lets(c Case, as Asker, at Target, h Holding) bool {
 // beginning of the body the router answers it with, empty where the route answers it itself.
 func refusal(c Case, as Asker, h Holding) (int, string) {
 	switch {
-	case as.Bearer == "" && as.Session == nil:
+	case as.Bearer == "" && (as.Session == nil || c.Repository):
 		return http.StatusUnauthorized, noCredential
 	case c.Runner && as.Bearer == "":
 		return http.StatusUnauthorized, noCredential
@@ -326,6 +330,8 @@ func (f *Fixture) fill(pattern string, at Target, made string) string {
 			}
 		case "workflow":
 			return at.Workflow
+		case "repository":
+			return at.Workflow + ".git"
 		case "run":
 			return at.Run
 		case "uri":

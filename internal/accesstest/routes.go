@@ -1,6 +1,7 @@
 package accesstest
 
 import (
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/api"
 )
 
@@ -142,6 +143,12 @@ var Cases = []Case{
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}", Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/images", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/images", Permission: api.WorkflowWrite, Scope: api.Workflow}, Refused: true},
+	// Git's smart HTTP, answered to the command line's token alone: clone and fetch take
+	// workflow:read, a push workflow:write besides, grant:manage for what only an owner does to a
+	// ref, and secret:use where a commit names a secret, which only the handler can tell.
+	{Route: api.Route{Method: "GET", Pattern: "/{namespace}/{repository}/info/refs", Permission: api.WorkflowRead, Scope: api.Workflow, Repository: true, Asks: access.SetOf(api.WorkflowWrite)}},
+	{Route: api.Route{Method: "POST", Pattern: "/{namespace}/{repository}/git-upload-pack", Permission: api.WorkflowRead, Scope: api.Workflow, Repository: true}, Refused: true},
+	{Route: api.Route{Method: "POST", Pattern: "/{namespace}/{repository}/git-receive-pack", Permission: api.WorkflowRead, Scope: api.Workflow, Repository: true, Asks: access.SetOf(api.WorkflowWrite, api.GrantManage, api.SecretUse)}, Refused: true},
 
 	// Runs and their data.
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/runs", Permission: api.WorkflowRun, Scope: api.Workflow}, Refused: true},
