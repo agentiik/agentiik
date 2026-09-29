@@ -192,12 +192,14 @@
 //
 // # What is deliberately not claimed here
 //
-// Replay from a chosen step and the cache lookup are not in this surface. CacheKey is
-// computed, because the evaluator already holds the image digest, the step's script, the
+// The cache lookup and the reading of a run a replay reuses are not in this surface. CacheKey
+// is computed, because the evaluator already holds the image digest, the step's script, the
 // resolved params and the items of its inputs that make it, and kept on the shard it was
 // handed out for; the controller looks it up, with the tree the step is handed, because a
 // cache hit that resolves to an expired or one-shot artifact is not a hit and only the
 // store knows that. A hit comes back as a Result like any other, a success carrying the
-// envelopes and MemoisedFrom. Expiry is the store's knowledge and the replay rule rests on
-// it, so ReplayFrom belongs to the group that has a store in reach.
+// envelopes and MemoisedFrom. A replay from a step is a new run started with Options.Reuse,
+// the steps Upstream of it in the state the run it replays left them, made with Reused:
+// which run that is, and whether what it produced is still there, is the store's knowledge
+// and the controller's to read.
 package graph

@@ -82,6 +82,10 @@ type Options struct {
 	// bounds nothing, as a namespace that sets none and agk run --local, which has no
 	// namespace, bound nothing.
 	MaxRunDuration time.Duration
+
+	// Reuse are the steps a replay reuses, each in the state the run it replays left it,
+	// made with Reused: they start over and are never handed out.
+	Reuse map[agk.Step]StepState
 }
 
 // Evaluator is a handle over a Graph and a State. It holds no progress of its own: the
@@ -139,6 +143,9 @@ func Start(g *Graph, run agk.Run, o Options, at time.Time) (*Evaluator, error) {
 	}
 	for _, name := range g.Steps() {
 		s.Steps[name] = StepState{}
+	}
+	if err := reuse(s, g, o.Reuse); err != nil {
+		return nil, err
 	}
 	most := DefaultMaxRequeues
 	if o.MaxRequeues != nil {

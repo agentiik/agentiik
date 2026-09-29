@@ -124,6 +124,16 @@ type RunDetail struct {
 	// and the console says so where it would otherwise offer the step".
 	ReplayFromStartOnly bool `json:"replay_from_start_only"`
 
+	// ReplayOf is the run this one replays, and ReplayFrom the step it replays from, left out
+	// for a replay from the start: the steps above it were reused rather than run, and carry a
+	// verdict and no task.
+	ReplayOf   agk.RunID `json:"replay_of,omitempty"`
+	ReplayFrom agk.Step  `json:"replay_from,omitempty"`
+
+	// EnvelopesPurged says the run's envelopes have gone with its retention, which no replay
+	// from a step can reuse. Not answered, since the steps' ports say so each.
+	EnvelopesPurged bool `json:"-"`
+
 	// Reason is why the run ended as it did, where nothing in its workflow is what ended it, and
 	// empty on every other run: from v0.3.0, a run its principal no longer held workflow:run for
 	// when it was created, which "ends cancelled before any task, with a reason naming the grant
@@ -159,11 +169,12 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	err := n.tx.QueryRow(ctx, `
 		select namespace, id, workflow, commit, state, trigger, triggered_by,
 		       created_at, started_at, finished_at, inputs, outputs, replay_from_start_only,
-		       coalesce(reason, '')
+		       coalesce(reason, ''), coalesce(replay_of, ''), coalesce(replay_from, ''),
+		       envelopes_purged_at is not null
 		from runs where namespace = $1 and id = $2`, n.namespace, string(run)).
 		Scan(&d.Namespace, &d.Run, &d.Workflow, &d.Commit, &state, &trigger, &by,
 			&d.CreatedAt, &started, &finished, &inputs, &outputs, &d.ReplayFromStartOnly,
-			&d.Reason)
+			&d.Reason, &d.ReplayOf, &d.ReplayFrom, &d.EnvelopesPurged)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunDetail{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}

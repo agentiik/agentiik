@@ -14,6 +14,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0052 gives a workflow when it was deleted and by whom, with nothing to do: none is, until one is deleted.
 - Migration 0053 makes every key naming a workflow carry a rename through, the versions', the runs', the refs', the grants', the pins' and the manifests', with nothing to do.
 - Migration 0054 adds `step_cache`, the cache entries of cached steps, and `tasks.memoised_from`, with nothing to do: the cache starts empty, and a cached step's first success after the upgrade fills it.
+- Migration 0055 gives a run what it replays, `replay_of` and `replay_from`, with nothing to do: no run is a replay until one is asked for.
 
 ### Workflows
 
@@ -58,6 +59,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `POST /api/v1/{ns}/workflows/{name}/runs` takes `ref`, a branch or a tag by its short name or in full, or a whole commit that is a version, resolved when the run is asked for and the run pinned to the commit it names then, whatever the ref does next; a ref naming nothing is 404, a name a branch and a tag both hold 400, and so is a request naming a commit and a ref. The 202 names the commit the run is pinned to, which a run asked for by a ref, or by none, did not name, and `run.trigger` records the ref beside the commit.
 - A redemption answers the tree a step's `files` select, which the controller writes into the grant with the commit: the globs expanded, each relocated file its own entry carrying `to`, with the selector's `mode` where it gives one, so that a narrowed step downloads only what it asked for; a step without `files`, or a grant written before, is answered the whole tree, and one whose files put two files at one place is answered 422.
 - The run detail names, for a task a cache hit ended, the run whose task made its outputs, `memoised_from`, where no runner and no exit code are named.
+- `POST /api/v1/runs/{id}/replay` starts a replay, a new run of the commit the run pinned, whatever its branch does next, over its inputs as they were bound: from the step `step` names, the steps above it reused with their verdicts and envelopes and every other step run, or from the start where it names none. 202 with `run`, `state`, `commit`, `replay_of` and `replay_from`, and `Location`; 409 while the run goes on, from a step above which something never ended, and from any step of a run replayable from the start only or whose envelopes have gone; 422 for a step the version lacks. Under `workflow:run`, recorded as `run.trigger` with `replay_of` and `step`. The run detail names `replay_of` and `replay_from`.
 
 ### agk
 
@@ -82,6 +84,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Controller
 
 - Memoisation: a cached step's task is looked up before the quota is asked, under the evaluator's key and the files of the tree the step is handed, and a hit is recorded as its success with the envelopes the entry names, stamped as the run's own, starting nothing; a cached task that succeeds on a container is remembered with what it published. An entry is no hit once its run's envelopes are purged, an envelope is gone or being collected, or a file its items name has expired, is collected or has a fetch budget, and is then removed; entries go with their run's envelopes.
+- A replay from a step starts with the steps above it in the verdicts and with the envelopes the run it replays left them, stamped as its own and never handed out; one whose run no longer holds them is refused with the reason as it would be let in.
 
 ### Tests
 

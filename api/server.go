@@ -165,6 +165,8 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			OnRun{Permission: RunRead, Reveals: RunReadData}, s.detail},
 		{"POST", "/api/v1/runs/{run}/cancel",
 			OnRun{Permission: WorkflowRun}, s.cancel},
+		{"POST", "/api/v1/runs/{run}/replay",
+			OnRun{Permission: WorkflowRun}, s.replay},
 		// The run by its identifier alone, which is all a push notification carries, read
 		// exactly as the namespaced route reads it: the router found the namespace.
 		{"GET", "/api/v1/runs/{run}",

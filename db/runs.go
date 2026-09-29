@@ -54,6 +54,11 @@ type NewRun struct {
 	// rather than a missing one. The evaluator seeds its own state the same way and for the
 	// same reason: "the reduction to a run verdict can tell the two apart".
 	Steps []agk.Step
+
+	// ReplayOf is the run this one replays, and ReplayFrom the step it replays from, empty for
+	// a replay from the start: the steps above it are reused rather than run.
+	ReplayOf   agk.RunID
+	ReplayFrom agk.Step
 }
 
 // RunsPerHourReached is a run refused at creation because its namespace has created as many runs
@@ -122,10 +127,10 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	}
 
 	if _, err := n.tx.Exec(ctx,
-		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs)
-		 values ($1, $2, $3, $4, 'queued', $5, $6, $7)`,
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs, replay_of, replay_from)
+		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9)`,
 		n.namespace, string(r.ID), r.Workflow, r.Commit,
-		r.Trigger.String(), nilIfEmpty(by), inputs); err != nil {
+		r.Trigger.String(), nilIfEmpty(by), inputs, nilIfEmpty(string(r.ReplayOf)), nilIfEmpty(string(r.ReplayFrom))); err != nil {
 		return fmt.Errorf("db: run %s could not be created: %w", r.ID, err)
 	}
 
@@ -304,6 +309,12 @@ type Evaluation struct {
 	Trigger agk.TriggerKind
 	WakeAt  time.Time
 
+	// ReplayOf and ReplayFrom are the run this one replays and the step it replays from, empty
+	// for a run that replays nothing: the evaluator starts the steps above that step in the
+	// state the run it replays left them.
+	ReplayOf   agk.RunID
+	ReplayFrom agk.Step
+
 	// TriggeredBy is who the run is attributed to, as a grant names a principal, and empty where
 	// the row names nobody. It is who the controller asks about before it lets the run in, since
 	// "authorisation is re-evaluated when a run is created".
@@ -347,11 +358,11 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
 		        cancel_requested_at, xmin::text, created_at,
 		        coalesce((select n.max_run_duration from namespaces n where n.name = runs.namespace), ''),
-		        coalesce(triggered_by, '')
+		        coalesce(triggered_by, ''), coalesce(replay_of, ''), coalesce(replay_from, '')
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
 			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt, &e.MaxRunDuration,
-			&e.TriggeredBy)
+			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}

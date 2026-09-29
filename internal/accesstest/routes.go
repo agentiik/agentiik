@@ -168,6 +168,7 @@ var Cases = []Case{
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs/{run}", Permission: api.RunRead, Scope: api.Workflow, OfRun: true, Reveals: api.RunReadData}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/runs/{run}", Permission: api.RunRead, Scope: api.Workflow, OfRun: true, Reveals: api.RunReadData}},
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/runs/{run}/cancel", Permission: api.WorkflowRun, Scope: api.Workflow, OfRun: true}, Refused: true},
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/runs/{run}/replay", Permission: api.WorkflowRun, Scope: api.Workflow, OfRun: true}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs/{run}/steps/{step}/logs", Permission: api.RunRead, Scope: api.Workflow, OfRun: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs/{run}/outputs/{name}", Permission: api.RunReadData, Scope: api.Workflow, OfRun: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs/{run}/steps/{step}/outputs/{port}", Permission: api.RunReadData, Scope: api.Workflow, OfRun: true}},

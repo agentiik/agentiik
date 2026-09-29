@@ -264,6 +264,18 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		return fmt.Errorf("controller: the graph of run %s could not be resolved: %w", run, err)
 	}
 
+	// A replay from a step whose run no longer holds what it would reuse is refused with the
+	// reason, on the pass that would let it in, rather than let in to fail on every pass after.
+	if len(e.Document) == 0 && e.ReplayFrom != "" {
+		_, why, err := co.reused(ctx, e, g)
+		if err != nil {
+			return err
+		}
+		if why != "" {
+			return co.refuse(ctx, run, both(why))
+		}
+	}
+
 	// Admission comes before the evaluator does, and it has to: graph.Start stamps the run
 	// as started and the root timeout runs from there, so a run admitted late would be a run
 	// whose deadline had been running while it queued.
@@ -573,10 +585,21 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		//
 		// The vars are the workflow's own, as agk run --local starts a run with them:
 		// there are no namespace variables to merge in yet.
+		//
+		// A replay from a step starts with the steps above it as the run it replays left them.
+		var reuse map[agk.Step]graph.StepState
+		if e.ReplayFrom != "" {
+			var why string
+			if reuse, why, err = co.reused(ctx, e, g); err != nil {
+				return nil, err
+			} else if why != "" {
+				return nil, fmt.Errorf("controller: run %s cannot replay %s from %s: %s", e.Run, e.ReplayOf, e.ReplayFrom, why)
+			}
+		}
 		return graph.Start(g, agk.Run{
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger,
-		}, graph.Options{Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound}, now)
+		}, graph.Options{Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound, Reuse: reuse}, now)
 	}
 
 	var doc Document
