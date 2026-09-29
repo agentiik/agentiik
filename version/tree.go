@@ -213,7 +213,7 @@ func checkTree(tree fs.FS) error {
 //
 // Counted by path rather than by tree object, since a walk visits paths: git lets one tree name
 // another any number of times, so eleven trees of a thousand entries each, a few kilobytes of a
-// push, list 10^30 paths, and a walk that did not count them would hold whoever judges the push
+// push, list 10^33 paths, and a walk that did not count them would hold whoever judges the push
 // for ever.
 const TreeMaxEntries = 1 << 16
 
