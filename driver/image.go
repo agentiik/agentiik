@@ -63,6 +63,9 @@ type resolved struct {
 	Digest   string
 	User     string
 	Manifest *brick.Manifest
+	// Text is the manifest as the image holds it at /agk/brick.yaml, byte for byte, where
+	// Manifest is set.
+	Text []byte
 
 	// PullMillis is how long the pull took, which is the one part of the usage
 	// block that is not measured inside the container.
@@ -79,28 +82,29 @@ type resolved struct {
 type manifests struct {
 	mu     sync.Mutex
 	byID   map[string]brick.Manifest
+	texts  map[string][]byte
 	absent map[string]bool
 }
 
 // newManifests is the cache one Docker holds for as long as it lives.
 func newManifests() *manifests {
-	return &manifests{byID: map[string]brick.Manifest{}, absent: map[string]bool{}}
+	return &manifests{byID: map[string]brick.Manifest{}, texts: map[string][]byte{}, absent: map[string]bool{}}
 }
 
-// lookup answers with what is cached for a digest: the manifest, whether the image is
-// known to carry none, and whether anything is known at all.
-func (c *manifests) lookup(digest string) (m brick.Manifest, none, known bool) {
+// lookup answers with what is cached for a digest: the manifest and its text, whether the
+// image is known to carry none, and whether anything is known at all.
+func (c *manifests) lookup(digest string) (m brick.Manifest, text []byte, none, known bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.absent[digest] {
-		return brick.Manifest{}, true, true
+		return brick.Manifest{}, nil, true, true
 	}
 	m, known = c.byID[digest]
-	return m, false, known
+	return m, c.texts[digest], false, known
 }
 
-// keep records what an image turned out to carry.
-func (c *manifests) keep(digest string, m *brick.Manifest) {
+// keep records what an image turned out to carry, and the text it carried it as.
+func (c *manifests) keep(digest string, m *brick.Manifest, text []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if m == nil {
@@ -108,6 +112,7 @@ func (c *manifests) keep(digest string, m *brick.Manifest) {
 		return
 	}
 	c.byID[digest] = *m
+	c.texts[digest] = text
 }
 
 // resolveImage resolves a step's image to a digest, pulling it where the daemon does not
@@ -145,11 +150,11 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 
 	out := resolved{Ref: ref, Digest: digest, User: image.Config.User, PullMillis: pullMillis}
 
-	if m, none, known := cache.lookup(digest); known {
+	if m, text, none, known := cache.lookup(digest); known {
 		if none {
 			return out, nil
 		}
-		out.Manifest = &m
+		out.Manifest, out.Text = &m, text
 		out.User = m.Spec.Runtime.User
 		return out, nil
 	}
@@ -168,7 +173,7 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 	if document == nil {
 		// An image carrying no manifest is a base image, which is what a script
 		// step runs in. The account stays the image's own.
-		cache.keep(digest, nil)
+		cache.keep(digest, nil, nil)
 		return out, nil
 	}
 
@@ -190,8 +195,8 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 			"%s of %s declares spec.runtime.user: %q", brick.ManifestPath, ref, m.Spec.Runtime.User)
 	}
 
-	cache.keep(digest, &m)
-	out.Manifest = &m
+	cache.keep(digest, &m, document)
+	out.Manifest, out.Text = &m, document
 	out.User = m.Spec.Runtime.User
 	return out, nil
 }
@@ -380,19 +385,27 @@ func declaresRootUser(user string) bool {
 // whatever the cache kept: a task's own read of the same image leaves the bound out, for the
 // versions recorded before it.
 func (d *Docker) Manifest(ctx context.Context, step agk.Step, image string) (brick.Manifest, error) {
+	m, _, err := d.ManifestFile(ctx, step, image)
+	return m, err
+}
+
+// ManifestFile is Manifest, and the file it was read from as the image holds it, byte for byte:
+// what agk push records for the image in the repository it pushes to, which a git push is judged
+// against, since the installation reaches no registry to read it itself.
+func (d *Docker) ManifestFile(ctx context.Context, step agk.Step, image string) (brick.Manifest, []byte, error) {
 	r, err := resolveImage(ctx, d.cli, d.cache, graph.Task{Step: step, Image: image}, "", nil)
 	if err != nil {
-		return brick.Manifest{}, err
+		return brick.Manifest{}, nil, err
 	}
 	if r.Manifest == nil {
-		return brick.Manifest{}, fault(step, ErrContractBroken, ChargeBrick,
+		return brick.Manifest{}, nil, fault(step, ErrContractBroken, ChargeBrick,
 			"%s carries no %s: an image becomes a brick by carrying one, and a step that is not a script step is held to the ports and the parameters its manifest declares", r.Ref, brick.ManifestPath)
 	}
 	if err := r.Manifest.CheckPortLengths(); err != nil {
-		return brick.Manifest{}, fault(step, ErrContractBroken, ChargeBrick,
+		return brick.Manifest{}, nil, fault(step, ErrContractBroken, ChargeBrick,
 			"%s of %s: %v", brick.ManifestPath, r.Ref, err)
 	}
-	return *r.Manifest, nil
+	return *r.Manifest, r.Text, nil
 }
 
 // Pin answers the reference a server run names image by: image's repository, spelt as

@@ -521,7 +521,7 @@ func TestACommitPushedAgainAfterItsTagMovedKeepsItsFirstDigest(t *testing.T) {
 			kept = line
 		}
 	}
-	for _, want := range []string{"alpine:3.21", "alpine@" + alpineDigest, "alpine@" + movedDigest, "a new commit"} {
+	for _, want := range []string{"alpine:3.21", "keeps the digests its first push resolved", "a new commit"} {
 		if !strings.Contains(kept, want) {
 			t.Errorf("the second push does not say that the version keeps its first digest, naming %q: %s", want, said)
 		}

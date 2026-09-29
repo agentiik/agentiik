@@ -1,24 +1,18 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"maps"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"testing/fstest"
-	"time"
 	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/api"
@@ -65,12 +59,13 @@ const (
 )
 
 func push(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk push", "agk push [-f <path>] --namespace <namespace> [--server <url>] [--commit <commit>] [--allow-dirty]")
+	fs := flags(e, "agk push", "agk push [-f <path>] --namespace <namespace> [--server <url>] [--commit <commit>] [--branch <branch>] [--allow-dirty]")
 	entry := fs.String("f", "", "The entry point to push. Defaults to "+entryPoint+" in the directory the command is run in.")
 	namespace := fs.String("namespace", "", "The namespace to register the workflow in.")
 	server := fs.String("server", "", "The installation to push to. "+serverDefault)
 	commit := fs.String("commit", "", "The commit to push: a hash, a branch or a tag the repository holds. Defaults to HEAD.")
 	dirty := fs.Bool("allow-dirty", false, "Push although the working tree has uncommitted changes. The commit is pushed as it was committed either way, so this says the changes are meant to stay behind.")
+	branch := fs.String("branch", "", "The branch the push leaves at the commit. Defaults to the branch --commit names, or the branch checked out.")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -127,23 +122,27 @@ func push(ctx context.Context, e Env, args []string) int {
 		}
 	}
 
-	// The whole tree, because "every step of every run sees it, mounted read-only at
-	// /agk/repo", and the installation holds no clone of the repository to read it out of.
-	files, err := repositoryOf(ctx, repo, sha)
+	// The ref the push moves, settled before the tree is read, since a push that names none is
+	// refused whatever the tree holds.
+	ref, object, err := pushRef(ctx, repo.top, *commit, *branch, sha)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}
 
-	// And the workflow is read out of those same bytes rather than off the disk, so that the
-	// closure the version is rebuilt from and the tree a container is given cannot disagree
-	// about any file both of them hold. It is judged by the one validation the installation
-	// and a hook judge it by, reaching what this machine reaches: each tag is resolved to its
-	// digest through the local daemon, and the manifests are read out of those digests, so
-	// that a tag moved on this machine between the two cannot pair the manifest of one image
-	// with the digest of another. A version the server cannot build is a version it will
-	// refuse, and finding that out here is cheaper.
-	tree := committed(files)
+	// The tree as git lists it, each entry held to the rules a version's tree is held to, and
+	// each file read out of git when the validation reads it.
+	tree, err := repositoryOf(ctx, repo, sha)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+
+	// The workflow is judged here by the one validation the installation's hook judges it by,
+	// reaching what this machine reaches: each tag is resolved to its digest through the local
+	// daemon, and the manifests are read out of those digests, so that a tag moved on this
+	// machine between the two cannot pair the manifest of one image with the digest of another.
+	// A version the hook will refuse is refused here, before anything is recorded or sent.
 	local := &daemon{e: e}
 	defer local.close()
 	checked, err := versions.Check(ctx, tree, versions.Checking{
@@ -154,55 +153,85 @@ func push(ctx context.Context, e Env, args []string) int {
 		refusal(e.Err, err)
 		return leaving(err)
 	}
-	wf, captured, images := checked.Workflow, checked.Version, checked.Version.Images
-
-	body := api.Push{
-		Entry: captured.Entry, Document: captured.Document,
-		Includes: captured.Includes, Manifests: captured.Manifests,
-		Images: images,
-		Tree:   files,
-		Branch: branchOf(ctx, repo.top),
-	}
+	wf, images := checked.Workflow, checked.Version.Images
 	name := string(wf.Metadata.Name)
-	url := fmt.Sprintf("%s/api/v1/%s/workflows/%s/versions/%s",
-		strings.TrimRight(where, "/"), *namespace, name, sha)
-	pushed, err := put(ctx, at, url, body)
-	if errors.Is(err, errAnswerUnread) {
-		// Recorded, and what it records is what cannot be said, which is no outcome
-		// rather than a refusal.
-		fmt.Fprintf(e.Err, "%s\n", err)
-		return exitNoOutcome
+
+	// Then, in order, what a git push needs of the installation and does not carry: the
+	// repository, created where it is not, and the digest of each tag and the manifest of
+	// each brick image, recorded in it, which is what its hook judges the push against.
+	defaultBranch := branchOf(ctx, repo.top)
+	if defaultBranch == "" {
+		defaultBranch = "main"
 	}
+	for _, step := range []func() error{
+		func() error { return createRepository(ctx, at, *namespace, name, defaultBranch) },
+		func() error { return recordImages(ctx, at, *namespace, name, images, local.texts) },
+	} {
+		if err := step(); err != nil {
+			fmt.Fprintf(e.Err, "%s\n", err)
+			if errors.Is(err, errUnreachable) {
+				return exitNoOutcome
+			}
+			return exitRefused
+		}
+	}
+
+	// And the push: the ref as the installation holds it, the objects it lacks, and its
+	// answer.
+	repository := "/" + *namespace + "/" + name + ".git"
+	refs, err := remoteRefs(ctx, at, repository)
 	if err != nil {
 		fmt.Fprintf(e.Err, "%s\n", err)
+		return leavingRemote(err)
+	}
+	if refs[ref] == object {
+		fmt.Fprintf(e.Out, "%s/%s %s is at %s already, on %s\n", *namespace, name, ref, short(sha), where)
+		// A commit a ref is left at is a version, and its first push settled its images: a
+		// tag moved since was recorded above for the next commit, and no run of this one
+		// names it. Said, because the lines above say each tag was resolved, and somebody
+		// pushing again to pick up an image they fixed under the same tag would otherwise
+		// believe it was picked up.
+		if len(images) > 0 {
+			fmt.Fprintf(e.Err, "%s/%s@%s was already pushed, and every run of it keeps the digests its first push resolved %s to, whatever they name now: running what a tag names now takes a new commit\n",
+				*namespace, name, short(sha), strings.Join(slices.Sorted(maps.Keys(images)), ", "))
+		}
+		return exitSucceeded
+	}
+	tips := make([]string, 0, len(refs))
+	for _, id := range refs {
+		tips = append(tips, id)
+	}
+	have, err := heldHere(ctx, repo.top, tips)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+	result, err := sendPack(ctx, e, at, repo.top, repository, ref, refs[ref], object, have)
+	if err != nil {
+		fmt.Fprintf(e.Err, "%s\n", err)
+		return leavingRemote(err)
+	}
+	if !result.accepted {
+		fmt.Fprintf(e.Err, "the installation refused %s at %s: %s\n", ref, short(sha), result.why)
 		return exitRefused
 	}
 
-	fmt.Fprintf(e.Out, "%s/%s@%s pushed to %s\n", *namespace, name, short(sha), where)
+	fmt.Fprintf(e.Out, "%s/%s@%s pushed to %s as %s\n", *namespace, name, short(sha), where, ref)
 	fmt.Fprintf(e.Out, "%s, %s, %s, %s, %s\n",
 		counted(len(wf.Steps), "step", "steps"),
-		counted(len(files), "file", "files"),
-		counted(len(captured.Includes), "included file", "included files"),
-		counted(len(captured.Manifests), "manifest", "manifests"),
+		counted(len(tree.files), "file", "files"),
+		counted(len(checked.Version.Includes), "included file", "included files"),
+		counted(len(local.texts), "manifest", "manifests"),
 		counted(len(images), "tag resolved to its digest", "tags resolved to their digests"))
-
-	// A commit pushed before is the version its first push recorded, digests included, so a
-	// tag that has moved since was resolved here to something no run of it will name. Said,
-	// because the lines above say it was resolved, and somebody pushing again to pick up an
-	// image they fixed under the same tag would otherwise believe it was picked up. A
-	// version recorded naming a tag itself, before digests were kept, holds none for it.
-	for _, tag := range slices.Sorted(maps.Keys(images)) {
-		held, recorded := pushed.Images[tag]
-		if held == images[tag] {
-			continue
-		}
-		if !recorded {
-			held = "written"
-		}
-		fmt.Fprintf(e.Err, "%s/%s@%s was already pushed, with %s as %s, and every run of it keeps that rather than %s: the first push of a commit settles its images, so running what the tag names now takes a new commit\n",
-			*namespace, name, short(sha), tag, held, images[tag])
-	}
 	return exitSucceeded
+}
+
+// leavingRemote is how a push the installation did not answer, or refused, leaves.
+func leavingRemote(err error) int {
+	if errors.Is(err, errUnreachable) {
+		return exitNoOutcome
+	}
+	return exitRefused
 }
 
 // atTheRoot refuses an entry point anywhere but agentiik.yaml at the top of the repository: "the
@@ -338,18 +367,18 @@ func (r place) holds(ctx context.Context, sha, path string) error {
 // submodule is another repository, which a runner would need a credential to fetch, and a runner
 // holds none.
 //
-// Every size is added up before any content is read, out of the listing git makes from object
-// headers, so that a tree above the limit is refused having read none of its files. The limit
-// belongs to how the tree travels rather than to what a repository may be: until the installation
-// serves the repository over git smart HTTP, which is v0.4.0, all of it rides inside one JSON
-// request.
+// The files are counted out of the listing git makes from object headers, and a tree of more than
+// a version holds is refused having read none of them. None is read here at all: the tree answered
+// reads a file out of git when it is first read, so that the validation, which reads the entry
+// point, what it includes and the schemas its inputs name, reads those and no others, and a tree
+// of large files is not read into memory to judge a workflow of a few kilobytes.
 //
 // That holds in a partial clone only because git is told to fetch nothing. A clone that filtered
 // blobs out fetches one the moment anything asks about it, with a request of its own, so listing
-// the sizes would be a round trip per file, every one of them made before the first size could be
-// added up, and a tree far above the limit downloaded whole in order to be refused. A blob the
-// clone lacks is refused by name instead, with a way to fetch them all at once.
-func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.PushFile, error) {
+// the sizes would be a round trip per file, and the pack a push writes would fetch every one of
+// them before its first byte. A blob the clone lacks is refused by name instead, with a way to
+// fetch them all at once.
+func repositoryOf(ctx context.Context, repo place, sha string) (*gitTree, error) {
 	// sha: is the commit's root, and sha:billing the tree at billing/ inside it. Either is
 	// listed with paths relative to itself, because git runs at the top, where a listing is
 	// not narrowed to the directory it runs in.
@@ -364,7 +393,6 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 	}
 	var entries []entry
 	var missing []string
-	var total int64
 	for _, record := range strings.Split(string(listed), "\x00") {
 		if record == "" {
 			continue
@@ -412,141 +440,28 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 		if err != nil || size < 0 {
 			return nil, fmt.Errorf("the tree of %s could not be read from git: %q is not a line of its listing", short(sha), record)
 		}
-		// Counted as the server counts it, the path with the bytes, so that what passes here is
-		// never refused there after every file has been read and sent.
-		total += int64(len(path)) + size
 		entries = append(entries, entry{path: path, mode: mode, object: fields[2], size: size})
 	}
 	if files := len(entries) + len(missing); files > api.TreeMaxFiles {
-		return nil, fmt.Errorf("the tree of %s has %d files, and a push carries at most %d until the installation hosts the repository itself: a tree of this many is usually carrying dependencies that belong in an image", short(sha), files, api.TreeMaxFiles)
-	}
-	if total > api.TreeMaxBytes {
-		// Where blobs are missing, the sizes added up are a floor, and already too much.
-		size := strconv.FormatInt(total, 10) + " bytes"
-		if len(missing) > 0 {
-			size = "at least " + size
-		}
-		return nil, fmt.Errorf("the tree of %s is %s with its paths, and a push carries a tree of at most %d bytes until the installation hosts the repository itself: something this size belongs in an image or in an artifact", short(sha), size, api.TreeMaxBytes)
+		return nil, fmt.Errorf("the tree of %s has %d files, and a version holds at most %d, as the installation holds it to: every task of a version is sent every file's URL, and a tree of this many is usually carrying dependencies that belong in an image", short(sha), files, api.TreeMaxFiles)
 	}
 	if len(missing) > 0 {
 		held := missing[0]
 		if len(missing) > 1 {
 			held += " and " + counted(len(missing)-1, "other file", "other files")
 		}
-		return nil, fmt.Errorf("the tree of %s holds %s, which this clone lacks: a partial clone fetches a file it lacks with a request of its own, one file at a time, and every one of them before the size of the tree can be checked. Fetch them first, with git backfill or by checking %s out, then push", short(sha), held, short(sha))
+		return nil, fmt.Errorf("the tree of %s holds %s, which this clone lacks: a partial clone fetches a file it lacks with a request of its own, one file at a time, and every one of them before a push could be written. Fetch them first, with git backfill or by checking %s out, then push", short(sha), held, short(sha))
 	}
 
-	sizes := make(map[string]int64, len(entries))
+	tree := &gitTree{ctx: ctx, top: repo.top, files: map[string]gitBlob{}, dirs: map[string][]fs.DirEntry{".": nil}}
 	for _, f := range entries {
-		sizes[f.object] = f.size
-	}
-	contents, err := contentsOf(ctx, repo.top, sizes)
-	if err != nil {
-		return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), err)
-	}
-
-	files := make(map[string]api.PushFile, len(entries))
-	for _, f := range entries {
-		files[f.path] = api.PushFile{Content: contents[f.object], Mode: f.mode}
-	}
-	return files, nil
-}
-
-// contentsOf reads the bytes of every object named, of the size the listing gave it, through one
-// git process rather than one per file: a tree of three hundred scripts is otherwise three hundred
-// processes.
-//
-// An object is asked for by its hash and never as commit:path, because the batch protocol is one
-// name per line and a path may hold a newline.
-func contentsOf(ctx context.Context, dir string, sizes map[string]int64) (map[string][]byte, error) {
-	if len(sizes) == 0 {
-		return map[string][]byte{}, nil
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	objects := make([]string, 0, len(sizes))
-	var asked strings.Builder
-	for object := range sizes {
-		objects = append(objects, object)
-		asked.WriteString(object + "\n")
-	}
-
-	cmd := fetchingNothing(gitCommand(ctx, dir, "cat-file", "--batch"))
-	cmd.Stdin = strings.NewReader(asked.String())
-	var errs bytes.Buffer
-	cmd.Stderr = &errs
-	answers, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	out := make(map[string][]byte, len(objects))
-	r := bufio.NewReader(answers)
-	var failed error
-	for _, object := range objects {
-		content, err := oneObject(r, object, sizes[object])
-		if err != nil {
-			failed = err
-			break
+		mode := fs.FileMode(0o444)
+		if f.mode == "0755" {
+			mode = 0o555
 		}
-		out[object] = content
+		tree.add(f.path, gitBlob{object: f.object, mode: mode, size: f.size})
 	}
-	if failed != nil {
-		// Whatever git had left to say is not going to be read, and a process blocked
-		// writing it would never exit for Wait to see.
-		cancel()
-	}
-	err = cmd.Wait()
-	said := strings.TrimSpace(errs.String())
-	switch {
-	case failed != nil && said != "" && (errors.Is(failed, io.EOF) || errors.Is(failed, io.ErrUnexpectedEOF)):
-		// An answer that stops short is git dying, over a corrupt pack or an object gone
-		// from under it, and why is what it said on the way out rather than where its
-		// answer broke off.
-		return nil, errors.New(said)
-	case failed != nil:
-		return nil, failed
-	case err != nil:
-		if said != "" {
-			return nil, errors.New(said)
-		}
-		return nil, err
-	}
-	return out, nil
-}
-
-// oneObject reads one answer of git cat-file --batch: a header naming the object, its type and its
-// size, the content, and a newline.
-func oneObject(r *bufio.Reader, object string, size int64) ([]byte, error) {
-	header, err := r.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("object %s: %w", object, err)
-	}
-	if want := object + " blob " + strconv.FormatInt(size, 10) + "\n"; header != want {
-		return nil, fmt.Errorf("git answered %q for object %s, where the listing gave a blob of %d bytes", strings.TrimSpace(header), object, size)
-	}
-	content := make([]byte, size+1)
-	if _, err := io.ReadFull(r, content); err != nil {
-		return nil, fmt.Errorf("object %s: %w", object, err)
-	}
-	if content[size] != '\n' {
-		return nil, fmt.Errorf("git answered more than the %d bytes object %s holds", size, object)
-	}
-	return content[:size], nil
-}
-
-// committed is the tree as an fs.FS, which is what version.Check reads: the bytes that travel as
-// the tree, and no others.
-func committed(files map[string]api.PushFile) versions.Files {
-	tree := make(versions.Files, len(files))
-	for path, f := range files {
-		tree[path] = &fstest.MapFile{Data: f.Content, Mode: 0o444}
-	}
-	return tree
+	return tree, nil
 }
 
 // loadCommitted is load, reading a commit rather than the disk, for agk run on an installation: the
@@ -572,50 +487,6 @@ func loadCommitted(tree fs.FS, base, dir, sha string) (*graph.Workflow, error) {
 		return nil, err
 	}
 	return wf, nil
-}
-
-// errAnswerUnread is a version the installation recorded and whose answer could not be read, so
-// what it records, which is not always what was pushed, cannot be said.
-var errAnswerUnread = errors.New("the installation recorded the version, and its answer saying which image digests it records could not be read")
-
-// put sends the version to url with at's credential and reads whatever the server says about it:
-// what the version records, or why it was refused.
-func put(ctx context.Context, at remote, url string, body api.Push) (api.Pushed, error) {
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return api.Pushed{}, fmt.Errorf("the version could not be written: %w", err)
-	}
-	r, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(encoded))
-	if err != nil {
-		return api.Pushed{}, fmt.Errorf("%s: %w", url, err)
-	}
-	r.Header.Set("Authorization", "Bearer "+at.token)
-	r.Header.Set("Content-Type", "application/json")
-
-	answer, err := client(2 * time.Minute).Do(r)
-	if err != nil {
-		return api.Pushed{}, fmt.Errorf("%s could not be reached: %w", url, err)
-	}
-	defer answer.Body.Close()
-	if answer.StatusCode == http.StatusOK {
-		var pushed api.Pushed
-		if err := json.NewDecoder(answer.Body).Decode(&pushed); err != nil {
-			return api.Pushed{}, fmt.Errorf("%w: %v", errAnswerUnread, err)
-		}
-		return pushed, nil
-	}
-
-	said := refusedBy(answer)
-	switch answer.StatusCode {
-	case http.StatusUnauthorized:
-		return api.Pushed{}, errors.New(at.refusedCredential())
-	case http.StatusNotFound:
-		// The same answer an inaccessible workflow gets, which is the point: there is
-		// nothing here to tell the two apart with, and saying so is more honest than
-		// guessing.
-		return api.Pushed{}, fmt.Errorf("no such namespace or workflow, or not yours")
-	}
-	return api.Pushed{}, fmt.Errorf("the installation refused the version: %s", said.said)
 }
 
 // commitOf is the commit a push names, as the whole hash git holds it under.

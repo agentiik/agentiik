@@ -193,7 +193,7 @@ func TestAnImageCarryingNoManifestIsABaseImage(t *testing.T) {
 	if got.User != "nonroot" {
 		t.Errorf("the account is %q, and with no manifest it is the image's own", got.User)
 	}
-	if _, none, known := cache.lookup(imageDigest); !known || !none {
+	if _, _, none, known := cache.lookup(imageDigest); !known || !none {
 		t.Error("an image known to carry no manifest was not remembered as one")
 	}
 }
