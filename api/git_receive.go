@@ -56,6 +56,9 @@ type command struct {
 	// forced is set where the move is no fast-forward: a branch moved to a commit its old one is
 	// not behind, a tag moved, or a ref deleted.
 	forced bool
+	// unprotected is set where the move was judged as that of a ref nobody protects, without
+	// asking for grant:manage, which moving the refs then holds it to (db.RefUpdate).
+	unprotected bool
 }
 
 func (c command) creates() bool { return c.old.IsZero() && !c.new.IsZero() }
@@ -603,6 +606,7 @@ func (s *Server) judge(ctx context.Context, r *http.Request, who Principal, over
 			}
 		}
 		protected := has && ref.Protected
+		c.unprotected = !c.forced && !protected
 		if c.forced || protected {
 			owns, err := holdsManage()
 			if err != nil {
@@ -920,7 +924,7 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 
 	updates := make([]db.RefUpdate, 0, len(p.commands))
 	for _, c := range p.commands {
-		u := db.RefUpdate{Ref: c.ref, Old: idOrEmpty(c.old), New: idOrEmpty(c.new)}
+		u := db.RefUpdate{Ref: c.ref, Old: idOrEmpty(c.old), New: idOrEmpty(c.new), Unprotected: c.unprotected}
 		if !c.deletes() && c.commit != c.new {
 			u.Commit = c.commit.String()
 		}
@@ -955,6 +959,8 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 	switch {
 	case errors.Is(err, db.ErrStaleRef):
 		return &pushRefusal{short: "a ref moved while this push was judged: fetch, and push again"}
+	case errors.Is(err, db.ErrProtected):
+		return &pushRefusal{short: "a ref this push moves was protected while the push was judged, and moving it takes grant:manage on the workflow: push again to be judged against it"}
 	case errors.Is(err, db.ErrDefaultBranch):
 		return &pushRefusal{short: "the default branch is not deleted: another branch is named the default first"}
 	case errors.Is(err, db.ErrOtherTree):
