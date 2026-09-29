@@ -26,7 +26,12 @@ import (
 // /var/lib/agentiik, as the Compose file mounts it. etcPath is the agent's own.
 const (
 	libPath = "/var/lib/agentiik"
-	etcPath = "/etc/agentiik"
+
+	// objectsPath is where a runner keeps the objects of the trees it lays out, one directory per
+	// namespace, each file named by its digest: the one place a repository's bytes are at rest on
+	// a runner, by design, and never under a name a repository gives them.
+	objectsPath = libPath + "/work/.objects/"
+	etcPath     = "/etc/agentiik"
 )
 
 // caPath is where each agent finds the authority the terminator's certificate is signed by, as the
@@ -468,7 +473,11 @@ func (h Holdings) breaches(publicURL string, held []heldValue, forbidden []strin
 		}
 	}
 	for _, path := range slices.Sorted(maps.Keys(h.Files)) {
-		broken = append(broken, heldIn("the file "+path, string(h.Files[path]), held)...)
+		values := held
+		if strings.HasPrefix(path, objectsPath) {
+			values = slices.DeleteFunc(slices.Clone(held), func(v heldValue) bool { return v.what == theRepository })
+		}
+		broken = append(broken, heldIn("the file "+path, string(h.Files[path]), values)...)
 	}
 	for _, v := range h.Env {
 		name, _, _ := strings.Cut(v, "=")

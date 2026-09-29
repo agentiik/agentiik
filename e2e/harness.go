@@ -124,6 +124,11 @@ type heldValue struct {
 	value string
 }
 
+// theRepository is what the workflow's own files are called among the values a runner must not
+// hold, and the one a runner's objects directory is let hold: "Trees are content-addressed and
+// cached on the runner by commit", each file under its digest in objectsPath, and nowhere else.
+const theRepository = "the workflow's repository"
+
 // logSource is one component's log, read when a test fails.
 type logSource struct {
 	name string
