@@ -96,6 +96,10 @@ type daemon struct {
 	e    Env
 	d    *driver.Docker
 	read int
+
+	// texts are the manifests read, as the images hold them, by the image each was read out
+	// of: what agk push records in the repository it pushes to.
+	texts map[string][]byte
 }
 
 func (m *daemon) open() (*driver.Docker, error) {
@@ -136,10 +140,14 @@ func (m *daemon) manifest(ctx context.Context, image string, step agk.Step) ([]b
 	if err != nil {
 		return nil, err
 	}
-	mf, err := d.Manifest(ctx, step, image)
+	mf, text, err := d.ManifestFile(ctx, step, image)
 	if err != nil {
 		return nil, err
 	}
+	if m.texts == nil {
+		m.texts = map[string][]byte{}
+	}
+	m.texts[image] = text
 	m.read++
 	fmt.Fprintf(m.e.Out, "%s: %s %s, reads %s, writes %s\n", image, mf.Metadata.Name, mf.Metadata.Version,
 		ports(mf.InputPorts()), ports(mf.OutputPorts()))

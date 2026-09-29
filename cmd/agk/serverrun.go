@@ -109,12 +109,11 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 		fmt.Fprintf(e.Err, "the working tree has uncommitted changes in %s, and what runs is %s as it was committed and pushed, without them\n",
 			counted(len(changed), "file", "files"), short(sha))
 	}
-	files, err := repositoryOf(ctx, repo, sha)
+	tree, err := repositoryOf(ctx, repo, sha)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}
-	tree := committed(files)
 	// Read as a stored version is, because it is one: a commit pushed before the bound a port is
 	// written to is started by the installation as before, and refusing it here would stop it
 	// before it was asked for.

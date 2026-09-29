@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"math/rand/v2"
 	"net/http"
+	"net/http/cgi"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -14,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/agentiik/agentiik/api"
@@ -95,45 +99,181 @@ func commitAll(t *testing.T, dir, message string) {
 	gitIn(t, dir, "commit", "-qm", message)
 }
 
-// pushing runs the command against a server that records what arrived.
+// pushing runs the command against a stand-in for an installation, and answers what the push left
+// there, nil where nothing arrived.
 func pushing(t *testing.T, dir string, answer int, args ...string) (int, string, string, *api.Push) {
 	t.Helper()
 	code, out, errs, got, _ := pushingTo(t, dir, answer, args...)
 	return code, out, errs, got
 }
 
-// pushingTo is pushing, and the path the version was sent to, which is where its commit is named.
+// pushingTo is pushing, and the commit the ref the push moved was left at.
 func pushingTo(t *testing.T, dir string, answer int, args ...string) (int, string, string, *api.Push, string) {
 	t.Helper()
-	var got *api.Push
-	var path string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
+	in := aPushStandIn(t, answer)
+	code, out, errs := pushAgainst(dir, in.server.URL, args...)
+	got, commit := in.landed()
+	return code, out, errs, got, commit
+}
+
+// pushStandIn is an installation as far as agk push reaches one: the routes that create a repository
+// and record its images, and git's smart HTTP, served by git http-backend over bare repositories,
+// so that what a push leaves is read back with git itself rather than with anything this command
+// computed. answer 404 answers every route as an installation holding nothing of the caller's does,
+// and 422 refuses every push with a hook, as the installation's refuses an invalid workflow.
+type pushStandIn struct {
+	t      *testing.T
+	root   string
+	answer int
+	server *httptest.Server
+
+	mu      sync.Mutex
+	created []api.WorkflowCreate
+	images  []api.RecordImages
+}
+
+func aPushStandIn(t *testing.T, answer int) *pushStandIn {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git on this machine")
+	}
+	in := &pushStandIn{t: t, root: t.TempDir(), answer: answer}
+	backend := &cgi.Handler{
+		Path: git, Args: []string{"http-backend"},
+		Env: []string{"GIT_PROJECT_ROOT=" + in.root, "GIT_HTTP_EXPORT_ALL=1", "REMOTE_USER=alice", "HOME=" + t.TempDir(), "GIT_CONFIG_NOSYSTEM=1"},
+	}
+	in.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer the-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":"no"}`))
 			return
 		}
-		var p api.Push
-		json.NewDecoder(r.Body).Decode(&p)
-		got = &p
-		w.WriteHeader(answer)
-		if answer != http.StatusOK {
-			w.Write([]byte(`{"error":"the installation said no"}`))
+		if in.answer == http.StatusNotFound {
+			http.Error(w, "no such repository, or not yours", http.StatusNotFound)
 			return
 		}
-		// What the installation answers a version it did not hold before: the images it
-		// records are the ones the push carried.
-		images := p.Images
-		if images == nil {
-			images = map[string]string{}
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/v1/finance/workflows":
+			var c api.WorkflowCreate
+			json.NewDecoder(r.Body).Decode(&c)
+			in.mu.Lock()
+			in.created = append(in.created, c)
+			in.mu.Unlock()
+			bare := in.bare(c.Name)
+			if _, err := os.Stat(bare); err == nil {
+				w.WriteHeader(http.StatusConflict)
+				w.Write([]byte(`{"error":"held"}`))
+				return
+			}
+			in.git("", "init", "-q", "--bare", "-b", c.DefaultBranch, bare)
+			if in.answer == http.StatusUnprocessableEntity {
+				hook := filepath.Join(bare, "hooks", "pre-receive")
+				os.WriteFile(hook, []byte("#!/bin/sh\necho 'refused: image-not-pinned at agentiik.yaml:9:12'\nexit 1\n"), 0o755)
+			}
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{}`))
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/v1/finance/workflows/") && strings.HasSuffix(r.URL.Path, "/images"):
+			var recording api.RecordImages
+			json.NewDecoder(r.Body).Decode(&recording)
+			in.mu.Lock()
+			in.images = append(in.images, recording)
+			in.mu.Unlock()
+			w.Write([]byte(`{}`))
+		case strings.HasPrefix(r.URL.Path, "/finance/") && strings.Contains(r.URL.Path, ".git/"):
+			name, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/finance/"), ".git/")
+			if _, err := os.Stat(in.bare(name)); err != nil {
+				http.Error(w, "no such repository, or not yours", http.StatusNotFound)
+				return
+			}
+			// Go's CGI takes no chunked body, which a push streaming its pack sends, and the
+			// installation does: read whole here, as the stand-in's shortcoming.
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			r.Body, r.ContentLength, r.TransferEncoding = io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
+			backend.ServeHTTP(w, r)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":"no such thing, or not yours"}`))
 		}
-		json.NewEncoder(w).Encode(api.Pushed{Namespace: "finance", Workflow: "monthly-invoicing", Commit: "x", Images: images})
 	}))
-	t.Cleanup(server.Close)
+	t.Cleanup(in.server.Close)
+	return in
+}
 
-	code, out, errs := pushAgainst(dir, server.URL, args...)
-	return code, out, errs, got, path
+// standInEnv is the environment the stand-in's own git runs in: untraced, so that a test tracing
+// what agk push asks of git reads that alone.
+func standInEnv() []string {
+	return append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_TRACE=0")
+}
+
+// bare is where the stand-in keeps a workflow's repository.
+func (in *pushStandIn) bare(name string) string {
+	return filepath.Join(in.root, "finance", name+".git")
+}
+
+// git runs git in dir, failing the test where it fails.
+func (in *pushStandIn) git(dir string, args ...string) string {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = standInEnv()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		in.t.Fatalf("git %v: %s", args, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// landed is what a push left in the one repository the stand-in holds, as git reads it, and the
+// commit its ref was left at: nil and nothing where no ref moved.
+func (in *pushStandIn) landed() (*api.Push, string) {
+	entries, _ := os.ReadDir(filepath.Join(in.root, "finance"))
+	if len(entries) != 1 {
+		return nil, ""
+	}
+	bare := filepath.Join(in.root, "finance", entries[0].Name())
+	refs := in.git(bare, "for-each-ref", "--format=%(refname)")
+	if refs == "" {
+		return nil, ""
+	}
+	ref, _, _ := strings.Cut(refs, "\n")
+	commit := in.git(bare, "rev-parse", ref+"^{commit}")
+	got := &api.Push{Entry: entryPoint, Tree: map[string]api.PushFile{}, Manifests: map[string][]byte{}}
+	for _, line := range strings.Split(in.git(bare, "ls-tree", "-r", "-z", commit), "\x00") {
+		meta, path, found := strings.Cut(line, "\t")
+		if !found {
+			continue
+		}
+		fields := strings.Fields(meta)
+		mode := "0644"
+		if fields[0] == "100755" {
+			mode = "0755"
+		}
+		// Read raw rather than through git, which trims what it answers.
+		read := exec.Command("git", "-C", bare, "cat-file", "blob", fields[2])
+		read.Env = standInEnv()
+		content, err := read.Output()
+		if err != nil {
+			in.t.Fatalf("%s of %s could not be read: %v", path, commit, err)
+		}
+		got.Tree[path] = api.PushFile{Content: content, Mode: mode}
+	}
+	got.Document = got.Tree[entryPoint].Content
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for _, recording := range in.images {
+		if got.Images == nil {
+			got.Images = map[string]string{}
+		}
+		maps.Copy(got.Images, recording.Pins)
+		for image, text := range recording.Manifests {
+			got.Manifests[image] = []byte(text)
+		}
+	}
+	return got, commit
 }
 
 // pushAgainst runs the command against the installation at url, and answers what it said.
@@ -218,12 +358,12 @@ func TestAllowDirtyPushesTheCommitAndNotTheEdits(t *testing.T) {
 `)
 	write(t, dir, "notes/draft.txt", "never committed")
 
-	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK, "--allow-dirty")
+	code, out, errs, got, pushed := pushingTo(t, dir, http.StatusOK, "--allow-dirty")
 	if code != exitSucceeded {
 		t.Fatalf("--allow-dirty answered %d: %s%s", code, out, errs)
 	}
-	if want := "/api/v1/finance/workflows/monthly-invoicing/versions/" + head; path != want {
-		t.Errorf("the version was sent to %s, where the commit names %s", path, want)
+	if pushed != head || !strings.Contains(out, "finance/monthly-invoicing@") {
+		t.Errorf("%s was pushed, where the commit is %s: %s", pushed, head, out)
 	}
 	if !strings.Contains(out, "1 step,") {
 		t.Errorf("it counted the steps of a workflow nobody committed: %q", out)
@@ -267,7 +407,7 @@ func TestWhatTheInstallationSaysIsPassedOn(t *testing.T) {
 		answer int
 		reads  string
 	}{
-		{http.StatusUnprocessableEntity, "refused the version"},
+		{http.StatusUnprocessableEntity, "remote: refused: image-not-pinned at agentiik.yaml:9:12"},
 		{http.StatusNotFound, "no such namespace or workflow"},
 	} {
 		code, _, errs, _ := pushing(t, dir, c.answer)
@@ -425,33 +565,37 @@ func TestAReplaceRefIsNotPushed(t *testing.T) {
 		t.Fatalf("git does not honour the replace ref, so this proves nothing:\n%s", shown)
 	}
 
-	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK)
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
 	if code != exitSucceeded {
 		t.Fatalf("push answered %d: %s%s", code, out, errs)
 	}
 	if string(got.Tree["agentiik.yaml"].Content) != scriptWorkflow || string(got.Document) != scriptWorkflow {
 		t.Errorf("what travelled is the replacement:\n%s", got.Document)
 	}
-	if !strings.Contains(path, "/workflows/monthly-invoicing/") {
-		t.Errorf("the version was sent to %s", path)
+	if !strings.Contains(out, "finance/monthly-invoicing@") {
+		t.Errorf("the version was pushed as %s", out)
 	}
 }
 
 // A commit is resolved before anything is read: one commit typed three ways is one version rather
-// than three, and a name the repository does not hold is refused rather than pushed under.
+// than three, and a name the repository does not hold is refused rather than pushed under. A hash
+// names no branch to leave at it, which --branch names.
 func TestACommitIsPushedUnderItsWholeHash(t *testing.T) {
 	dir := repository(t)
 	head := gitIn(t, dir, "rev-parse", "HEAD")
 	branch := gitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
 
-	for _, args := range [][]string{nil, {"--commit", head[:7]}, {"--commit", branch}} {
-		code, out, errs, _, path := pushingTo(t, dir, http.StatusOK, args...)
+	for _, args := range [][]string{nil, {"--commit", head[:7], "--branch", branch}, {"--commit", branch}} {
+		code, out, errs, _, pushed := pushingTo(t, dir, http.StatusOK, args...)
 		if code != exitSucceeded {
 			t.Fatalf("a push of %v answered %d: %s%s", args, code, out, errs)
 		}
-		if !strings.HasSuffix(path, "/versions/"+head) {
-			t.Errorf("a push of %v was sent to %s", args, path)
+		if pushed != head {
+			t.Errorf("a push of %v left the branch at %s", args, pushed)
 		}
+	}
+	if code, _, errs, got := pushing(t, dir, http.StatusOK, "--commit", head[:7]); code != exitRefused || got != nil || !strings.Contains(errs, "--branch") {
+		t.Errorf("a hash with no branch answered %d: %s", code, errs)
 	}
 
 	for _, c := range []struct{ named, reads string }{
@@ -489,12 +633,12 @@ func TestACommitOtherThanHeadPushesItsOwnTree(t *testing.T) {
 	write(t, dir, "scripts/new.sh", "#!/bin/sh\necho new\n")
 	commitAll(t, dir, "a later step and a new script")
 
-	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK, "--commit", earlier)
+	code, out, errs, got, pushed := pushingTo(t, dir, http.StatusOK, "--commit", earlier, "--branch", "earlier")
 	if code != exitSucceeded {
 		t.Fatalf("push answered %d: %s%s", code, out, errs)
 	}
-	if !strings.HasSuffix(path, "/versions/"+earlier) {
-		t.Errorf("the version was sent to %s", path)
+	if pushed != earlier {
+		t.Errorf("the branch was left at %s", pushed)
 	}
 	if strings.Contains(string(got.Document), "later") {
 		t.Error("the entry point the graph is rebuilt from is the one of HEAD")
@@ -611,12 +755,12 @@ func TestACommitFromBeforeItsEntryPointWasRemovedIsPushed(t *testing.T) {
 	gitIn(t, dir, "rm", "-q", "agentiik.yaml")
 	gitIn(t, dir, "commit", "-qm", "the workflow retired")
 
-	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK, "--commit", earlier)
+	code, out, errs, got, pushed := pushingTo(t, dir, http.StatusOK, "--commit", earlier, "--branch", "earlier")
 	if code != exitSucceeded {
 		t.Fatalf("push answered %d: %s%s", code, out, errs)
 	}
-	if !strings.HasSuffix(path, "/versions/"+earlier) {
-		t.Errorf("the version was sent to %s", path)
+	if pushed != earlier {
+		t.Errorf("the branch was left at %s", pushed)
 	}
 	if got.Entry != "agentiik.yaml" || string(got.Tree["agentiik.yaml"].Content) != scriptWorkflow {
 		t.Errorf("the entry point travelled as %q in a tree holding %v", got.Entry, keysOf(got.Tree))
@@ -870,35 +1014,33 @@ func TestTheModeOfAFileIsWhatGitSays(t *testing.T) {
 	}
 }
 
-// Every size comes out of git's listing, so a tree above the limit is refused before a byte of it
-// is read: git is asked for the listing and never for a blob.
-func TestAnOversizedTreeIsRefusedBeforeItsContentIsRead(t *testing.T) {
+// A tree is judged reading what the validation reads and nothing else: a large file beside the
+// workflow is pushed in the pack, since a git push is bounded by its pack rather than by a request,
+// and never read into the command's memory to judge the entry point.
+func TestAFileTheValidationDoesNotReadIsNotReadToJudgeTheTree(t *testing.T) {
 	dir := repository(t)
-	write(t, dir, "fixtures/big.bin", strings.Repeat("x", api.TreeMaxBytes))
-	commitAll(t, dir, "a fixture that belongs somewhere else")
+	write(t, dir, "fixtures/big.bin", strings.Repeat("x", 5<<20))
+	commitAll(t, dir, "a fixture the steps read")
+	big := gitIn(t, dir, "rev-parse", "HEAD:fixtures/big.bin")
 
 	trace := filepath.Join(t.TempDir(), "trace")
 	t.Setenv("GIT_TRACE", trace)
 	code, out, errs, got := pushing(t, dir, http.StatusOK)
-	if code != exitRefused {
-		t.Fatalf("an oversized tree answered %d: %s%s", code, out, errs)
+	if code != exitSucceeded {
+		t.Fatalf("a tree holding a large file answered %d: %s%s", code, out, errs)
 	}
-	if got != nil {
-		t.Error("it reached the server anyway")
+	if len(got.Tree["fixtures/big.bin"].Content) != 5<<20 {
+		t.Errorf("the large file arrived as %d bytes", len(got.Tree["fixtures/big.bin"].Content))
 	}
-	if !strings.Contains(errs, "belongs in an image or in an artifact") {
-		t.Errorf("the refusal does not say where something this size goes: %q", errs)
-	}
-
 	said, err := os.ReadFile(trace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(said), "ls-tree") {
-		t.Fatalf("git was not traced, so this proves nothing:\n%s", said)
+	if !strings.Contains(string(said), "cat-file") {
+		t.Fatalf("git was not traced reading the entry point, so this proves nothing:\n%s", said)
 	}
-	if strings.Contains(string(said), "cat-file") {
-		t.Error("git was asked for content before the size refused the tree")
+	if strings.Contains(string(said), "cat-file blob "+big) {
+		t.Error("the large file was read to judge the tree")
 	}
 }
 
@@ -955,7 +1097,7 @@ func TestAPartialCloneIsRefusedRatherThanFetchedFileByFile(t *testing.T) {
 		t.Skip("this clone holds every blob, which is a git before 2.45 fetching whatever it is asked about, or one that did not filter")
 	}
 
-	code, out, errs, got := pushing(t, clone, http.StatusOK, "--commit", earlier)
+	code, out, errs, got := pushing(t, clone, http.StatusOK, "--commit", earlier, "--branch", "earlier")
 	if code != exitRefused {
 		t.Fatalf("a commit whose files the clone lacks answered %d: %s%s", code, out, errs)
 	}
@@ -1100,8 +1242,9 @@ func TestEveryTagIsPushedWithTheDigestItsRegistryServes(t *testing.T) {
 	if !maps.Equal(got.Images, want) {
 		t.Errorf("the push carries the images %v, want %v", got.Images, want)
 	}
-	if _, held := got.Manifests["ghcr.io/acme/agk-invoice:1.4.0"]; !held || len(got.Manifests) != 1 {
-		t.Errorf("the push carries manifests for %v", slices.Sorted(maps.Keys(got.Manifests)))
+	// Recorded by the digest the tag was resolved to, which is the image a version runs.
+	if _, held := got.Manifests["ghcr.io/acme/agk-invoice@"+invoiceDigest]; !held || len(got.Manifests) != 1 {
+		t.Errorf("the push records manifests for %v", slices.Sorted(maps.Keys(got.Manifests)))
 	}
 	if string(got.Document) != taggedWorkflow {
 		t.Error("the entry point travelled as something other than what was committed")
@@ -1117,47 +1260,6 @@ func TestEveryTagIsPushedWithTheDigestItsRegistryServes(t *testing.T) {
 	}
 	if strings.Contains(errs, "already pushed") {
 		t.Errorf("a version recording what was pushed is said to keep something else: %s", errs)
-	}
-}
-
-// The installation answers with what the version records, and agk push says where that is not
-// what it resolved: a digest the first push of the commit settled, or none at all for a version
-// recorded naming the tag itself before digests were kept. The push is still exit 0, since the
-// version it names is the one recorded.
-func TestAPushSaysWhereItsVersionKeepsAnotherImage(t *testing.T) {
-	const kept = "ghcr.io/acme/agk-invoice@sha256:9999999999999999999999999999999999999999999999999999999999999999"
-	dir := taggedRepository(t)
-	aDaemon(t, map[string]dockertest.Image{
-		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
-		"alpine:3.21":                    {Digest: alpineDigest},
-	})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(api.Pushed{Images: map[string]string{"ghcr.io/acme/agk-invoice:1.4.0": kept}})
-	}))
-	t.Cleanup(server.Close)
-
-	code, out, errs := pushAgainst(dir, server.URL)
-	if code != exitSucceeded {
-		t.Fatalf("push answered %d: %s%s", code, out, errs)
-	}
-	var said []string
-	for _, line := range strings.Split(errs, "\n") {
-		if strings.Contains(line, "already pushed") {
-			said = append(said, line)
-		}
-	}
-	if len(said) != 2 {
-		t.Fatalf("the push says of %d images that the version keeps another, want 2: %s", len(said), errs)
-	}
-	for i, want := range [][]string{
-		{"alpine:3.21 as written", "alpine@" + alpineDigest},
-		{"ghcr.io/acme/agk-invoice:1.4.0 as " + kept, "ghcr.io/acme/agk-invoice@" + invoiceDigest},
-	} {
-		for _, w := range want {
-			if !strings.Contains(said[i], w) {
-				t.Errorf("the push does not say %q: %s", w, said[i])
-			}
-		}
 	}
 }
 
@@ -1183,7 +1285,7 @@ func TestAManifestIsReadOutOfTheDigestItsTagWasResolvedTo(t *testing.T) {
 	if want := "ghcr.io/acme/agk-invoice@" + invoiceDigest; got.Images[tag] != want {
 		t.Fatalf("the tag was pushed as %s, and it named %s when it was resolved", got.Images[tag], want)
 	}
-	m, err := brick.ParseManifest(got.Manifests[tag])
+	m, err := brick.ParseManifest(got.Manifests["ghcr.io/acme/agk-invoice@"+invoiceDigest])
 	if err != nil {
 		t.Fatalf("the manifest pushed for %s: %v", tag, err)
 	}
@@ -1192,22 +1294,21 @@ func TestAManifestIsReadOutOfTheDigestItsTagWasResolvedTo(t *testing.T) {
 	}
 }
 
-// A version the installation recorded and whose answer cannot be read is exit 4 and not exit 1: it
-// was not refused, and which digests it records, which a commit pushed before makes other than the
-// ones resolved here, is what cannot be said.
-func TestAnAnswerThatCannotBeReadIsNoOutcome(t *testing.T) {
+// An installation that answers the repository's routes and not git, one from before v0.4.0 behind
+// a proxy that answers anything, is said to be one, rather than read as a refusal of the push.
+func TestAnInstallationThatDoesNotSpeakGitIsSaidSo(t *testing.T) {
 	dir := repository(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/api/v1/finance/workflows" {
+			w.WriteHeader(http.StatusCreated)
+		}
 		w.Write([]byte("<html>recorded</html>"))
 	}))
 	t.Cleanup(server.Close)
 
 	code, out, errs := pushAgainst(dir, server.URL)
-	if code != exitNoOutcome {
-		t.Errorf("a push whose answer could not be read answered %d: %s%s", code, out, errs)
-	}
-	if !strings.Contains(errs, "recorded the version") || strings.Contains(out, "pushed to") {
-		t.Errorf("the push does not say that the version was recorded and its answer unread: %s%s", out, errs)
+	if code != exitRefused || !strings.Contains(errs, "rather than git's") || strings.Contains(out, "pushed to") {
+		t.Errorf("a push to an installation that does not speak git answered %d: %s%s", code, out, errs)
 	}
 }
 
