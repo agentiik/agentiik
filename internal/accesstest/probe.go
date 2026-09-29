@@ -365,7 +365,7 @@ func (f *Fixture) fill(pattern string, at Target, made string) string {
 // name.
 func absent() map[string]string {
 	return map[string]string{
-		"namespace": "nowhere", "ns": "nowhere", "workflow": "nothing", "run": ulid.New(),
+		"namespace": "nowhere", "ns": "nowhere", "workflow": "nothing", "repository": "nothing.git", "run": ulid.New(),
 		"step": "normalize", "port": "ok", "commit": Commit, "login": "nobody", "group": "nobody",
 		"runner": strings.ToLower(ulid.New()), "pool": "nowhere", "key": "nowhere/sha256/" + strings.Repeat("0", 64),
 		"uri":  url.PathEscape("agk://run/" + ulid.New() + "/normalize/ok/invoice.pdf"),

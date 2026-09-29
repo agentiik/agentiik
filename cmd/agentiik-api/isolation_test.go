@@ -298,7 +298,7 @@ var staticAssets = map[string]bool{"GET /auth/assets/{name}": true}
 // and not the refusal of a name that is asked about.
 func (x *tenants) present(route string) map[string]string {
 	named := map[string]string{
-		"namespace": "finance", "ns": "finance", "workflow": "monthly-invoicing", "run": x.run,
+		"namespace": "finance", "ns": "finance", "workflow": "monthly-invoicing", "repository": "monthly-invoicing.git", "run": x.run,
 		"step": "normalize", "port": "ok", "commit": theCommit, "login": "alice", "group": "auditors",
 		"runner": x.runner, "pool": "dmz", "key": x.object,
 		"uri": url.PathEscape("agk://run/" + x.run + "/normalize/ok/invoice.pdf"),
@@ -331,7 +331,7 @@ func (x *tenants) present(route string) map[string]string {
 func absent() map[string]string {
 	nowhere := strings.ToLower(ulid.New())
 	named := map[string]string{
-		"namespace": "nowhere", "ns": "nowhere", "workflow": "nothing", "run": ulid.New(),
+		"namespace": "nowhere", "ns": "nowhere", "workflow": "nothing", "repository": "nothing.git", "run": ulid.New(),
 		"step": "normalize", "port": "ok", "commit": theCommit, "login": "nobody", "group": "nobody",
 		"runner": nowhere, "pool": "nowhere", "key": "nowhere/sha256/" + strings.Repeat("0", 64),
 		"uri":  url.PathEscape("agk://run/" + ulid.New() + "/normalize/ok/invoice.pdf"),
