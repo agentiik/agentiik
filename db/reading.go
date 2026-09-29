@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -134,6 +135,11 @@ type RunDetail struct {
 	// from a step can reuse. Not answered, since the steps' ports say so each.
 	EnvelopesPurged bool `json:"-"`
 
+	// Includes are the workflow includes of the version the run pinned, each with the commit its
+	// ref resolved to when the version was pushed: "the run records the commit it resolved to".
+	// Absent where it includes no other repository.
+	Includes []RunInclude `json:"includes,omitempty"`
+
 	// Reason is why the run ended as it did, where nothing in its workflow is what ended it, and
 	// empty on every other run: from v0.3.0, a run its principal no longer held workflow:run for
 	// when it was created, which "ends cancelled before any task, with a reason naming the grant
@@ -208,6 +214,9 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 		}
 	}
 
+	if d.Includes, err = n.includes(ctx, d.Workflow, d.Commit); err != nil {
+		return RunDetail{}, err
+	}
 	if d.Steps, err = n.steps(ctx, run); err != nil {
 		return RunDetail{}, err
 	}
@@ -215,6 +224,42 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 		return RunDetail{}, err
 	}
 	return d, nil
+}
+
+// RunInclude is one workflow include of the version a run pinned: the repository and the ref the
+// file wrote, and the commit the ref resolved to at the push.
+type RunInclude struct {
+	Workflow string `json:"workflow"`
+	Ref      string `json:"ref"`
+	Commit   string `json:"commit"`
+}
+
+// includes reads the workflow includes a version kept, in the order of what they name, without
+// the files each read: the version holds them by the reference the file wrote,
+// <namespace>/<name>@<ref>, and a namespace or a name holds no @.
+func (n *NS) includes(ctx context.Context, workflow, commit string) ([]RunInclude, error) {
+	rows, err := n.tx.Query(ctx, `
+		select l.key, l.value->>'commit'
+		from workflow_versions v, jsonb_each(coalesce(v.graph->'libraries', '{}')) l
+		where v.namespace = $1 and v.workflow = $2 and v.commit = $3
+		order by l.key`, n.namespace, workflow, commit)
+	if err != nil {
+		return nil, fmt.Errorf("db: the includes of %s@%s could not be read: %w", workflow, commit, err)
+	}
+	var out []RunInclude
+	for rows.Next() {
+		var key, resolved string
+		if err := rows.Scan(&key, &resolved); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("db: the includes of %s@%s could not be read: %w", workflow, commit, err)
+		}
+		name, ref, _ := strings.Cut(key, "@")
+		out = append(out, RunInclude{Workflow: name, Ref: ref, Commit: resolved})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: the includes of %s@%s could not be read: %w", workflow, commit, err)
+	}
+	return out, nil
 }
 
 func (n *NS) steps(ctx context.Context, run agk.RunID) ([]StepSummary, error) {

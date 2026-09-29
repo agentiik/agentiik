@@ -11,12 +11,12 @@
 // "A version is a commit. finance/monthly-invoicing@a3f9c1e names exactly one tree, permanently,
 // because that is what a commit already is." A run pins one, and a branch that moves afterwards
 // has to change nothing about it. So a version stores what its graph is rebuilt from: the entry
-// point as it was at that commit, the files it included, the manifest of every image it names,
-// and the digest each image it names by tag was resolved to when it was pushed. Rebuilding
-// reaches no repository, no object store and no registry, which is what makes a run of a two year
-// old commit evaluate the same way today as it did then, and run the same images. The version
-// names its whole tree as well, which is what a container is given at /agk/repo and plays no part
-// here.
+// point as it was at that commit, the files it included, what it read of each library another
+// repository holds, the manifest of every image it names, and the digest each image it names by
+// tag was resolved to when it was pushed. Rebuilding reaches no repository, no object store and no
+// registry, which is what makes a run of a two year old commit evaluate the same way today as it
+// did then, and run the same images. The version names its whole tree as well, which is what a
+// container is given at /agk/repo and plays no part here.
 //
 // # Why it is cached
 //
@@ -29,6 +29,7 @@ package version
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -121,9 +122,10 @@ func (s *Store) Graph(ctx context.Context, namespace, workflow, commit string) (
 
 // Build turns a stored version back into a graph, reaching nothing.
 //
-// The entry point and the includes are the ones the version carries, which is the whole point: a
-// run of a commit whose branch has since moved, or whose repository has since been deleted,
-// evaluates exactly as it did when it started. So are the digests its tags were resolved to at
+// The entry point, the includes and what each workflow include read of its library are the ones
+// the version carries, which is the whole point: a run of a commit whose branch has since moved, or
+// whose repository or a library it includes has since been deleted, evaluates exactly as it did
+// when it started. So are the digests its tags were resolved to at
 // the push, which the graph names in their place, so that a tag moved since changes nothing a run
 // of it runs. Version.Tree is what a container is given, and plays no part here.
 //
@@ -136,13 +138,16 @@ func Build(v db.Version) (*graph.Graph, error) {
 	if v.Entry == "" || len(v.Document) == 0 {
 		return nil, fmt.Errorf("version: %s@%s carries no entry point", v.Workflow, v.Commit)
 	}
+	if v.Library {
+		return nil, fmt.Errorf("version: %s@%s is a library: %w", v.Workflow, v.Commit, ErrLibrary)
+	}
 
 	tree := fstest.MapFS{v.Entry: &fstest.MapFile{Data: v.Document, Mode: 0o444}}
 	for path, body := range v.Includes {
 		tree[path] = &fstest.MapFile{Data: body, Mode: 0o444}
 	}
 
-	wf, err := graph.LoadStored(tree, v.Entry, nil)
+	wf, err := graph.LoadStored(tree, v.Entry, keptLibraries(v))
 	if err != nil {
 		return nil, fmt.Errorf("version: %s@%s could not be loaded: %w", v.Workflow, v.Commit, err)
 	}
@@ -174,6 +179,32 @@ func Build(v db.Version) (*graph.Graph, error) {
 		return nil, fmt.Errorf("version: %s@%s could not be built: %w", v.Workflow, v.Commit, err)
 	}
 	return g, nil
+}
+
+// ErrLibrary is a version that is a library's commit, which has no graph since nothing runs it.
+var ErrLibrary = errors.New("its root agentiik.yaml is a fragment, which another workflow includes and nothing runs")
+
+// keptLibraries answers each workflow include out of what the version kept of it: the commit its
+// ref resolved to at the push, and the files resolution read there. Nothing is reached, so that
+// the library moving its tag, being renamed or being deleted since changes nothing a run of this
+// version does. An include the version kept nothing of is refused, which is a version stored
+// before workflow includes were resolved and so one that names none.
+func keptLibraries(v db.Version) graph.Remote {
+	return kept{v: v}
+}
+
+type kept struct{ v db.Version }
+
+func (k kept) Include(ref graph.WorkflowRef) (fs.FS, string, error) {
+	l, ok := k.v.Libraries[ref.String()]
+	if !ok {
+		return nil, "", fmt.Errorf("%s@%s kept nothing of it: a version keeps what each workflow include read at the push", k.v.Workflow, k.v.Commit)
+	}
+	tree := fstest.MapFS{}
+	for path, body := range l.Files {
+		tree[path] = &fstest.MapFile{Data: body, Mode: 0o444}
+	}
+	return tree, l.Commit, nil
 }
 
 // pin puts the digest each tag was resolved to at the push in the place of the tag, so that the
@@ -271,8 +302,16 @@ func (w *watcher) Open(name string) (fs.File, error) {
 
 // ReadFile reads a file whole through the tree's own ReadFile, and records it: fs.ReadFile would
 // otherwise open it here and size its buffer by what the file says it weighs, before the tree
-// below could refuse a byte of it.
+// below could refuse a byte of it. A file read already is answered as it was read, reading nothing
+// and spending nothing of a budget below: the root file a library is told apart by is read by
+// whatever resolves it next.
 func (w *watcher) ReadFile(name string) ([]byte, error) {
+	w.mu.Lock()
+	held, ok := w.read[name]
+	w.mu.Unlock()
+	if ok {
+		return held, nil
+	}
 	b, err := fs.ReadFile(w.under, name)
 	if err != nil {
 		return nil, err
@@ -292,12 +331,23 @@ func (w *watcher) ReadFile(name string) ([]byte, error) {
 // memory of the installation judging it.
 const ReadMaxBytes = yamlbound.MaxBytes
 
-// budgeted is a tree whose files, together, are read up to a budget, and refused past it.
+// budgeted is a tree whose files are read up to a budget, and refused past it. Several trees may
+// share one budget: a workflow include's files are read within what the entry point's tree left.
 type budgeted struct {
 	under fs.FS
+	of    *budget
+}
 
+// budget is what is left to read, every tree sharing it together.
+type budget struct {
 	mu   sync.Mutex
 	left int64
+}
+
+func (b *budget) remaining() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.left
 }
 
 func (b *budgeted) Open(name string) (fs.File, error) {
@@ -305,7 +355,7 @@ func (b *budgeted) Open(name string) (fs.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &budgetedFile{File: f, name: name, of: b}, nil
+	return &budgetedFile{File: f, name: name, of: b.of}, nil
 }
 
 // ReadFile reads a file whole, refusing one that says it weighs more than what is left before a
@@ -316,13 +366,8 @@ func (b *budgeted) ReadFile(name string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	if info, err := f.Stat(); err == nil {
-		b.mu.Lock()
-		left := b.left
-		b.mu.Unlock()
-		if info.Size() > left {
-			return nil, readTooMuch(name)
-		}
+	if info, err := f.Stat(); err == nil && info.Size() > b.of.remaining() {
+		return nil, readTooMuch(name)
 	}
 	return io.ReadAll(f)
 }
@@ -335,7 +380,7 @@ func readTooMuch(name string) error {
 type budgetedFile struct {
 	fs.File
 	name string
-	of   *budgeted
+	of   *budget
 }
 
 // Read reads at most one byte past what is left, which is how a file past it is told from one that

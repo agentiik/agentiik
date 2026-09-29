@@ -41,6 +41,19 @@ type Version struct {
 	Manifests map[string][]byte
 	Images    map[string]string
 
+	// Library says the commit is a library's: its root agentiik.yaml is written as a fragment,
+	// which another workflow includes and nothing runs. Document is that file and Includes what
+	// it includes of its own tree, and there are no manifests and no images, since it names no
+	// step a run starts.
+	Library bool
+
+	// Libraries are what each workflow include read, by the reference the file wrote it with,
+	// <namespace>/<name>@<ref>: the commit it resolved to at the push and the files of that
+	// commit resolution read. They are part of what the graph is rebuilt from, as Includes are,
+	// since another repository may since have moved its tag, been renamed or been deleted, and
+	// none of that may change what a run of this version does.
+	Libraries map[string]LibraryFiles
+
 	// Tree is the repository as the runner will see it, named rather than carried: "every
 	// step of every run sees it, mounted read-only at /agk/repo". The bytes are objects in
 	// the namespace's store, addressed by digest like everything else, so a file that did
@@ -71,6 +84,13 @@ const (
 	SourceTree = "tree"
 )
 
+// LibraryFiles are the files of a library a workflow include read, at the commit its ref resolved
+// to.
+type LibraryFiles struct {
+	Commit string            `json:"commit"`
+	Files  map[string][]byte `json:"files"`
+}
+
 // TreeFile is one file of the repository, at the path the container sees it under /agk/repo.
 //
 // The field names are the wire's: a redemption answers path, mode and sha256 for each file, and a
@@ -99,6 +119,9 @@ type stored struct {
 	Includes  map[string][]byte `json:"includes,omitempty"`
 	Manifests map[string][]byte `json:"manifests,omitempty"`
 	Images    map[string]string `json:"images,omitempty"`
+	Library   bool              `json:"library,omitempty"`
+
+	Libraries map[string]LibraryFiles `json:"libraries,omitempty"`
 }
 
 // ErrNoVersion is nothing of that commit.
@@ -289,6 +312,7 @@ func (n *NS) insertVersion(ctx context.Context, v Version) ([]TreeFile, bool, er
 	body, err := json.Marshal(stored{
 		Entry: v.Entry, Document: v.Document,
 		Includes: v.Includes, Manifests: v.Manifests, Images: v.Images,
+		Library: v.Library, Libraries: v.Libraries,
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("db: version %s@%s could not be written: %w", v.Workflow, v.Commit, err)
@@ -474,6 +498,7 @@ func readVersion(ctx context.Context, tx pgx.Tx, namespace, workflow, commit str
 		return Version{}, fmt.Errorf("db: version %s@%s could not be read: %w", workflow, commit, err)
 	}
 	v.Entry, v.Document, v.Includes, v.Manifests, v.Images = s.Entry, s.Document, s.Includes, s.Manifests, s.Images
+	v.Library, v.Libraries = s.Library, s.Libraries
 
 	// A version without its tree is still a version a run can be decided from, so a null
 	// here is a nil Tree rather than a refusal. What refuses it is the redemption.
