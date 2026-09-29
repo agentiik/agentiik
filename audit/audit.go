@@ -162,9 +162,17 @@ const PolicyChange = "policy.change"
 // tree push made, recorded in the namespace with the workflow as its target, the reference, the
 // image by digest and the digest it named before where it named one: a pin decides which bytes the
 // next version of the workflow runs, with its secrets. A pin named again at the digest it holds
-// changed nothing and is not recorded, and neither is a brick manifest recorded, which is a fact
-// about an image by digest that never changes, and whose row keeps who recorded it.
+// changed nothing and is not recorded.
 const ImagePin = "image.pin"
+
+// ImageManifest is a brick manifest recorded for an image of a repository, or replaced by another,
+// at POST /api/v1/{ns}/workflows/{name}/images, recorded in the namespace with the workflow as its
+// target, the image, the SHA-256 of the manifest and that of the one it replaced where there was
+// one: a version made from a manifest holds what it says of the brick, its ports, its parameters and
+// where its secrets are mounted, so whoever wrote one another pusher's version was judged by is
+// named in the log for good, where the row keeps only who wrote it last. A manifest recorded again
+// with the same bytes changed nothing and is not recorded.
+const ImageManifest = "image.manifest"
 
 // The results an entry records.
 const (

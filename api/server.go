@@ -550,6 +550,13 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		if err := ns.SaveWorkflow(ctx, over.Workflow, p.Branch); err != nil {
 			return err
 		}
+		// The repository's lock before the version's rows, where the version may pin a tag, in
+		// the order a git push takes them, so that the two never wait on each other.
+		if len(pins.Pins) > 0 {
+			if err := ns.HoldRepository(ctx, over.Workflow); err != nil {
+				return err
+			}
+		}
 		var err error
 		if saved, err = ns.SaveVersion(ctx, v); err != nil {
 			return err
@@ -558,11 +565,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 			if len(pins.Pins) == 0 {
 				return nil
 			}
-			moved, err := ns.RecordImages(ctx, over.Workflow, string(who), v.CreatedAt, pins)
+			recorded, err := ns.RecordImages(ctx, over.Workflow, string(who), v.CreatedAt, pins)
 			if err != nil {
 				return err
 			}
-			return auditPins(ctx, ns, who, over.Workflow, moved)
+			return auditImages(ctx, ns, who, over.Workflow, recorded)
 		}
 		// The same tree pushed again, which is the version already recorded, and its
 		// images are the ones its first push resolved rather than these.

@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
@@ -25,13 +27,13 @@ const tagged = "ghcr.io/acme/agk-invoice:1.4.0"
 
 func recording(t *testing.T, pool *Pool, namespace, by string, images Images) ([]PinMoved, error) {
 	t.Helper()
-	var moved []PinMoved
+	var done ImagesRecorded
 	err := pool.In(t.Context(), namespace, func(ctx context.Context, n *NS) error {
 		var err error
-		moved, err = n.RecordImages(ctx, "nightly", by, time.Time{}, images)
+		done, err = n.RecordImages(ctx, "nightly", by, time.Time{}, images)
 		return err
 	})
-	return moved, err
+	return done.Pins, err
 }
 
 func imagesHeld(t *testing.T, pool *Pool, namespace string) ([]ImagePin, []BrickManifest) {
@@ -40,7 +42,7 @@ func imagesHeld(t *testing.T, pool *Pool, namespace string) ([]ImagePin, []Brick
 	var manifests []BrickManifest
 	if err := pool.In(t.Context(), namespace, func(ctx context.Context, n *NS) error {
 		var err error
-		pins, manifests, err = n.ImagesOf(ctx, "nightly")
+		pins, manifests, err = n.ImagesOf(ctx, "nightly", nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -80,29 +82,20 @@ func TestAPinMovesAndAManifestIsReplaced(t *testing.T) {
 		t.Errorf("a pin moved is answered as %+v", moved)
 	}
 
-	// Another manifest for the image replaces the one held, and a set failing on a pin the store
-	// cannot hold keeps nothing of itself, the manifest beside it included, even where the
-	// transaction goes on and commits.
+	// Another manifest for the image replaces the one held, answered with the one it replaced.
 	another := []byte(`{"kind":"Brick"}`)
-	if _, err := recording(t, pool, "finance", "carol", Images{Manifests: map[string][]byte{pinnedTo: another}}); err != nil {
-		t.Fatal(err)
-	}
-	err = pool.In(t.Context(), "finance", func(ctx context.Context, n *NS) error {
-		_, err := n.RecordImages(ctx, "nightly", "dan", time.Time{}, Images{
-			Pins:      map[string]string{"ghcr.io/acme/agk-invoice:1.5.0": movedTo, "ghcr.io/acme/agk-invoice:" + strings.Repeat("9", ImageReferenceMaxBytes): movedTo},
-			Manifests: map[string][]byte{pinnedTo: manifest},
-		})
-		if err == nil {
-			t.Error("a set holding a pin past its bound was recorded")
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, n *NS) error {
+		done, err := n.RecordImages(ctx, "nightly", "carol", time.Time{}, Images{Manifests: map[string][]byte{pinnedTo: another}})
+		if err == nil && (len(done.Manifests) != 1 || done.Manifests[0].Was != sha256Of(manifest) || done.Manifests[0].SHA256 != sha256Of(another)) {
+			t.Errorf("a manifest replaced is answered as %+v", done.Manifests)
 		}
-		return nil
-	})
-	if err != nil {
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	pins, manifests = imagesHeld(t, pool, "finance")
-	if len(pins) != 1 || pins[0].Image != movedTo || pins[0].PinnedBy != "bob" || string(manifests[0].Manifest) != string(another) || manifests[0].RecordedBy != "carol" {
-		t.Errorf("a set refused left %+v and %+v", pins, manifests)
+	if len(pins) != 1 || pins[0].Image != movedTo || pins[0].PinnedBy != "bob" || manifests[0].SHA256 != sha256Of(another) || manifests[0].RecordedBy != "carol" {
+		t.Errorf("a manifest replaced left %+v and %+v", pins, manifests)
 	}
 
 	var image string
@@ -146,7 +139,7 @@ func TestARepositorysImagesAreItsNamespacesAlone(t *testing.T) {
 		if _, err := n.Pin(ctx, "nightly", tagged); !errors.Is(err, ErrNoPin) {
 			t.Errorf("team-ops reads finance's pin: %v", err)
 		}
-		if _, _, err := n.ImagesOf(ctx, "absent"); !errors.Is(err, ErrNoWorkflow) {
+		if _, _, err := n.ImagesOf(ctx, "absent", nil); !errors.Is(err, ErrNoWorkflow) {
 			t.Errorf("the images of a workflow nobody created are %v", err)
 		}
 		if _, err := n.RecordImages(ctx, "absent", "alice", time.Time{}, Images{Pins: map[string]string{tagged: pinnedTo}}); !errors.Is(err, ErrNoWorkflow) {
@@ -171,8 +164,9 @@ func TestAnImageTheStoreCannotHoldIsRefusedBeforeTheTable(t *testing.T) {
 		"an empty manifest":           {Manifests: map[string][]byte{pinnedTo: {}}},
 		"a manifest past its bound":   {Manifests: map[string][]byte{pinnedTo: make([]byte, ManifestMaxBytes+1)}},
 	} {
-		if _, err := recording(t, pool, "finance", "alice", images); err == nil {
-			t.Errorf("%s was recorded", name)
+		_, err := recording(t, pool, "finance", "alice", images)
+		if err == nil || !strings.HasPrefix(err.Error(), "db: ") || strings.Contains(err.Error(), "SQLSTATE") {
+			t.Errorf("%s is answered %v, where this package refuses it before the table does", name, err)
 		}
 	}
 	// And the table refuses them itself, to anything that would write around this package.
@@ -207,16 +201,65 @@ func TestTwoSetsForOneRepositoryTakeTurns(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	// Each move names the digest the one before it left, so the moves chain from nothing to the
-	// digest the pin holds now.
-	was := map[string]int{}
+	// Each move names the digest the one before it left: the sets took turns, and none moved the
+	// pin from where another had just left it without seeing it there.
+	var all []PinMoved
 	for _, m := range moves {
-		for _, one := range m {
-			was[one.Was]++
+		all = append(all, m...)
+	}
+	var created int
+	for _, m := range all {
+		if m.Was == "" {
+			created++
+		} else if m.Was == m.Image {
+			t.Errorf("a move from %s to itself was answered", m.Was)
 		}
 	}
-	if was[""] != 1 {
-		t.Errorf("the pin was created %d times", was[""])
+	if created != 1 {
+		t.Errorf("the pin was created %d times", created)
+	}
+	// Moves alternate between the two digests, and a set finding the pin where it would put it
+	// moves nothing: so every move but the creation goes from one digest to the other.
+	for _, m := range all {
+		if m.Was != "" && !((m.Was == pinnedTo && m.Image == movedTo) || (m.Was == movedTo && m.Image == pinnedTo)) {
+			t.Errorf("a move from %s to %s", m.Was, m.Image)
+		}
+	}
+}
+
+// A set that fails after it has written keeps nothing of itself, even where the transaction goes on
+// and commits: it is written under a savepoint of its own.
+func TestASetThatFailsKeepsNothingOfItself(t *testing.T) {
+	pool, super := repositories(t)
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	// A manifest of this image fails as it is written, after the pin before it was.
+	if _, err := conn.Exec(t.Context(), `
+		create function refuse_manifest() returns trigger language plpgsql as $$
+		begin raise exception 'refused by the test'; end $$;
+		create trigger refuse_manifest before insert on brick_manifests for each row
+		  when (new.image like 'ghcr.io/acme/agk-refused@%') execute function refuse_manifest();`); err != nil {
+		t.Fatal(err)
+	}
+	refused := "ghcr.io/acme/agk-refused@sha256:" + strings.Repeat("4", 64)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, n *NS) error {
+		if _, err := n.RecordImages(ctx, "nightly", "alice", time.Time{}, Images{
+			Pins: map[string]string{tagged: pinnedTo}, Manifests: map[string][]byte{refused: manifest},
+		}); err == nil {
+			t.Error("a set whose manifest the table refuses was recorded")
+		}
+		// And the transaction goes on, and commits what it writes after.
+		_, err := n.RecordImages(ctx, "nightly", "alice", time.Time{}, Images{Manifests: map[string][]byte{pinnedTo: manifest}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pins, manifests := imagesHeld(t, pool, "finance")
+	if len(pins) != 0 || len(manifests) != 1 || manifests[0].Image != pinnedTo {
+		t.Errorf("a set that failed after writing its pin left %+v and %+v", pins, manifests)
 	}
 }
 
@@ -243,5 +286,37 @@ func TestAWorkflowDeletedTakesItsImages(t *testing.T) {
 	}
 	if left != 0 {
 		t.Errorf("%d images outlived their workflow", left)
+	}
+}
+
+func sha256Of(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// A listing names what it is asked to and nothing else, and answers each manifest's SHA-256 without
+// reading its bytes out of the database.
+func TestAListingNamesWhatItIsAskedTo(t *testing.T) {
+	pool, _ := repositories(t)
+	other := "ghcr.io/acme/agk-other@sha256:" + strings.Repeat("3", 64)
+	if _, err := recording(t, pool, "finance", "alice", Images{
+		Pins:      map[string]string{tagged: pinnedTo, "ghcr.io/acme/agk-invoice:1.5.0": movedTo},
+		Manifests: map[string][]byte{pinnedTo: manifest, other: manifest},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var pins []ImagePin
+	var manifests []BrickManifest
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, n *NS) error {
+		var err error
+		pins, manifests, err = n.ImagesOf(ctx, "nightly", &Images{
+			Pins: map[string]string{tagged: ""}, Manifests: map[string][]byte{strings.Replace(pinnedTo, "@", ":1.4.0@", 1): nil},
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pins) != 1 || pins[0].Reference != tagged || len(manifests) != 1 || manifests[0].Image != pinnedTo || manifests[0].SHA256 != sha256Of(manifest) {
+		t.Errorf("a listing of one pin and one manifest, the manifest named with its tag, answers %+v and %+v", pins, manifests)
 	}
 }

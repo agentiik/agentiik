@@ -3,7 +3,7 @@
 --
 -- A git push carries neither, and the hook reaches no registry to find them: agk push resolves each
 -- tag where the image is, on the pusher's own Docker daemon, reads each brick's /agk/brick.yaml
--- there, and records both here before it pushes with git, as the tree push records those of each
+-- there, and records both here before it pushes with git, as the tree push records the pins of each
 -- version it makes. A plain git push then passes where every tag it names is pinned and every brick
 -- image it runs has a manifest here, and is refused where one is missing.
 --
@@ -51,11 +51,12 @@ create table image_pins (
 -- One row per image a brick step of the repository runs, by digest, with the manifest read out of
 -- it: the file the image holds at /agk/brick.yaml, byte for byte, rather than the document a version
 -- keeps of it, which lifts a parameter's boolean required out and so could not hold a step to the
--- parameters it must supply. Recorded again with other bytes, it is replaced: the runner reads the
--- manifest out of the image itself when a step runs, so what is kept here is only what a push is
--- judged against, and one recorded wrong is put right by recording it again. At most 256 KiB, sixty
--- times the largest manifest of the standard catalog, so that one with a large parameter schema fits
--- and a row stays a row.
+-- parameters it must supply. Recorded again with other bytes, it is replaced, so that one recorded
+-- wrong is put right by recording it again rather than refusing every push after it; the
+-- replacement is recorded in the audit log, since a version made from a manifest holds what it says
+-- of the brick, where its secrets are mounted included. At most 256 KiB, sixty times the largest
+-- manifest of the standard catalog, so that one with a large parameter schema fits and a row stays a
+-- row.
 create table brick_manifests (
   namespace   text not null,
   workflow    identifier not null,

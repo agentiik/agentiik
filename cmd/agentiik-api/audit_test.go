@@ -455,8 +455,8 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}", "/api/v1/finance/workflows/monthly-invoicing/versions/"+theCommit, carol, aTaggedPush(t), http.StatusOK,
 		"image.pin carol monthly-invoicing finance done")
 	s.act("POST /api/v1/{namespace}/workflows/{workflow}/images", "/api/v1/finance/workflows/monthly-invoicing/images", carol,
-		api.RecordImages{Pins: map[string]string{"ghcr.io/acme/agk-invoice:1.5.0": theImage}}, http.StatusOK,
-		"image.pin carol monthly-invoicing finance done")
+		api.RecordImages{Pins: map[string]string{"ghcr.io/acme/agk-invoice:1.5.0": theImage}, Manifests: map[string]string{theImage: theManifest}}, http.StatusOK,
+		"image.pin carol monthly-invoicing finance done", "image.manifest carol monthly-invoicing finance done")
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"dave","deny":"run:read_data"}`, http.StatusCreated)
 	deny := s.answer(w)["id"].(string)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+deny+" finance done")

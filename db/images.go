@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -19,7 +21,7 @@ import (
 //
 // A git push carries neither, and the hook reaches no registry: agk push resolves each tag on the
 // pusher's own Docker daemon and reads each brick's manifest there, and records both here before it
-// pushes with git, as the tree push records those of each version it makes. The hook reads them
+// pushes with git, as the tree push records the pins of each version it makes. The hook reads them
 // through Pin and Manifest. Kept per repository rather than per namespace, so that writing a pin
 // takes what registering a version of that workflow takes and reaches no other workflow: see
 // migration 0050.
@@ -41,11 +43,12 @@ type ImagePin struct {
 	PinnedAt time.Time
 }
 
-// BrickManifest is the brick manifest of one image of a repository, by digest, as the file the image
-// holds at /agk/brick.yaml, byte for byte.
+// BrickManifest is the brick manifest of one image of a repository, by digest: the SHA-256 of the
+// file the image holds at /agk/brick.yaml, which is kept byte for byte and read by Manifest alone,
+// so that a listing costs what it lists and not what every manifest weighs.
 type BrickManifest struct {
-	Image    string
-	Manifest []byte
+	Image  string
+	SHA256 string
 
 	RecordedBy string
 	RecordedAt time.Time
@@ -57,6 +60,22 @@ type PinMoved struct {
 	Reference string
 	Image     string
 	Was       string
+}
+
+// ManifestRecorded is a manifest RecordImages recorded or replaced: its SHA-256, and Was the
+// SHA-256 of the one it replaced, empty where the repository held none for the image.
+type ManifestRecorded struct {
+	Image  string
+	SHA256 string
+	Was    string
+}
+
+// ImagesRecorded is what RecordImages changed: the pins it created or moved, and the manifests it
+// recorded or replaced, each in order. What it was asked to record again as it stood is in
+// neither.
+type ImagesRecorded struct {
+	Pins      []PinMoved
+	Manifests []ManifestRecorded
 }
 
 // Images are what RecordImages is asked to record: pins by reference, and manifests by the
@@ -98,17 +117,29 @@ func (n *NS) Manifest(ctx context.Context, workflow, image string) ([]byte, erro
 	return manifest, nil
 }
 
-// ImagesOf answers every pin of the repository, by reference, and every manifest, by image, in
-// C's collation, byte by byte, whatever collation the database was created with. ErrNoWorkflow
-// where the namespace holds no workflow of that name.
-func (n *NS) ImagesOf(ctx context.Context, workflow string) ([]ImagePin, []BrickManifest, error) {
+// ImagesOf answers the pins of the repository, by reference, and its manifests, by image, in C's
+// collation, byte by byte, whatever collation the database was created with: every one where named
+// is nil, and those it names otherwise. ErrNoWorkflow where the namespace holds no workflow of that
+// name.
+func (n *NS) ImagesOf(ctx context.Context, workflow string, named *Images) ([]ImagePin, []BrickManifest, error) {
 	if err := n.workflowHeld(ctx, workflow, ""); err != nil {
 		return nil, nil, err
 	}
+	var references, images []string
+	if named != nil {
+		references, images = slices.Collect(maps.Keys(named.Pins)), make([]string, 0, len(named.Manifests))
+		for image := range named.Manifests {
+			images = append(images, CanonicalImage(image))
+		}
+		if references == nil {
+			references = []string{}
+		}
+	}
 	rows, err := n.tx.Query(ctx,
 		`select reference, image, pinned_by, pinned_at from image_pins
-		 where namespace = $1 and workflow = $2 order by reference collate "C"`,
-		n.namespace, workflow)
+		 where namespace = $1 and workflow = $2 and ($3::text[] is null or reference = any($3))
+		 order by reference collate "C"`,
+		n.namespace, workflow, references)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: the pins of %s could not be read: %w", workflow, err)
 	}
@@ -122,15 +153,16 @@ func (n *NS) ImagesOf(ctx context.Context, workflow string) ([]ImagePin, []Brick
 		return nil, nil, fmt.Errorf("db: the pins of %s could not be read: %w", workflow, err)
 	}
 	rows, err = n.tx.Query(ctx,
-		`select image, manifest, recorded_by, recorded_at from brick_manifests
-		 where namespace = $1 and workflow = $2 order by image collate "C"`,
-		n.namespace, workflow)
+		`select image, encode(sha256(manifest), 'hex'), recorded_by, recorded_at from brick_manifests
+		 where namespace = $1 and workflow = $2 and ($3::text[] is null or image = any($3))
+		 order by image collate "C"`,
+		n.namespace, workflow, images)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: the manifests of %s could not be read: %w", workflow, err)
 	}
 	manifests, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (BrickManifest, error) {
 		var m BrickManifest
-		err := row.Scan(&m.Image, &m.Manifest, &m.RecordedBy, &m.RecordedAt)
+		err := row.Scan(&m.Image, &m.SHA256, &m.RecordedBy, &m.RecordedAt)
 		m.RecordedAt = m.RecordedAt.UTC()
 		return m, err
 	})
@@ -142,37 +174,38 @@ func (n *NS) ImagesOf(ctx context.Context, workflow string) ([]ImagePin, []Brick
 
 // RecordImages records pins and manifests of one repository as by at at, now where at is zero, all
 // of them or none, and leaves every other pin and manifest of the repository as it was, so that two
-// pushes of one workflow never drop each other's. It answers the pins it created or moved, in
-// reference order: a pin named again at the digest it holds is left alone, its pinned_by and
-// pinned_at included, and a manifest recorded again with the same bytes is too.
+// pushes of one workflow never drop each other's. It answers what it changed, in order: a pin named
+// again at the digest it holds is left alone, its pinned_by and pinned_at included, and a manifest
+// recorded again with the same bytes is too.
 //
-// A manifest recorded again with other bytes replaces the one held. The runner reads the manifest
-// out of the image itself when a step runs, so what is kept here is only what a push is judged
-// against, and one recorded wrong, by a client with a bug, is put right by recording it again
-// rather than left to refuse every push after it. A failure keeps nothing of the set, even where the
+// A manifest recorded again with other bytes replaces the one held, so that one recorded wrong, by a
+// client with a bug, is put right by recording it again rather than left to refuse every push after
+// it; what it replaced is answered, for the caller to record in the audit log, since a manifest is
+// what a version made from it holds of the brick, its ports, its parameters and where its secrets
+// are mounted. A failure keeps nothing of the set, even where the
 // caller's transaction goes on and commits: the set is written under a savepoint of its own, as
 // UpdateRefs writes a push's refs. ErrNoWorkflow where the namespace holds no workflow of that name.
 //
 // Every row is written in reference and image order, so that two sets naming the same entries lock
 // them in one order and never deadlock.
-func (n *NS) RecordImages(ctx context.Context, workflow, by string, at time.Time, images Images) ([]PinMoved, error) {
+func (n *NS) RecordImages(ctx context.Context, workflow, by string, at time.Time, images Images) (ImagesRecorded, error) {
 	if by == "" {
-		return nil, fmt.Errorf("db: the images of %s recorded by nobody", workflow)
+		return ImagesRecorded{}, fmt.Errorf("db: the images of %s recorded by nobody", workflow)
 	}
 	for reference, image := range images.Pins {
 		if !imageTag.MatchString(reference) || len(reference) > ImageReferenceMaxBytes {
-			return nil, fmt.Errorf("db: %q is not an image named by a tag, of at most %d bytes", reference, ImageReferenceMaxBytes)
+			return ImagesRecorded{}, fmt.Errorf("db: %q is not an image named by a tag, of at most %d bytes", reference, ImageReferenceMaxBytes)
 		}
 		if !imageDigest.MatchString(image) || len(image) > ImageReferenceMaxBytes {
-			return nil, fmt.Errorf("db: %s is pinned to %q, which is no image named by a digest", reference, image)
+			return ImagesRecorded{}, fmt.Errorf("db: %s is pinned to %q, which is no image named by a digest", reference, image)
 		}
 	}
 	for image, manifest := range images.Manifests {
 		if !imageDigest.MatchString(image) || len(image) > ImageReferenceMaxBytes {
-			return nil, fmt.Errorf("db: a manifest recorded for %q, which is no image named by a digest", image)
+			return ImagesRecorded{}, fmt.Errorf("db: a manifest recorded for %q, which is no image named by a digest", image)
 		}
 		if len(manifest) == 0 || len(manifest) > ManifestMaxBytes {
-			return nil, fmt.Errorf("db: the manifest of %s is %d bytes, where one is 1 to %d", image, len(manifest), ManifestMaxBytes)
+			return ImagesRecorded{}, fmt.Errorf("db: the manifest of %s is %d bytes, where one is 1 to %d", image, len(manifest), ManifestMaxBytes)
 		}
 	}
 	// Kept by the image's canonical reference, so that a step writing a tag beside the digest
@@ -184,7 +217,7 @@ func (n *NS) RecordImages(ctx context.Context, workflow, by string, at time.Time
 	for image, manifest := range images.Manifests {
 		image = CanonicalImage(image)
 		if _, twice := canonical.Manifests[image]; twice {
-			return nil, fmt.Errorf("db: the manifest of %s is recorded twice by one set, under two spellings of its image", image)
+			return ImagesRecorded{}, fmt.Errorf("db: the manifest of %s is recorded twice by one set, under two spellings of its image", image)
 		}
 		canonical.Manifests[image] = manifest
 	}
@@ -198,31 +231,31 @@ func (n *NS) RecordImages(ctx context.Context, workflow, by string, at time.Time
 	// does not wait for it. A workflow deleted meanwhile is ErrNoWorkflow here rather than a
 	// foreign key's violation in the middle of the set.
 	if err := n.workflowHeld(ctx, workflow, "for no key update"); err != nil {
-		return nil, err
+		return ImagesRecorded{}, err
 	}
 
 	set, err := n.tx.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("db: the images of %s could not be recorded: %w", workflow, err)
+		return ImagesRecorded{}, fmt.Errorf("db: the images of %s could not be recorded: %w", workflow, err)
 	}
-	moved, err := recordImages(ctx, set, n.namespace, workflow, by, at, images)
+	done, err := recordImages(ctx, set, n.namespace, workflow, by, at, images)
 	if err != nil {
 		rollback, stop := context.WithTimeout(context.WithoutCancel(ctx), rollbackWithin)
 		rerr := set.Rollback(rollback)
 		stop()
 		if rerr != nil {
-			return nil, errors.Join(err, fmt.Errorf("db: the images of %s recorded before it could not be put back: %w", workflow, rerr))
+			return ImagesRecorded{}, errors.Join(err, fmt.Errorf("db: the images of %s recorded before it could not be put back: %w", workflow, rerr))
 		}
-		return nil, err
+		return ImagesRecorded{}, err
 	}
 	if err := set.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("db: the images of %s could not be recorded: %w", workflow, err)
+		return ImagesRecorded{}, fmt.Errorf("db: the images of %s could not be recorded: %w", workflow, err)
 	}
-	return moved, nil
+	return done, nil
 }
 
-func recordImages(ctx context.Context, tx pgx.Tx, namespace, workflow, by string, at time.Time, images Images) ([]PinMoved, error) {
-	var moved []PinMoved
+func recordImages(ctx context.Context, tx pgx.Tx, namespace, workflow, by string, at time.Time, images Images) (ImagesRecorded, error) {
+	var done ImagesRecorded
 	for _, reference := range slices.Sorted(maps.Keys(images.Pins)) {
 		image := images.Pins[reference]
 		var was string
@@ -236,7 +269,7 @@ func recordImages(ctx context.Context, tx pgx.Tx, namespace, workflow, by string
 				 values ($1, $2, $3, $4, $5, $6)`,
 				namespace, workflow, reference, image, by, at)
 		case err != nil:
-			return nil, fmt.Errorf("db: the pin of %s in %s could not be read: %w", reference, workflow, err)
+			return ImagesRecorded{}, fmt.Errorf("db: the pin of %s in %s could not be read: %w", reference, workflow, err)
 		case was == image:
 			continue
 		default:
@@ -246,23 +279,41 @@ func recordImages(ctx context.Context, tx pgx.Tx, namespace, workflow, by string
 				namespace, workflow, reference, image, by, at)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("db: %s could not be pinned in %s: %w", reference, workflow, err)
+			return ImagesRecorded{}, fmt.Errorf("db: %s could not be pinned in %s: %w", reference, workflow, err)
 		}
-		moved = append(moved, PinMoved{Reference: reference, Image: image, Was: was})
+		done.Pins = append(done.Pins, PinMoved{Reference: reference, Image: image, Was: was})
 	}
 
 	for _, image := range slices.Sorted(maps.Keys(images.Manifests)) {
-		if _, err := tx.Exec(ctx,
-			`insert into brick_manifests (namespace, workflow, image, manifest, recorded_by, recorded_at)
-			 values ($1, $2, $3, $4, $5, $6)
-			 on conflict (namespace, workflow, image) do update
-			   set manifest = excluded.manifest, recorded_by = excluded.recorded_by, recorded_at = excluded.recorded_at
-			 where brick_manifests.manifest <> excluded.manifest`,
-			namespace, workflow, image, images.Manifests[image], by, at); err != nil {
-			return nil, fmt.Errorf("db: the manifest of %s could not be recorded in %s: %w", image, workflow, err)
+		sum := sha256.Sum256(images.Manifests[image])
+		digest := hex.EncodeToString(sum[:])
+		var was string
+		err := tx.QueryRow(ctx,
+			`select encode(sha256(manifest), 'hex') from brick_manifests
+			 where namespace = $1 and workflow = $2 and image = $3`,
+			namespace, workflow, image).Scan(&was)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			_, err = tx.Exec(ctx,
+				`insert into brick_manifests (namespace, workflow, image, manifest, recorded_by, recorded_at)
+				 values ($1, $2, $3, $4, $5, $6)`,
+				namespace, workflow, image, images.Manifests[image], by, at)
+		case err != nil:
+			return ImagesRecorded{}, fmt.Errorf("db: the manifest of %s in %s could not be read: %w", image, workflow, err)
+		case was == digest:
+			continue
+		default:
+			_, err = tx.Exec(ctx,
+				`update brick_manifests set manifest = $4, recorded_by = $5, recorded_at = $6
+				 where namespace = $1 and workflow = $2 and image = $3`,
+				namespace, workflow, image, images.Manifests[image], by, at)
 		}
+		if err != nil {
+			return ImagesRecorded{}, fmt.Errorf("db: the manifest of %s could not be recorded in %s: %w", image, workflow, err)
+		}
+		done.Manifests = append(done.Manifests, ManifestRecorded{Image: image, SHA256: digest, Was: was})
 	}
-	return moved, nil
+	return done, nil
 }
 
 // The bounds and the grammar an image reference is held to here, which migration 0050 holds in SQL.
@@ -296,6 +347,13 @@ func CanonicalImage(image string) string {
 		return image
 	}
 	return agk.ImageRepository(image[:at]) + image[at:]
+}
+
+// HoldRepository takes the lock a push takes on a workflow's row, FOR NO KEY UPDATE, which every
+// writer of a repository's refs, packs and images takes before it writes anything else, so that two
+// of them never wait on each other's rows in two orders. ErrNoWorkflow where there is none.
+func (n *NS) HoldRepository(ctx context.Context, workflow string) error {
+	return n.workflowHeld(ctx, workflow, "for no key update")
 }
 
 // workflowHeld answers ErrNoWorkflow where the namespace holds no workflow of that name, taking the

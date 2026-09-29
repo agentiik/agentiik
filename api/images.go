@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -26,7 +24,8 @@ import (
 // the pushing daemon holds for it". So agk push records what it resolved here, with the manifest it
 // read out of each brick's image, before it pushes with git, and a plain git push passes where
 // every tag it names is pinned and every brick image it runs has a manifest. The tree push records
-// those of each version it makes as well.
+// the pins of each version it makes as well, and no manifest: what it carries of one is the document
+// a version keeps, a parameter's boolean required lifted out, and not the file.
 //
 // Per repository, under workflow:write on it, which is what registering a version of it takes:
 // a pin decides which bytes the next version runs, with that workflow's secrets, and held per
@@ -54,8 +53,7 @@ type BrickManifest struct {
 
 // answeredManifest is a kept manifest as the routes answer it.
 func answeredManifest(m db.BrickManifest) BrickManifest {
-	sum := sha256.Sum256(m.Manifest)
-	return BrickManifest{Image: m.Image, SHA256: hex.EncodeToString(sum[:]), RecordedBy: m.RecordedBy, RecordedAt: m.RecordedAt}
+	return BrickManifest{Image: m.Image, SHA256: m.SHA256, RecordedBy: m.RecordedBy, RecordedAt: m.RecordedAt}
 }
 
 // Images is what GET and POST /api/v1/{ns}/workflows/{name}/images answer.
@@ -125,7 +123,7 @@ func (s *Server) listImages(w http.ResponseWriter, r *http.Request, _ Principal,
 	var manifests []db.BrickManifest
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		pins, manifests, err = ns.ImagesOf(ctx, over.Workflow)
+		pins, manifests, err = ns.ImagesOf(ctx, over.Workflow, nil)
 		return err
 	})
 	switch {
@@ -179,18 +177,18 @@ func (s *Server) recordImages(w http.ResponseWriter, r *http.Request, who Princi
 		}
 	}
 
-	var moved []db.PinMoved
+	var recorded db.ImagesRecorded
 	var pins []db.ImagePin
 	var manifests []db.BrickManifest
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		if moved, err = ns.RecordImages(ctx, over.Workflow, string(who), s.now(), images); err != nil {
+		if recorded, err = ns.RecordImages(ctx, over.Workflow, string(who), s.now(), images); err != nil {
 			return err
 		}
-		if err := auditPins(ctx, ns, who, over.Workflow, moved); err != nil {
+		if err := auditImages(ctx, ns, who, over.Workflow, recorded); err != nil {
 			return err
 		}
-		pins, manifests, err = ns.ImagesOf(ctx, over.Workflow)
+		pins, manifests, err = ns.ImagesOf(ctx, over.Workflow, &images)
 		return err
 	})
 	switch {
@@ -225,13 +223,16 @@ func checkImages(ri RecordImages) (db.Images, error) {
 		if err := imageReference(reference); err != nil {
 			return db.Images{}, err
 		}
+		if agk.ImageRepository(reference) == "" {
+			return db.Images{}, fmt.Errorf("%.64q names no repository, only a tag: an image is named by its repository and the tag after it", reference)
+		}
 		if agk.ImageByDigest(reference) || strings.Contains(reference, "@") {
 			return db.Images{}, fmt.Errorf("%.64q is pinned, and it names its image by a digest already: a pin is for an image a step names by a tag, which moves, and a digest does not", reference)
 		}
 		if err := imageReference(image); err != nil {
 			return db.Images{}, err
 		}
-		if !agk.ImageByDigest(image) {
+		if !agk.ImageByDigest(image) || agk.ImageRepository(image) == "" {
 			return db.Images{}, fmt.Errorf("%s is pinned to %.64q, and a tag is pinned to its image by digest, name@sha256: and sixty-four lowercase hexadecimal characters", reference, image)
 		}
 		// The same check the validation makes of a pin it is answered, so that a pin the hook
@@ -245,8 +246,8 @@ func checkImages(ri RecordImages) (db.Images, error) {
 		if err := imageReference(image); err != nil {
 			return db.Images{}, err
 		}
-		if !agk.ImageByDigest(image) {
-			return db.Images{}, fmt.Errorf("a manifest is recorded for %.64q, and a manifest is recorded for an image by its digest: a tag moves, and the manifest is the one inside the image a digest names", image)
+		if !agk.ImageByDigest(image) || agk.ImageRepository(image) == "" {
+			return db.Images{}, fmt.Errorf("a manifest is recorded for %.64q, and a manifest is recorded for an image by its repository and its digest: a tag moves, and the manifest is the one inside the image a digest names", image)
 		}
 		manifest := ri.Manifests[image]
 		if manifest == "" {
@@ -276,16 +277,27 @@ func imageReference(ref string) error {
 	return nil
 }
 
-// auditPins records each pin a recording created or moved, as image.pin in the namespace: the pin
-// decides which bytes the next version of the workflow runs, with its secrets, and who moved it is
-// what the log is for. A pin named again at the digest it held changed nothing and is not recorded.
-func auditPins(ctx context.Context, ns *db.NS, who Principal, workflow string, moved []db.PinMoved) error {
-	for _, m := range moved {
+// auditImages records each pin a recording created or moved, as image.pin, and each manifest it
+// recorded or replaced, as image.manifest, in the namespace: a pin decides which bytes the next
+// version of the workflow runs, with its secrets, and a manifest what that version holds of the
+// brick, its ports, its parameters and where its secrets are mounted, so who changed either is what
+// the log is for. What was named again as it stood changed nothing and is not recorded.
+func auditImages(ctx context.Context, ns *db.NS, who Principal, workflow string, recorded db.ImagesRecorded) error {
+	for _, m := range recorded.Pins {
 		detail := map[string]any{"reference": m.Reference, "image": m.Image}
 		if m.Was != "" {
 			detail["was"] = m.Was
 		}
 		if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.ImagePin, Target: workflow, Result: audit.Done, Detail: detail}); err != nil {
+			return err
+		}
+	}
+	for _, m := range recorded.Manifests {
+		detail := map[string]any{"image": m.Image, "sha256": m.SHA256}
+		if m.Was != "" {
+			detail["was"] = m.Was
+		}
+		if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.ImageManifest, Target: workflow, Result: audit.Done, Detail: detail}); err != nil {
 			return err
 		}
 	}
@@ -305,7 +317,7 @@ func auditPins(ctx context.Context, ns *db.NS, who Principal, workflow string, m
 func versionPins(v db.Version) db.Images {
 	images := db.Images{Pins: map[string]string{}}
 	for reference, image := range v.Images {
-		if imageReference(reference) == nil && imageReference(image) == nil && !strings.Contains(reference, "@") &&
+		if imageReference(reference) == nil && imageReference(image) == nil && !strings.Contains(reference, "@") && agk.ImageRepository(reference) != "" &&
 			agk.ImageByDigest(image) && agk.ImageRepository(image) == agk.ImageRepository(reference) {
 			images.Pins[reference] = db.CanonicalImage(image)
 		}

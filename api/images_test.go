@@ -117,6 +117,18 @@ func TestARepositorysPinsAndManifestsAreRecordedAndReadBack(t *testing.T) {
 	if got := pinsAudited(t, audited(t, pool)); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("the log records the pins\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+	// And the manifest recorded, once, where it was new: the same bytes recorded again change nothing.
+	var manifests []string
+	for _, e := range audited(t, pool) {
+		if e.Action == audit.ImageManifest {
+			d := detailOf(t, e)
+			manifests = append(manifests, fmt.Sprintf("%s %s %v %v", e.Actor, d["image"], d["sha256"], d["was"]))
+		}
+	}
+	sum := sha256.Sum256([]byte(brickManifest))
+	if len(manifests) != 1 || manifests[0] != "alice "+image+" "+hex.EncodeToString(sum[:])+" <nil>" {
+		t.Errorf("the log records the manifests %v", manifests)
+	}
 }
 
 // A recording is refused whole, and what it refuses leaves nothing behind it.
