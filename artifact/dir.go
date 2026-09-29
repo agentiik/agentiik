@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Dir is the local directory that backs agk run --local: an Objects holding one file per
@@ -74,7 +75,7 @@ func (d dir) Put(ctx context.Context, key string, r io.Reader) (err error) {
 	// Staged beside the object rather than in the system temporary directory, so that the
 	// rename that publishes it stays on one filesystem and is therefore atomic: a reader
 	// sees the whole object under the key or nothing at all.
-	stage, err := staging(filepath.Dir(p))
+	stage, err := staging(ctx, filepath.Dir(p))
 	if err != nil {
 		return fmt.Errorf("artifact: object %s: %w", key, err)
 	}
@@ -109,17 +110,29 @@ func (d dir) Put(ctx context.Context, key string, r io.Reader) (err error) {
 
 // staging makes dir and the file a write is staged in there. A Remove of the last object under dir
 // removes dir as well, and may do so between the two, which leaves the file nowhere to be made: dir
-// is made again then, up to three times, a failure that lasts answering the same each time. Once the
-// file is there dir is not empty, and no Remove takes it until the write has renamed it.
-func staging(dir string) (*os.File, error) {
-	for attempt := 1; ; attempt++ {
+// is made again then. A directory being removed is still found by its path for a moment after the
+// kernel refuses a new file in it, so making it again can find it there and the file be refused
+// again until the removal is over, a moment a busy host can stretch past a few tries in a row. So
+// each try waits a little longer than the one before, for up to a second, and a failure that lasts,
+// or is not a directory gone, answers the same each time. Once the file is there dir is not empty,
+// and no Remove takes it until the write has renamed it.
+func staging(ctx context.Context, dir string) (*os.File, error) {
+	wait := 100 * time.Microsecond
+	deadline := time.Now().Add(time.Second)
+	for {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, err
 		}
 		f, err := os.CreateTemp(dir, ".staging-*")
-		if err == nil || attempt == 3 {
+		if err == nil || !errors.Is(err, fs.ErrNotExist) || time.Now().After(deadline) {
 			return f, err
 		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+		wait = min(2*wait, 10*time.Millisecond)
 	}
 }
 
