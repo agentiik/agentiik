@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/repo"
@@ -32,6 +35,10 @@ import (
 // otherwise the branch checked out. A hash, or a detached HEAD, names no ref, and git itself asks
 // for one then: pushing a commit leaves some branch or tag at it, and choosing one for the pusher
 // could move the branch production runs.
+//
+// The name is read as git reads it, which is how commitOf read the commit sha out of it, so that the
+// ref moved is the one whose commit was judged: a name both a branch and a tag hold is refused, as
+// the installation refuses it, rather than read one way here and the other way there.
 func pushRef(ctx context.Context, top, named, branch, sha string) (string, string, error) {
 	if branch != "" {
 		if err := checkBranchName(branch); err != nil {
@@ -39,23 +46,100 @@ func pushRef(ctx context.Context, top, named, branch, sha string) (string, strin
 		}
 		return "refs/heads/" + branch, sha, nil
 	}
-	if named == "" {
+	if named == "" || named == "HEAD" || named == "@" {
 		checked, err := git(ctx, top, "symbolic-ref", "--quiet", "HEAD")
 		if err != nil || !strings.HasPrefix(checked, "refs/heads/") {
 			return "", "", fmt.Errorf("HEAD is detached, and a push leaves a branch at the commit: name it with --branch")
 		}
 		return checked, sha, nil
 	}
-	for _, full := range []string{"refs/heads/" + named, "refs/tags/" + named, named} {
-		if !strings.HasPrefix(full, "refs/heads/") && !strings.HasPrefix(full, "refs/tags/") {
-			continue
-		}
-		object, err := git(ctx, top, "rev-parse", "--verify", "--quiet", full)
-		if err == nil && object != "" {
-			return full, object, nil
+	if !strings.HasPrefix(named, "refs/") {
+		_, errBranch := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+named)
+		_, errTag := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/tags/"+named)
+		if errBranch == nil && errTag == nil {
+			return "", "", fmt.Errorf("--commit %s is both a branch and a tag: name the one meant in full, refs/heads/%s or refs/tags/%s", named, named, named)
 		}
 	}
-	return "", "", fmt.Errorf("--commit %s names a commit and no branch or tag, and a push leaves a branch at the commit: name it with --branch", named)
+	full, _ := git(ctx, top, "rev-parse", "--verify", "--quiet", "--symbolic-full-name", named)
+	if !strings.HasPrefix(full, "refs/heads/") && !strings.HasPrefix(full, "refs/tags/") {
+		return "", "", fmt.Errorf("--commit %s names a commit and no branch or tag of this repository, and a push leaves a branch at the commit: name it with --branch", named)
+	}
+	object, err := git(ctx, top, "rev-parse", "--verify", "--quiet", full)
+	if err != nil || object == "" {
+		return "", "", fmt.Errorf("%s could not be read from git", full)
+	}
+	if peeled, err := git(ctx, top, "rev-parse", "--verify", "--quiet", full+"^{commit}"); err != nil || peeled != sha {
+		return "", "", fmt.Errorf("%s names %s, where --commit %s was read as %s", full, short(peeled), named, short(sha))
+	}
+	return full, object, nil
+}
+
+// aheadOf refuses to move ref from old, where the installation holds it, to object unless the move
+// is one git makes without --force: a branch moved to a commit that has old in its history. A tag
+// is never moved, since a tag others fetched names one commit for good.
+//
+// The installation moves either all the same for whoever holds grant:manage on the workflow, which
+// is what makes such a push forced rather than refused. agk push makes none, so that a push from a
+// clone that is behind, or from a branch rewritten here, is told so rather than rewriting what others
+// fetched: git push --force is how a forced push is made, deliberately.
+func aheadOf(ctx context.Context, top, ref, old, object, sha string) error {
+	if !strings.HasPrefix(ref, "refs/heads/") {
+		return fmt.Errorf("%s is at %s on the installation, and a tag names one commit for good: push the commit under a new tag", ref, short(old))
+	}
+	held, err := heldHere(ctx, top, []string{old})
+	if err != nil {
+		return err
+	}
+	if len(held) == 0 {
+		return fmt.Errorf("%s is at %s on the installation, which this repository does not hold: fetch it, merge or rebase, and push again", ref, short(old))
+	}
+	if err := gitCommand(ctx, top, "merge-base", "--is-ancestor", old, sha).Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return fmt.Errorf("%s is at %s on the installation, and %s is not ahead of it: merge or rebase onto it, and push again; moving a branch back or aside is a forced push, which agk push does not make", ref, short(old), short(sha))
+		}
+		return fmt.Errorf("whether %s is ahead of %s could not be read from git: %w", short(sha), short(old), err)
+	}
+	return nil
+}
+
+// shallowBelow is a commit the push would send whose parents this clone does not hold, where it is
+// shallow and the installation lacks the history below it: git fetch --unshallow is then the only
+// way to push it, since the installation holds every object a commit it keeps reaches. Empty where
+// the clone is whole, or the history it lacks is history the installation's refs already reach.
+func shallowBelow(ctx context.Context, top, sha string, have []string) (string, error) {
+	if is, err := git(ctx, top, "rev-parse", "--is-shallow-repository"); err != nil || is != "true" {
+		return "", err
+	}
+	file, err := git(ctx, top, "rev-parse", "--git-path", "shallow")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(file) {
+		file = filepath.Join(top, file)
+	}
+	listed, err := os.ReadFile(file)
+	if err != nil {
+		return "", fmt.Errorf("the shallow commits of this clone could not be read: %w", err)
+	}
+	boundary := map[string]bool{}
+	for _, id := range strings.Fields(string(listed)) {
+		boundary[id] = true
+	}
+	revs := sha + "\n"
+	for _, id := range have {
+		revs += "^" + id + "\n"
+	}
+	sent, err := output(stdinOf(gitCommand(ctx, top, "rev-list", "--stdin"), revs))
+	if err != nil {
+		return "", fmt.Errorf("what the push sends could not be read from git: %w", err)
+	}
+	for _, id := range strings.Fields(string(sent)) {
+		if boundary[id] {
+			return id, nil
+		}
+	}
+	return "", nil
 }
 
 // checkBranchName refuses a branch git would refuse, as git check-ref-format does.
@@ -122,6 +206,17 @@ func recordImages(ctx context.Context, at remote, namespace, name string, pins m
 	return fmt.Errorf("the installation refused the images the push names: %w", err)
 }
 
+// isVersion says whether the installation holds commit as a version of the workflow already, which
+// the tree at that commit answers. An answer that is not a yes is taken as a no: it decides only
+// whether a sentence is said.
+func isVersion(ctx context.Context, at remote, namespace, name, commit string) bool {
+	req, err := at.request(ctx, http.MethodGet, "/api/v1/"+namespace+"/workflows/"+name+"/tree/"+commit, nil)
+	if err != nil {
+		return false
+	}
+	return at.do(req, http.StatusOK, nil) == nil
+}
+
 // gitAnswer is one answer of the repository's git routes: its status, and what it says, which is
 // text a person reads where it refuses.
 func gitAnswer(at remote, req *http.Request, want string) (*http.Response, error) {
@@ -134,6 +229,14 @@ func gitAnswer(at remote, req *http.Request, want string) (*http.Response, error
 	}
 	defer answer.Body.Close()
 	said, _ := io.ReadAll(io.LimitReader(answer.Body, 4<<10))
+	if answer.StatusCode >= 500 {
+		// No verdict: a gateway in front of the installation, or the installation failing
+		// on its side; and a push it answered so may have moved its ref all the same.
+		if req.Method == http.MethodPost {
+			return nil, fmt.Errorf("%w: %s answered %s, and whether the push landed is unknown: agk push again reads where the ref stands", errUnreachable, at.base, answer.Status)
+		}
+		return nil, fmt.Errorf("%w: %s answered %s, and nothing was pushed", errUnreachable, at.base, answer.Status)
+	}
 	switch answer.StatusCode {
 	case http.StatusUnauthorized:
 		return nil, errors.New(at.refusedCredential())
@@ -259,18 +362,29 @@ func sendPack(ctx context.Context, e Env, at remote, top, repository, ref, old, 
 	req.Header.Set("Content-Type", "application/x-git-receive-pack-request")
 	req.Header.Set("Accept", "application/x-git-receive-pack-result")
 	answer, err := gitAnswer(at, req, "application/x-git-receive-pack-result")
+	// What git says of a pack it could not write: a pack it failed on here, an object it could
+	// not read, is its own failure and said first; a pack it was cut off writing, the pipe closed
+	// because the installation stopped reading, is the installation's to explain.
+	var packErr error
+	cutOff := false
 	if packing != nil {
 		// Whatever the answer, git is waited for, the pipe closed first so that a git still
-		// writing a pack nobody reads ends rather than waits; and a pack it failed to write
-		// is said rather than the refusal of a pack cut short that the installation answers.
+		// writing a pack nobody reads ends rather than waits.
 		packed.Close()
-		werr := packing.Wait()
-		if err == nil && werr != nil {
-			answer.Body.Close()
-			return pushed{}, fmt.Errorf("the pack could not be written: %s", strings.TrimSpace(packErrs.String()+" "+werr.Error()))
+		if werr := packing.Wait(); werr != nil {
+			packErr = fmt.Errorf("the pack could not be written: %s", strings.TrimSpace(packErrs.String()+" "+werr.Error()))
+			cutOff = brokenPipe(werr, packErrs.String())
 		}
 	}
+	if packErr != nil && !cutOff {
+		if answer != nil {
+			answer.Body.Close()
+		}
+		return pushed{}, packErr
+	}
 	if err != nil {
+		// What the installation answered comes first: a pack it stopped reading, one past its
+		// bound, leaves git with a broken pipe that says nothing of why.
 		return pushed{}, err
 	}
 	defer answer.Body.Close()
@@ -278,7 +392,8 @@ func sendPack(ctx context.Context, e Env, at remote, top, repository, ref, old, 
 	band := repo.NewSidebandReader(repo.NewPktReader(answer.Body))
 	band.Progress = &remoteLines{w: e.Err}
 	report := repo.NewPktReader(band)
-	result := pushed{why: "the installation answered no status for " + ref}
+	var result pushed
+	stated := false
 	for {
 		kind, data, err := report.Next()
 		if err != nil {
@@ -286,7 +401,10 @@ func sendPack(ctx context.Context, e Env, at remote, top, repository, ref, old, 
 			if errors.As(err, &said) {
 				return pushed{why: said.Message}, nil
 			}
-			return pushed{}, fmt.Errorf("the installation's answer to the push could not be read: %w", err)
+			if packErr != nil {
+				return pushed{}, packErr
+			}
+			return pushed{}, fmt.Errorf("%w: its answer to the push was cut off (%v), and whether the push landed is unknown: agk push again reads where the ref stands", errUnreachable, err)
 		}
 		if kind == repo.PktFlush {
 			break
@@ -294,15 +412,35 @@ func sendPack(ctx context.Context, e Env, at remote, top, repository, ref, old, 
 		line := strings.TrimSuffix(string(data), "\n")
 		switch {
 		case strings.HasPrefix(line, "unpack ") && line != "unpack ok":
-			result.why = strings.TrimPrefix(line, "unpack ")
+			result.why, stated = strings.TrimPrefix(line, "unpack "), true
 		case line == "ok "+ref:
-			result = pushed{accepted: true}
+			result, stated = pushed{accepted: true}, true
 		case strings.HasPrefix(line, "ng "+ref+" "):
-			result = pushed{why: strings.TrimPrefix(line, "ng "+ref+" ")}
+			result, stated = pushed{why: strings.TrimPrefix(line, "ng "+ref+" ")}, true
 		}
 	}
 	band.Progress.(*remoteLines).flush()
-	return result, nil
+	switch {
+	case stated:
+		// The installation's word, over a pack git could not finish: a pack it refused to
+		// read on leaves git with a broken pipe that says nothing of why.
+		return result, nil
+	case packErr != nil:
+		return pushed{}, packErr
+	}
+	return pushed{}, fmt.Errorf("%w: its answer to the push named no status for %s, and whether the push landed is unknown: agk push again reads where the ref stands", errUnreachable, ref)
+}
+
+// brokenPipe is whether git stopped writing because nothing read what it wrote: killed by SIGPIPE,
+// or saying so where it caught the write's failure.
+func brokenPipe(err error, said string) bool {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() && status.Signal() == syscall.SIGPIPE {
+			return true
+		}
+	}
+	return strings.Contains(said, "Broken pipe")
 }
 
 // stdinOf is cmd reading text on its standard input.

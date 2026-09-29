@@ -130,6 +130,10 @@ type pushStandIn struct {
 	mu      sync.Mutex
 	created []api.WorkflowCreate
 	images  []api.RecordImages
+
+	// receiving, where a test sets it, answers a push's POST in place of git: a gateway, or an
+	// installation that stops reading.
+	receiving http.HandlerFunc
 }
 
 func aPushStandIn(t *testing.T, answer int) *pushStandIn {
@@ -184,6 +188,12 @@ func aPushStandIn(t *testing.T, answer int) *pushStandIn {
 			name, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/finance/"), ".git/")
 			if _, err := os.Stat(in.bare(name)); err != nil {
 				http.Error(w, "no such repository, or not yours", http.StatusNotFound)
+				return
+			}
+			// Before the body is read, as an installation refusing a pack part way through
+			// answers before reading the rest.
+			if in.receiving != nil && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/git-receive-pack") {
+				in.receiving(w, r)
 				return
 			}
 			// Go's CGI takes no chunked body, which a push streaming its pack sends, and the
