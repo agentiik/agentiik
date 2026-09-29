@@ -15,12 +15,18 @@ import (
 
 // A fetch: POST git-upload-pack.
 //
-// Stateless, as git speaks it over HTTP: each request carries the objects the client wants, which
-// have to be what the repository advertises, and the commits it has, and says done once it has
-// said enough. Without multi_ack, which is not advertised, the answer to a request that is not done
-// is one line, ACK and the first commit it has that the repository holds too, or NAK, and git stops
-// asking once it is told of one; the answer to a request that is done is the same line and then the
-// pack, on the side band where the client asked for one.
+// Stateless, as git speaks it over HTTP: each request carries the objects the client wants, each a
+// ref's tip or what one reaches, and the commits it has, and says done once it has said enough.
+// With multi_ack_detailed, which git asks for wherever it is offered, every have the repository
+// holds is acknowledged as common, ACK and the commit and common, which is what makes the client
+// say it again in each request after, since the server keeps nothing between two; a request that is
+// not done ends with NAK, and one that is done with ACK and the last common commit, or NAK where
+// there is none, and then the pack, on the side band where the client asked for one. Without it,
+// the one acknowledgement stops a client's negotiation at the first common commit, and its request
+// after that says done without the haves that found it, so that a fetch of a history longer than
+// one round of haves, sixteen commits, was answered NAK and the whole history, which the client
+// read as the pack and failed on. A client that does not ask for it is answered as git answers one:
+// ACK and the first common commit alone.
 //
 // The pack is every object reachable from what is wanted and not from the common commits, the
 // trees and blobs of the common commits themselves left out too, as git leaves them out: every
@@ -34,7 +40,7 @@ type fetchRequest struct {
 	done  bool
 
 	// What the client said it reads, from the first want line.
-	sideband, sideband64k, includeTag, noProgress bool
+	sideband, sideband64k, includeTag, noProgress, multiAck bool
 }
 
 // readFetch reads a fetch's request, refusing what the advertisement did not offer.
@@ -72,6 +78,8 @@ func readFetch(body io.Reader) (fetchRequest, error) {
 						req.includeTag = true
 					case "no-progress":
 						req.noProgress = true
+					case "multi_ack_detailed":
+						req.multiAck = true
 					}
 				}
 			}
@@ -95,6 +103,9 @@ func readFetch(body io.Reader) (fetchRequest, error) {
 }
 
 func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
+	if !gitRequest(w, r, uploadPack) {
+		return
+	}
 	if s.packs == nil {
 		gitFail(w, http.StatusServiceUnavailable, noPacks)
 		return
@@ -134,9 +145,11 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, _ Principal,
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 	w.Header().Set("Cache-Control", "no-cache")
 
-	// Only what the advertisement named may be asked for: a ref's tip, or the commit a tag peels
-	// to. Anything else is an object the caller may have learnt of elsewhere, from another
-	// repository or another namespace, and is answered as git answers it.
+	// Only what the refs reach may be asked for: a ref's tip, the commit a tag peels to, or,
+	// since the refs a client was shown may have moved before it asks, as git's own upload-pack
+	// allows over HTTP, a commit or a tag behind them. Anything else is an object the caller may
+	// have learnt of elsewhere, from another repository or another namespace, and is answered as
+	// git answers it.
 	offered := map[repo.ID]bool{}
 	for _, ref := range repository.Refs {
 		for _, id := range []string{ref.Commit, ref.Tag} {
@@ -145,9 +158,21 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, _ Principal,
 			}
 		}
 	}
+	behind := map[repo.ID]bool{}
 	for _, want := range req.wants {
 		if !offered[want] {
-			writePkts(w, fmt.Sprintf("ERR upload-pack: not our ref %s\n", want))
+			behind[want] = true
+		}
+	}
+	if len(behind) > 0 {
+		if err := reached(r.Context(), objects, repository, behind); err != nil {
+			var not notOurs
+			if errors.As(err, &not) {
+				writePkts(w, fmt.Sprintf("ERR upload-pack: not our ref %s\n", not.id))
+				return
+			}
+			s.report(fmt.Errorf("api: the refs of %s/%s: %w", over.Namespace, over.Workflow, err))
+			writePkts(w, "ERR upload-pack: the repository could not be read\n")
 			return
 		}
 	}
@@ -157,6 +182,7 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, _ Principal,
 	}
 
 	var common []repo.ID
+	acks := &pktLines{w: w}
 	for _, have := range req.haves {
 		held, err := objects.Has(r.Context(), have)
 		if err != nil {
@@ -164,17 +190,29 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, _ Principal,
 			writePkts(w, "ERR upload-pack: the repository could not be read\n")
 			return
 		}
-		if held {
-			common = append(common, have)
+		if !held {
+			continue
+		}
+		common = append(common, have)
+		switch {
+		case req.multiAck:
+			acks.add("ACK " + have.String() + " common\n")
+		case len(common) == 1:
+			acks.add("ACK " + have.String() + "\n")
 		}
 	}
-	ack := "NAK\n"
-	if len(common) > 0 {
-		ack = "ACK " + common[0].String() + "\n"
-	}
 	if !req.done {
-		writePkts(w, ack)
+		if req.multiAck || len(common) == 0 {
+			acks.add("NAK\n")
+		}
+		acks.flush()
 		return
+	}
+	switch {
+	case len(common) == 0:
+		acks.add("NAK\n")
+	case req.multiAck:
+		acks.add("ACK " + common[len(common)-1].String() + "\n")
 	}
 
 	sent, err := packing(r.Context(), objects, repository, req, common)
@@ -183,7 +221,7 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, _ Principal,
 		writePkts(w, "ERR upload-pack: the repository could not be read\n")
 		return
 	}
-	writePkts(w, ack)
+	acks.flush()
 	out := io.Writer(w)
 	switch {
 	case req.sideband64k:
@@ -205,6 +243,82 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, _ Principal,
 	if req.sideband || req.sideband64k {
 		repo.WriteFlush(w)
 	}
+}
+
+// pktLines writes lines as packets, some tens of kilobytes at a time: a fetch's haves are
+// acknowledged one line each, and there may be a million of them.
+type pktLines struct {
+	w io.Writer
+	b []byte
+}
+
+func (p *pktLines) add(line string) {
+	p.b, _ = repo.AppendPkt(p.b, []byte(line))
+	if len(p.b) >= 64<<10 {
+		p.flush()
+	}
+}
+
+func (p *pktLines) flush() {
+	if len(p.b) > 0 {
+		p.w.Write(p.b)
+		p.b = p.b[:0]
+	}
+}
+
+// notOurs is a want no ref reaches.
+type notOurs struct{ id repo.ID }
+
+func (n notOurs) Error() string { return "not our ref " + n.id.String() }
+
+// reached answers notOurs for the first of wanted that no ref of the repository reaches, walking
+// back from every ref, through tags and parents, until each is found.
+func reached(ctx context.Context, objects repo.Lookup, repository db.Repository, wanted map[repo.ID]bool) error {
+	left := len(wanted)
+	seen := map[repo.ID]bool{}
+	var queue []repo.ID
+	for _, ref := range repository.Refs {
+		for _, id := range []string{ref.Commit, ref.Tag} {
+			if parsed, err := repo.ParseID(id); err == nil {
+				queue = append(queue, parsed)
+			}
+		}
+	}
+	for len(queue) > 0 && left > 0 {
+		id := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if wanted[id] {
+			left--
+		}
+		t, data, err := repo.ReadObject(ctx, objects, id, repo.MaxParsedBytes)
+		if err != nil {
+			return err
+		}
+		switch t {
+		case repo.TypeCommit:
+			c, err := repo.ParseCommit(data)
+			if err != nil {
+				return err
+			}
+			queue = append(queue, c.Parents...)
+		case repo.TypeTag:
+			tag, err := repo.ParseTag(data)
+			if err != nil {
+				return err
+			}
+			queue = append(queue, tag.Object)
+		}
+	}
+	for id := range wanted {
+		if !seen[id] {
+			return notOurs{id}
+		}
+	}
+	return nil
 }
 
 // writePkts writes lines as packets, as one write.
@@ -373,29 +487,33 @@ func (w *walk) markHistory(id repo.ID) error {
 	return nil
 }
 
-// markTree marks a tree and everything under it as what the client has.
+// markTree marks a tree and everything under it as what the client has. Walked with a stack of its
+// own rather than by recursion, as tree is, so that no chain of trees is deep enough to exhaust one.
 func (w *walk) markTree(id repo.ID) error {
-	if w.skip[id] {
-		return nil
-	}
-	w.skip[id] = true
-	data, err := w.read(id, repo.TypeTree)
-	if err != nil {
-		return err
-	}
-	entries, err := repo.ParseTree(data)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		switch e.Mode {
-		case repo.ModeTree:
-			if err := w.markTree(e.ID); err != nil {
-				return err
+	stack := []repo.ID{id}
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if w.skip[id] {
+			continue
+		}
+		w.skip[id] = true
+		data, err := w.read(id, repo.TypeTree)
+		if err != nil {
+			return err
+		}
+		entries, err := repo.ParseTree(data)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			switch e.Mode {
+			case repo.ModeTree:
+				stack = append(stack, e.ID)
+			case repo.ModeSubmodule:
+			default:
+				w.skip[e.ID] = true
 			}
-		case repo.ModeSubmodule:
-		default:
-			w.skip[e.ID] = true
 		}
 	}
 	return nil
@@ -424,27 +542,37 @@ func (w *walk) history(tips []repo.ID) error {
 
 // tree adds a tree and whatever under it the client does not have. A submodule is a commit of
 // another repository, which is not sent, and no version holds one.
+//
+// Walked with a stack of its own rather than by recursion: the hook bounds the depth of the trees a
+// ref is left at, and not of those behind them, which a push can chain a million deep, and a
+// recursion that deep ends the process rather than the request.
 func (w *walk) tree(id repo.ID) error {
-	if !w.add(id) {
-		return nil
-	}
-	data, err := w.read(id, repo.TypeTree)
-	if err != nil {
-		return err
-	}
-	entries, err := repo.ParseTree(data)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		switch e.Mode {
-		case repo.ModeTree:
-			if err := w.tree(e.ID); err != nil {
-				return err
+	stack := []repo.ID{id}
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if !w.add(id) {
+			continue
+		}
+		data, err := w.read(id, repo.TypeTree)
+		if err != nil {
+			return err
+		}
+		entries, err := repo.ParseTree(data)
+		if err != nil {
+			return err
+		}
+		// Its files first, then its directories in the order it lists them, which is why they
+		// are stacked in reverse.
+		for _, e := range entries {
+			if e.Mode != repo.ModeTree && e.Mode != repo.ModeSubmodule {
+				w.add(e.ID)
 			}
-		case repo.ModeSubmodule:
-		default:
-			w.add(e.ID)
+		}
+		for i := len(entries) - 1; i >= 0; i-- {
+			if entries[i].Mode == repo.ModeTree {
+				stack = append(stack, entries[i].ID)
+			}
 		}
 	}
 	return nil

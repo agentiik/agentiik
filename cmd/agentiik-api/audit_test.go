@@ -119,6 +119,10 @@ func (s *scenario) ask(route, path string, who actor, body any, status int) *htt
 	r := httptest.NewRequestWithContext(s.t.Context(), method, path, reader)
 	if reader != nil {
 		r.Header.Set("Content-Type", "application/json")
+		// What git sends, where the route is git's.
+		if _, service, git := strings.Cut(path, ".git/"); git && strings.HasPrefix(service, "git-") {
+			r.Header.Set("Content-Type", "application/x-"+service+"-request")
+		}
 	}
 	if who.bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+who.bearer)

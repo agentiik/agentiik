@@ -13,6 +13,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -112,7 +113,13 @@ func readCommands(pkts *repo.PktReader) (pushed, error) {
 			return pushed{}, fmt.Errorf("a push's command %.128q: %w", line, err)
 		}
 		if old.IsZero() && new.IsZero() {
-			return pushed{}, fmt.Errorf("a push's command %.128q neither creates, moves nor deletes %s", line, fields[2])
+			return pushed{}, fmt.Errorf("a push's command %.128q neither creates, moves nor deletes %.128s", line, fields[2])
+		}
+		// Bounded as it is read, since every ref a push names is told back to it and recorded
+		// where the push is refused: which refs a repository holds is the hook's to judge,
+		// and one past the bound every ref is held to is no ref at all.
+		if len(fields[2]) > db.MaxRefBytes {
+			return pushed{}, fmt.Errorf("a push names a ref of %d bytes, and a ref is at most %d", len(fields[2]), db.MaxRefBytes)
 		}
 		if len(p.commands) == receiveMaxCommands {
 			return pushed{}, fmt.Errorf("a push moves at most %d refs", receiveMaxCommands)
@@ -146,6 +153,9 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, who Princip
 	}
 	if !held {
 		notPushing(w, over)
+		return
+	}
+	if !gitRequest(w, r, receivePack) {
 		return
 	}
 	if s.packs == nil || s.objects == nil {
@@ -425,9 +435,10 @@ func (s *Server) receive(ctx context.Context, body io.Reader, repository repo.Lo
 		rc.objects = both{pack: rc.pack, repository: repository}
 	}
 
-	// "Every object reachable from each new tip is in the pack or in the repository", whose
-	// objects are whole by the same check at every push before, so the walk stops at the first
-	// object the repository holds rather than walking its history again.
+	// "Every object reachable from each new tip is in the pack or in the repository": every
+	// object the repository holds names only objects it holds, so a new tip held there is whole,
+	// and one sent is whole where every object the pack holds names only what the pack or the
+	// repository holds.
 	var tips []repo.ID
 	for _, c := range p.commands {
 		if !c.deletes() {
@@ -441,39 +452,44 @@ func (s *Server) receive(ctx context.Context, body io.Reader, repository repo.Lo
 	return rc, nil
 }
 
-// connected refuses a push whose new tips reach an object neither its pack nor the repository
-// holds, which a clone of the repository would find missing.
+// connected refuses a push whose new tips, or any object of whose pack, name an object neither the
+// pack nor the repository holds, which a clone of the repository would find missing.
+//
+// Every object of the pack is held to it, whether a new tip reaches it or not, since the pack is
+// kept whole. That is what keeps true that every object the repository holds names only objects it
+// holds, which lets each push stop where it reaches the repository rather than walk its history
+// again: an object a push slipped in unreached, naming a parent nobody sent, would otherwise be one
+// a later push could leave a ref at, its history missing and every clone of the repository failing.
 func connected(ctx context.Context, rc *received, repository repo.Lookup, tips []repo.ID) error {
-	seen := map[repo.ID]bool{}
-	queue := slices.Clone(tips)
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		if seen[id] {
-			continue
+	held := map[repo.ID]bool{}
+	has := func(id repo.ID) error {
+		if held[id] || (rc.pack != nil && rc.pack.Has(id)) {
+			return nil
 		}
-		seen[id] = true
-		if rc.pack == nil || !rc.pack.Has(id) {
-			o, err := repository.OpenObject(ctx, id)
-			if errors.Is(err, repo.ErrMissing) {
-				return &pushRefusal{short: fmt.Sprintf("missing necessary objects: %s is named and neither sent nor held", id)}
-			}
-			if err != nil {
-				return err
-			}
-			o.Close()
-			continue
+		o, err := repository.OpenObject(ctx, id)
+		if errors.Is(err, repo.ErrMissing) {
+			return &pushRefusal{short: fmt.Sprintf("missing necessary objects: %s is named and neither sent nor held", id)}
 		}
-		o, err := rc.pack.OpenObject(ctx, id)
 		if err != nil {
 			return err
 		}
-		t := o.Type()
 		o.Close()
-		switch t {
-		case repo.TypeBlob:
+		held[id] = true
+		return nil
+	}
+	for _, tip := range tips {
+		if err := has(tip); err != nil {
+			return err
+		}
+	}
+	if rc.unpacked == nil {
+		return nil
+	}
+	for _, o := range rc.unpacked.Objects {
+		var named []repo.ID
+		switch o.Type {
 		case repo.TypeCommit:
-			_, data, err := repo.ReadObject(ctx, rc.pack, id, repo.MaxParsedBytes)
+			_, data, err := repo.ReadObject(ctx, rc.pack, o.ID, repo.MaxParsedBytes)
 			if err != nil {
 				return err
 			}
@@ -481,10 +497,9 @@ func connected(ctx context.Context, rc *received, repository repo.Lookup, tips [
 			if err != nil {
 				return err
 			}
-			queue = append(queue, c.Tree)
-			queue = append(queue, c.Parents...)
+			named = append([]repo.ID{c.Tree}, c.Parents...)
 		case repo.TypeTree:
-			_, data, err := repo.ReadObject(ctx, rc.pack, id, repo.MaxParsedBytes)
+			_, data, err := repo.ReadObject(ctx, rc.pack, o.ID, repo.MaxParsedBytes)
 			if err != nil {
 				return err
 			}
@@ -494,11 +509,11 @@ func connected(ctx context.Context, rc *received, repository repo.Lookup, tips [
 			}
 			for _, e := range entries {
 				if e.Mode != repo.ModeSubmodule {
-					queue = append(queue, e.ID)
+					named = append(named, e.ID)
 				}
 			}
 		case repo.TypeTag:
-			_, data, err := repo.ReadObject(ctx, rc.pack, id, repo.MaxParsedBytes)
+			_, data, err := repo.ReadObject(ctx, rc.pack, o.ID, repo.MaxParsedBytes)
 			if err != nil {
 				return err
 			}
@@ -506,7 +521,12 @@ func connected(ctx context.Context, rc *received, repository repo.Lookup, tips [
 			if err != nil {
 				return err
 			}
-			queue = append(queue, tag.Object)
+			named = []repo.ID{tag.Object}
+		}
+		for _, id := range named {
+			if err := has(id); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -517,6 +537,8 @@ type judged struct {
 	commit  repo.ID
 	parent  string
 	checked *version.Checked
+	tree    []db.TreeFile
+	files   map[string]fileOf
 }
 
 // judge holds each command to the refs as they stand and to what the pusher holds, then judges
@@ -601,9 +623,12 @@ func (s *Server) judge(ctx context.Context, r *http.Request, who Principal, over
 		}
 	}
 
-	// Each commit a ref will point at is judged once, in the order the commands name them, and a
-	// commit that is a version already is not judged again: "a commit already stored is judged by
-	// none of the rules that arrived after it was stored".
+	// Each commit a ref will point at is judged once, in the order the commands name them. A
+	// commit that is a version already is not judged again: what was judged is what it holds,
+	// secret:use included, since what that permission answers for is writing a secret's name,
+	// which is done. Its tree is compared with the one recorded all the same, since a tree push
+	// records a version under whatever commit it is told, and a branch left at a commit whose
+	// files are not the version's would run files nobody judged.
 	var out []judged
 	seen := map[repo.ID]bool{}
 	for _, c := range p.commands {
@@ -616,6 +641,9 @@ func (s *Server) judge(ctx context.Context, r *http.Request, who Principal, over
 			return nil, err
 		}
 		if stored {
+			if err := s.sameTree(ctx, over, rc, c.commit); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		j, err := s.hook(ctx, r, over, rc, c.commit)
@@ -641,6 +669,20 @@ func (s *Server) isVersion(ctx context.Context, over Target, commit string) (boo
 	return stored, err
 }
 
+// sameTree refuses a commit that is a version already where the version records another tree.
+func (s *Server) sameTree(ctx context.Context, over Target, rc *received, commit repo.ID) error {
+	_, data, err := repo.ReadObject(ctx, rc.objects, commit, repo.MaxParsedBytes)
+	if err != nil {
+		return err
+	}
+	c, err := repo.ParseCommit(data)
+	if err != nil {
+		return err
+	}
+	_, _, err = s.treeRecorded(ctx, over, rc, commit, c.Tree)
+	return err
+}
+
 // hook judges one commit as the version it would be, by the one validation agk validate makes.
 func (s *Server) hook(ctx context.Context, r *http.Request, over Target, rc *received, commit repo.ID) (judged, error) {
 	_, data, err := repo.ReadObject(ctx, rc.objects, commit, repo.MaxParsedBytes)
@@ -651,8 +693,13 @@ func (s *Server) hook(ctx context.Context, r *http.Request, over Target, rc *rec
 	if err != nil {
 		return judged{}, err
 	}
+	j := judged{commit: commit}
+	if len(c.Parents) > 0 {
+		j.parent = c.Parents[0].String()
+	}
+	// Judged by the rules first, which name what they refuse and where, and its files read after.
 	tree := repo.NewTreeFS(ctx, rc.objects, c.Tree)
-	checked, err := version.Check(ctx, tree, version.Checking{
+	j.checked, err = version.Check(ctx, tree, version.Checking{
 		Commit: commit.String(), Committed: true, Namespace: over.Namespace, Repository: over.Workflow,
 		Resolvers: s.resolvers(r, over),
 	})
@@ -679,11 +726,42 @@ func (s *Server) hook(ctx context.Context, r *http.Request, over Target, rc *rec
 		}
 		return judged{}, &pushRefusal{short: "refused: " + oneLine(err.Error()), told: []string{fmt.Sprintf("%s refused %s: %s", over.Workflow, commit, err)}, commit: commit}
 	}
-	var parent string
-	if len(c.Parents) > 0 {
-		parent = c.Parents[0].String()
+	if j.tree, j.files, err = s.treeRecorded(ctx, over, rc, commit, c.Tree); err != nil {
+		return judged{}, err
 	}
-	return judged{commit: commit, parent: parent, checked: checked}, nil
+	return j, nil
+}
+
+// treeRecorded is a commit's tree as a version keeps it, refused where it holds more files than a
+// version may, or where the commit is recorded as a version with another tree.
+func (s *Server) treeRecorded(ctx context.Context, over Target, rc *received, commit, root repo.ID) ([]db.TreeFile, map[string]fileOf, error) {
+	files, blobs, err := treeOf(ctx, rc.objects, root, TreeMaxFiles)
+	var odd *oddTree
+	switch {
+	case errors.Is(err, errTooManyFiles):
+		told := fmt.Sprintf("%s refused %s: its tree holds more than %d files, the most a version holds while every task of it is sent the URL of every file of its tree; a tree of this many is usually carrying dependencies that belong in an image", over.Workflow, commit, TreeMaxFiles)
+		return nil, nil, &pushRefusal{short: fmt.Sprintf("refused: more than %d files", TreeMaxFiles), told: []string{told}, commit: commit}
+	case errors.As(err, &odd):
+		return nil, nil, &pushRefusal{short: "refused: " + oneLine(odd.Error()), told: []string{fmt.Sprintf("%s refused %s: %s", over.Workflow, commit, odd)}, commit: commit}
+	case err != nil:
+		return nil, nil, err
+	}
+	err = s.pool.In(ctx, over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		return ns.CheckVersion(ctx, db.Version{Workflow: over.Workflow, Commit: commit.String(), Tree: files})
+	})
+	if errors.Is(err, db.ErrOtherTree) {
+		return nil, nil, otherTreeRefusal(over, commit)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return files, blobs, nil
+}
+
+// otherTreeRefusal is the refusal of a commit recorded as a version with other files than it holds.
+func otherTreeRefusal(over Target, commit repo.ID) *pushRefusal {
+	told := fmt.Sprintf("%s refused %s: it is a version already, recorded by a tree push with other files than the commit holds, and a version is a commit: one commit names exactly one tree, so a run of it would lay out files git does not show. Commit again, which makes another version", over.Workflow, commit)
+	return &pushRefusal{short: "refused: a version recorded with other files", told: []string{told}, commit: commit}
 }
 
 // resolvers are what the hook reaches beyond a commit's tree: the repository's pins and manifests,
@@ -804,25 +882,23 @@ func descends(ctx context.Context, objects repo.Lookup, commit, old repo.ID) (bo
 	return false, nil
 }
 
+// made is a version a push makes, and where the bytes of its files are.
+type made struct {
+	v     db.Version
+	files map[string]fileOf
+}
+
 // accept records a push the hook accepted: the files of each new version as the objects a runner
 // fetches, the pack, then in one transaction the refs, the pack made live, each version and each
 // move recorded.
 func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *received, p pushed, versions []judged) error {
 	now := s.now()
-	type made struct {
-		v     db.Version
-		files map[string]fileOf
-	}
 	var all []made
 	for _, j := range versions {
-		tree, files, err := treeOf(ctx, rc.objects, j.commit)
-		if err != nil {
-			return err
-		}
 		v := j.checked.Version
 		v.Namespace, v.Workflow, v.Commit, v.Parent = over.Namespace, over.Workflow, j.commit.String(), j.parent
-		v.Tree, v.Author, v.CreatedAt, v.Source = tree, string(who), now, db.SourceGit
-		all = append(all, made{v: v, files: files})
+		v.Tree, v.Author, v.CreatedAt, v.Source = j.tree, string(who), now, db.SourceGit
+		all = append(all, made{v: v, files: j.files})
 	}
 	// The bytes before the rows, as the tree push writes them, so that a version that exists names
 	// objects that exist.
@@ -860,13 +936,13 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 				return err
 			}
 		}
-		saved = saved[:0]
-		for _, m := range all {
-			got, err := ns.SaveVersion(ctx, m.v)
-			if err != nil {
-				return err
-			}
-			saved = append(saved, got)
+		versions := make([]db.Version, len(all))
+		for i, m := range all {
+			versions[i] = m.v
+		}
+		var err error
+		if saved, err = ns.SaveVersions(ctx, versions); err != nil {
+			return err
 		}
 		for _, c := range p.commands {
 			detail := map[string]any{"ref": c.ref, "old": idOrEmpty(c.old), "new": idOrEmpty(c.new), "forced": c.forced}
@@ -886,8 +962,24 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 	case err != nil:
 		return err
 	}
-	// And again for any object a sweep had claimed while a version raised its reference onto it,
-	// or whose row the version had to create, as the tree push does: see there.
+	// The refs have moved: whatever follows is the installation's to finish, and the push is
+	// answered as accepted whether it does or not. Neither is it left to the client, which may
+	// hang up once its refs are reported, so it runs whatever becomes of the request.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), afterPushTimeout)
+	defer cancel()
+	if err := s.writeAgain(ctx, over, rc, all, saved); err != nil {
+		s.report(fmt.Errorf("api: a push to %s/%s moved its refs and its files could not all be written again: %w", over.Namespace, over.Workflow, err))
+	}
+	return nil
+}
+
+// afterPushTimeout bounds what a push writes once its refs have moved: a minute, some thousands of
+// small files at the store's pace, where the objects written again are usually none.
+const afterPushTimeout = time.Minute
+
+// writeAgain writes again, as the tree push does, each object a sweep had claimed while a version
+// raised its reference onto it, and each whose row the version had to create: see there.
+func (s *Server) writeAgain(ctx context.Context, over Target, rc *received, all []made, saved []db.Saved) error {
 	for i, m := range all {
 		again := map[string]fileOf{}
 		for _, digest := range saved[i].MustWriteBytes {
@@ -912,41 +1004,64 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 // fileOf is where the bytes of a version's file are: the blob holding them.
 type fileOf struct{ blob repo.ID }
 
+// errTooManyFiles is a tree holding more files than a version may.
+var errTooManyFiles = errors.New("the tree holds more files than a version may")
+
+// oddTree is a tree no version holds, which the validation refuses of a tree it judges and which a
+// commit that is a version already can still hold: a path past its bound, or more paths than a
+// walk visits.
+type oddTree struct{ why string }
+
+func (o *oddTree) Error() string { return o.why }
+
 // treeOf is a commit's tree as a version keeps it: every file with its path, SHA-256, size and
 // mode, and where the bytes of each digest are. The hook has refused a tree holding a symbolic
 // link or a submodule, so every entry is a directory or a file.
-func treeOf(ctx context.Context, objects repo.Lookup, commit repo.ID) ([]db.TreeFile, map[string]fileOf, error) {
-	_, data, err := repo.ReadObject(ctx, objects, commit, repo.MaxParsedBytes)
-	if err != nil {
-		return nil, nil, err
-	}
-	c, err := repo.ParseCommit(data)
-	if err != nil {
-		return nil, nil, err
-	}
+//
+// A tree of more than most files is errTooManyFiles, answered before the file past them is read:
+// the bound the tree push holds a tree to, TreeMaxFiles, for its reason, which holds of a version
+// whichever push made it for as long as every task of it is sent the URL of every file. A path past
+// version.TreePathMaxBytes and a tree of more than version.TreeMaxEntries paths are refused as the
+// validation refuses them, since a commit that is a version already is not walked by it. Walked
+// with a stack of its own rather than by recursion, so that no tree is deep enough to exhaust one.
+func treeOf(ctx context.Context, objects repo.Lookup, root repo.ID, most int) ([]db.TreeFile, map[string]fileOf, error) {
 	var tree []db.TreeFile
 	files := map[string]fileOf{}
-	var walk func(id repo.ID, dir string) error
-	walk = func(id repo.ID, dir string) error {
-		_, data, err := repo.ReadObject(ctx, objects, id, repo.MaxParsedBytes)
+	type dir struct {
+		id   repo.ID
+		name string
+	}
+	stack := []dir{{id: root}}
+	visited := 0
+	for len(stack) > 0 {
+		d := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		_, data, err := repo.ReadObject(ctx, objects, d.id, repo.MaxParsedBytes)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		entries, err := repo.ParseTree(data)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		for _, e := range entries {
-			name := path.Join(dir, e.Name)
+			if visited++; visited > version.TreeMaxEntries {
+				return nil, nil, &oddTree{version.ErrTooManyEntries.Error()}
+			}
+			name := path.Join(d.name, e.Name)
+			if len(name) > version.TreePathMaxBytes {
+				return nil, nil, &oddTree{fmt.Sprintf("%.64s... is a path of more than %d bytes, the most a tree path may be", name, version.TreePathMaxBytes)}
+			}
 			switch e.Mode {
 			case repo.ModeTree:
-				if err := walk(e.ID, name); err != nil {
-					return err
-				}
+				stack = append(stack, dir{id: e.ID, name: name})
 			case repo.ModeFile, repo.ModeExecutable:
+				if len(tree) == most {
+					return nil, nil, errTooManyFiles
+				}
 				digest, size, err := digestOf(ctx, objects, e.ID)
 				if err != nil {
-					return err
+					return nil, nil, err
 				}
 				mode := "0644"
 				if e.Mode == repo.ModeExecutable {
@@ -955,13 +1070,9 @@ func treeOf(ctx context.Context, objects repo.Lookup, commit repo.ID) ([]db.Tree
 				tree = append(tree, db.TreeFile{Path: name, SHA256: digest, Size: size, Mode: mode})
 				files[digest] = fileOf{blob: e.ID}
 			default:
-				return fmt.Errorf("%s is a %s, which a version's tree does not hold", name, e.Mode)
+				return nil, nil, &oddTree{fmt.Sprintf("%s is a %s, which a version's tree does not hold", name, e.Mode)}
 			}
 		}
-		return nil
-	}
-	if err := walk(c.Tree, ""); err != nil {
-		return nil, nil, err
 	}
 	return tree, files, nil
 }

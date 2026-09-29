@@ -347,8 +347,30 @@ const TreeMaxBytes = 4 << 20
 // version runs, held in the API's memory while it is answered. At TreeMaxBytes this many files is
 // a kibibyte each on average, which is smaller than a script usually is, so a workflow reaches it
 // only by carrying a dependency tree, and that belongs in an image. It is counted as the push is
-// read, so a tree of more is refused before its files are decoded.
+// read, so a tree of more is refused before its files are decoded. A git push holds each version it
+// makes to it too, for the same reason, for as long as every task is sent every file's URL.
 const TreeMaxFiles = 4096
+
+// errGitHosts is a tree pushed as a new version of a repository git hosts.
+var errGitHosts = errors.New("git hosts the repository")
+
+// gitHosts answers errGitHosts where a git push has given the repository a branch or a tag.
+func gitHosts(ctx context.Context, ns *db.NS, workflow string) error {
+	hosted, err := ns.GitHosted(ctx, workflow)
+	if err != nil {
+		return err
+	}
+	if hosted {
+		return errGitHosts
+	}
+	return nil
+}
+
+// hostedByGit is the refusal of a tree pushed as a new version of a repository git hosts. A commit
+// already a version is still answered, as it always is, since that push makes nothing.
+func hostedByGit(over Target) string {
+	return fmt.Sprintf("git hosts %s/%s since a git push gave it a branch or a tag, and from then on a version is a commit pushed with git: a tree pushed here would be a version no ref reaches and no clone holds", over.Namespace, over.Workflow)
+}
 
 // commitName is a commit as a push names one, and a push is held to it before anything is written.
 // Left to the table's own check, a commit that is not one was refused only by the insert, after
@@ -440,6 +462,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// unchanged: it is not judged again by a rule added after it was stored, so that an agk of
 	// the release that stored it, pushing it again after an upgrade, meets no refusal it did not
 	// meet then. The rules that stood then, secret:use and the inputs' declaration, still apply.
+	//
+	// A commit that is not a version yet is refused once git hosts the repository, before
+	// anything is written: from its first branch or tag on, a version is a commit a git push
+	// carries, and a tree pushed here would be one no ref reaches and no clone holds.
 	var stored bool
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.CheckVersion(ctx, v); err != nil {
@@ -447,13 +473,17 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		}
 		_, err := ns.Version(ctx, over.Workflow, commit)
 		stored = err == nil
-		if errors.Is(err, db.ErrNoVersion) {
-			return nil
+		if !errors.Is(err, db.ErrNoVersion) {
+			return err
 		}
-		return err
+		return gitHosts(ctx, ns, over.Workflow)
 	})
 	if errors.Is(err, db.ErrOtherTree) {
 		fail(w, http.StatusConflict, otherTree)
+		return
+	}
+	if errors.Is(err, errGitHosts) {
+		fail(w, http.StatusConflict, hostedByGit(over))
 		return
 	}
 	if err != nil {
@@ -565,16 +595,23 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		if err := ns.SaveWorkflow(ctx, over.Workflow, p.Branch); err != nil {
 			return err
 		}
-		// The repository's lock before the version's rows, where the version may pin a tag, in
-		// the order a git push takes them, so that the two never wait on each other.
-		if len(pins.Pins) > 0 {
-			if err := ns.HoldRepository(ctx, over.Workflow); err != nil {
-				return err
-			}
+		// The repository's lock before the version's rows, in the order a git push takes them,
+		// so that the two never wait on each other, and so that a git push giving the
+		// repository its first ref cannot land between asking whether git hosts it and the
+		// version's row.
+		if err := ns.HoldRepository(ctx, over.Workflow); err != nil {
+			return err
+		}
+		hosted := gitHosts(ctx, ns, over.Workflow)
+		if hosted != nil && !errors.Is(hosted, errGitHosts) {
+			return hosted
 		}
 		var err error
 		if saved, err = ns.SaveVersion(ctx, v); err != nil {
 			return err
+		}
+		if saved.New && hosted != nil {
+			return hosted
 		}
 		if saved.New {
 			if len(pins.Pins) == 0 {
@@ -596,6 +633,12 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		// Two pushes of one commit that both compared before either recorded, and this one
 		// lost. What it stored is uncounted, as it is for a push that dies before its row.
 		fail(w, http.StatusConflict, otherTree)
+		return
+	}
+	if errors.Is(err, errGitHosts) {
+		// A git push gave the repository its first ref after this one looked. What it stored
+		// is uncounted, as it is for a push that dies before its row.
+		fail(w, http.StatusConflict, hostedByGit(over))
 		return
 	}
 	if err != nil {

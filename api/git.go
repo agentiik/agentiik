@@ -81,6 +81,19 @@ func gitFail(w http.ResponseWriter, status int, message string) {
 	io.WriteString(w, message+"\n")
 }
 
+// gitRequest refuses a POST whose body is not of the type git sends to service, as git's own
+// http-backend does, with 415: neither type is one a page of another site may send without asking
+// first, so a browser holding a token it was given for this host, as Basic's password, cannot be
+// made to send a fetch or a push by a page it visits.
+func gitRequest(w http.ResponseWriter, r *http.Request, service string) bool {
+	want := "application/x-" + service + "-request"
+	if r.Header.Get("Content-Type") == want {
+		return true
+	}
+	gitFail(w, http.StatusUnsupportedMediaType, fmt.Sprintf("a POST to %s carries %s, which git sends, and this one carries %.64q", service, want, r.Header.Get("Content-Type")))
+	return false
+}
+
 // notPushing is the refusal of a caller who may read a repository and not push to it: a 403 rather
 // than the 404 of one they cannot read, since they can, and told why.
 func notPushing(w http.ResponseWriter, over Target) {
@@ -188,16 +201,17 @@ func advertised(r db.Repository, service string) []string {
 // The capabilities of each service, as git names them.
 //
 // A fetch: the pack on side band 64k, or 1k for a client that asks for that one, progress left out
-// where no-progress is asked, and an annotated tag sent where it points at what is sent, where
-// include-tag is asked. ofs-delta says a client may be sent deltas against an offset, which a pack
-// of whole objects never holds and which is harmless to say. There is no multi_ack: the common
-// commit is the first the client names that the repository holds, and no shallow: a shallow clone
-// is refused by git itself, saying the server does not support it.
+// where no-progress is asked, an annotated tag sent where it points at what is sent, where
+// include-tag is asked, and every common commit acknowledged, which is what lets a client that
+// asks nothing of the server between two requests go on finding them (see git_upload.go).
+// ofs-delta says a client may be sent deltas against an offset, which a pack of whole objects never
+// holds and which is harmless to say. There is no shallow: a shallow clone is refused by git
+// itself, saying the server does not support it.
 //
 // A push: its status reported, refs deleted, the report on side band 64k, quiet, and atomic, which
 // every push is whether asked or not, since the refs of one push move all together or not at all.
 const (
-	uploadCapabilities  = "side-band-64k side-band ofs-delta include-tag no-progress"
+	uploadCapabilities  = "multi_ack_detailed side-band-64k side-band ofs-delta include-tag no-progress"
 	receiveCapabilities = "report-status delete-refs side-band-64k quiet atomic ofs-delta"
 )
 

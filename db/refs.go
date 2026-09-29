@@ -109,6 +109,20 @@ type Pack struct {
 	CreatedAt time.Time
 }
 
+// GitHosted says whether git hosts a workflow's repository: whether any of its refs points at a
+// commit, which only a git push makes. The tree push asks it under the repository's lock, since a
+// version it made from then on would be one no ref reaches and no pack holds.
+func (n *NS) GitHosted(ctx context.Context, workflow string) (bool, error) {
+	var hosted bool
+	err := n.tx.QueryRow(ctx,
+		`select exists (select 1 from workflow_refs where namespace = $1 and workflow = $2 and commit is not null)`,
+		n.namespace, workflow).Scan(&hosted)
+	if err != nil {
+		return false, fmt.Errorf("db: the refs of %s could not be read: %w", workflow, err)
+	}
+	return hosted, nil
+}
+
 // ErrNoPack is a pack no longer receiving: collected once it had been receiving past the grace, or
 // never recorded.
 var ErrNoPack = errors.New("db: that pack is not receiving")

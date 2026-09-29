@@ -3,12 +3,16 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +32,7 @@ import (
 // in finance, and the manifest of image recorded in its repository, served over HTTP for git.
 type gitServer struct {
 	t     *testing.T
+	h     http.Handler
 	url   string
 	pool  *db.Pool
 	super string
@@ -64,7 +69,7 @@ func servingGit(t *testing.T, auth api.Authorizer) *gitServer {
 	}
 	server := httptest.NewServer(rt)
 	t.Cleanup(server.Close)
-	return &gitServer{t: t, url: server.URL, pool: pool, super: super}
+	return &gitServer{t: t, h: rt, url: server.URL, pool: pool, super: super}
 }
 
 // remote is the repository's URL, with the principal as the password git sends, which is how a
@@ -206,9 +211,13 @@ func TestAWorkflowIsPushedClonedAndFetchedWithGit(t *testing.T) {
 		t.Errorf("a clone of an empty repository holds %q", out)
 	}
 
+	// A script large enough that git sends its next version as a delta against this one, which
+	// the repository holds and the push does not carry: git leaves out a delta for an object of
+	// a few dozen bytes.
+	script := strings.Repeat("# a line of the script that the next commit leaves alone\n", 100)
 	work := g.newClone("alice")
 	work.write("agentiik.yaml", workflowDocument)
-	work.write("scripts/normalize.py", "print('normalize')\n")
+	work.write("scripts/normalize.py", script+"print('normalize')\n")
 	first := work.commit("first")
 	work.must("push", "-q", "origin", "main")
 
@@ -227,12 +236,12 @@ func TestAWorkflowIsPushedClonedAndFetchedWithGit(t *testing.T) {
 	if head := strings.TrimSpace(read.must("rev-parse", "HEAD")); head != first {
 		t.Errorf("a clone reads HEAD as %s, where main is %s", head, first)
 	}
-	if got, err := os.ReadFile(filepath.Join(read.dir, "scripts/normalize.py")); err != nil || string(got) != "print('normalize')\n" {
+	if got, err := os.ReadFile(filepath.Join(read.dir, "scripts/normalize.py")); err != nil || string(got) != script+"print('normalize')\n" {
 		t.Errorf("a clone reads the script as %q: %v", got, err)
 	}
 	read.must("fsck", "--strict", "--full")
 
-	work.write("scripts/normalize.py", "print('normalize, twice')\n")
+	work.write("scripts/normalize.py", script+"print('normalize, twice')\n")
 	second := work.commit("second")
 	work.must("push", "-q", "origin", "main")
 	if v, err := g.version(second); err != nil || v.Parent != first {
@@ -262,10 +271,13 @@ func TestAnInvalidWorkflowIsRefusedAtThePushNamingTheFileTheLocationAndTheRule(t
 	if err == nil {
 		t.Fatalf("a workflow naming an image nobody pinned was pushed:\n%s", out)
 	}
-	for _, said := range []string{"remote:", "image-not-pinned", "agentiik.yaml:"} {
+	for _, said := range []string{"remote:", "image-not-pinned"} {
 		if !strings.Contains(out, said) {
 			t.Errorf("git says %q, and does not say %s", out, said)
 		}
+	}
+	if !regexp.MustCompile(`image-not-pinned at agentiik\.yaml:\d+:\d+`).MatchString(out) {
+		t.Errorf("git says %q, and does not name the file, the line and the column", out)
 	}
 	if got := g.refs()["refs/heads/main"]; got != "" {
 		t.Errorf("main names %s after a refused push", got)
@@ -387,6 +399,19 @@ func TestAForcedPushADeletionAndTheProtectedBranchTakeGrantManage(t *testing.T) 
 	if got := g.refs()["refs/heads/main"]; got != rewritten {
 		t.Errorf("main names %s after an owner forced it to %s", got, rewritten)
 	}
+	moves := map[string]map[string]any{}
+	for _, e := range audited(t, g.pool) {
+		if e.Action == audit.RefUpdate && e.Target == "monthly-invoicing" {
+			d := detailOf(t, e)
+			moves[e.Actor+" "+d["ref"].(string)+" "+d["new"].(string)] = d
+		}
+	}
+	if d := moves["owner refs/heads/main "+rewritten]; d == nil || d["forced"] != true {
+		t.Errorf("the owner's forced push is recorded as %v", d)
+	}
+	if d := moves["alice refs/heads/main "+first]; d == nil || d["forced"] != false || d["old"] != "" {
+		t.Errorf("the first push of main is recorded as %v", d)
+	}
 
 	// A branch deleted: refused to an editor, taken from an owner; the default branch never.
 	if out, err := work.run("push", "origin", ":feature"); err == nil || !strings.Contains(out, "grant:manage") {
@@ -461,5 +486,268 @@ func TestACommitNamingASecretIsPushedOnlyBySomeoneHoldingSecretUse(t *testing.T)
 	owner.must("fetch", "-q", work.dir, "main")
 	if out, err := owner.run("push", "origin", "FETCH_HEAD:refs/heads/main"); err != nil {
 		t.Errorf("an owner pushing a secret's name is answered:\n%s", out)
+	}
+
+	// A version already is not judged again: what secret:use answers for is writing a secret's
+	// name, which the owner did, so an editor may leave another branch at it.
+	if out, err := work.run("push", "origin", "main:elsewhere"); err != nil {
+		t.Errorf("an editor leaving a branch at a version naming a secret is answered:\n%s", out)
+	}
+}
+
+// "One row per commit a push left a branch or a tag pointing at, once its hook accepted it, and per
+// tree agk push sent before the repository's first git push": once git hosts the repository, a tree
+// pushed as a new version is refused, since no ref would reach it and no clone would hold it, and a
+// commit that is a version already is answered as it always was.
+func TestATreeIsNoNewVersionOnceGitHostsTheRepository(t *testing.T) {
+	g := servingGit(t, everyone())
+	const versions = "/api/v1/finance/workflows/monthly-invoicing/versions/"
+	if w, _ := call(t, g.h, "PUT", versions+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
+		t.Fatalf("a tree pushed before any git push answered %d: %s", w.Code, w.Body)
+	}
+
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	work.commit("first")
+	work.must("push", "-q", "origin", "main")
+
+	other := strings.Repeat("b", 40)
+	w, _ := call(t, g.h, "PUT", versions+other, "alice", aPush(t))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "git hosts finance/monthly-invoicing") {
+		t.Errorf("a tree pushed as a new version once git hosts the repository answered %d: %s", w.Code, w.Body)
+	}
+	if _, err := g.version(other); err == nil {
+		t.Error("the refused tree is a version")
+	}
+	if w, _ := call(t, g.h, "PUT", versions+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
+		t.Errorf("the tree of a version pushed again answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// A version is held to the files a pushed tree may hold, whichever push makes it, for as long as
+// every task of it is sent the URL of every file: TreeMaxFiles go through, and one more is refused,
+// naming the bound, with no ref moved.
+func TestAVersionOfMoreFilesThanATreeHoldsIsRefusedAtThePush(t *testing.T) {
+	g := servingGit(t, everyone())
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	for i := range api.TreeMaxFiles - 1 {
+		work.write(fmt.Sprintf("data/%04d", i), "the same bytes, one object\n")
+	}
+	full := work.commit("as many files as a tree holds")
+	work.must("push", "-q", "origin", "main")
+	if v, err := g.version(full); err != nil || len(v.Tree) != api.TreeMaxFiles {
+		t.Fatalf("a commit of %d files is recorded with %d: %v", api.TreeMaxFiles, len(v.Tree), err)
+	}
+
+	work.write("data/one-more", "the same bytes, one object\n")
+	over := work.commit("one file more")
+	out, err := work.run("push", "origin", "main")
+	if err == nil || !strings.Contains(out, fmt.Sprintf("more than %d files", api.TreeMaxFiles)) {
+		t.Errorf("a commit of one file more than a tree holds was answered: %v\n%s", err, out)
+	}
+	if got := g.refs()["refs/heads/main"]; got != full {
+		t.Errorf("main names %s after a refused push", got)
+	}
+	if _, err := g.version(over); err == nil {
+		t.Error("the refused commit is a version")
+	}
+}
+
+// pkt is a line as a packet of git's protocol.
+func pkt(line string) string { return fmt.Sprintf("%04x%s", len(line)+4, line) }
+
+// post sends a request to one of the repository's git routes as who, as git would send it, and
+// answers the status and the body.
+func (g *gitServer) post(who, service, body string) (int, string) {
+	g.t.Helper()
+	r, err := http.NewRequestWithContext(g.t.Context(), "POST", g.url+"/finance/monthly-invoicing.git/"+service, strings.NewReader(body))
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	r.SetBasicAuth("agk", who)
+	r.Header.Set("Content-Type", "application/x-"+service+"-request")
+	res, err := http.DefaultClient.Do(r)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	answer, err := io.ReadAll(res.Body)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return res.StatusCode, string(answer)
+}
+
+// A fetch of a history longer than one round of haves: git sends sixteen haves a request, and
+// negotiates on for as long as the server acknowledges each common one, which only
+// multi_ack_detailed does over HTTP. Without it, the pull after a clone of twenty-one commits was
+// answered with the whole history where git read the pack, and failed.
+func TestAFetchNegotiatesPastOneRoundOfHaves(t *testing.T) {
+	g := servingGit(t, everyone())
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	for i := range 21 {
+		work.write("scripts/count.sh", fmt.Sprintf("echo %d\n", i))
+		work.commit(fmt.Sprintf("commit %d", i))
+	}
+	work.must("push", "-q", "origin", "main")
+
+	read := g.cloned("bob")
+	work.write("scripts/count.sh", "echo once more\n")
+	last := work.commit("one more")
+	work.must("push", "-q", "origin", "main")
+	read.must("pull", "-q", "--ff-only", "origin", "main")
+	if got := strings.TrimSpace(read.must("rev-parse", "HEAD")); got != last {
+		t.Errorf("a pull reads HEAD as %s, where main is %s", got, last)
+	}
+	read.must("fsck", "--strict", "--full")
+}
+
+// "Clone and fetch need workflow:read" and nothing a ref does not reach is sent: a want no longer a
+// tip, because a push moved its ref between the advertisement and the fetch, is served as git's own
+// upload-pack serves it over HTTP, since the ref still reaches it, and one no ref reaches is not.
+func TestAWantBehindARefIsServedAndOneNoRefReachesIsNot(t *testing.T) {
+	g := servingGit(t, everyone())
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	first := work.commit("first")
+	work.must("push", "-q", "origin", "main")
+	work.write("scripts/a.sh", "true\n")
+	work.commit("second")
+	work.must("push", "-q", "origin", "main")
+
+	status, answer := g.post("bob", "git-upload-pack", pkt("want "+first+" side-band-64k multi_ack_detailed\n")+"0000"+pkt("done\n"))
+	if status != http.StatusOK || strings.Contains(answer, "ERR") || !strings.Contains(answer, "PACK") {
+		t.Errorf("a want the ref moved past is answered %d: %.200q", status, answer)
+	}
+	elsewhere := strings.Repeat("1", 40)
+	_, answer = g.post("bob", "git-upload-pack", pkt("want "+elsewhere+" side-band-64k\n")+"0000"+pkt("done\n"))
+	if !strings.Contains(answer, "ERR upload-pack: not our ref "+elsewhere) {
+		t.Errorf("a want no ref reaches is answered %.200q", answer)
+	}
+}
+
+// A POST is of the type git sends, as git's own http-backend holds it to: neither is a type a page
+// of another site may send a browser holding a token without asking first.
+func TestAGitRequestOfAnotherTypeIsRefused(t *testing.T) {
+	g := servingGit(t, everyone())
+	for _, service := range []string{"git-upload-pack", "git-receive-pack"} {
+		r, _ := http.NewRequestWithContext(t.Context(), "POST", g.url+"/finance/monthly-invoicing.git/"+service, strings.NewReader("0000"))
+		r.SetBasicAuth("agk", "alice")
+		r.Header.Set("Content-Type", "text/plain")
+		res, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusUnsupportedMediaType {
+			t.Errorf("a POST to %s as text/plain is answered %d", service, res.StatusCode)
+		}
+	}
+}
+
+// Every object a push stores names only objects the repository holds, reached by a new tip or not:
+// a pack slipping in a commit whose parent nobody sent is refused whole, where it would have let a
+// later push leave a ref at it, its history missing and every clone failing.
+func TestAPackHoldingAnObjectWhoseHistoryIsMissingIsRefused(t *testing.T) {
+	g := servingGit(t, everyone())
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	tip := work.commit("the tip")
+	tree := strings.TrimSpace(work.must("rev-parse", tip+"^{tree}"))
+	parent := strings.TrimSpace(work.must("commit-tree", tree, "-m", "a parent nobody sends"))
+	orphan := strings.TrimSpace(work.must("commit-tree", tree, "-p", parent, "-m", "a commit nothing reaches"))
+
+	objects := work.must("rev-list", "--objects", tip)
+	var ids []string
+	for _, line := range strings.Split(strings.TrimSpace(objects), "\n") {
+		id, _, _ := strings.Cut(line, " ")
+		ids = append(ids, id)
+	}
+	ids = append(ids, orphan)
+	cmd := exec.Command("git", "pack-objects", "--stdout")
+	cmd.Dir = work.dir
+	cmd.Env = gitEnv(filepath.Dir(work.dir))
+	cmd.Stdin = strings.NewReader(strings.Join(ids, "\n") + "\n")
+	pack, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	zero := strings.Repeat("0", 40)
+	_, answer := g.post("alice", "git-receive-pack", pkt(zero+" "+tip+" refs/heads/main\x00report-status\n")+"0000"+string(pack))
+	if !strings.Contains(answer, "missing necessary objects: "+parent) || !strings.Contains(answer, "ng refs/heads/main") {
+		t.Errorf("a pack holding a commit whose parent nobody sent is answered %.300q", answer)
+	}
+	if got := g.refs()["refs/heads/main"]; got != "" {
+		t.Errorf("main names %s after the refused push", got)
+	}
+}
+
+// A version is a commit, and a commit names exactly one tree: a commit a tree push recorded with
+// other files than it holds is refused at a git push, which would otherwise leave a branch at files
+// nobody judged, and one recorded with the files it holds is taken as the version it is.
+func TestACommitRecordedByATreePushWithOtherFilesIsRefused(t *testing.T) {
+	g := servingGit(t, everyone())
+	const versions = "/api/v1/finance/workflows/monthly-invoicing/versions/"
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	work.write("scripts/benign.sh", "true\n")
+	other := work.commit("files the tree push did not carry")
+	if w, _ := call(t, g.h, "PUT", versions+other, "alice", aPush(t)); w.Code != http.StatusOK {
+		t.Fatalf("the tree push answered %d: %s", w.Code, w.Body)
+	}
+	out, err := work.run("push", "origin", "main")
+	if err == nil || !strings.Contains(out, "recorded with other files") {
+		t.Errorf("a commit recorded with other files is pushed:\n%s", out)
+	}
+	if got := g.refs()["refs/heads/main"]; got != "" {
+		t.Errorf("main names %s after the refused push", got)
+	}
+
+	same := g.newClone("alice")
+	same.write("agentiik.yaml", workflowDocument)
+	commit := same.commit("the files the tree push carried")
+	if w, _ := call(t, g.h, "PUT", versions+commit, "alice", aPush(t)); w.Code != http.StatusOK {
+		t.Fatalf("the tree push answered %d: %s", w.Code, w.Body)
+	}
+	same.must("push", "-q", "origin", "main")
+	if v, err := g.version(commit); err != nil || v.Source != db.SourceTree {
+		t.Errorf("the version is %+v after the git push of its commit: %v", v, err)
+	}
+}
+
+// Two pushes racing to create one branch: one lands whole, and the other is refused whole, its
+// commit no version, whichever of the two checks catches it, git's own or the installation's.
+func TestTwoPushesRacingForOneBranchLandOne(t *testing.T) {
+	g := servingGit(t, everyone())
+	var works [2]*clone
+	var commits [2]string
+	for i := range works {
+		works[i] = g.newClone("alice")
+		works[i].write("agentiik.yaml", workflowDocument)
+		works[i].write("scripts/racer.sh", fmt.Sprintf("echo %d\n", i))
+		commits[i] = works[i].commit(fmt.Sprintf("racer %d", i))
+	}
+	var errs [2]error
+	var outs [2]string
+	var wg sync.WaitGroup
+	for i := range works {
+		wg.Go(func() { outs[i], errs[i] = works[i].run("push", "origin", "main") })
+	}
+	wg.Wait()
+	if (errs[0] == nil) == (errs[1] == nil) {
+		t.Fatalf("two pushes racing for main answered %v and %v:\n%s\n%s", errs[0], errs[1], outs[0], outs[1])
+	}
+	won, lost := 0, 1
+	if errs[0] != nil {
+		won, lost = 1, 0
+	}
+	if got := g.refs()["refs/heads/main"]; got != commits[won] {
+		t.Errorf("main names %s, where the push that landed moved it to %s", got, commits[won])
+	}
+	if _, err := g.version(commits[lost]); err == nil {
+		t.Errorf("the commit of the push that lost is a version:\n%s", outs[lost])
 	}
 }

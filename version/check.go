@@ -62,7 +62,10 @@ func Check(ctx context.Context, tree fs.FS, c Checking) (*Checked, error) {
 	// construction, and the only way to be exact, since an include may itself include and
 	// working out the closure by parsing the include blocks again would be this package
 	// reimplementing resolution in order to agree with resolution.
-	watched := &watcher{under: tree, read: map[string][]byte{}}
+	//
+	// Both it and the schemas the inputs name are read within ReadMaxBytes, together.
+	limited := &budgeted{under: tree, left: ReadMaxBytes}
+	watched := &watcher{under: limited, read: map[string][]byte{}}
 	load := graph.Load
 	if c.Stored {
 		load = graph.LoadStored
@@ -86,7 +89,7 @@ func Check(ctx context.Context, tree fs.FS, c Checking) (*Checked, error) {
 	// The boundary a trigger fills, and a schema that does not compile is a workflow whose
 	// first run cannot start. Compiled against the tree rather than what resolution read,
 	// since a schema's $ref names a file of the commit, which is not an include.
-	if _, err := wf.DeclaredInputs(tree); err != nil {
+	if _, err := wf.DeclaredInputs(limited); err != nil {
 		return nil, err
 	}
 

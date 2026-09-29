@@ -196,7 +196,7 @@ func checkTree(tree fs.FS) error {
 		}
 		return nil
 	}
-	return fs.WalkDir(tree, ".", func(name string, d fs.DirEntry, err error) error {
+	return walkTree(tree, func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -204,6 +204,32 @@ func checkTree(tree fs.FS) error {
 			return nil
 		}
 		return TreeEntry(name, d.Type())
+	})
+}
+
+// TreeMaxEntries is the most entries, files and directories together, a walk of a tree visits
+// before the tree is refused: 65,536. A version holds at most 4,096 files, the bound a pushed tree
+// is held to, and sixteen levels of directory above each of them is more than anybody nests.
+//
+// Counted by path rather than by tree object, since a walk visits paths: git lets one tree name
+// another any number of times, so eleven trees of a thousand entries each, a few kilobytes of a
+// push, list 10^30 paths, and a walk that did not count them would hold whoever judges the push
+// for ever.
+const TreeMaxEntries = 1 << 16
+
+// ErrTooManyEntries is a tree listing more than TreeMaxEntries paths.
+var ErrTooManyEntries = fmt.Errorf("the tree lists more than %d files and directories, counted by path, where a version holds at most 4,096 files", TreeMaxEntries)
+
+// walkTree walks a tree as fs.WalkDir does, and refuses one listing more than TreeMaxEntries paths.
+func walkTree(tree fs.FS, fn fs.WalkDirFunc) error {
+	visited := 0
+	return fs.WalkDir(tree, ".", func(name string, d fs.DirEntry, err error) error {
+		if name != "." {
+			if visited++; visited > TreeMaxEntries {
+				return ErrTooManyEntries
+			}
+		}
+		return fn(name, d, err)
 	})
 }
 
@@ -223,7 +249,7 @@ func entryPoint(tree fs.FS) error {
 				below = append(below, name)
 			}
 		}
-	} else if err := fs.WalkDir(tree, ".", func(name string, d fs.DirEntry, err error) error {
+	} else if err := walkTree(tree, func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
