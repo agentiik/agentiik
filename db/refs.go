@@ -88,10 +88,20 @@ type RefUpdate struct {
 	// Commit is the commit New peels to, where New is an annotated tag; empty is New itself, which
 	// is what a branch and a lightweight tag name.
 	Commit string
+
+	// Unprotected is that the push was judged to move the ref as a ref nobody protects, without
+	// asking whether the pusher holds grant:manage, so that it is moved only while that still
+	// holds: a protection set between the push being judged and its refs moving would otherwise
+	// be moved past by a pusher who never held what it asks for.
+	Unprotected bool
 }
 
 // ErrStaleRef is a ref no longer where the push found it: another push moved it first.
 var ErrStaleRef = errors.New("db: a ref is no longer where the push found it")
+
+// ErrProtected is a ref a push was judged to move as unprotected, and that was protected before its
+// refs moved.
+var ErrProtected = errors.New("db: a ref was protected while the push was judged")
 
 // ErrDefaultBranch is a push deleting the default branch, which is refused.
 var ErrDefaultBranch = errors.New("db: the default branch is not deleted: another branch is named the default first")
@@ -218,7 +228,7 @@ func (n *NS) UpdateRefs(ctx context.Context, workflow, by string, at time.Time, 
 	}
 	type move struct {
 		ref, old, commit, tag string
-		deletes               bool
+		deletes, unprotected  bool
 	}
 	moves := make([]move, 0, len(updates))
 	seen := map[string]bool{}
@@ -231,7 +241,7 @@ func (n *NS) UpdateRefs(ctx context.Context, workflow, by string, at time.Time, 
 			return fmt.Errorf("db: the refs of %s: %s is moved twice by one push", workflow, u.Ref)
 		}
 		seen[u.Ref] = true
-		moves = append(moves, move{ref: u.Ref, old: u.Old, commit: m.commit, tag: m.tag, deletes: u.New == ""})
+		moves = append(moves, move{ref: u.Ref, old: u.Old, commit: m.commit, tag: m.tag, deletes: u.New == "", unprotected: u.Unprotected})
 	}
 	if at.IsZero() {
 		at = time.Now().UTC()
@@ -251,6 +261,29 @@ func (n *NS) UpdateRefs(ctx context.Context, workflow, by string, at time.Time, 
 	for _, m := range moves {
 		if m.deletes && m.ref == "refs/heads/"+branch {
 			return fmt.Errorf("%w: %s of %s", ErrDefaultBranch, m.ref, workflow)
+		}
+	}
+
+	// Protection is read again under the lock, which a change of it takes too (SetDefault): a
+	// push judged before the change moves its refs after it, and is held to it.
+	var unprotected []string
+	for _, m := range moves {
+		if m.unprotected {
+			unprotected = append(unprotected, m.ref)
+		}
+	}
+	if len(unprotected) > 0 {
+		var protected string
+		err := n.tx.QueryRow(ctx,
+			`select ref from workflow_refs
+			 where namespace = $1 and workflow = $2 and ref = any($3) and protected
+			 order by ref limit 1`,
+			n.namespace, workflow, unprotected).Scan(&protected)
+		switch {
+		case err == nil:
+			return fmt.Errorf("%w: %s of %s", ErrProtected, protected, workflow)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("db: the protection of the refs of %s could not be read: %w", workflow, err)
 		}
 	}
 

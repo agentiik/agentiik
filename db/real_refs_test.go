@@ -688,3 +688,39 @@ func TestARepositoryIsReadAndMovedInItsOwnNamespaceAlone(t *testing.T) {
 		t.Errorf("team-ops's repository went from\n%+v\nto\n%+v", theirs, after)
 	}
 }
+
+// A ref a push was judged to move as unprotected is moved only while it still is: protection set
+// between the push being judged and its refs moving, which a PATCH does under the same lock, holds
+// the push to it. A ref judged as protected, by a pusher holding grant:manage, moves either way.
+func TestAPushJudgedBeforeARefWasProtectedIsHeldToTheProtection(t *testing.T) {
+	pool, _ := repositories(t)
+	move := func(updates ...RefUpdate) error {
+		return pool.In(t.Context(), "finance", func(ctx context.Context, n *NS) error {
+			return n.UpdateRefs(ctx, "nightly", "alice", time.Time{}, updates)
+		})
+	}
+	if err := move(RefUpdate{Ref: "refs/heads/main", New: c1, Unprotected: true}); err != nil {
+		t.Fatalf("a push to the unprotected default branch answered %v", err)
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, n *NS) error {
+		_, _, err := n.SetDefault(ctx, "nightly", nil, ptrTo(true))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := move(RefUpdate{Ref: "refs/heads/main", Old: c1, New: c2, Unprotected: true}, RefUpdate{Ref: "refs/heads/feature", New: c2, Unprotected: true})
+	if !errors.Is(err, ErrProtected) || !strings.Contains(err.Error(), "refs/heads/main") {
+		t.Errorf("a push judged before the protection answered %v", err)
+	}
+	if main, _ := refNamed(repositoryOf(t, pool, "finance", "nightly"), "refs/heads/main"); main.Commit != c1 {
+		t.Errorf("the protected branch moved to %s", main.Commit)
+	}
+	if _, held := refNamed(repositoryOf(t, pool, "finance", "nightly"), "refs/heads/feature"); held {
+		t.Error("a push refused whole created a ref")
+	}
+	if err := move(RefUpdate{Ref: "refs/heads/main", Old: c1, New: c2}); err != nil {
+		t.Errorf("a push judged against the protection answered %v", err)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
