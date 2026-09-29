@@ -74,6 +74,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - A file a step's `files` relocate is laid out apart from the tree, with its entry's mode, and bound read-only at its place instead of under `/agk/repo`, the driver binding what the redemption placed (`driver.Sources.Bound`) rather than reading the step's selectors again. A relocation none of the step's files names, one not absolute or not written as it cleans to, and two files at one place are refused before anything is fetched.
 - `agk run --local` reads a step's selectors over the working tree, `.git` left out, so that a directory or a glob relocated locally is bound file by file where it lands on a server.
+- A runner keeps the objects of the trees it lays out under `<work root>/.objects/<namespace>`, each under the digest it was checked against, and lays every tree out from there, fetching only what it does not hold, so that a commit is fetched once rather than once per task: a file linked to the object where it is not executable and copied where it is, since a link carries the object's mode. An object no tree has named for seven days goes, at most one prune an hour, and a namespace never reads what another fetched.
 
 ### Tests
 

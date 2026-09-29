@@ -315,11 +315,15 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 		e.at = strconv.Itoa(len(relocated))
 		relocated = append(relocated, e)
 	}
+	kept, err := cacheOf(o.WorkRoot, m.Namespace)
+	if err != nil {
+		return nil, err
+	}
 	dir, err := newTreeDir(o.WorkRoot, t.ID)
 	if err != nil {
 		return nil, err
 	}
-	if err := layOutTree(ctx, objects, m.Namespace, dir, inPlace, limits); err != nil {
+	if err := layOutTree(ctx, objects, m.Namespace, kept, dir, inPlace, limits); err != nil {
 		return nil, fmt.Errorf("runner: task %s: %w", t.ID, err)
 	}
 	sources := driver.Sources{Store: store, Secrets: secrets, Repo: dir}
@@ -329,7 +333,7 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 			os.RemoveAll(dir)
 			return nil, err
 		}
-		if err := layOutTree(ctx, objects, m.Namespace, apart, relocated, limits); err != nil {
+		if err := layOutTree(ctx, objects, m.Namespace, kept, apart, relocated, limits); err != nil {
 			os.RemoveAll(dir)
 			return nil, fmt.Errorf("runner: task %s: %w", t.ID, err)
 		}

@@ -320,12 +320,13 @@ func TestTheResultIsPublishedOnceTheContainerAndItsDirectoriesAreGone(t *testing
 			}
 		}
 		// The driver leaves the directories a task's working directory sat in, which hold
-		// nothing, so what is looked for is a file, and a tree laid out for the key.
+		// nothing, so what is looked for is a file, and a tree laid out for the key. The
+		// objects the tree was laid out from are kept for the next task of the commit.
 		filepath.WalkDir(c.root, func(path string, d os.DirEntry, err error) error {
 			rel, _ := filepath.Rel(c.root, path)
 			switch {
 			case err != nil || rel == ".":
-			case rel == driver.KeysDir || rel == ResultsDir:
+			case rel == driver.KeysDir || rel == ResultsDir || rel == ObjectsDir:
 				return filepath.SkipDir
 			case filepath.Dir(rel) == TreesDir || !d.IsDir():
 				left = append(left, rel)
