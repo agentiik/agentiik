@@ -405,11 +405,12 @@ func checkRef(ref string) error {
 // file under git/ always has a row naming it: one a push died writing is collected with its row once
 // it has been receiving past the grace, and one a push is writing is never taken for anything else.
 // A pack of the same name is the same bytes, since its name is their checksum: one receiving is
-// receiving again from now, one live stays live, and one superseded is receiving again, so that a
-// repack's collection, which deletes a pack only while it is superseded, leaves the bytes this push
-// is about to write alone. One not live takes the size and the count given now, which are those of
-// the bytes about to be written: a write refused for a size that was not theirs leaves nothing to
-// hold the next one to.
+// receiving again from now, one live stays live, and one superseded is receiving again, so that the
+// collection, which claims a pack only while it is superseded or receiving past the grace, leaves the
+// bytes this push is about to write alone. One the collection has claimed already is
+// ErrPackCollected: its files are going, and the push is sent again once they are gone. One not live
+// takes the size and the count given now, which are those of the bytes about to be written: a write
+// refused for a size that was not theirs leaves nothing to hold the next one to.
 func (n *NS) ReceivePack(ctx context.Context, workflow string, p Pack) (string, error) {
 	switch {
 	case !objectID.MatchString(p.Name):
@@ -427,15 +428,29 @@ func (n *NS) ReceivePack(ctx context.Context, workflow string, p Pack) (string, 
 	if err != nil {
 		return "", fmt.Errorf("db: the repository of %s could not be read: %w", workflow, err)
 	}
-	if _, err := n.tx.Exec(ctx,
+	tag, err := n.tx.Exec(ctx,
 		`insert into git_packs (namespace, repository, name, size, objects)
 		 values ($1, $2, $3, $4, $5)
 		 on conflict (namespace, repository, name) do update
 		   set state = 'receiving', superseded_at = null, created_at = now(),
 		       size = excluded.size, objects = excluded.objects
-		 where git_packs.state <> 'live'`,
-		n.namespace, key, p.Name, p.Size, p.Objects); err != nil {
+		 where git_packs.state in ('receiving', 'superseded')`,
+		n.namespace, key, p.Name, p.Size, p.Objects)
+	if err != nil {
 		return "", fmt.Errorf("db: pack %s of %s could not be recorded: %w", p.Name, workflow, err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Live already, which the push writes again byte for byte and leaves live; or being
+		// collected, whose files would go under the push's feet.
+		var state string
+		if err := n.tx.QueryRow(ctx,
+			`select state from git_packs where namespace = $1 and repository = $2 and name = $3`,
+			n.namespace, key, p.Name).Scan(&state); err != nil {
+			return "", fmt.Errorf("db: pack %s of %s could not be read: %w", p.Name, workflow, err)
+		}
+		if state == "collecting" {
+			return "", fmt.Errorf("%w: %s of %s/%s", ErrPackCollected, p.Name, n.namespace, workflow)
+		}
 	}
 	return key, nil
 }

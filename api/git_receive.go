@@ -918,6 +918,9 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 		}
 		var err error
 		if pack, err = s.packs.Put(ctx, s.pool, over.Namespace, over.Workflow, rc.file, rc.size, rc.unpacked); err != nil {
+			if errors.Is(err, db.ErrPackCollected) {
+				return &pushRefusal{short: "this push's pack is the one a repack replaced, whose files are being deleted: push again once they are, in a minute"}
+			}
 			return err
 		}
 	}
@@ -963,6 +966,8 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 		return &pushRefusal{short: "a ref this push moves was protected while the push was judged, and moving it takes grant:manage on the workflow: push again to be judged against it"}
 	case errors.Is(err, db.ErrDefaultBranch):
 		return &pushRefusal{short: "the default branch is not deleted: another branch is named the default first"}
+	case errors.Is(err, db.ErrNoPack):
+		return &pushRefusal{short: "the pack this push wrote was collected before its refs could move, the push having taken longer than the grace: push again"}
 	case errors.Is(err, db.ErrOtherTree):
 		return &pushRefusal{short: "a commit this push makes a version was recorded with another tree, which one commit cannot have"}
 	case err != nil:
