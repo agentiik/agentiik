@@ -25,6 +25,17 @@ func (s Signature) String() string {
 	return s.Name + " <" + s.Email + "> " + strconv.FormatInt(s.When, 10) + " " + s.Zone
 }
 
+// Author is who a commit says wrote it, as the API answers it in a repository's history: the name
+// and the address its author line carries, whoever the git configuration of whoever wrote it named,
+// and never checked against anything.
+type Author struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// Author is the signature's name and address, as a history answers who wrote a commit.
+func (s Signature) Author() Author { return Author{Name: s.Name, Email: s.Email} }
+
 // Header is a header line of a commit or a tag that is none of the ones this package reads, such
 // as encoding, gpgsig and mergetag: its key, and its value, whose lines after the first are
 // joined with line feeds, as git joins them.

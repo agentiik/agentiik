@@ -93,21 +93,15 @@ type Version struct {
 	Source    string    `json:"source"`
 }
 
-// GitAuthor is who a commit says wrote it, as its git configuration named them.
-type GitAuthor struct {
-	Name  string `json:"name"`
-	Email string `json:"email"`
-}
-
 // HistoryEntry is one commit of the default branch's first-parent history, openapi.json's
 // historyEntry, and the version it is where it is one.
 type HistoryEntry struct {
-	Commit     string     `json:"commit"`
-	Parent     string     `json:"parent,omitempty"`
-	Author     *GitAuthor `json:"author,omitempty"`
-	AuthoredAt string     `json:"authored_at,omitempty"`
-	Subject    string     `json:"subject,omitempty"`
-	Version    *Version   `json:"version,omitempty"`
+	Commit     string       `json:"commit"`
+	Parent     string       `json:"parent,omitempty"`
+	Author     *repo.Author `json:"author,omitempty"`
+	AuthoredAt string       `json:"authored_at,omitempty"`
+	Subject    string       `json:"subject,omitempty"`
+	Version    *Version     `json:"version,omitempty"`
 }
 
 // WorkflowDetail is what GET /api/v1/{ns}/workflows/{name} answers, openapi.json's workflowDetail.
@@ -415,7 +409,7 @@ func (s *Server) gitHistory(ctx context.Context, over Target, repository db.Repo
 		}
 		e := HistoryEntry{
 			Commit:     at.String(),
-			Author:     &GitAuthor{Name: c.Author.Name, Email: c.Author.Email},
+			Author:     ptr(c.Author.Author()),
 			AuthoredAt: authoredAt(c.Author),
 			Subject:    subjectOf(c.Message),
 		}
@@ -701,3 +695,6 @@ func (s *Server) defaultCommit(ctx context.Context, over Target) (string, error)
 	})
 	return commit, err
 }
+
+// ptr is a value's address, for a member the wire leaves out where it is nil.
+func ptr[T any](v T) *T { return &v }
