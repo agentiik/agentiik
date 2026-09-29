@@ -922,6 +922,9 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 			if errors.Is(err, db.ErrPackCollected) {
 				return &pushRefusal{short: "this push's pack is the one a repack replaced, whose files are being deleted: push again once they are, in a minute"}
 			}
+			if errors.Is(err, db.ErrWorkflowMoving) {
+				return &pushRefusal{short: "refused: " + movingSentence(over)}
+			}
 			return err
 		}
 	}
@@ -971,6 +974,8 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 		return &pushRefusal{short: "the pack this push wrote was collected before its refs could move, the push having taken longer than the grace: push again"}
 	case errors.Is(err, db.ErrOtherTree):
 		return &pushRefusal{short: "a commit this push makes a version was recorded with another tree, which one commit cannot have"}
+	case errors.Is(err, db.ErrWorkflowMoving):
+		return &pushRefusal{short: "refused: " + movingSentence(over)}
 	case err != nil:
 		return err
 	}

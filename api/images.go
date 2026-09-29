@@ -195,6 +195,9 @@ func (s *Server) recordImages(w http.ResponseWriter, r *http.Request, who Princi
 	case errors.Is(err, db.ErrNoWorkflow):
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
 		return
+	case errors.Is(err, db.ErrWorkflowMoving):
+		fail(w, http.StatusConflict, movingSentence(over))
+		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the image pins and brick manifests could not be recorded")
 		return

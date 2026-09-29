@@ -66,6 +66,9 @@ type guard struct {
 	// includes is set on a route whose request may carry a workflow include, whose handler may
 	// then ask whether its caller reads the workflow one names: see HoldsToInclude.
 	includes bool
+
+	// owning is set on a route whose handler asks which namespaces its caller owns: see Owns.
+	owning bool
 }
 
 // Needs is a route that requires one permission at one scope.
@@ -104,13 +107,16 @@ type Needs struct {
 
 	// Includes is set on a route whose request may carry a workflow include: see HoldsToInclude.
 	Includes bool
+
+	// Owning is set on a route whose handler asks whether its caller owns a namespace: see Owns.
+	Owning bool
 }
 
 func (n Needs) guards() guard {
 	return guard{
 		permission: n.Permission, scope: n.Scope, reveals: n.Reveals, also: n.Also,
 		administered: n.OrAdministrator, seeing: n.Seeing, asks: access.SetOf(n.Asks...), asked: n.Asks,
-		includes: n.Includes,
+		includes: n.Includes, owning: n.Owning,
 	}
 }
 
@@ -184,6 +190,22 @@ func HoldsToInclude(r *http.Request) Holds {
 
 // includesKey is where the router leaves the question HoldsToInclude asks.
 type includesKey struct{}
+
+// Owns answers, for the route serving r, whether its caller owns a namespace, holding the owner role
+// there by a grant of its own or of one of its groups, through the credential it presented: "move
+// between namespaces the principal owns on both sides". It is answered false about every namespace
+// on a route whose guard does not set Owning, through a narrowed credential, which owns nothing as
+// Caller.Owned says, where the authorizer cannot say who owns what, and on a request the router did
+// not serve.
+func Owns(r *http.Request) func(ctx context.Context, namespace string) (bool, error) {
+	if held, ok := r.Context().Value(ownsKey{}).(func(context.Context, string) (bool, error)); ok {
+		return held
+	}
+	return func(context.Context, string) (bool, error) { return false, nil }
+}
+
+// ownsKey is where the router leaves the question Owns asks.
+type ownsKey struct{}
 
 // HoldsOn answers, for the route taking OnRepository or Needs serving r, whether its caller holds a
 // permission its guard names in Asks over the target the route was authorised against. A

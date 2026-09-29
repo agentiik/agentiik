@@ -353,7 +353,6 @@ func TestTheDefaultBranchIsNamedAndProtectedByWhoeverHoldsGrantManage(t *testing
 		"a branch it does not hold": {"default_branch": "nothing"},
 		"a branch read as a flag":   {"default_branch": "-x"},
 		"a branch read as HEAD":     {"default_branch": "@"},
-		"a move":                    {"namespace": "team-ops"},
 		"nothing":                   {},
 	} {
 		want := http.StatusBadRequest
