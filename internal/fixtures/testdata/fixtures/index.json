@@ -1,5 +1,5 @@
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "What each fixture pins. A fixture under valid/ must be accepted by the schema named beside it. A fixture under invalid/ must be refused; refused_by says by what. schema means the JSON Schema document alone refuses it, and a consumer can assert that with a validator and nothing else. validator means the documentation states the rule but JSON Schema cannot express it, because it needs the graph, the brick manifest, the included file or the expression language; those fixtures are schema valid on purpose and are refused by the workflow validator instead.",
   "schemas": {
     "workflow": "../workflow.schema.json",
@@ -1590,6 +1590,10 @@
         {
           "file": "wire/valid/version-tree.json",
           "covers": "a version agk push sent as a tree before v0.4.0, by the bootstrap token, with no parent named"
+        },
+        {
+          "file": "wire/valid/version-library.json",
+          "covers": "a library's commit, which other workflows include and nothing runs"
         }
       ],
       "invalid": [
@@ -1598,6 +1602,12 @@
           "rule": "A version arriving by neither git nor a tree push.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs#storage"
+        },
+        {
+          "file": "wire/invalid/version-library-false.json",
+          "rule": "A version saying it is no library. The flag is written where a commit is a library's and left out otherwise, so that one shape is not two.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#includes-and-inheritance"
         },
         {
           "file": "wire/invalid/version-without-author.json",
@@ -1659,8 +1669,8 @@
     "layout": {
       "tree/": "The files of the pushed commit's tree, as they would be committed, each with mode 100644: the entry point at tree/agentiik.yaml where the case has one, the files it includes, and whatever else the commit carries. A YAML file there is an entry point where it is named agentiik.yaml or agentiik.yml, and a fragment otherwise. No name in a case begins with a dot or an underscore, which go:embed leaves out of an embedded tree.",
       "tree.json": "Present where the tree holds entries that cannot be files here, listed as formats.tree describes them. The tree pushed is tree/ with them added.",
-      "case.json": "The repository and the commit pushed, and the stand-ins for the installation: the namespace's pins, brick manifests and secret declarations, the versions already recorded and the other repositories an include reads, as formats.case describes them.",
-      "manifests/": "The brick manifests the namespace's store holds, each a document valid against brick.schema.json and named by case.json's manifests.",
+      "case.json": "The repository and the commit pushed, and the stand-ins for the installation: the repository's pins and brick manifests, the namespace's secret declarations, the versions already recorded and the other repositories an include reads, as formats.case describes them.",
+      "manifests/": "The brick manifests the repository's store holds, each a document valid against brick.schema.json and named by case.json's manifests.",
       "repositories/": "The trees of the other repositories a workflow include reads, one directory per commit, named by case.json's repositories.",
       "expected.json": "A valid case's resolved graph, valid against wire.schema.json#/$defs/resolvedGraph: what the hook records for the pushed commit, and what the API answers for it.",
       "refusal.json": "An invalid case's refusal, as formats.refusal describes it."
@@ -1669,7 +1679,7 @@
       "case": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Case",
-        "description": "What the hook is told beside the pushed tree: which repository and which commit the push is for, and what it reads from the installation. Each of the last is a stand-in for a store the installation keeps per namespace, holding exactly what the case needs and nothing a real store would add, so that a consumer builds the store from it and nothing else.",
+        "description": "What the hook is told beside the pushed tree: which repository and which commit the push is for, and what it reads from the installation. Each of the last is a stand-in for a store the installation keeps, the pins and manifests per repository and the secret declarations per namespace, holding exactly what the case needs and nothing a real store would add, so that a consumer builds the store from it and nothing else.",
         "type": "object",
         "required": [
           "namespace",
@@ -1682,7 +1692,7 @@
         "additionalProperties": false,
         "properties": {
           "namespace": {
-            "description": "The namespace the repository belongs to: what metadata.namespace has to equal where the file writes it, and whose pins, manifests and secret declarations the hook reads.",
+            "description": "The namespace the repository belongs to: what metadata.namespace has to equal where the file writes it, and whose secret declarations the hook reads.",
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
             "maxLength": 255,
@@ -1691,7 +1701,7 @@
             ]
           },
           "repository": {
-            "description": "The name of the repository pushed to, which metadata.name has to equal: the name is the identity runs, grants and the git remote are addressed by, and the repository already holds one.",
+            "description": "The name of the repository pushed to, which metadata.name has to equal: the name is the identity runs, grants and the git remote are addressed by, and the repository already holds one. It is also the repository whose pins and manifests the hook reads.",
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
             "maxLength": 255,
@@ -1722,7 +1732,7 @@
             ]
           },
           "pins": {
-            "description": "The namespace's image pins: each reference a step may name an image by that is not a digest, mapped to the reference by digest it was pinned to, of that reference's own repository. The hook reaches no registry, so a step naming a reference no pin holds is refused, and a step naming a digest needs none.",
+            "description": "The repository's image pins: each reference a step may name an image by that is not a digest, mapped to the reference by digest it was pinned to, of that reference's own repository. The hook reaches no registry, so a step naming a reference no pin holds is refused, and a step naming a digest needs none.",
             "type": "object",
             "propertyNames": {
               "pattern": "^[^\\s@]+$"
@@ -1738,7 +1748,7 @@
             ]
           },
           "manifests": {
-            "description": "The namespace's brick manifests: each image by digest mapped to the file under manifests/ holding the manifest recorded for it, valid against brick.schema.json. A brick step is held to the manifest of its image once pinned; a script step reads none.",
+            "description": "The repository's brick manifests: each image by digest mapped to the file under manifests/ holding the manifest recorded for it, valid against brick.schema.json. A brick step is held to the manifest of its image once pinned; a script step reads none.",
             "type": "object",
             "propertyNames": {
               "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
@@ -2081,7 +2091,7 @@
               },
               {
                 "const": "manifest-missing",
-                "description": "A brick step whose image has no manifest the hook can read: for the hook, none recorded in the namespace's store under the image's digest. The engine's package graph names it today."
+                "description": "A brick step whose image has no manifest the hook can read: for the hook, none recorded in the repository's store under the image's digest. The engine's package graph names it today."
               },
               {
                 "const": "port-name-251-characters",
@@ -2125,7 +2135,7 @@
               },
               {
                 "const": "image-not-pinned",
-                "description": "A step naming an image by a tag the namespace's store holds no pin for. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
+                "description": "A step naming an image by a tag the repository's store holds no pin for. Named here first: the engine refuses it by no rule yet, and its hook is to refuse it by this one."
               }
             ],
             "examples": [
@@ -2200,7 +2210,7 @@
       },
       {
         "case": "repository/valid/hidden-step-never-executed",
-        "covers": "a step named with a leading dot is a hidden block: out of steps and order, never executed, and never held to the namespace's pins and manifests; a chain of extends from a step through a hidden step to a hidden block at the root",
+        "covers": "a step named with a leading dot is a hidden block: out of steps and order, never executed, and never held to the repository's pins and manifests; a chain of extends from a step through a hidden step to a hidden block at the root",
         "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
       },
       {
@@ -2264,7 +2274,7 @@
       },
       {
         "case": "repository/invalid/step-output-not-in-manifest",
-        "rule": "A brick step declaring an output port the manifest its namespace recorded for the image does not carry. outputs must be a subset of the ports the manifest declares.",
+        "rule": "A brick step declaring an output port the manifest the repository's store holds for the image does not carry. outputs must be a subset of the ports the manifest declares.",
         "refused_by": "validator",
         "reference": "https://agentiik.github.io/docs/#step-keywords"
       },
@@ -2330,13 +2340,13 @@
       },
       {
         "case": "repository/invalid/image-not-pinned",
-        "rule": "A step naming an image by a tag the namespace's store holds no pin for, a pin of another tag of the same repository beside it. A server runs every image by the digest its tag was pinned to, and the hook reaches no registry to resolve one.",
+        "rule": "A step naming an image by a tag the repository's store holds no pin for, a pin of another tag of the same repository beside it. A server runs every image by the digest its tag was pinned to, and the hook reaches no registry to resolve one.",
         "refused_by": "validator",
         "reference": "https://agentiik.github.io/docs/#supply-chain"
       },
       {
         "case": "repository/invalid/manifest-missing",
-        "rule": "A brick step naming an image by a digest the namespace's store holds no manifest for. A brick step is held to its manifest at the push, and reading one out of the image would be pulling it.",
+        "rule": "A brick step naming an image by a digest the repository's store holds no manifest for. A brick step is held to its manifest at the push, and reading one out of the image would be pulling it.",
         "refused_by": "validator",
         "reference": "https://agentiik.github.io/docs/#supply-chain"
       }

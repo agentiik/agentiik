@@ -1,4 +1,4 @@
-# The manifest ghcr.io/acme/agk-invoice:1.4.0 carries at /agk/brick.yaml, as the namespace's
+# The manifest ghcr.io/acme/agk-invoice:1.4.0 carries at /agk/brick.yaml, as the repository's
 # store recorded it under the digest the tag is pinned to.
 
 apiVersion: agentiik.dev/v1

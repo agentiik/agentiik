@@ -2,10 +2,13 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
-## Unreleased
+## v0.4.0, 2026-09-30
+
+The workflow is a repository: each workflow is a git repository the installation serves, cloned, fetched and pushed with a plain git client under the command line's token and the permissions that already decide who reads and writes it, and `agk push` pushes it over git's own protocol. The pre-receive hook judges every commit a ref would point at with the one validation `agk validate` runs, and refuses the push whole, naming the file, the line and the rule. A run pins the commit its ref named, whatever the branch does next, and a replay, from the start or from a step, runs that commit again; a workflow includes its own files and another repository's library at a tag or a whole commit; a step reads only the files it selects; a cached step republishes what an identical one made; and a workflow is renamed, moved to another namespace its mover owns, and deleted. A v0.3.0 installation upgrades with v0.4.0's `compose.yaml` and its own `.env`, and nothing else.
 
 ### Upgrading
 
+- A v0.3.0 installation upgrades with v0.4.0's `compose.yaml` and its own `.env`, and nothing else: `init` applies migrations 0049 to 0057, each with nothing to do, as the entries below say one by one.
 - A version stored before this release naming a port or a workflow output of 251 to 255 characters, or a secret its namespace does not declare, rebuilds, starts and runs as before, with nothing to do: both rules are applied where a version is made, and never where a stored one is read back (`version.Build`, `graph.LoadStored`, `brick.ParseStoredManifest`, a task's read of its image, `agk run --namespace`). Pushed again with the same files, from an agk of any release, it is answered as that version, unchanged; with other files, 409 as before.
 - A version stored before this release from a directory of its repository, under a name its `metadata` does not write, or relocating a file to a relative path, rebuilds, starts and runs as before, with nothing to do, and the push route answers it as that version when an earlier agk pushes it again: those rules are applied where a version is made (`version.Check`), which is also why this release's `agk push` makes none.
 - A workflow v0.2 or v0.3 pushed as trees becomes an empty repository at the upgrade, with nothing to do: migration 0049 gives it a key of its own for its packs and its default branch unborn and unprotected, so that an editor's `agk push` keeps landing, and keeps every version, run and counted object as it was, each version recorded as sent as a tree (`workflow_versions.source`).
@@ -15,8 +18,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0053 makes every key naming a workflow carry a rename through, the versions', the runs', the refs', the grants', the pins' and the manifests', with nothing to do.
 - Migration 0054 adds `step_cache`, the cache entries of cached steps, and `tasks.memoised_from`, with nothing to do: the cache starts empty, and a cached step's first success after the upgrade fills it.
 - Migration 0055 gives a run what it replays, `replay_of` and `replay_from`, with nothing to do: no run is a replay until one is asked for.
-- Migration 0057 adds `workflow_moves` and `move_targets`, a move asked and the name it holds in its target, and `moved_objects`, what a move leaves under the namespace it left until the grace has passed, and makes every key naming a run, a step, a task, a task's log or a repository carry a change of namespace through, as 0053 made every key naming a workflow carry a rename, with nothing to do.
 - Migration 0056 describes what a version's `graph` column now holds, with nothing to do: whether its commit is a library's, and what each workflow include read. A version stored before names no other repository, since a workflow include was refused until now, and none is a library.
+- Migration 0057 adds `workflow_moves` and `move_targets`, a move asked and the name it holds in its target, and `moved_objects`, what a move leaves under the namespace it left until the grace has passed, and makes every key naming a run, a step, a task, a task's log or a repository carry a change of namespace through, as 0053 made every key naming a workflow carry a rename, with nothing to do.
 
 ### Workflows
 
@@ -102,7 +105,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Tests
 
 - The corpus's three documents refusing a port or a workflow output of 251 characters are refused, and are read by the stored readings.
-- The schemas' repository corpus runs through `version.Check`, each valid case resolving to exactly its `expected.json`, which the vendored wire schema accepts, and each invalid one meeting exactly its `refusal.json`; the fragment corpus runs through `graph.ParseFragment` (schemas `75d34d9` vendored, still `0.3.0`).
+- The schemas' repository corpus runs through `version.Check`, each valid case resolving to exactly its `expected.json`, which the vendored wire schema accepts, and each invalid one meeting exactly its `refusal.json`; the fragment corpus runs through `graph.ParseFragment`.
+- The schemas of v0.4.0 are vendored into `internal/fixtures`, pinned at `0.4.0`.
 - The runner's boundary test refuses package `repo` by name: a runner never speaks git.
 - An installation of v0.3.0 is upgraded through `init` and `serve`: its versions, runs and counted objects are unchanged, its runs read and start as before, and its workflows are empty repositories.
 
