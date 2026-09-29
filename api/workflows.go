@@ -586,10 +586,6 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 			return
 		}
 	}
-	name := over.Workflow
-	if u.Name != nil {
-		name = *u.Name
-	}
 	if moving {
 		if held, err := owns(*u.Namespace)(r.Context()); err != nil {
 			fail(w, http.StatusInternalServerError, "the change could not be authorised")
@@ -598,27 +594,23 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 			fail(w, http.StatusNotFound, fmt.Sprintf("there is no namespace %s you own: a workflow moves between namespaces its mover owns on both sides", *u.Namespace))
 			return
 		}
-		// Judged whole before anything else the request names is changed, so that a move
-		// refused refuses the request: the secrets the versions its refs point at name, then
-		// everything the move itself is refused for.
-		if !s.movable(w, r.Context(), over, name, *u.Namespace) {
-			return
-		}
-		if u.Name == nil && !branching {
-			s.askMove(w, r.Context(), who, over, *u.Namespace)
+		if !s.movable(w, r.Context(), over, *u.Namespace) {
 			return
 		}
 	}
-	name = over.Workflow
+
+	// What the request changes besides a move, in the transaction the move is asked in where it
+	// names one, so that a move refused refuses the request and changes nothing.
 	var before, after db.WorkflowRecord
-	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+	change := func(ctx context.Context, ns *db.NS) (string, []audit.Record, error) {
 		// What the change records, appended once everything else is done: an append takes the
 		// head of the audit chain until the transaction ends, and holding it while the
 		// branches are locked would keep every other act of the installation waiting.
 		var records []audit.Record
+		name := over.Workflow
 		if u.Name != nil && *u.Name != over.Workflow {
 			if err := ns.RenameWorkflow(ctx, over.Workflow, *u.Name); err != nil {
-				return err
+				return "", nil, err
 			}
 			name = *u.Name
 			records = append(records, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: name, Result: audit.Done,
@@ -626,13 +618,11 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		}
 		var err error
 		if !branching {
-			if after, err = ns.WorkflowRecord(ctx, name); err != nil {
-				return err
-			}
-			return appendAll(ctx, ns, records)
+			after, err = ns.WorkflowRecord(ctx, name)
+			return name, records, err
 		}
 		if before, after, err = ns.SetDefault(ctx, name, u.DefaultBranch, u.Protected); err != nil {
-			return err
+			return "", nil, err
 		}
 		if before.DefaultBranch != after.DefaultBranch {
 			records = append(records, audit.Record{Actor: string(who), Action: audit.WorkflowUpdate, Target: name, Result: audit.Done,
@@ -653,31 +643,52 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 			records = append(records, audit.Record{Actor: string(who), Action: audit.RefProtect, Target: name, Result: audit.Done,
 				Detail: map[string]any{"ref": "refs/heads/" + after.DefaultBranch, "protected": after.Protected, "was": was}})
 		}
-		return appendAll(ctx, ns, records)
-	})
-	switch {
-	case errors.Is(err, db.ErrNoWorkflow):
-		fail(w, http.StatusNotFound, "no such thing, or not yours")
-		return
-	case errors.Is(err, db.ErrWorkflowMoving):
-		fail(w, http.StatusConflict, movingSentence(over))
-		return
-	case errors.Is(err, db.ErrWorkflowExists):
-		fail(w, http.StatusConflict, fmt.Sprintf("%s holds a workflow named %s already: a name is one workflow in its namespace", over.Namespace, *u.Name))
-		return
-	case errors.Is(err, db.ErrWorkflowPurging):
-		fail(w, http.StatusConflict, fmt.Sprintf("a workflow named %s was deleted from %s and is still being purged: the name is free once its runs, versions and packs are gone", *u.Name, over.Namespace))
-		return
-	case errors.Is(err, db.ErrNoBranch):
-		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("%s holds no branch %s: the default branch is one the repository holds, since HEAD names it and a clone checks it out, and only a repository nothing was pushed to names the branch its first push will create", over.Workflow, *u.DefaultBranch))
-		return
-	case err != nil:
-		s.report(fmt.Errorf("api: workflow %s/%s could not be changed: %w", over.Namespace, over.Workflow, err))
-		fail(w, http.StatusInternalServerError, "the workflow could not be changed")
+		return name, records, nil
+	}
+	// refused answers what the change was refused for, and false where it was not.
+	refused := func(err error) bool {
+		switch {
+		case err == nil:
+			return false
+		case errors.Is(err, db.ErrNoWorkflow):
+			fail(w, http.StatusNotFound, "no such thing, or not yours")
+		case errors.Is(err, db.ErrWorkflowMoving):
+			fail(w, http.StatusConflict, movingSentence(over))
+		case errors.Is(err, db.ErrWorkflowExists):
+			fail(w, http.StatusConflict, fmt.Sprintf("%s holds a workflow named %s already: a name is one workflow in its namespace", over.Namespace, *u.Name))
+		case errors.Is(err, db.ErrWorkflowPurging):
+			fail(w, http.StatusConflict, fmt.Sprintf("a workflow named %s was deleted from %s and is still being purged: the name is free once its runs, versions and packs are gone", *u.Name, over.Namespace))
+		case errors.Is(err, db.ErrNoBranch):
+			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("%s holds no branch %s: the default branch is one the repository holds, since HEAD names it and a clone checks it out, and only a repository nothing was pushed to names the branch its first push will create", over.Workflow, *u.DefaultBranch))
+		default:
+			s.report(fmt.Errorf("api: workflow %s/%s could not be changed: %w", over.Namespace, over.Workflow, err))
+			fail(w, http.StatusInternalServerError, "the workflow could not be changed")
+		}
+		return true
+	}
+
+	if moving {
+		name := over.Workflow
+		if u.Name != nil {
+			name = *u.Name
+		}
+		var besides db.Change
+		if u.Name != nil || branching {
+			besides = change
+		}
+		s.askMove(w, r.Context(), who, over, name, *u.Namespace, besides, refused)
 		return
 	}
-	if moving {
-		s.askMove(w, r.Context(), who, Target{Namespace: over.Namespace, Workflow: name}, *u.Namespace)
+	name := over.Workflow
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var records []audit.Record
+		var err error
+		if name, records, err = change(ctx, ns); err != nil {
+			return err
+		}
+		return appendAll(ctx, ns, records)
+	})
+	if refused(err) {
 		return
 	}
 	head := after.Head

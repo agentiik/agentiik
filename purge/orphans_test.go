@@ -354,7 +354,7 @@ func TestAnOrphanHandedOverIsFinishedByTheNextLeader(t *testing.T) {
 		calls++
 		// The purges before the sweep each make one call on a store with nothing else to do, and
 		// the sweep one a namespace and one more: the collection's is refused.
-		if calls > 8 {
+		if calls > 9 {
 			return errors.New("another controller leads")
 		}
 		return nil

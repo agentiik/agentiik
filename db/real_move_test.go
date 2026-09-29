@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -30,7 +31,7 @@ func TestAMoveIsJudgedAndFreezesItsWorkflow(t *testing.T) {
 		}
 	}
 	ask := func(target string) error {
-		return pool.AskMove(ctx, "finance", "monthly-invoicing", target, "alice", time.Now())
+		return pool.AskMove(ctx, "finance", "monthly-invoicing", target, "alice", time.Now(), nil)
 	}
 
 	// The run the seed leaves queued has not finished.
@@ -74,17 +75,64 @@ func TestAMoveIsJudgedAndFreezesItsWorkflow(t *testing.T) {
 	if err := ask("team-ops"); !errors.As(err, &room) || room.Moving != 4096 || room.Limit != 1024 {
 		t.Errorf("a move past the target's max_artifact_bytes answered %v", err)
 	}
+	// And one that would fit alone and does not beside a move asked to the target before it.
+	exec(`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at)
+	      values ('finance', $1, 'archive', 'out', 'payslips.zip', $2, 2048, 'application/zip', now() + interval '1 day')`, other, "sha256:"+digestOf("e"))
+	exec(`update namespaces set max_artifact_bytes = 5000 where name = 'team-ops'`)
+	if err := pool.AskMove(ctx, "finance", "payroll", "team-ops", "alice", time.Now(), nil); err != nil {
+		t.Fatalf("a move within the target's max_artifact_bytes answered %v", err)
+	}
+	if err := ask("team-ops"); !errors.As(err, &room) || room.Moving != 6144 || room.Limit != 5000 {
+		t.Errorf("a move past the target's max_artifact_bytes beside another asked there answered %v", err)
+	}
+	exec(`delete from workflow_moves where workflow = 'payroll'`)
+	exec(`update namespaces set max_artifact_bytes = 1024 where name = 'team-ops'`)
+
+	// What the request changes besides is undone with a move refused, and a change refused is
+	// told from the move's refusals.
+	var records int
+	if err := conn.QueryRow(ctx, `select count(*) from audit_log`).Scan(&records); err != nil {
+		t.Fatal(err)
+	}
+	rename := func(ctx context.Context, ns *NS) (string, []audit.Record, error) {
+		if err := ns.RenameWorkflow(ctx, "monthly-invoicing", "invoicing"); err != nil {
+			return "", nil, err
+		}
+		return "invoicing", []audit.Record{{Actor: "alice", Action: audit.WorkflowUpdate, Target: "invoicing", Result: audit.Done,
+			Detail: map[string]any{"name": "invoicing", "was": map[string]any{"name": "monthly-invoicing"}}}}, nil
+	}
+	if err := pool.AskMove(ctx, "finance", "monthly-invoicing", "team-ops", "alice", time.Now(), rename); !errors.As(err, &room) {
+		t.Errorf("a move past the target's max_artifact_bytes with a rename answered %v", err)
+	}
+	var still, after int
+	if err := conn.QueryRow(ctx, `select (select count(*) from workflows where namespace = 'finance' and name = 'monthly-invoicing'), (select count(*) from audit_log)`).Scan(&still, &after); err != nil || still != 1 || after != records {
+		t.Errorf("a move refused left the workflow renamed (%d under its name) or recorded (%d entries, %d before): %v", still, after, records, err)
+	}
+	var besides *ChangeRefused
+	if err := pool.AskMove(ctx, "finance", "monthly-invoicing", "team-ops", "alice", time.Now(), func(ctx context.Context, ns *NS) (string, []audit.Record, error) {
+		return "", nil, ns.RenameWorkflow(ctx, "monthly-invoicing", "payroll")
+	}); !errors.As(err, &besides) || !errors.Is(err, ErrWorkflowExists) {
+		t.Errorf("a move with a rename to a name its namespace holds answered %v", err)
+	}
 	exec(`update namespaces set max_artifact_bytes = null where name = 'team-ops'`)
 
-	// Judged and asked. A cache entry of it goes.
+	// Asked, with a rename: under the new name, which it holds in the target, recorded as a rename
+	// in the transaction that asks it. A cache entry of it goes.
 	exec(`insert into step_cache (namespace, key, run_id, step, ports) values ('finance', 'finance/sha256/1', $1, 'archive', '[]')`, financeRun)
-	if err := pool.CheckMove(ctx, "finance", "monthly-invoicing", "monthly-invoicing", "team-ops"); err != nil {
-		t.Fatalf("a move that may be made was judged %v", err)
+	if err := pool.AskMove(ctx, "finance", "monthly-invoicing", "team-ops", "alice", time.Now(), rename); err != nil {
+		t.Fatalf("a move with a rename that may be made answered %v", err)
 	}
+	var target string
+	if err := conn.QueryRow(ctx, `select m.target from workflow_moves m join move_targets h on h.from_namespace = m.namespace and h.name = m.workflow where m.workflow = 'invoicing' and h.namespace = 'team-ops'`).Scan(&target); err != nil || target != "team-ops" {
+		t.Errorf("the move with a rename is asked as %q: %v", target, err)
+	}
+	if err := conn.QueryRow(ctx, `select count(*) from audit_log where namespace = 'finance' and target = 'invoicing'`).Scan(&after); err != nil || after != 1 {
+		t.Errorf("the rename asked with the move is recorded %d times: %v", after, err)
+	}
+	exec(`delete from workflow_moves`)
+	exec(`update workflows set name = 'monthly-invoicing' where namespace = 'finance' and name = 'invoicing'`)
+	exec(`insert into step_cache (namespace, key, run_id, step, ports) values ('finance', 'finance/sha256/1', $1, 'archive', '[]')`, financeRun)
 	var held int
-	if err := conn.QueryRow(ctx, `select count(*) from workflow_moves`).Scan(&held); err != nil || held != 0 {
-		t.Errorf("judging a move left %d moves: %v", held, err)
-	}
 	if err := ask("team-ops"); err != nil {
 		t.Fatalf("a move that may be made answered %v", err)
 	}
@@ -174,7 +222,7 @@ func TestAMoveCarriesEverythingAndRecountsIt(t *testing.T) {
 	exec(`update namespaces set max_retention_days = 30 where name = 'team-ops'`)
 	exec(`insert into workflow_refs (namespace, workflow, ref) values ('finance', 'monthly-invoicing', 'refs/heads/main')`)
 
-	if err := pool.AskMove(ctx, "finance", "monthly-invoicing", "team-ops", "alice", time.Now()); err != nil {
+	if err := pool.AskMove(ctx, "finance", "monthly-invoicing", "team-ops", "alice", time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	moves, err := pool.Moves(ctx, 10)
@@ -190,7 +238,7 @@ func TestAMoveCarriesEverythingAndRecountsIt(t *testing.T) {
 		t.Errorf("the move copies %+v", objects)
 	}
 
-	moved, err := pool.CompleteMove(ctx, m, time.Hour)
+	moved, err := pool.CompleteMove(ctx, m, objects, time.Hour)
 	if err != nil || !moved.Done {
 		t.Fatalf("the move was carried out as %+v: %v", moved, err)
 	}
@@ -270,8 +318,36 @@ func TestAMoveCarriesEverythingAndRecountsIt(t *testing.T) {
 	}
 
 	// Carried out, a move is no longer asked, and carrying it out again changes nothing.
-	if again, err := pool.CompleteMove(ctx, m, time.Hour); err != nil || again.Done {
+	if again, err := pool.CompleteMove(ctx, m, objects, time.Hour); err != nil || again.Done {
 		t.Errorf("a move carried out twice answered %+v: %v", again, err)
+	}
+
+	// Moved back within the grace, it names again what the first move left under the source's
+	// keys, which the copy found held there: kept, and what it leaves in the target goes instead.
+	if err := pool.AskMove(ctx, "team-ops", "monthly-invoicing", "finance", "alice", time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	moves, err = pool.Moves(ctx, 10)
+	if err != nil || len(moves) != 1 {
+		t.Fatalf("the move back reads %v: %v", moves, err)
+	}
+	back, err := pool.ObjectsOf(ctx, moves[0])
+	if err != nil || !back.Ready {
+		t.Fatalf("what the move back copies read %+v: %v", back, err)
+	}
+	if moved, err := pool.CompleteMove(ctx, moves[0], back, time.Hour); err != nil || !moved.Done {
+		t.Fatalf("the move back was carried out as %+v: %v", moved, err)
+	}
+	var kept, leaving []string
+	if err := conn.QueryRow(ctx, `select coalesce(array_agg(key order by key) filter (where namespace = 'finance'), '{}'), coalesce(array_agg(key order by key) filter (where namespace = 'team-ops'), '{}') from moved_objects`).Scan(&kept, &leaving); err != nil {
+		t.Fatal(err)
+	}
+	there := "team-ops/git/" + repository + "/pack-" + pack
+	if len(kept) != 0 || !slices.Equal(leaving, []string{there + ".idx", there + ".pack", "team-ops" + strings.TrimPrefix(logKey, "finance")}) {
+		t.Errorf("moved back, the keys it names are to be deleted %v, and those it left %v", kept, leaving)
+	}
+	if err := conn.QueryRow(ctx, `select object_key from task_log_chunks where task_id = $1`, task).Scan(&key); err != nil || key != logKey {
+		t.Errorf("moved back, the log's key is %s: %v", key, err)
 	}
 	// What it left goes once the grace has passed.
 	exec(`update moved_objects set delete_after = now() - interval '1 second'`)
@@ -300,7 +376,7 @@ func TestAMoveWaitsForWhatIsGoing(t *testing.T) {
 	if _, err := conn.Exec(ctx, `update runs set state = 'succeeded' where id = $1`, financeRun); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.AskMove(ctx, "finance", "monthly-invoicing", "team-ops", "alice", time.Now()); err != nil {
+	if err := pool.AskMove(ctx, "finance", "monthly-invoicing", "team-ops", "alice", time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	moves, err := pool.Moves(ctx, 10)
@@ -313,11 +389,65 @@ func TestAMoveWaitsForWhatIsGoing(t *testing.T) {
 	if objects, err := pool.ObjectsOf(ctx, moves[0]); err != nil || objects.Ready {
 		t.Errorf("a move with a run going is ready: %+v, %v", objects, err)
 	}
-	if moved, err := pool.CompleteMove(ctx, moves[0], time.Hour); err != nil || moved.Done {
+	if moved, err := pool.CompleteMove(ctx, moves[0], MoveObjects{}, time.Hour); err != nil || moved.Done {
 		t.Errorf("a move with a run going was carried out: %+v, %v", moved, err)
 	}
 	var namespace string
 	if err := conn.QueryRow(ctx, `select namespace from runs where id = $1`, financeRun).Scan(&namespace); err != nil || namespace != "finance" {
 		t.Errorf("the run is in %s: %v", namespace, err)
+	}
+	if _, err := conn.Exec(ctx, `update runs set state = 'succeeded' where id = $1`, financeRun); err != nil {
+		t.Fatal(err)
+	}
+
+	// Outputs a cache hit found as the move was asked republished since, by a run of another
+	// workflow: waited out, as the move would have been refused for them.
+	for _, stmt := range []string{
+		`insert into workflows (namespace, name) values ('finance', 'payroll')`,
+		`insert into workflow_versions (namespace, workflow, commit, graph, author, created_at) values ('finance', 'payroll', 'b4a0d2f', '{}', 'alice', now())`,
+		`insert into runs (namespace, id, workflow, commit, trigger, state) values ('finance', '01M2T1BBBBBBBBBBBBBBBBBBBB', 'payroll', 'b4a0d2f', 'manual', 'succeeded')`,
+		`insert into steps (namespace, run_id, step) values ('finance', '01M2T1BBBBBBBBBBBBBBBBBBBB', 'archive')`,
+		`insert into tasks (namespace, id, run_id, step, attempt, state, memoised_from) values ('finance', '01M2T1CCCCCCCCCCCCCCCCCCCC', '01M2T1BBBBBBBBBBBBBBBBBBBB', 'archive', 1, 'succeeded', '` + financeRun + `')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	if objects, err := pool.ObjectsOf(ctx, moves[0]); err != nil || objects.Ready {
+		t.Errorf("a move whose outputs another workflow's run republished is ready: %+v, %v", objects, err)
+	}
+	if _, err := conn.Exec(ctx, `update tasks set memoised_from = null`); err != nil {
+		t.Fatal(err)
+	}
+
+	// A chunk a task still stopping shipped after the objects were read, which the copy could not
+	// have seen: carried out the pass after, once it has been read and copied.
+	objects, err := pool.ObjectsOf(ctx, moves[0])
+	if err != nil || !objects.Ready {
+		t.Fatalf("what the move copies read %+v: %v", objects, err)
+	}
+	const task = "01M2T1AAAAAAAAAAAAAAAAAAAA"
+	late := "finance/logs/" + financeRun + "/" + task + "/1/1-" + digestOf("d")
+	for _, stmt := range []string{
+		`insert into task_logs (namespace, task_id, next_seq) values ('finance', '` + task + `', 2)`,
+		`insert into task_log_chunks (namespace, task_id, seq, first_line, shipped, shipped_digest, lines, bytes, object_key, object_digest)
+		 values ('finance', '` + task + `', 1, 1, 3, '` + digestOf("d") + `', 3, 30, '` + late + `', '` + digestOf("d") + `')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	if moved, err := pool.CompleteMove(ctx, moves[0], objects, time.Hour); err != nil || moved.Done {
+		t.Errorf("a move with a chunk indexed since its objects were read was carried out: %+v, %v", moved, err)
+	}
+	if err := conn.QueryRow(ctx, `select namespace from runs where id = $1`, financeRun).Scan(&namespace); err != nil || namespace != "finance" {
+		t.Errorf("the run is in %s: %v", namespace, err)
+	}
+	objects, err = pool.ObjectsOf(ctx, moves[0])
+	if err != nil || !slices.Equal(objects.Indexed, []string{late}) {
+		t.Fatalf("what the move copies read %+v: %v", objects, err)
+	}
+	if moved, err := pool.CompleteMove(ctx, moves[0], objects, time.Hour); err != nil || !moved.Done {
+		t.Errorf("the move with its chunk read was carried out as %+v: %v", moved, err)
 	}
 }
