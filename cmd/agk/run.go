@@ -77,12 +77,13 @@ func init() {
 }
 
 func runLocal(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk run", "agk run --local [-f <path>] [--input name=value] [--input-file name=path] [--inputs <path>] [--secret name=value] [--secret-file name=path] [--dir <path>] [--helper <path>|none] [--require-userns-remap] [-o json] [-v] [--logs]\n\tagk run --namespace <namespace> [--server <url>] [--commit <commit>] [-f <path>] [--input name=value] [--input-file name=path] [--inputs <path>] [-o json] [-v]")
+	fs := flags(e, "agk run", "agk run --local [-f <path>] [--input name=value] [--input-file name=path] [--inputs <path>] [--secret name=value] [--secret-file name=path] [--dir <path>] [--helper <path>|none] [--require-userns-remap] [-o json] [-v] [--logs]\n\tagk run --namespace <namespace> [--server <url>] [--commit <commit>|--ref <ref>] [-f <path>] [--input name=value] [--input-file name=path] [--inputs <path>] [-o json] [-v]")
 	isLocal := fs.Bool("local", false, "Runs against the Docker daemon of this machine.")
 	entry := fs.String("f", "", "The entry point to run. Defaults to "+entryPoint+" in the directory the command is run in.")
 	namespace := fs.String("namespace", "", "Runs on an installation instead, in this namespace, the workflow the commit holds, as agk push registered it.")
 	server := fs.String("server", "", "The installation to run on. "+serverDefault)
 	commit := fs.String("commit", "", "The commit to run on an installation: a hash, a branch or a tag the repository holds. Defaults to HEAD.")
+	ref := fs.String("ref", "", "A branch or a tag of the repository on the installation, resolved there when the run is asked for, rather than a commit read here.")
 
 	var inputs, inputFiles, secretValues, secretFiles pairs
 	fs.Var(&inputs, "input", "A workflow input, written name=value. The value is read as JSON and falls back to the string it is. Repeatable.")
@@ -107,9 +108,13 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 	if code, ok := oneKindOfRun(e, fs, *isLocal, *namespace); !ok {
 		return code
 	}
+	if *commit != "" && *ref != "" {
+		fmt.Fprintln(e.Err, "--commit names a commit this repository holds, and --ref a ref the installation resolves to one, and a run is of one commit: pass one")
+		return exitUsage
+	}
 	if !*isLocal {
 		return runOnServer(ctx, e, serverRun{
-			entry: *entry, namespace: *namespace, server: *server, commit: *commit,
+			entry: *entry, namespace: *namespace, server: *server, commit: *commit, ref: *ref,
 			inputs: inputs, inputFiles: inputFiles, document: *document,
 			json: *output == "json", verbose: *verbose,
 		})
@@ -314,12 +319,12 @@ func (e Env) paths(ps pairs) []string {
 
 // Which flags belong to which run. A local run's secrets, directory, helper and floor are this
 // machine's, and on an installation the namespace declares the secrets and the runner holds the
-// rest; the namespace, the installation and the commit name a server run. A flag of the other
+// rest; the namespace, the installation and the commit or the ref name a server run. A flag of the other
 // kind is refused rather than ignored, since a run that silently dropped --secret would be a run
 // somebody believes had it.
 var (
 	localOnly  = []string{"secret", "secret-file", "dir", "helper", "require-userns-remap", "logs"}
-	serverOnly = []string{"namespace", "server", "commit"}
+	serverOnly = []string{"namespace", "server", "commit", "ref"}
 )
 
 // oneKindOfRun says whether the flags name one run, local or on an installation, and answers

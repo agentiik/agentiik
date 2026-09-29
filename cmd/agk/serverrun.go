@@ -32,11 +32,13 @@ import (
 //
 // # What it names
 //
-// A run is of a commit, since "a version is a commit", and until the installation hosts the
-// repository it holds no branch to resolve one from, so the commit is read here as agk push reads
-// it: HEAD, or the hash, branch or tag --commit names. A commit nobody pushed is refused by the
-// installation as a version it does not have. --ref, a ref the installation resolves, arrives
-// with git hosting.
+// A run is of a commit, since "a version is a commit", and by default the commit is read here as
+// agk push reads it: HEAD, or the hash, branch or tag --commit names, so that what runs is what
+// this clone holds. A commit nobody pushed is refused by the installation as a version it does not
+// have. --ref names instead a branch or a tag of the installation's repository, resolved there when
+// the run is asked for: somebody else's branch runs as it stands there, whether or not this clone
+// fetched it. The workflow is then named by HEAD, since the name is the repository's whichever of
+// its commits runs, and the commit the ref named is said once the installation has answered.
 //
 // The inputs are sent as they were given, and the installation binds them against the declaration
 // the version was pushed with, by the same package schema a local run binds them with: every
@@ -67,7 +69,7 @@ var (
 
 // serverRun is what agk run on an installation was asked.
 type serverRun struct {
-	entry, namespace, server, commit string
+	entry, namespace, server, commit, ref string
 
 	inputs, inputFiles pairs
 	document           string
@@ -104,8 +106,9 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 	}
 	// Said rather than refused: nothing is registered, and the run is of what was pushed
 	// whatever the working copy holds, but somebody with an edit open most likely believes it
-	// is what runs.
-	if changed, err := dirtyTree(ctx, repo.top); err == nil && len(changed) > 0 {
+	// is what runs. A run at a ref is of what the installation holds, which nobody takes for
+	// their working copy.
+	if changed, err := dirtyTree(ctx, repo.top); err == nil && len(changed) > 0 && o.ref == "" {
 		fmt.Fprintf(e.Err, "the working tree has uncommitted changes in %s, and what runs is %s as it was committed and pushed, without them\n",
 			counted(len(changed), "file", "files"), short(sha))
 	}
@@ -132,7 +135,11 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 
 	// 3. The run.
 	workflow := string(wf.Metadata.Name)
-	run, err := start(ctx, at, o.namespace, workflow, sha, supplied)
+	ask := api.Start{Commit: sha, Inputs: supplied}
+	if o.ref != "" {
+		ask = api.Start{Ref: o.ref, Inputs: supplied}
+	}
+	run, pinned, err := start(ctx, at, o.namespace, workflow, ask)
 	switch {
 	case errors.Is(err, errUnreachable):
 		fmt.Fprintf(e.Err, "%s\n", err)
@@ -141,7 +148,15 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 		fmt.Fprintf(e.Err, "%s\n", err)
 		return exitRefused
 	}
-	fmt.Fprintf(e.Err, "run %s of %s/%s@%s started at %s\n", run, o.namespace, workflow, short(sha), at.base)
+	switch {
+	case o.ref == "":
+		fmt.Fprintf(e.Err, "run %s of %s/%s@%s started at %s\n", run, o.namespace, workflow, short(sha), at.base)
+	case pinned != "":
+		fmt.Fprintf(e.Err, "run %s of %s/%s@%s, where %s stands, started at %s\n", run, o.namespace, workflow, short(pinned), o.ref, at.base)
+	default:
+		// An answer read from its Location alone names no commit, and the run's detail does.
+		fmt.Fprintf(e.Err, "run %s of %s/%s at %s started at %s\n", run, o.namespace, workflow, o.ref, at.base)
+	}
 
 	// 4. Following it until it ends.
 	f := &following{e: e, at: at, run: run, n: &narration{w: e.Err, verbose: o.verbose}}
@@ -173,21 +188,22 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 	return exitSucceeded
 }
 
-// start asks the installation for a run of a commit, and answers its identifier.
-func start(ctx context.Context, at remote, namespace, workflow, sha string, inputs map[string]any) (string, error) {
-	body, err := json.Marshal(api.Start{Commit: sha, Inputs: inputs})
+// start asks the installation for a run of a commit, or of the commit a ref names there, and
+// answers its identifier and the commit it is pinned to.
+func start(ctx context.Context, at remote, namespace, workflow string, ask api.Start) (string, string, error) {
+	body, err := json.Marshal(ask)
 	if err != nil {
-		return "", fmt.Errorf("the inputs could not be written: %w", err)
+		return "", "", fmt.Errorf("the inputs could not be written: %w", err)
 	}
 	path := fmt.Sprintf("/api/v1/%s/workflows/%s/runs", url.PathEscape(namespace), url.PathEscape(workflow))
 	req, err := at.request(ctx, http.MethodPost, path, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	answer, err := client(answerTimeout).Do(req)
 	if err != nil {
 		// Sent and never answered is a run that may exist, which nothing here can tell.
-		return "", fmt.Errorf("%w at %s: %v, and whether a run was started cannot be said", errUnreachable, at.base, err)
+		return "", "", fmt.Errorf("%w at %s: %v, and whether a run was started cannot be said", errUnreachable, at.base, err)
 	}
 	defer answer.Body.Close()
 	if answer.StatusCode != http.StatusAccepted {
@@ -196,39 +212,43 @@ func start(ctx context.Context, at remote, namespace, workflow, sha string, inpu
 			// A refusal and not an unknown, though it may pass: the namespace has created as
 			// many runs in the last hour as its max_runs_per_hour allows, no run was written,
 			// and the installation says when one more fits.
-			return "", fmt.Errorf("the installation refused the run: %s", r.said)
+			return "", "", fmt.Errorf("the installation refused the run: %s", r.said)
 		}
 		if passing(r) {
 			// A gateway that timed out in front of an API that had already written the run
 			// answers this too, so it is no outcome rather than a refusal: a person told that
 			// nothing ran would start a second run.
-			return "", fmt.Errorf("%w: %s answered %s, and whether a run was started cannot be said: agk status reads runs by identifier, and GET /api/v1/%s/runs lists them", errUnreachable, at.base, r.said, namespace)
+			return "", "", fmt.Errorf("%w: %s answered %s, and whether a run was started cannot be said: agk status reads runs by identifier, and GET /api/v1/%s/runs lists them", errUnreachable, at.base, r.said, namespace)
 		}
 		switch r.status {
 		case http.StatusUnauthorized:
-			return "", errors.New(at.refusedCredential())
+			return "", "", errors.New(at.refusedCredential())
 		case http.StatusNotFound:
 			// The same answer an inaccessible workflow gets, and a commit never pushed.
-			return "", fmt.Errorf("%s/%s@%s is not there, or not yours: a server runs a commit agk push registered, so push it first", namespace, workflow, short(sha))
+			if ask.Ref != "" {
+				return "", "", fmt.Errorf("%s/%s at %s: %s; a ref is one agk push, or git, moved on the installation", namespace, workflow, ask.Ref, r.said)
+			}
+			return "", "", fmt.Errorf("%s/%s@%s is not there, or not yours: a server runs a commit agk push registered, so push it first", namespace, workflow, short(ask.Commit))
 		case http.StatusUnprocessableEntity:
 			// An input the declaration refuses, in the sentence a local run prints for it.
-			return "", errors.New(r.said)
+			return "", "", errors.New(r.said)
 		}
-		return "", fmt.Errorf("the installation refused the run: %s", r.said)
+		return "", "", fmt.Errorf("the installation refused the run: %s", r.said)
 	}
 	var started struct {
-		Run string `json:"run"`
+		Run    string `json:"run"`
+		Commit string `json:"commit"`
 	}
 	if err := json.NewDecoder(answer.Body).Decode(&started); err != nil || started.Run == "" {
 		// The run exists, and the Location it is read at names it too.
 		if loc := answer.Header.Get("Location"); loc != "" {
 			if i := strings.LastIndex(loc, "/"); i >= 0 && loc[i+1:] != "" {
-				return loc[i+1:], nil
+				return loc[i+1:], started.Commit, nil
 			}
 		}
-		return "", fmt.Errorf("%w: a run was started and its answer naming it could not be read", errUnreachable)
+		return "", "", fmt.Errorf("%w: a run was started and its answer naming it could not be read", errUnreachable)
 	}
-	return started.Run, nil
+	return started.Run, started.Commit, nil
 }
 
 // following is one run being followed: what has been said of it, so that nothing is said twice.

@@ -887,8 +887,19 @@ func (s *Server) storeTree(ctx context.Context, namespace string, blobs map[stri
 // default branch resolved to a commit, which whoever pushed it named. It is what a client writes,
 // and the API reads it as a starting.
 type Start struct {
-	Commit string         `json:"commit"`
+	Commit string         `json:"commit,omitempty"`
+	Ref    string         `json:"ref,omitempty"`
 	Inputs map[string]any `json:"inputs,omitempty"`
+}
+
+// triggered is what run.trigger records of a run started: its workflow and commit, and the ref it
+// was asked by where it was, since the ref may name another commit by the time anybody reads the log.
+func triggered(workflow, commit, ref string) map[string]any {
+	detail := map[string]any{"workflow": workflow, "commit": commit}
+	if ref != "" {
+		detail["ref"] = ref
+	}
+	return detail
 }
 
 // starting is a Start as the API reads one, with its inputs kept as the JSON they were written in
@@ -899,8 +910,8 @@ type Start struct {
 // written [{},{},...] was 508 MiB once decoded. So they are held to inputsMaxValues as they are
 // read, and only then decoded to be bound against the version's declaration.
 type starting struct {
-	commit string
-	inputs jsontext.Value
+	commit, ref string
+	inputs      jsontext.Value
 }
 
 // startMaxBytes is how large the body starting a run may be, which is what its inputs may weigh.
@@ -926,6 +937,8 @@ func (s *starting) field(b *body, name string) error {
 	switch name {
 	case "commit":
 		return text(b, &s.commit)
+	case "ref":
+		return text(b, &s.ref)
 	case "inputs":
 		// An object naming each input, told apart before it is read, so that a document that is
 		// not one is refused before it is counted rather than after.
@@ -951,7 +964,33 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		fail(w, statusOf(err), err.Error())
 		return
 	}
-	if start.commit == "" {
+	switch {
+	case start.commit != "" && start.ref != "":
+		fail(w, http.StatusBadRequest, "the request names a commit and a ref, and a run is of one commit: name the commit, or the ref the installation resolves to one")
+		return
+	case start.ref != "":
+		// A ref other than the default branch: a branch or a tag, by its short name or in
+		// full, or a whole commit that is a version, resolved here, once, and the run pinned
+		// to the commit it names now, whatever the ref does next.
+		status := http.StatusOK
+		err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+			var why error
+			start.commit, status, why = resolveRef(ctx, ns, over.Workflow, start.ref)
+			return why
+		})
+		switch {
+		case errors.Is(err, db.ErrNoWorkflow):
+			fail(w, http.StatusNotFound, "no such thing, or not yours")
+			return
+		case err != nil && status == http.StatusOK:
+			s.report(fmt.Errorf("api: the ref %.200s of %s/%s: %w", start.ref, over.Namespace, over.Workflow, err))
+			fail(w, http.StatusInternalServerError, "the ref could not be resolved")
+			return
+		case err != nil:
+			fail(w, status, err.Error())
+			return
+		}
+	case start.commit == "":
 		// "A run naming no ref runs the default branch's head": the commit it points at, or,
 		// while it is unborn, the latest version a tree push recorded. The run is pinned to
 		// that commit from here on, whatever the branch does next.
@@ -1001,7 +1040,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		// unrecorded and the chain's lock is held for no longer than the commit.
 		return ns.Audit(ctx, audit.Record{
 			Actor: string(who), Action: audit.RunTrigger, Target: string(run), Result: audit.Done,
-			Detail: map[string]any{"workflow": over.Workflow, "commit": start.commit},
+			Detail: triggered(over.Workflow, start.commit, start.ref),
 		})
 	})
 	var reached *db.RunsPerHourReached
@@ -1021,8 +1060,10 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 	// 202 rather than 201: the run exists, and nothing has happened yet. What happens is the
 	// controller's, and it has been told.
 	w.Header().Set("Location", fmt.Sprintf("/api/v1/%s/runs/%s", over.Namespace, run))
+	// The commit too, since a run asked for by a ref, or by none, is pinned to one its caller
+	// did not name.
 	write(w, http.StatusAccepted, map[string]any{
-		"run": string(run), "state": agk.Queued.String(),
+		"run": string(run), "state": agk.Queued.String(), "commit": start.commit,
 	})
 }
 
