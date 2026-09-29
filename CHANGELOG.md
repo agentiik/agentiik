@@ -11,6 +11,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A workflow v0.2 or v0.3 pushed as trees becomes an empty repository at the upgrade, with nothing to do: migration 0049 gives it a key of its own for its packs and its default branch unborn and unprotected, so that an editor's `agk push` keeps landing, and keeps every version, run and counted object as it was, each version recorded as sent as a tree (`workflow_versions.source`).
 - A repository's image pins and brick manifests start empty at the upgrade, with nothing to do (migration 0050): the next version a tree push makes records its pins, and a git push naming a tag nobody pinned since, or running a brick whose manifest nobody recorded, is refused until `agk push` records them. Which of several stored versions' digests a tag should be pinned to is not something a migration can decide.
 - Migration 0051 lets the collection claim a pack of a workflow repository before it deletes it, with nothing to do: a pack is `receiving`, `live` or `superseded` as before, and `collecting` from its claim to its deletion.
+- Migration 0052 gives a workflow when it was deleted and by whom, with nothing to do: none is, until one is deleted.
 
 ### Workflows
 
@@ -47,6 +48,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A workflow its first push creates is a repository whose default branch is unborn and unprotected, as every repository is until an owner protects it.
 - A push naming a secret its namespace does not declare is refused with 422 before any of its tree is stored, naming the secret and the steps that mount it, once the pusher holds `secret:use`.
 - A push whose `metadata.name` is not the workflow it is pushed to, or whose `metadata.namespace` is not its namespace, is refused with 422 at the line (`metadata-name-not-repository`, `metadata-namespace-not-repository`), and a version records only the files, manifests and digests it was judged over.
+- `DELETE /api/v1/{ns}/workflows/{name}` deletes a workflow under `workflow:delete`, answering 202 with no body: from the answer on it is absent, to every route about it, its runs and git included, since the authorizer holds nothing over a deleted workflow for anybody, the bootstrap operator included, asked in the question that reads the grants so that a deleted workflow is refused after as many questions as any. Its runs still going are asked to cancel, and the expiry of every run's envelopes, logs and artifacts is brought to the deletion. A body is refused with 400 before anything is deleted, and a workflow created under the name while it is purged with 409. Audited as `workflow.delete`, with how many runs were asked to cancel (`db.NS.DeleteWorkflow`).
+- The controller that leads purges a deleted workflow in turn, first in each pass so that the purges after it act on the expiry it brings forward: the runs the purges are done with, then the versions once no run is left, letting go of the objects their trees name, then its packs, superseded for the collection to delete a day later, and once nothing names it the workflow itself, with its refs, grants, pins and manifests, which frees its name (`db.Pool.PurgeDeleted`). Counted as `agentiik_workflows_purged_total`, and said in the pass's log line.
 
 ### agk
 
