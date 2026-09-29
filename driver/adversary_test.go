@@ -321,6 +321,8 @@ func TestOnlyTheOutputTreeIsBoundWritable(t *testing.T) {
 
 	task := taskWithASecret(ref)
 	task.Files = []graph.FileSelector{{From: "certs/ca.pem", To: "/etc/ssl/certs/internal-ca.pem"}}
+	repo := workingTree(t, "certs/ca.pem")
+	r.cfg.Repo = func(context.Context, string, string, string) (string, error) { return repo, nil }
 	if _, err := r.Run(t.Context(), task); err != nil {
 		t.Fatalf("running: %s", err)
 	}

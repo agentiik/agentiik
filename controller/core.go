@@ -728,6 +728,9 @@ func scopeOf(t graph.Task, inputs map[agk.Port]InputRef) db.GrantScope {
 	for _, m := range t.Secrets {
 		scope.Secrets = append(scope.Secrets, db.GrantSecret{Name: m.Name, Mount: m.Mount})
 	}
+	for _, f := range t.Files {
+		scope.Files = append(scope.Files, db.GrantFile{From: f.From, To: f.To, Mode: f.Mode})
+	}
 	return scope
 }
 

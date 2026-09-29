@@ -181,7 +181,7 @@ func TestTheRepositoryTreeIsMountedReadOnly(t *testing.T) {
 // it", which for a tool that will only read /etc/ssl/certs/internal-ca.pem is the only
 // way it reads it at all.
 func TestASelectorRelocatesAPathWhereATheToolInsistsOnIt(t *testing.T) {
-	repo := t.TempDir()
+	repo := workingTree(t, "certs/internal-ca.pem", "sql/orders.sql")
 	task := graph.Task{
 		Step:    "load",
 		Attempt: 1,
@@ -206,6 +206,82 @@ func TestASelectorRelocatesAPathWhereATheToolInsistsOnIt(t *testing.T) {
 		if strings.Contains(mount.Target, "sql") {
 			t.Fatalf("a short form selector mounted something at %s", mount.Target)
 		}
+	}
+}
+
+// workingTree is a directory holding the files named, as agk run --local finds a working tree.
+func workingTree(t *testing.T, files ...string) string {
+	t.Helper()
+	repo := t.TempDir()
+	for _, f := range files {
+		at := filepath.Join(repo, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at, []byte(f), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repo
+}
+
+// A directory or a glob relocated in a working tree lands where it lands on a server: each file
+// it selects under the place named, keeping its path below the directory, or below the glob's
+// segments before its first wildcard, and .git, which no version carries, is never among them.
+func TestAGlobRelocatedInAWorkingTreeKeepsThePathBelowItsFixedSegments(t *testing.T) {
+	repo := workingTree(t, "sql/orders.sql", "sql/2026/q1.sql", "sql/README.md", ".git/config", "scripts/a.sh")
+	task := graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{
+		{From: "./sql/**/*.sql", To: "/docker-entrypoint-initdb.d"},
+		{From: "scripts", To: "/opt/tools"},
+		{From: "**/config", To: "/etc/leaked"},
+	}}
+	g, _ := prepared(t, task, nil, repo)
+	for target, source := range map[string]string{
+		"/docker-entrypoint-initdb.d/orders.sql":  "sql/orders.sql",
+		"/docker-entrypoint-initdb.d/2026/q1.sql": "sql/2026/q1.sql",
+		"/opt/tools/a.sh":                         "scripts/a.sh",
+	} {
+		if m := mountAt(t, g, target); m.Source != filepath.Join(repo, filepath.FromSlash(source)) || !m.ReadOnly {
+			t.Errorf("%s is bound from %s, read-only %v", target, m.Source, m.ReadOnly)
+		}
+	}
+	for _, m := range g.Mounts {
+		if strings.HasPrefix(m.Target, "/etc/leaked") || strings.HasSuffix(m.Target, "README.md") {
+			t.Errorf("%s is bound at %s", m.Source, m.Target)
+		}
+	}
+}
+
+// A tree a runner laid out comes with its relocations placed, and they are what is bound: the
+// step's files are not read again over a tree that holds only what they selected.
+func TestARunnersTreeIsBoundWithTheRelocationsItWasHanded(t *testing.T) {
+	laid := t.TempDir()
+	apart := filepath.Join(t.TempDir(), "0")
+	if err := os.WriteFile(apart, []byte("ca"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := graph.Task{ID: agk.NewTaskID("01JMZ8V1P9C4", "load", 1, agk.Shard{}), Step: "load", Attempt: 1, Files: []graph.FileSelector{
+		{From: "certs/**", To: "/etc/ssl/certs"},
+	}}
+	w, err := newWorkdir(t.TempDir(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.remove() })
+	ctx := WithSources(context.Background(), Sources{Store: store, Repo: laid, Bound: []Bound{{Source: apart, Target: "/etc/ssl/certs/internal-ca.pem"}}})
+	g, err := prepare(ctx, task, w, laptop(), store, agk.Run{}, laid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := mountAt(t, g, "/etc/ssl/certs/internal-ca.pem"); m.Source != apart || !m.ReadOnly {
+		t.Errorf("the relocation is bound from %s, read-only %v", m.Source, m.ReadOnly)
+	}
+	if m := mountAt(t, g, RepoDir); m.Source != laid {
+		t.Errorf("%s is bound from %s", RepoDir, m.Source)
 	}
 }
 

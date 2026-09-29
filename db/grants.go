@@ -56,6 +56,20 @@ type GrantScope struct {
 
 	Inputs  []GrantInput  `json:"inputs,omitempty"`
 	Secrets []GrantSecret `json:"secrets,omitempty"`
+
+	// Files are the step's files, which narrow and relocate the tree the redemption answers:
+	// none is the whole tree. Written with the version rather than read off its graph at
+	// redemption for the reason Workflow and Commit are, and absent from a grant written before
+	// the redemption served them, which is answered the whole tree as it was then.
+	Files []GrantFile `json:"files,omitempty"`
+}
+
+// GrantFile is one selector of a step's files, as the workflow wrote it: a path or glob of the
+// tree, where it is relocated to, and the mode it is given.
+type GrantFile struct {
+	From string `json:"from"`
+	To   string `json:"to,omitempty"`
+	Mode string `json:"mode,omitempty"`
 }
 
 // GrantInput is one input port's envelope, named by digest.

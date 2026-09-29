@@ -46,6 +46,18 @@ type Sources struct {
 	// Repo is the path of the workflow repository tree the runner laid out for this task
 	// from the files its redemption names, which is bound read-only at /agk/repo.
 	Repo string
+
+	// Bound are the files of the tree the step's files relocate, each laid out by the runner
+	// outside Repo and bound read-only where the redemption placed it. The redemption placed
+	// every file already, so nothing here reads a selector.
+	Bound []Bound
+}
+
+// Bound is one file a step's files relocate: where it is on the host, and the absolute path in
+// the container it is bound at.
+type Bound struct {
+	Source string
+	Target string
 }
 
 // sourcesKey is the context key Sources travels under. It is a type of this package's own,

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -301,14 +302,42 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 		return nil, notRunnable{err}
 	}
 
+	// The files under /agk/repo in one directory, and the ones the step's files relocate in
+	// another beside it, each under a name of its own, so that a file bound elsewhere is not
+	// under /agk/repo as well and two bound from one path can carry two modes. Both are named
+	// after the task, which is how Remove finds them.
+	var inPlace, relocated []TreeEntry
+	for _, e := range r.Tree {
+		if e.To == "" {
+			inPlace = append(inPlace, e)
+			continue
+		}
+		e.at = strconv.Itoa(len(relocated))
+		relocated = append(relocated, e)
+	}
 	dir, err := newTreeDir(o.WorkRoot, t.ID)
 	if err != nil {
 		return nil, err
 	}
-	if err := layOutTree(ctx, objects, m.Namespace, dir, r.Tree, limits); err != nil {
+	if err := layOutTree(ctx, objects, m.Namespace, dir, inPlace, limits); err != nil {
 		return nil, fmt.Errorf("runner: task %s: %w", t.ID, err)
 	}
-	return &Assembled{Task: t, Sources: driver.Sources{Store: store, Secrets: secrets, Repo: dir}}, nil
+	sources := driver.Sources{Store: store, Secrets: secrets, Repo: dir}
+	if len(relocated) > 0 {
+		apart, err := newTreeDir(o.WorkRoot, t.ID)
+		if err != nil {
+			os.RemoveAll(dir)
+			return nil, err
+		}
+		if err := layOutTree(ctx, objects, m.Namespace, apart, relocated, limits); err != nil {
+			os.RemoveAll(dir)
+			return nil, fmt.Errorf("runner: task %s: %w", t.ID, err)
+		}
+		for _, e := range relocated {
+			sources.Bound = append(sources.Bound, driver.Bound{Source: filepath.Join(apart, e.at), Target: e.To})
+		}
+	}
+	return &Assembled{Task: t, Sources: sources}, nil
 }
 
 // objectsOf is the store as one task's redemption lets it be reached: the presigned GET of every

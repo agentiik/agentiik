@@ -22,6 +22,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A step keeps its whole `extends` chain (`graph.Step.Extends`), a workflow include reads the other repository's root `agentiik.yaml` as a fragment with its path includes resolved there (`graph.Remote`), and the includes are recorded in the order they applied.
 - A version's graph is written as `wire.schema.json#/$defs/resolvedGraph` (`graph.Graph.Resolved`), leaving out keywords at the language's default, the script keywords of a brick or a call, and the namespace.
 - A file relocated to a relative path by `files` is refused where a version is made.
+- A step's `files` select the tree as the language says (`graph.Place`): a path names a file or a directory with everything under it, a glob matches segment by segment with `*`, `?`, `[abc]` and `**` as a segment of its own, a relocated directory or glob keeps each file's path below the directory or the glob's fixed segments, and `mode` applies to every file placed. Two files at one place are refused, and so are a selector leaving the tree and a glob whose set is never closed, where a version is made.
 
 ### API
 
@@ -53,6 +54,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The controller that leads purges a deleted workflow in turn, first in each pass so that the purges after it act on the expiry it brings forward: the runs the purges are done with, then the versions once no run is left, letting go of the objects their trees name, then its packs, superseded for the collection to delete a day later, and once nothing names it the workflow itself, with its refs, grants, pins and manifests, which frees its name (`db.Pool.PurgeDeleted`). Counted as `agentiik_workflows_purged_total`, and said in the pass's log line.
 - `PATCH /api/v1/{ns}/workflows/{name}` renames a workflow within its namespace, `name` under `workflow:write`, each field under its own permission and all of them held or nothing changed (`api.Needs.Asks`, `api.HoldsOn`): versions, refs, runs, grants, pins and manifests answer at the new name from the answer on, a task dispatched before redeems after, its grant's scope following, and the old name is free (`db.NS.RenameWorkflow`). A name held is 409, and so is one a deleted workflow holds while it is purged. Audited as `workflow.update` with `name` and `was.name`, under the new name. Versions keep the `metadata.name` they were written with, and a push is held to the new one. A move to another namespace answers 400 until it is served.
 - `POST /api/v1/{ns}/workflows/{name}/runs` takes `ref`, a branch or a tag by its short name or in full, or a whole commit that is a version, resolved when the run is asked for and the run pinned to the commit it names then, whatever the ref does next; a ref naming nothing is 404, a name a branch and a tag both hold 400, and so is a request naming a commit and a ref. The 202 names the commit the run is pinned to, which a run asked for by a ref, or by none, did not name, and `run.trigger` records the ref beside the commit.
+- A redemption answers the tree a step's `files` select, which the controller writes into the grant with the commit: the globs expanded, each relocated file its own entry carrying `to`, with the selector's `mode` where it gives one, so that a narrowed step downloads only what it asked for; a step without `files`, or a grant written before, is answered the whole tree, and one whose files put two files at one place is answered 422.
 
 ### agk
 
@@ -67,6 +69,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk run --local` says before its first step that it executes the working tree, uncommitted changes included, and is labelled local.
 - `agk push` pushes its repository from the root and refuses an entry point below it, naming `git subtree split --prefix <directory>` (`entry-point-below-root`), and a `--namespace` other than the file's `metadata.namespace`.
 - `agk run --namespace --ref` names a branch or a tag of the installation's repository, resolved there, so that somebody else's branch runs as it stands on the installation whether or not this clone fetched it; the workflow is named by `HEAD`, the commit the ref named is said as the run starts, and `--ref` with `--commit` or `--local` is refused.
+
+### Runner
+
+- A file a step's `files` relocate is laid out apart from the tree, with its entry's mode, and bound read-only at its place instead of under `/agk/repo`, the driver binding what the redemption placed (`driver.Sources.Bound`) rather than reading the step's selectors again. A relocation none of the step's files names, one not absolute or not written as it cleans to, and two files at one place are refused before anything is fetched.
+- `agk run --local` reads a step's selectors over the working tree, `.git` left out, so that a directory or a glob relocated locally is bound file by file where it lands on a server.
 
 ### Tests
 

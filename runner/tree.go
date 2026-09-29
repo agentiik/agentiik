@@ -127,10 +127,10 @@ func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir st
 	// would be refused here by the file's creation, which finds a directory in its place.
 	byDigest := map[string][]TreeEntry{}
 	for _, e := range entries {
-		if err := treePath(e.Path); err != nil {
+		if err := treePath(e.laidAt()); err != nil {
 			return fmt.Errorf("runner: %w", err)
 		}
-		if err := mkdirTree(dir, path.Dir(e.Path)); err != nil {
+		if err := mkdirTree(dir, path.Dir(e.laidAt())); err != nil {
 			return err
 		}
 		byDigest[e.SHA256] = append(byDigest[e.SHA256], e)
@@ -216,7 +216,7 @@ func writeObject(ctx context.Context, objects artifact.Objects, namespace, dir, 
 		return fmt.Errorf("runner: the tree file %s could not be fetched: %w", at[0].Path, err)
 	}
 	defer r.Close()
-	first := filepath.Join(dir, filepath.FromSlash(at[0].Path))
+	first := filepath.Join(dir, filepath.FromSlash(at[0].laidAt()))
 	if err := writeChecked(first, r, digest, at[0], l); err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func writeObject(ctx context.Context, objects artifact.Objects, namespace, dir, 
 		if err != nil {
 			return fmt.Errorf("runner: the tree file %s: %w", e.Path, err)
 		}
-		err = writeChecked(filepath.Join(dir, filepath.FromSlash(e.Path)), src, digest, e, l)
+		err = writeChecked(filepath.Join(dir, filepath.FromSlash(e.laidAt())), src, digest, e, l)
 		src.Close()
 		if err != nil {
 			return err

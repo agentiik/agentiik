@@ -236,6 +236,87 @@ func TestATaskIsAssembledFromWhatItsRedemptionNames(t *testing.T) {
 	}
 }
 
+// A file the step's files relocate is laid out apart from the tree, with the mode its entry gives
+// it, and handed to the driver to be bound where the entry says, "instead" of under /agk/repo; a
+// file relocated to two places is laid out twice, and both go with the task.
+func TestARelocatedTreeFileIsBoundApartFromTheTree(t *testing.T) {
+	s := newObjectStore(t)
+	m, r := s.taskFor(t, nil, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}}, nil)
+	m.Files = []bus.File{{From: "certs/**", To: "/etc/ssl/certs"}, {From: "scripts/run.sh", To: "/usr/local/bin/run", Mode: "0755"}}
+	ca, run := s.put(t, []byte("-----BEGIN CERTIFICATE-----\n")), s.put(t, []byte("#!/bin/sh\n"))
+	r.Tree = append(r.Tree,
+		TreeEntry{Path: "certs/internal-ca.pem", Mode: "0644", SHA256: ca, URL: s.url(t, ca), To: "/etc/ssl/certs/internal-ca.pem"},
+		TreeEntry{Path: "scripts/run.sh", Mode: "0755", SHA256: run, URL: s.url(t, run), To: "/usr/local/bin/run"},
+		TreeEntry{Path: "scripts/run.sh", Mode: "0644", SHA256: run, URL: s.url(t, run), To: "/etc/ssl/certs/run.sh"},
+	)
+
+	work := t.TempDir()
+	a, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: work})
+	if err != nil {
+		t.Fatalf("assembling the task: %s", err)
+	}
+	if _, err := os.Stat(filepath.Join(a.Sources.Repo, "certs")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a relocated file is under /agk/repo as well: %v", err)
+	}
+	bound := map[string]string{}
+	for _, b := range a.Sources.Bound {
+		bound[b.Target] = b.Source
+		if strings.HasPrefix(b.Source, a.Sources.Repo+string(os.PathSeparator)) {
+			t.Errorf("%s is bound from inside the tree, %s", b.Target, b.Source)
+		}
+	}
+	for target, want := range map[string]struct {
+		content string
+		mode    os.FileMode
+	}{
+		"/etc/ssl/certs/internal-ca.pem": {"-----BEGIN CERTIFICATE-----\n", treeFileMode},
+		"/usr/local/bin/run":             {"#!/bin/sh\n", treeExecMode},
+		"/etc/ssl/certs/run.sh":          {"#!/bin/sh\n", treeFileMode},
+	} {
+		source, ok := bound[target]
+		if !ok {
+			t.Errorf("nothing is bound at %s: %v", target, bound)
+			continue
+		}
+		b, err := os.ReadFile(source)
+		info, _ := os.Stat(source)
+		if err != nil || string(b) != want.content || info.Mode().Perm() != want.mode {
+			t.Errorf("%s is bound from a file reading %q, mode %v: %v", target, b, info.Mode().Perm(), err)
+		}
+	}
+
+	if err := a.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := os.ReadDir(filepath.Join(work, TreesDir)); len(left) != 0 {
+		t.Errorf("the trees left behind once the task is removed: %v", left)
+	}
+}
+
+// A relocation is one the step's files asked for, at an absolute path, and one place holds one file.
+func TestARelocationTheStepDidNotAskForIsRefused(t *testing.T) {
+	s := newObjectStore(t)
+	m, base := s.taskFor(t, nil, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}}, nil)
+	m.Files = []bus.File{{From: "certs/**", To: "/etc/ssl/certs"}}
+	ca := s.put(t, []byte("ca"))
+	entry := func(path, to string) TreeEntry {
+		return TreeEntry{Path: path, Mode: "0644", SHA256: ca, URL: s.url(t, ca), To: to}
+	}
+	for name, tree := range map[string][]TreeEntry{
+		"somewhere nobody asked for": {entry("certs/ca.pem", "/etc/passwd")},
+		"beside what was asked for":  {entry("certs/ca.pem", "/etc/ssl/certsx/ca.pem")},
+		"a relative place":           {entry("certs/ca.pem", "etc/ssl/certs/ca.pem")},
+		"a place not cleaned":        {entry("certs/ca.pem", "/etc/ssl/certs/../../passwd")},
+		"two files at one place":     {entry("certs/a.pem", "/etc/ssl/certs/ca.pem"), entry("certs/b.pem", "/etc/ssl/certs/ca.pem")},
+	} {
+		r := base
+		r.Tree = append(append([]TreeEntry(nil), base.Tree...), tree...)
+		if err := r.answers(m); err == nil {
+			t.Errorf("a tree relocating %s was taken", name)
+		}
+	}
+}
+
 // An envelope whose bytes are not its digest, or that holds another count of items than the
 // controller published, and a tree file whose bytes are not its digest, are each refused as
 // ErrNotAsNamed, and leave no tree behind.

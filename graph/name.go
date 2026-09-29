@@ -50,14 +50,14 @@ func identifier(name, what, where string) error {
 // where a version is made and never where a stored one is read back (LoadStored): a stored
 // version keeps rebuilding, and its runs and replays keep going, after an upgrade.
 //
-// Two of them. A port or a workflow output is written at most agk.PortMaxBytes, "since each
+// Three of them. A port or a workflow output is written at most agk.PortMaxBytes, "since each
 // becomes the file <name>.json and no filesystem holds that name past 255 characters with its
 // suffix", which is checked in every place a port is named: the workflow outputs and the port
 // each is taken from, a tool's output, and in each step and each hidden block the ports it
 // declares, the inputs it feeds and both ends of every edge. And a file relocated by the long
 // form of files is relocated to an absolute path, since "a relative path has nothing inside a
 // container to be relative to", which is why the runner refuses one and the task message holds
-// it to the same grammar.
+// it to the same grammar, and a selector names a path inside the tree, as a glob that reads.
 func (w *Workflow) newRules() error {
 	at := origin{src: w.src}
 	for _, name := range slices.Sorted(maps.Keys(w.Outputs)) {
@@ -149,11 +149,16 @@ func portPastBound(where, what, name string) string {
 	return fmt.Sprintf("%s names %s %.64s..., which is %d characters long: a port or a workflow output is at most %d, since it becomes the file <name>.json and no filesystem holds that name past %d characters", where, what, name, len(name), agk.PortMaxBytes, agk.IdentifierMaxBytes)
 }
 
-// relocatedTo refuses a file relocated to a relative path.
+// relocatedTo refuses a file relocated to a relative path, and a selector no tree can be matched
+// against: one leaving the tree, or a glob whose set is not closed. Each would otherwise be found
+// by the first task of the step, after the version was accepted.
 func relocatedTo(d Defaults, where string) error {
 	for i, f := range d.Files {
 		if f.To != "" && !strings.HasPrefix(f.To, "/") {
 			return fmt.Errorf("%s.files[%d] relocates %s to %q, and a file is relocated to an absolute path: a relative path has nothing inside a container to be relative to, which is why the runner refuses one", where, i, f.From, f.To)
+		}
+		if _, err := compileSelector(f); err != nil {
+			return fmt.Errorf("%s.files[%d]: %w", where, i, err)
 		}
 	}
 	return nil

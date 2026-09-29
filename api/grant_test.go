@@ -970,6 +970,46 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 	}
 }
 
+// "A narrowed step downloads only what it asked for": the tree a redemption answers is the one the
+// step's files select, globs expanded and each relocation carried as the entry's own to, so that a
+// runner evaluates no path rule. A step whose files put two files in one place is answered 422,
+// since asking again selects the same two.
+func TestAGrantAnswersWhatTheStepsFilesSelect(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	credential := g.joined(t)
+	g.dispatched(t, nil)
+
+	narrowed := g.granted(t, db.GrantScope{Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "a3f9c1e", Files: []db.GrantFile{
+		{From: "./scripts/render.sh"}, {From: "scripts/*.sh", To: "/opt/bin", Mode: "0555"},
+	}})
+	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(narrowed))
+	if w.Code != http.StatusOK {
+		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
+	}
+	if err := conforms(t, "/$defs/grantRedemption/properties/response/properties/tree", answer["tree"]); err != nil {
+		t.Errorf("the tree is not what the wire describes: %s", err)
+	}
+	var read []string
+	for _, e := range answer["tree"].([]any) {
+		f := e.(map[string]any)
+		entry := f["path"].(string) + " " + f["mode"].(string)
+		if to, ok := f["to"].(string); ok {
+			entry += " -> " + to
+		}
+		read = append(read, entry)
+	}
+	if got, want := strings.Join(read, ", "), "scripts/again.sh 0555 -> /opt/bin/again.sh, scripts/render.sh 0755, scripts/render.sh 0555 -> /opt/bin/render.sh"; got != want {
+		t.Errorf("the narrowed tree reads %s, want %s", got, want)
+	}
+
+	twice := g.granted(t, db.GrantScope{Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "a3f9c1e", Files: []db.GrantFile{
+		{From: "scripts/render.sh", To: "/opt/run"}, {From: "scripts/again.sh", To: "/opt/run"},
+	}})
+	if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(twice)); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("two files at one place answered %d: %s", w.Code, w.Body)
+	}
+}
+
 // A redemption that cannot say what the task's repository is refuses, with a sentence, rather than
 // answering an empty tree: an empty /agk/repo is a directory that looks like a repository and is
 // not one. None of these is the runner's doing, and none of them binds the task to it. Each is a

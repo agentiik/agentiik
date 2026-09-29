@@ -82,18 +82,30 @@ type RedeemedArtifact struct {
 	URL    string `json:"url"`
 }
 
-// TreeEntry is one file of the workflow repository: where it goes under /agk/repo, the mode it
-// is created with, its digest and the URL it is fetched through.
+// TreeEntry is one file of the workflow repository: its path in the tree, which is where it goes
+// under /agk/repo, the mode it is created with, its digest and the URL it is fetched through.
 //
-// To is the wire's relocation, which the API does not send yet. It is read rather than refused,
-// since the wire allows it, and held to the step's own files, which is what the driver binds a
-// relocation from.
+// To is the wire's relocation, the absolute path the file is bound at instead, where the step's
+// files relocate it. The API expanded the step's files over the version's tree, so a directory
+// or a glob relocated arrives as one entry per file, and a file relocated to two places as two.
 type TreeEntry struct {
 	Path   string `json:"path"`
 	Mode   string `json:"mode"`
 	SHA256 string `json:"sha256"`
 	URL    string `json:"url"`
 	To     string `json:"to,omitempty"`
+
+	// at is where the file is laid out below the directory it is written in, the path for a
+	// file under /agk/repo and a name of its own for one bound elsewhere.
+	at string
+}
+
+// laidAt is where the entry is written below its directory.
+func (e TreeEntry) laidAt() string {
+	if e.at != "" {
+		return e.at
+	}
+	return e.Path
 }
 
 // RedeemedSecret is one value, the name the task message gave it, where it is mounted, and how
@@ -292,17 +304,29 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 		}
 	}
 
-	// The tree: each path inside /agk/repo, once, with a mode and a digest.
-	relocated := map[string]bool{}
+	// The tree: each path inside /agk/repo once, each place a file is bound at once, with a
+	// mode and a digest.
+	var relocations []string
 	for _, f := range m.Files {
 		if f.To != "" {
-			relocated[f.To] = true
+			relocations = append(relocations, path.Clean(f.To))
 		}
 	}
 	paths := make(map[string]bool, len(r.Tree))
+	bound := map[string]bool{}
 	for _, f := range r.Tree {
 		if err := treePath(f.Path); err != nil {
 			return err
+		}
+		if f.To != "" {
+			if err := boundAt(f, relocations); err != nil {
+				return err
+			}
+			if bound[f.To] {
+				return fmt.Errorf("the tree binds two files at %s", f.To)
+			}
+			bound[f.To] = true
+			continue
 		}
 		if paths[f.Path] {
 			return fmt.Errorf("the tree names %s twice", f.Path)
@@ -312,7 +336,7 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 	for _, f := range r.Tree {
 		// A file one entry names is a directory another entry is below, and no tree can
 		// be laid out with both, on any try.
-		for dir := path.Dir(f.Path); dir != "."; dir = path.Dir(dir) {
+		for dir := path.Dir(f.Path); dir != "." && f.To == ""; dir = path.Dir(dir) {
 			if paths[dir] {
 				return fmt.Errorf("the tree names %s as a file and %s below it", dir, f.Path)
 			}
@@ -322,11 +346,6 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 		}
 		if !isHex64(f.SHA256) || f.URL == "" {
 			return fmt.Errorf("the tree gives %s no digest and URL to fetch it by", f.Path)
-		}
-		// A relocation is bound by the driver from the step's own files, so one the
-		// step did not write would be a relocation nothing binds.
-		if f.To != "" && !relocated[f.To] {
-			return fmt.Errorf("the tree relocates %s to %s, which none of the step's files names", f.Path, f.To)
 		}
 	}
 
@@ -355,6 +374,24 @@ func treeMode(mode string) (os.FileMode, error) {
 		return 0, fmt.Errorf("the mode %q, which does not read as octal", mode)
 	}
 	return os.FileMode(m), nil
+}
+
+// boundAt holds a relocated entry to a place the step's files name: the place one names for a
+// file, or somewhere below the directory one names for a directory or a glob. A relocation none of
+// them names is one the step did not ask for, bound over whatever the image holds there.
+func boundAt(f TreeEntry, relocations []string) error {
+	switch {
+	case !strings.HasPrefix(f.To, "/") || path.Clean(f.To) != f.To || strings.ContainsRune(f.To, 0):
+		return fmt.Errorf("the tree binds %s at %q, and a file is bound at an absolute path written as it cleans to", f.Path, f.To)
+	case f.To == "/":
+		return fmt.Errorf("the tree binds %s at the root of the container", f.Path)
+	}
+	for _, to := range relocations {
+		if f.To == to || strings.HasPrefix(f.To, strings.TrimSuffix(to, "/")+"/") {
+			return nil
+		}
+	}
+	return fmt.Errorf("the tree binds %s at %s, which none of the step's files relocates anything to", f.Path, f.To)
 }
 
 // treePath holds one path of the tree to what can be written under /agk/repo and nowhere else.
