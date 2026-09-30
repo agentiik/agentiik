@@ -37,11 +37,12 @@ func healthVerb(ctx context.Context, lookup config.Lookup, _, stderr io.Writer) 
 
 // answers asks the API listening where h says for its root, and says why where nothing answered.
 //
-// Any answer is ready, the 404 of a path no route serves included, because the API answers nothing
-// before it is: it listens from the start, and serves only once the database, the bus, every pool's
-// queue and every route are open, so until then a request waits, and fails at the timeout. A
-// request with no credential to a path no route serves touches neither the database nor the bus,
-// so a check every few seconds costs the installation nothing.
+// Any answer is ready, the console's page and the 404 of an API serving none included, because the
+// API answers nothing before it is: it listens from the start, and serves only once the database,
+// the bus, every pool's queue and every route are open, so until then a request waits, and fails at
+// the timeout. A request with no credential to the root touches neither the database nor the bus,
+// whether the console answers it from the build in memory or no route does, so a check every few
+// seconds costs the installation nothing.
 //
 // The certificate is not verified. The request carries nothing and its answer is not read, so a
 // certificate that did not verify would put nothing at risk, and a health check that refused one

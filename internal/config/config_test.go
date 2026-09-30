@@ -335,6 +335,7 @@ func TestEverySettingLeftOutTakesItsDefault(t *testing.T) {
 		"the admin's password, none":                  {string(migration.Admin.Password), ""},
 		"the application's password, none":            {string(migration.Application.Password), ""},
 		"the metrics, answered nowhere":               {controller.Metrics, config.Metrics{}},
+		"the console, served":                         {api.Console, true},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s reads %v", what, c.got)
@@ -728,6 +729,28 @@ func TestTheAPIIsProxiedWhereAProxyIsNamed(t *testing.T) {
 	}
 }
 
+// AGK_CONSOLE is on or off and nothing else: off turns the console off, on or nothing serves it, and
+// any other word refuses the start naming the variable, rather than serving what somebody meant to
+// turn off or turning off what they meant to keep.
+func TestTheConsoleIsOnOrOffAndNothingElse(t *testing.T) {
+	for written, served := range map[string]bool{"on": true, "off": false, "": true} {
+		i := anInstallation(t)
+		i.env[config.Console] = written
+		api, err := config.ReadAPI(theAPI.environment(i))
+		if err != nil || api.Console != served {
+			t.Errorf("AGK_CONSOLE=%s serves the console %v: %v", written, api.Console, err)
+		}
+	}
+	for _, written := range []string{"false", "0", "no", "disabled", "OFF", "On", " off", "off "} {
+		i := anInstallation(t)
+		i.env[config.Console] = written
+		_, err := config.ReadAPI(theAPI.environment(i))
+		if names := refused(err); !slices.Equal(names, []string{config.Console}) {
+			t.Errorf("AGK_CONSOLE=%q refuses %v: %v", written, names, err)
+		}
+	}
+}
+
 // "A secret is only ever a file named by an _FILE variable, never a value in the environment."
 // A secret written as a value is refused wherever it is written, by every program whether or not
 // it reads that secret, and the refusal never repeats it.
@@ -890,7 +913,7 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 		theController.name: {
 			config.PublicURL, config.PresignKeyFile, config.BusAccountSeedFile, config.OperatorTokenFile,
 			config.EnvPrefixes, config.Listen, config.JoinRotation, config.RevocationGrace,
-			config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile,
+			config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile, config.Console,
 		},
 		// The object store's directory is migrate's too, since it reads the envelopes of the
 		// runs v0.2 finished there, to record the files they name.
@@ -900,7 +923,7 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 			config.Listen, config.MaxRequeues, config.TaskCeiling, config.JoinRotation,
 			config.RevocationGrace, config.AuditExportURL, config.AuditExportTokenFile,
 			config.MetricsListen, config.MetricsTokenFile, config.OTLPEndpoint, config.TLSCertFile,
-			config.TLSKeyFile,
+			config.TLSKeyFile, config.Console,
 		},
 	}
 	i := anInstallation(t)

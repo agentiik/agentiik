@@ -2,6 +2,11 @@ module github.com/agentiik/agentiik
 
 go 1.27
 
+// The web console's dependencies, which npm installs beside its sources in console/, and which are
+// not this module's packages: a dependency that ships a .go file would otherwise be one, built, vetted
+// and tested with ./... as though it were the engine's.
+ignore ./console/node_modules
+
 require (
 	// CEL, used by package internal/expr alone and reached only from package graph.
 	// The documentation names the language and names the reason: CEL "evaluates in

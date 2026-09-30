@@ -39,6 +39,11 @@
 // AGK_PUBLIC_URL, each request identified and authorised by api.Principals from what the database
 // holds. It takes no argument, since a flag would be a second way to say what the environment says.
 //
+// It serves the web console at every address outside the API's own, /api, /auth, /hooks, /mcp,
+// /objects and a repository's, from the build this binary carries, unless AGK_CONSOLE is off, which
+// leaves every other route served; a build that skipped the console's stage carries none and serves
+// none, and the line the start logs says which of the three it is.
+//
 // It serves plain HTTP, to the TLS terminator in front on a network only the terminator reaches,
 // unless AGK_TLS_CERT_FILE and AGK_TLS_KEY_FILE name a certificate and its key: then it serves TLS
 // itself, 1.3 where the client speaks it and 1.2 at the least. The certificate is read once, at

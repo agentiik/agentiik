@@ -332,7 +332,7 @@ func TestTheSurfaceCanBeReadBack(t *testing.T) {
 	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
 	rt.MustHandle("GET", "/api/v1/{namespace}/runs", api.Needs{Permission: api.RunRead, Scope: api.Namespace}, ok)
 	rt.MustHandle("GET", "/api/v1/runners", api.Needs{Permission: api.GrantManage, Scope: api.Installation}, ok)
-	rt.MustHandle("GET", "/healthz", api.Public{Why: "a health check answers whether this process is up, which is not something anybody learns anything from"}, ok)
+	rt.MustHandle("GET", "/auth/healthz", api.Public{Why: "a health check answers whether this process is up, which is not something anybody learns anything from"}, ok)
 
 	routes := rt.Routes()
 	if len(routes) != 3 {

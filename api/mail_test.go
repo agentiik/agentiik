@@ -119,7 +119,9 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if name == ".git" || name == "testdata" {
+			// The console's node_modules is what npm installs to build it, and ships nowhere: what
+			// the build makes of it is the console's dist/, which its //go:embed has this read.
+			if name == ".git" || name == "testdata" || name == "node_modules" {
 				return filepath.SkipDir
 			}
 			return nil

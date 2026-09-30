@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -78,6 +79,10 @@ type Router struct {
 	// routes is what was registered, in registration order, for the test that reads the
 	// list back and for an installation that wants to print its own surface.
 	routes []Route
+
+	// console answers what no root of the API holds, and is nil where the installation serves
+	// no console: AGK_CONSOLE=off, or a build that carries none. See NewConsole.
+	console *Console
 }
 
 // Route is one registered route and what stands in front of it.
@@ -446,6 +451,27 @@ type AcrossHandler func(w http.ResponseWriter, r *http.Request, who Principal, w
 // apiPrefix is where the routes under a namespace and the routes under a word of their own part.
 const apiPrefix = "/api/v1/"
 
+// apiRoots are the first segments of every path the API answers besides a repository's, which is
+// /{namespace}/{name}.git/ and told apart by its shape: the API under /api, the sign-in page under
+// /auth, the triggers' webhooks under /hooks, the MCP server at /mcp and the built-in object store
+// under /objects. Every other path is the console's.
+//
+// Fixed here rather than read off the routes, and a route refused registration outside them, for
+// two readers. The console, which answers every other path, would otherwise take one of the API's
+// the day a new root was added, with nothing to say so. And an operator serving the console's files
+// from a proxy of their own sends the API the paths the documentation names and nothing else, so a
+// route outside them would be one such an installation never reaches. A root is added here, and in
+// the documentation's list, before any route is registered under it; /hooks and /mcp are held
+// before their routes are served, so that the console never answers what an API of a later release
+// will.
+var apiRoots = []string{"api", "auth", "hooks", "mcp", "objects"}
+
+// underRoot says whether a path, unescaped, is under one of apiRoots: its first segment is one.
+func underRoot(p string) bool {
+	first, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
+	return slices.Contains(apiRoots, first)
+}
+
 // register puts one route on the mux, and answers the mux's refusal of it as an error.
 //
 // net/http refuses two patterns that each match a path the other does when neither is the more
@@ -464,6 +490,9 @@ func (rt *Router) register(method, pattern string, h http.HandlerFunc) (err erro
 	if strings.HasPrefix(pattern, "/{namespace}/{repository}/") {
 		rt.git.HandleFunc(method+" "+pattern, h)
 		return nil
+	}
+	if !underRoot(pattern) {
+		return fmt.Errorf("api: %s %s is outside the paths the API answers, /api/, /auth/, /hooks/, /mcp, /objects/ and a repository's: every other path is the console's, and an installation serving the console's files from a proxy of its own sends the API those alone, so the root joins apiRoots, and the documentation's list, first", method, pattern)
 	}
 	if rest, under := strings.CutPrefix(pattern, apiPrefix); under {
 		first, _, _ := strings.Cut(rest, "/")
@@ -507,14 +536,37 @@ func (rt *Router) Routes() []Route {
 //
 // A route nobody registered is a 404 from the mux, which is the same answer an inaccessible one
 // gets, and that is the right accident: an installation's surface is not a thing to enumerate by
-// asking.
+// asking. A page asked for outside every root of the API is the console's, where one is served.
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux := rt.muxFor(r)
-	if mux == rt.git {
+	switch {
+	case mux == rt.git:
 		rt.serveGit(w, r)
-		return
+	case mux == rt.mux && rt.consoles(r):
+		rt.console.ServeHTTP(w, r)
+	default:
+		mux.ServeHTTP(w, r)
 	}
-	mux.ServeHTTP(w, r)
+}
+
+// consoles says whether the console answers a request: a GET or a HEAD, where one is served, of a
+// path outside every root of the API and in its clean form.
+//
+// Any other method is the mux's, which answers it 404 as it answers a route nobody registered, so
+// that serving the console changes nothing the API answers anybody but a browser asking for a page.
+// A path the mux would clean first, //runs or /x/../api/v1/runs, is the mux's too, which redirects
+// it to its clean form, which then comes back here and is routed on that: read as it stands, the
+// second would be the console's page answered at what is the API's address.
+func (rt *Router) consoles(r *http.Request) bool {
+	if rt.console == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		return false
+	}
+	p := r.URL.Path
+	clean := path.Clean(p)
+	if strings.HasSuffix(p, "/") && clean != "/" {
+		clean += "/"
+	}
+	return p == clean && !underRoot(p)
 }
 
 // serveGit answers a request of git's smart HTTP, authenticated by the command line's API token

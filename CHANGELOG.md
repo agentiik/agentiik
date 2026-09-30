@@ -2,6 +2,14 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### API
+
+- The web console is served at the root of the public URL from a build embedded in `agentiik-api` (package `console`), at every address outside `/api`, `/auth`, `/hooks`, `/mcp`, `/objects` and a repository's: a `GET` or a `HEAD` is answered the build's file it names, or else the console's page with its `<base href="/">` rewritten to the public URL's path, and any other method `404` as before. Every answer carries a Content-Security-Policy holding the console to its own origin, `nosniff`, `Referrer-Policy: no-referrer` and an ETag it is revalidated by at every load. A build that skipped the console's stage carries none and serves none, and the line the start logs says whether the console is `served`, `off` or `not carried by this build`.
+- `AGK_CONSOLE` is `on` or `off` and nothing else, `on` where unset: `off` serves no console and every other route, `/auth` among them, and any other value refuses the start naming the variable.
+- A route is registered under `/api`, `/auth`, `/hooks`, `/mcp`, `/objects` or a repository's path, or refused at registration (`api.Router`), so that the console never takes an address of the API's and a proxy sending the API those paths misses none.
+
 ## v0.4.0, 2026-09-30
 
 The workflow is a repository: each workflow is a git repository the installation serves, cloned, fetched and pushed with a plain git client under the command line's token and the permissions that already decide who reads and writes it, and `agk push` pushes it over git's own protocol. The pre-receive hook judges every commit a ref would point at with the one validation `agk validate` runs, and refuses the push whole, naming the file, the line and the rule. A run pins the commit its ref named, whatever the branch does next, and a replay, from the start or from a step, runs that commit again; a workflow includes its own files and another repository's library at a tag or a whole commit; a step reads only the files it selects; a cached step republishes what an identical one made; and a workflow is renamed, moved to another namespace its mover owns, and deleted. A v0.3.0 installation upgrades with v0.4.0's `compose.yaml` and its own `.env`, and nothing else.
