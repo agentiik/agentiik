@@ -18,7 +18,7 @@ var ErrRefused = errors.New("the workflow is refused")
 // then one lookup rather than a translation table somebody has to keep in step. The
 // corpus marks each invalid workflow refused_by "schema" or "validator": everything
 // marked schema is shape, which closed decoding gives for nothing and which is refused
-// here by an ordinary error naming the key, and the nineteen marked validator are, item
+// here by an ordinary error naming the key, and the twenty marked validator are, item
 // for item, the rules below that carry a corpus name.
 type Rule string
 

@@ -1,5 +1,5 @@
 {
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "What each fixture pins. A fixture under valid/ must be accepted by the schema named beside it. A fixture under invalid/ must be refused; refused_by says by what. schema means the JSON Schema document alone refuses it, and a consumer can assert that with a validator and nothing else. validator means the documentation states the rule but JSON Schema cannot express it, because it needs the graph, the brick manifest, the included file or the expression language; those fixtures are schema valid on purpose and are refused by the workflow validator instead.",
   "schemas": {
     "workflow": "../workflow.schema.json",
@@ -98,7 +98,7 @@
         },
         {
           "file": "workflow/valid/triggers.yaml",
-          "covers": "on.schedule with a stepped, a ranged and a named field, a timezone and its absence, jitter and catch_up; on.webhook with hmac, several segments, a sync response naming a declared output, and map; on.event with type, source and filter; concurrency cancelling the run in progress",
+          "covers": "on.schedule with a stepped, a ranged and a named field, a timezone and its absence, jitter and catch_up; on.webhook with hmac, several segments, a sync response naming a declared output, and map; on.event with type, source and filter, and with another namespace's events filling an input by map; concurrency cancelling the run in progress",
           "source": "https://agentiik.github.io/docs/#triggers"
         }
       ],
@@ -528,6 +528,24 @@
         {
           "file": "workflow/invalid/webhook-duplicate-path.yaml",
           "rule": "Two webhooks answering one path with one method. A request would start whichever the engine found first, so a path and a method answer one trigger.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/event-trigger-empty.yaml",
+          "rule": "An event trigger naming nothing it listens for. It would start a run on every event its namespace can see, so a subscription names a type, a source or a filter.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/event-trigger-namespace-alone.yaml",
+          "rule": "An event trigger naming only the namespace it listens to. It would start a run on every event published there, so a subscription names a type, a source or a filter whichever namespace it hears.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/event-map-input-not-declared.yaml",
+          "rule": "An event trigger filling an input the workflow does not declare. map builds the run's inputs, each validated against its schema before the run exists, and an input nobody declared has none.",
           "refused_by": "validator",
           "reference": "https://agentiik.github.io/docs/#triggers"
         },
