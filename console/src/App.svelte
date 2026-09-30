@@ -11,9 +11,10 @@
   import Refused from "./views/Refused.svelte";
   import Run from "./views/Run.svelte";
   import Runs from "./views/Runs.svelte";
+  import SignIn, { type Passkeys } from "./views/SignIn.svelte";
 
   // The console: who it is signed in as, the top bar, the screen the address names, and the key line.
-  let { api, session, place, version }: { api: API; session: Session; place: Place; version: string } = $props();
+  let { api, session, place, version, passkeys }: { api: API; session: Session; place: Place; version: string; passkeys: Passkeys } = $props();
 
   onMount(() => {
     session.read();
@@ -55,12 +56,7 @@
 {#if session.standing === "reading"}
   <p class="reading" role="status">Reading who you are.</p>
 {:else if session.standing === "signed-out"}
-  <main class="alone">
-    <Pane title="Sign in">
-      <p>This browser is not signed in to this installation.</p>
-      <p><a class="control primary" href="auth/sign-in">Sign in</a></p>
-    </Pane>
-  </main>
+  <SignIn {api} {session} {passkeys} />
 {:else if session.standing === "enrol-only"}
   <main class="alone">
     <Pane title="Enrol a passkey">

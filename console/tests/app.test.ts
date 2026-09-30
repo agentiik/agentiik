@@ -12,7 +12,7 @@ function open(path: string, s: Scenario = scenario("alice")) {
   const api = connect("http://stand-in/", answering(s, asked));
   const history = { pushState() {}, replaceState() {} };
   const place = new Place({ pathname: path, baseURI: "http://stand-in/" }, history);
-  render(App, { api, session: new Session(api), place, version: "v0.6.0" });
+  render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
   return { asked, place };
 }
 

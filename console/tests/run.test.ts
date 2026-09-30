@@ -17,7 +17,7 @@ function detail(s: Scenario): RunDetail {
 function open(path: string, s: Scenario = scenario("alice")) {
   const api = connect("http://stand-in/", answering(s));
   const place = new Place({ pathname: path, baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
-  render(App, { api, session: new Session(api), place, version: "v0.6.0" });
+  render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
 }
 
 describe("an exit code", () => {
