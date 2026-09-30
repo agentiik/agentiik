@@ -258,6 +258,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// What a webhook checks its caller against, and the deliveries it took: a namespace's own,
 		// as its secrets are.
 		"webhook_credentials": true, "webhook_deliveries": true,
+		// The events published into a namespace and remembered for a day: its own, as the
+		// deliveries its webhooks took are.
+		"event_deliveries": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -338,10 +341,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 // declared: a new escape is a line somebody adds here, not a habit that spreads.
 func TestEveryEscapeIsNamed(t *testing.T) {
 	declared := map[string]bool{}
-	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, SchemaUpgrade} {
+	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, EventDelivery, SchemaUpgrade} {
 		declared[string(r)] = true
 	}
-	if len(declared) != 15 {
+	if len(declared) != 16 {
 		t.Fatalf("two reasons share a string: %v", declared)
 	}
 
@@ -364,7 +367,7 @@ func TestEveryEscapeIsNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := map[string]bool{"ControllerSweep": true, "Purge": true, "Collect": true,
-		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "LogShipment": true, "RunRoute": true, "RunListing": true, "AuditLog": true, "NamespaceAdministration": true, "Identity": true, "Authorisation": true, "WorkflowMove": true, "SchemaUpgrade": true}
+		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "LogShipment": true, "RunRoute": true, "RunListing": true, "AuditLog": true, "NamespaceAdministration": true, "Identity": true, "Authorisation": true, "WorkflowMove": true, "EventDelivery": true, "SchemaUpgrade": true}
 	for u := range used {
 		if !names[u] {
 			t.Errorf("Installation is called with %s, which is not a declared Reason: an escape from the namespace has to be one of the named few", u)

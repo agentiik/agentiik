@@ -42,7 +42,7 @@ func (w *Workflow) newTriggerRules() error {
 	}
 	for i, e := range w.On.Event {
 		if e.Type == "" && e.Source == "" && e.Filter == "" {
-			return fmt.Errorf("on.event[%d] names no type, no source and no filter, and would start a run on every event its namespace can see: a subscription names what it listens for", i)
+			return fmt.Errorf("on.event[%d] names no type, no source and no filter, and would start a run on every event the namespace it hears is published: a subscription names what it listens for, whichever namespace it hears", i)
 		}
 	}
 	return nil
@@ -103,6 +103,14 @@ func triggersHold(wf *Workflow) error {
 		}
 		answered[pair] = i
 	}
+	for i, e := range wf.On.Event {
+		at := on.at("event", i)
+		for _, name := range keysOf(e.Map) {
+			if _, ok := wf.Inputs[name]; !ok {
+				return place(refuse(RuleEventMapInputNotDeclared, "", "", fmt.Sprintf("the event trigger %d fills the input %s, which the workflow does not declare: map builds the run's inputs, each validated against its schema before the run exists, and an input nobody declared has none, %s", i, name, declared(wf.Inputs))), at.at("map", name).key())
+			}
+		}
+	}
 	return nil
 }
 
@@ -133,8 +141,49 @@ type Fired struct {
 // evaluated through; anything else is the literal the file wrote. What it answers is bound by the
 // one path every run takes, which holds each input to its schema before the run exists.
 func (g *Graph) Fill(m map[string]any, f Fired) (map[string]any, error) {
+	return g.fillIn(expr.ScopeWebhook, m, f)
+}
+
+// FillFromEvent is Fill for an event trigger's map, which reads the event it matched as well.
+func (g *Graph) FillFromEvent(m map[string]any, f Fired) (map[string]any, error) {
+	return g.fillIn(expr.ScopeTrigger, m, f)
+}
+
+// Hears says whether an event trigger's filter accepts the event f carries: true where it
+// writes none, and otherwise its answer, which is true or false and nothing else, as a run
+// condition's is. "Only an event it accepts starts a run", evaluated before any run exists.
+func (g *Graph) Hears(e Event, f Fired) (bool, error) {
+	if e.Filter == "" {
+		return true, nil
+	}
+	v, err := fill(g.firedContext(f), expr.ScopeTrigger, e.Filter)
+	if err != nil {
+		return false, err
+	}
+	accepted, ok := v.(bool)
+	if !ok {
+		return false, fmt.Errorf("filter: %s answered %T, and a filter answers true or false", e.Filter, v)
+	}
+	return accepted, nil
+}
+
+func (g *Graph) fillIn(scope expr.Scope, m map[string]any, f Fired) (map[string]any, error) {
+	c := g.firedContext(f)
+	out := make(map[string]any, len(m))
+	for _, name := range slices.Sorted(maps.Keys(m)) {
+		v, err := fill(c, scope, m[name])
+		if err != nil {
+			return nil, fmt.Errorf("map.%s: %w", name, err)
+		}
+		out[name] = v
+	}
+	return out, nil
+}
+
+// firedContext is what the on block's expressions read of what fired a run.
+func (g *Graph) firedContext(f Fired) expr.Context {
 	wf := g.wf
-	c := expr.Context{
+	return expr.Context{
 		Workflow: map[string]any{
 			"name": wf.Metadata.Name, "namespace": wf.Metadata.Namespace, "version": f.Commit,
 			// The inputs are what this fills: read here, they are the ones nothing filled yet.
@@ -145,25 +194,16 @@ func (g *Graph) Fill(m map[string]any, f Fired) (map[string]any, error) {
 		Event:   f.Event,
 		Vars:    map[string]any(wf.Vars),
 	}
-	out := make(map[string]any, len(m))
-	for _, name := range slices.Sorted(maps.Keys(m)) {
-		v, err := fill(c, m[name])
-		if err != nil {
-			return nil, fmt.Errorf("map.%s: %w", name, err)
-		}
-		out[name] = v
-	}
-	return out, nil
 }
 
-// fill evaluates one value of a map, through the maps and lists it holds.
-func fill(c expr.Context, v any) (any, error) {
+// fill evaluates one value of a map, through the maps and lists it holds, as scope places it.
+func fill(c expr.Context, scope expr.Scope, v any) (any, error) {
 	switch value := v.(type) {
 	case string:
 		if !strings.Contains(value, "${{") {
 			return value, nil
 		}
-		t, err := expr.Interpolate(expr.ScopeWebhook, value)
+		t, err := expr.Interpolate(scope, value)
 		if err != nil {
 			return nil, err
 		}
@@ -171,7 +211,7 @@ func fill(c expr.Context, v any) (any, error) {
 	case map[string]any:
 		out := make(map[string]any, len(value))
 		for _, key := range slices.Sorted(maps.Keys(value)) {
-			resolved, err := fill(c, value[key])
+			resolved, err := fill(c, scope, value[key])
 			if err != nil {
 				return nil, err
 			}
@@ -181,7 +221,7 @@ func fill(c expr.Context, v any) (any, error) {
 	case []any:
 		out := make([]any, 0, len(value))
 		for _, elem := range value {
-			resolved, err := fill(c, elem)
+			resolved, err := fill(c, scope, elem)
 			if err != nil {
 				return nil, err
 			}

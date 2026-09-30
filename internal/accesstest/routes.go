@@ -170,6 +170,9 @@ var Cases = []Case{
 	// webhook itself, authenticated per trigger on whichever method its file declares.
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/workflows/{workflow}/webhooks/{method}/{path...}", Permission: api.WorkflowWrite, Scope: api.Workflow}, Refused: true},
 	public("", "/hooks/{namespace}/{path...}"),
+	// An event published into a namespace, under workflow:run held there, "since an event reaches
+	// every workflow listening to the namespace".
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/events", Permission: api.WorkflowRun, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs/{run}", Permission: api.RunRead, Scope: api.Workflow, OfRun: true, Reveals: api.RunReadData}},
