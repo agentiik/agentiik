@@ -156,7 +156,7 @@ func fill(c expr.Context, v any) (any, error) {
 		if !strings.Contains(value, "${{") {
 			return value, nil
 		}
-		t, err := expr.Interpolate(expr.ScopeTrigger, value)
+		t, err := expr.Interpolate(expr.ScopeWebhook, value)
 		if err != nil {
 			return nil, err
 		}

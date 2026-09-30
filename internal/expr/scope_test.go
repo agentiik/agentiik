@@ -32,6 +32,9 @@ func TestTheTableIsTheTable(t *testing.T) {
 			expr.RootWorkflow, expr.RootRun, expr.RootTrigger, expr.RootVars,
 			expr.RootInputs, expr.RootSteps, expr.RootItem, expr.RootMatrix, expr.RootSecrets,
 		}},
+		{expr.ScopeWebhook, []expr.Root{
+			expr.RootWorkflow, expr.RootRun, expr.RootTrigger, expr.RootVars,
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.scope.String(), func(t *testing.T) {
@@ -44,12 +47,12 @@ func TestTheTableIsTheTable(t *testing.T) {
 
 // TestWhereEachRootIsAvailable reads the same table down its own column, which is how the
 // documentation writes it: workflow, run and vars everywhere, the trigger in the on block
-// and in step parameters, the event in event triggers, port and step metadata in a step,
+// and in step parameters, the event in event triggers alone, port and step metadata in a step,
 // item and matrix in a shard, and secrets only in params and secrets.
 func TestWhereEachRootIsAvailable(t *testing.T) {
 	all := []expr.Scope{
 		expr.ScopeTrigger, expr.ScopeStep, expr.ScopeParams,
-		expr.ScopeShard, expr.ScopeShardParams,
+		expr.ScopeShard, expr.ScopeShardParams, expr.ScopeWebhook,
 	}
 	cases := []struct {
 		root   expr.Root
@@ -58,7 +61,7 @@ func TestWhereEachRootIsAvailable(t *testing.T) {
 		{expr.RootWorkflow, all},
 		{expr.RootRun, all},
 		{expr.RootVars, all},
-		{expr.RootTrigger, []expr.Scope{expr.ScopeTrigger, expr.ScopeParams, expr.ScopeShardParams}},
+		{expr.RootTrigger, []expr.Scope{expr.ScopeTrigger, expr.ScopeParams, expr.ScopeShardParams, expr.ScopeWebhook}},
 		{expr.RootEvent, []expr.Scope{expr.ScopeTrigger}},
 		{expr.RootInputs, []expr.Scope{expr.ScopeStep, expr.ScopeParams, expr.ScopeShard, expr.ScopeShardParams}},
 		{expr.RootSteps, []expr.Scope{expr.ScopeStep, expr.ScopeParams, expr.ScopeShard, expr.ScopeShardParams}},
