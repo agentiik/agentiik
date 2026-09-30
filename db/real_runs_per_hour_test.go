@@ -24,6 +24,12 @@ func runOf(kind agk.TriggerKind) NewRun {
 	if kind.Unattended() {
 		r.TriggeredBy = ""
 	}
+	if kind == agk.TriggerWorkflow {
+		// A run a call started names the step that called it, which the table holds it to.
+		caller := agk.NewRunID()
+		r.Caller = &Caller{Run: caller, Step: "invoice", Task: agk.NewTaskID(caller, "invoice", 1, agk.Shard{})}
+		r.Depth = 1
+	}
 	return r
 }
 

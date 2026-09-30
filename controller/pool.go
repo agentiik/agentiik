@@ -120,6 +120,10 @@ func refuseUnpooled(ev *graph.Evaluator, namespace string, allowed []string, poo
 		}
 		refused := map[agk.Step]string{}
 		for _, t := range plan.Start {
+			if t.Call != nil {
+				// A call runs on no pool.
+				continue
+			}
 			if _, err := poolOf(namespace, allowed, t, pools); err != nil {
 				refused[t.Step] = err.Error()
 			}

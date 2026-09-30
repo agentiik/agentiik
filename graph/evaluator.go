@@ -334,6 +334,9 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 	if !r.DispatchedAt.IsZero() {
 		sh.DispatchedAt = r.DispatchedAt.UTC()
 	}
+	if r.Called != "" {
+		sh.Called = r.Called
+	}
 	if !r.StartedAt.IsZero() {
 		sh.StartedAt = r.StartedAt.UTC()
 	}
@@ -381,6 +384,7 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 				sh.Task = agk.TaskPending
 				sh.ExitCode, sh.NoExitCode = 0, false
 				sh.Ports = nil
+				sh.Called = ""
 				sh.NextAttemptAt = when
 				sh.DispatchedAt, sh.StartedAt, sh.FinishedAt = time.Time{}, time.Time{}, time.Time{}
 			} else if r.Reason != "" && ss.Reason == "" && ss.Verdict == agk.VerdictRunning {
@@ -894,6 +898,11 @@ func (e *Evaluator) task(name agk.Step, st *Step, sh shard, state ShardState, no
 	if len(st.Script) > 0 {
 		t.BeforeScript, t.AfterScript = st.BeforeScript, st.AfterScript
 	}
+	if st.Call != nil {
+		if t.CallInputs, err = e.callInputs(name, st, sh, state); err != nil {
+			return Task{}, err
+		}
+	}
 
 	// "AGK_DEADLINE: the timestamp past which the container will be stopped." The
 	// deadline runs from the moment the work became somebody's, so it is measured from
@@ -1022,7 +1031,9 @@ func (e *Evaluator) condition(name agk.Step, st *Step, arrived *arrival) (bool, 
 // or an expression, with no dependency on another step", so the value is resolved here
 // and the envelope that port carries is built out of it.
 func (e *Evaluator) fed(name agk.Step, st *Step) (map[agk.Port]agk.Envelope, error) {
-	if len(st.Inputs) == 0 {
+	// A call's inputs keyword writes the called workflow's inputs, which are values of any
+	// type, and no port: callInputs reads them as the call is made.
+	if len(st.Inputs) == 0 || st.Call != nil {
 		return nil, nil
 	}
 	// The step's own input ports are what is being fed, so there is no port metadata
@@ -1040,6 +1051,32 @@ func (e *Evaluator) fed(name agk.Step, st *Step) (map[agk.Port]agk.Envelope, err
 			return nil, err
 		}
 		out[port] = envelope
+	}
+	return out, nil
+}
+
+// callInputs are the inputs a call hands the workflow it calls: "the step's input ports map to
+// the callee's inputs". A port another step feeds it is the list of its items' data, since a
+// workflow input is a value and a port a batch; a value the inputs keyword writes is that value,
+// of whatever type it evaluates to, a string or a number among them, which no port could carry.
+// Where the two name one input, the keyword's value is the one handed over, as the file wrote it
+// last.
+func (e *Evaluator) callInputs(name agk.Step, st *Step, sh shard, state ShardState) (map[string]any, error) {
+	out := make(map[string]any, len(sh.Inputs)+len(st.Inputs))
+	for port, envelope := range sh.Inputs {
+		items := make([]any, len(envelope.Items))
+		for i, item := range envelope.Items {
+			items[i] = item.Data
+		}
+		out[string(port)] = items
+	}
+	context := e.context(sh.Inputs, &sh, state)
+	for _, port := range slices.Sorted(maps.Keys(st.Inputs)) {
+		v, err := e.resolve(expr.ScopeStep, context, st.Inputs[port])
+		if err != nil {
+			return nil, fmt.Errorf("graph: step %s: inputs.%s: %w", name, port, err)
+		}
+		out[string(port)] = v
 	}
 	return out, nil
 }

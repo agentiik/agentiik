@@ -70,6 +70,10 @@ type RunSummary struct {
 	Trigger     agk.TriggerKind `json:"trigger_kind"`
 	TriggeredBy string          `json:"triggered_by,omitempty"`
 
+	// From is the run and the step whose call started this run, for trigger_kind workflow and
+	// no other.
+	From *Caller `json:"from,omitempty"`
+
 	CreatedAt  time.Time `json:"created_at"`
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
@@ -108,6 +112,10 @@ type TaskSummary struct {
 	// "a hit republishes the same envelopes without starting a container", so no runner and no
 	// exit code are named, and this says where the outputs were made.
 	MemoisedFrom agk.RunID `json:"memoised_from,omitempty"`
+
+	// Called is the run a call started, where the task is a workflow: step's, which no runner
+	// held: its ending is that run's.
+	Called agk.RunID `json:"called,omitempty"`
 
 	// Inputs are the envelopes the task was handed on its input ports, by digest as a step's
 	// ports are, from the grant it was dispatched with. A task never dispatched has none.
@@ -172,16 +180,17 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	var state, trigger string
 	var by *string
 	var started, finished *time.Time
+	var from Caller
 
 	err := n.tx.QueryRow(ctx, `
 		select namespace, id, workflow, commit, state, trigger, triggered_by,
 		       created_at, started_at, finished_at, inputs, outputs, replay_from_start_only,
 		       coalesce(reason, ''), coalesce(replay_of, ''), coalesce(replay_from, ''),
-		       envelopes_purged_at is not null
+		       envelopes_purged_at is not null, coalesce(caller_run, ''), coalesce(caller_step, '')
 		from runs where namespace = $1 and id = $2`, n.namespace, string(run)).
 		Scan(&d.Namespace, &d.Run, &d.Workflow, &d.Commit, &state, &trigger, &by,
 			&d.CreatedAt, &started, &finished, &inputs, &outputs, &d.ReplayFromStartOnly,
-			&d.Reason, &d.ReplayOf, &d.ReplayFrom, &d.EnvelopesPurged)
+			&d.Reason, &d.ReplayOf, &d.ReplayFrom, &d.EnvelopesPurged, &from.Run, &from.Step)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunDetail{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -196,6 +205,9 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	}
 	if by != nil {
 		d.TriggeredBy = *by
+	}
+	if from.Run != "" {
+		d.From = &from
 	}
 	if started != nil {
 		d.StartedAt = *started
@@ -317,7 +329,7 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 	// dispatch it was prepared for was handed.
 	rows, err := n.tx.Query(ctx, `
 		select t.idempotency_key, t.step, t.state, t.attempt, t.shard_index, t.shard_of,
-		       t.runner, t.exit_code, t.started_at, t.finished_at, t.memoised_from,
+		       t.runner, t.exit_code, t.started_at, t.finished_at, t.memoised_from, coalesce(t.called_run, ''),
 		       (select g.scope->'inputs' from task_grants g
 		        where g.namespace = t.namespace and g.task_id = t.id
 		        order by g.created_at desc limit 1),
@@ -340,7 +352,7 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		var started, finished, purged *time.Time
 		var handed []byte
 		if err := rows.Scan(&t.Task, &t.Step, &state, &t.Attempt, &index, &of,
-			&runner, &t.ExitCode, &started, &finished, &memoised, &handed, &purged); err != nil {
+			&runner, &t.ExitCode, &started, &finished, &memoised, &t.Called, &handed, &purged); err != nil {
 			return nil, err
 		}
 		if t.Inputs, err = inputsHanded(handed, purged); err != nil {
@@ -374,9 +386,13 @@ func scanRun(rows pgx.Rows) (RunSummary, error) {
 	var state, trigger string
 	var by *string
 	var started, finished *time.Time
+	var from Caller
 	if err := rows.Scan(&r.Namespace, &r.Run, &r.Workflow, &r.Commit, &state, &trigger, &by,
-		&r.CreatedAt, &started, &finished); err != nil {
+		&r.CreatedAt, &started, &finished, &from.Run, &from.Step); err != nil {
 		return RunSummary{}, err
+	}
+	if from.Run != "" {
+		r.From = &from
 	}
 	if err := r.State.UnmarshalText([]byte(state)); err != nil {
 		return RunSummary{}, err
@@ -455,7 +471,7 @@ func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]RunSum
 	}
 	rows, err := w.tx.Query(ctx, `
 		select namespace, id, workflow, commit, state, trigger, triggered_by,
-		       created_at, started_at, finished_at
+		       created_at, started_at, finished_at, coalesce(caller_run, ''), coalesce(caller_step, '')
 		from runs
 		where (namespace, workflow::text) in (select * from unnest($1::text[], $2::text[]))
 		  and ($3 = '' or state = $3)
