@@ -25,7 +25,7 @@ import (
 // A static binary, because it goes into an image with nothing else in it, and is copied onto a host
 // that may have another libc or none: a binary that needed a dynamic loader would fail there with
 // an exec error the shell prints as "not found", the least informative failure there is. And an
-// image holding that same binary, run as a user that is not root.
+// image holding that same binary and the controller's, run as a user that is not root.
 
 // architectures are the machines the release builds for, with the ELF machine each one reports.
 var architectures = []struct {
@@ -68,12 +68,14 @@ func TestTheBinaryIsAStaticLinuxELFForEveryArchitectureTheReleaseBuilds(t *testi
 	}
 }
 
-// The image build/api.Dockerfile describes, built from the binary as the release builds it and run
-// on the daemon on this machine. It holds that binary, which runs with nothing else in the image,
-// serves by default and is refused its start for want of configuration, naming each setting; it
-// runs as a user that is not root; it holds the certificates every connection it makes is verified
-// against; and it carries the annotations a published image carries.
-func TestTheImageRunsTheBinaryAsAUserThatIsNotRoot(t *testing.T) {
+// The image build/agentiik.Dockerfile describes, built from the binaries as the release builds it
+// and run on the daemon on this machine. It holds this binary and the controller's, each of which
+// runs with nothing else in the image and is refused its start for want of configuration, naming
+// each setting: the API by default, and the controller where the command names it, as the
+// installation runs the one image as two containers. It runs as a user that is not root; it holds
+// the certificates every connection is verified against; and it carries the annotations a published
+// image carries.
+func TestTheImageRunsTheAPIAndTheControllerAsAUserThatIsNotRoot(t *testing.T) {
 	socket, ok := dockertest.Socket()
 	if !ok {
 		dockertest.Unavailable(t, "no Docker daemon on this machine")
@@ -84,12 +86,17 @@ func TestTheImageRunsTheBinaryAsAUserThatIsNotRoot(t *testing.T) {
 	arch := daemonArch(t, socket)
 
 	dir := t.TempDir()
-	built, err := os.ReadFile(buildAPI(t, arch))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "agentiik-api-linux-"+arch), built, 0o755); err != nil {
-		t.Fatal(err)
+	for name, path := range map[string]string{
+		"agentiik-api":        buildAPI(t, arch),
+		"agentiik-controller": build(t, "agentiik-controller", filepath.Join("..", "agentiik-controller"), arch),
+	} {
+		built, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+"-linux-"+arch), built, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// The one image the build pulls, which a machine running these tests holds already: a test
 	// that pulled it would be a test of somebody's registry. Once it is here, a build that fails
@@ -97,11 +104,11 @@ func TestTheImageRunsTheBinaryAsAUserThatIsNotRoot(t *testing.T) {
 	if err := exec.Command("docker", "image", "inspect", "alpine:3.21").Run(); err != nil {
 		dockertest.Unavailable(t, "alpine:3.21, which the image takes its certificates from, is not on this machine")
 	}
-	const image = "agentiik-api:test"
-	build := exec.Command("docker", "build", "-q", "-t", image,
+	const image = "agentiik:test"
+	building := exec.Command("docker", "build", "-q", "-t", image,
 		"--build-arg", "VERSION=0.0.0-test", "--build-arg", "REVISION=0000000",
-		"-f", filepath.Join("..", "..", "build", "api.Dockerfile"), dir)
-	if out, err := build.CombinedOutput(); err != nil {
+		"-f", filepath.Join("..", "..", "build", "agentiik.Dockerfile"), dir)
+	if out, err := building.CombinedOutput(); err != nil {
 		t.Fatalf("the image could not be built: %v\n%s", err, out)
 	}
 	// A test leaves nothing behind on the daemon it borrowed.
@@ -113,8 +120,9 @@ func TestTheImageRunsTheBinaryAsAUserThatIsNotRoot(t *testing.T) {
 	}
 	var inspected []struct {
 		Config struct {
-			User   string
-			Labels map[string]string
+			User       string
+			Entrypoint []string
+			Labels     map[string]string
 		}
 	}
 	if err := json.Unmarshal(out, &inspected); err != nil || len(inspected) != 1 {
@@ -123,6 +131,10 @@ func TestTheImageRunsTheBinaryAsAUserThatIsNotRoot(t *testing.T) {
 	cfg := inspected[0].Config
 	if user, _, _ := strings.Cut(cfg.User, ":"); user == "" || user == "0" || user == "root" {
 		t.Errorf("the image runs as %q, which is root", cfg.User)
+	}
+	// An entrypoint would stand before every command, and the controller's is a program of its own.
+	if len(cfg.Entrypoint) > 0 {
+		t.Errorf("the image has the entrypoint %q, so a command cannot name the controller", cfg.Entrypoint)
 	}
 	for _, label := range []string{"title", "description", "version", "source", "revision", "licenses"} {
 		if cfg.Labels["org.opencontainers.image."+label] == "" {
@@ -133,20 +145,33 @@ func TestTheImageRunsTheBinaryAsAUserThatIsNotRoot(t *testing.T) {
 		t.Errorf("the image is licensed %q, and the server is AGPL-3.0-or-later", got)
 	}
 
-	// Bounded, so that a container that hangs fails the test rather than the run.
-	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-	defer cancel()
-	var stdout, stderr bytes.Buffer
-	runIt := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none", image)
-	runIt.Stdout, runIt.Stderr = &stdout, &stderr
-	err = runIt.Run()
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != exitFailed {
-		t.Fatalf("with nothing configured, the image exited %v, want %d:\n%s%s", err, exitFailed, stdout.String(), stderr.String())
-	}
-	for _, variable := range []string{config.DatabaseURL, config.BusURL, config.BusCredentialsFile, config.ObjectsDir, config.MasterKeyFile} {
-		if !strings.Contains(stderr.String(), variable) {
-			t.Errorf("the image's refusal does not name %s:\n%s", variable, stderr.String())
+	for _, c := range []struct {
+		command   []string
+		refusing  string
+		variables []string
+	}{
+		{nil, "the API", []string{config.DatabaseURL, config.BusURL, config.BusCredentialsFile, config.ObjectsDir, config.MasterKeyFile}},
+		{[]string{"agentiik-controller"}, "the controller", []string{config.DatabaseURL, config.BusURL, config.BusCredentialsFile, config.ObjectsDir}},
+	} {
+		// Bounded, so that a container that hangs fails the test rather than the run.
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		var stdout, stderr bytes.Buffer
+		runIt := exec.CommandContext(ctx, "docker", append([]string{"run", "--rm", "--network", "none", image}, c.command...)...)
+		runIt.Stdout, runIt.Stderr = &stdout, &stderr
+		err = runIt.Run()
+		cancel()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != exitFailed {
+			t.Fatalf("with nothing configured, %s exited %v, want %d:\n%s%s", c.refusing, err, exitFailed, stdout.String(), stderr.String())
+		}
+		for _, variable := range c.variables {
+			if !strings.Contains(stderr.String(), variable) {
+				t.Errorf("the refusal of %s does not name %s:\n%s", c.refusing, variable, stderr.String())
+			}
+		}
+		// The controller never reads the master key, so its refusal naming it would be the API's.
+		if c.command != nil && strings.Contains(stderr.String(), config.MasterKeyFile) {
+			t.Errorf("the image ran the API where the command named the controller:\n%s", stderr.String())
 		}
 	}
 
@@ -210,22 +235,30 @@ func daemonArch(t *testing.T, socket string) string {
 
 // buildAPI builds this program for linux on one architecture, with the flags the release passes,
 // and answers with the path.
+func buildAPI(t *testing.T, arch string) string {
+	t.Helper()
+	return build(t, "agentiik-api", ".", arch)
+}
+
+// build builds the program in dir for linux on one architecture, with the flags the release passes,
+// and answers with the path.
 //
 // CGO_ENABLED=0 is what makes it static. These are the flags the header of
-// build/api.Dockerfile gives for the binaries the image is built from, and the ones
+// build/agentiik.Dockerfile gives for the binaries the image is built from, and the ones
 // .github/workflows/release.yml publishes it with; the three are kept the same by hand. A machine
 // with no Go toolchain in reach skips.
-func buildAPI(t *testing.T, arch string) string {
+func build(t *testing.T, name, dir, arch string) string {
 	t.Helper()
 	tool, err := exec.LookPath("go")
 	if err != nil {
-		t.Skip("no Go toolchain to build the API with")
+		t.Skipf("no Go toolchain to build %s with", name)
 	}
-	path := filepath.Join(t.TempDir(), "agentiik-api-linux-"+arch)
+	path := filepath.Join(t.TempDir(), name+"-linux-"+arch)
 	cmd := exec.Command(tool, "build", "-trimpath", "-ldflags=-s -w", "-o", path, ".")
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+arch)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("building for linux/%s: %s\n%s", arch, err, out)
+		t.Fatalf("building %s for linux/%s: %s\n%s", name, arch, err, out)
 	}
 	return path
 }

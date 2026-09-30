@@ -22,6 +22,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A heartbeat writes the silence since the one before where they are 20 seconds or more apart, and what its runner offers where it changed: the history the chart of the pools reads, which `runners` keeps only the latest of.
 - A task's queue wait runs from when it could be handed out, its creation or, for a further attempt, the end of its retry's backoff, which is the step's policy rather than a wait for room, to its dispatch; a wait a skew between two clocks reads below zero is counted as none.
 
+### Images
+
+- The API and the controller are one image, `ghcr.io/agentiik/agentiik`, built from `build/agentiik.Dockerfile`, run as two containers by their commands, since the controller never mounts the master key the API reads: `agentiik-api serve` where no command is given, `agentiik-api init` and the API's other verbs, and `agentiik-controller`. It has no entrypoint, and both programs are in `/usr/local/bin`, on its `PATH`, so a Compose health check is `[CMD, agentiik-api, health]`. `ghcr.io/agentiik/api` and `ghcr.io/agentiik/controller` are no longer published: their last tags are `0.5.0` and `dev` as `main` left them before this change, and neither moves again.
+- The release builds the web console before it compiles `agentiik-api`, named with the version the programs record, so the API of every published image, `dev` included, serves it.
+
 ### Console
 
 - The web console's sources are in `console/`, written with Svelte 5 and built with Vite into `dist/`, which `agentiik-api` carries. Its client is generated from `openapi.json`, so it calls no route the document does not describe, and its tokens, faces and icons are the design system's, copied from `agentiik/schemas` and `agentiik/design` at the commits `console/vendor/README.md` names. It loads nothing from anywhere else and runs under the Content-Security-Policy the API sends.
