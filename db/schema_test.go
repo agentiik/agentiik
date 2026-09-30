@@ -252,6 +252,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// A move asked, held in its workflow's namespace and seen from its target's, and the files a
 		// move left in the namespace it left, until they are deleted.
 		"workflow_moves": true, "move_targets": true, "moved_objects": true,
+		// What a workflow's default branch has armed, and its state, the workflow's in its namespace:
+		// a schedule's next occurrence and a webhook's failures are no other namespace's to read.
+		"triggers": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -546,6 +549,9 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		{`insert into brick_manifests (namespace, workflow, image, manifest, recorded_by, recorded_at)
 		  values ('finance', $1, $2, 'kind: Brick', 'alice', now())`,
 			[]any{workflow, "ghcr.io/acme/agk-invoice@sha256:" + strings.Repeat("0", 64)}},
+		{`insert into triggers (namespace, workflow, kind, position, commit, declared, path, method, armed_by)
+		  values ('finance', $1, 'webhook', 0, $2, '{}', '/invoicing', 'POST', 'alice')`,
+			[]any{workflow, strings.Repeat("a", 40)}},
 	} {
 		if _, err := conn.Exec(ctx, s.sql, s.args...); err != nil {
 			t.Fatalf("%s: %s", s.sql, err)
@@ -569,6 +575,7 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		"workflow_refs.workflow":     {workflow},
 		"image_pins.workflow":        {workflow},
 		"brick_manifests.workflow":   {workflow},
+		"triggers.workflow":          {workflow},
 	}
 	for _, c := range schemaColumns(t, conn) {
 		if c.typeName == "identifier" && written[c.table+"."+c.column] == nil {

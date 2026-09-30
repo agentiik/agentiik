@@ -34,9 +34,16 @@ func (n *NS) DeleteWorkflow(ctx context.Context, workflow, by string, at time.Ti
 		return nil, err
 	}
 	if _, err := n.tx.Exec(ctx,
-		`update workflows set deleted_at = $3, deleted_by = $4 where namespace = $1 and name = $2`,
+		`update workflows set deleted_at = $3, deleted_by = $4, armed = null where namespace = $1 and name = $2`,
 		n.namespace, workflow, at, by); err != nil {
 		return nil, fmt.Errorf("db: workflow %s could not be deleted: %w", workflow, err)
+	}
+	// Its triggers go with it at once, not with the purge that removes its row: a schedule of a
+	// workflow deleted would otherwise go on starting runs of something nobody can read. The
+	// workflow.delete entry is the act, and records none of them one by one.
+	if _, err := n.tx.Exec(ctx,
+		`delete from triggers where namespace = $1 and workflow = $2`, n.namespace, workflow); err != nil {
+		return nil, fmt.Errorf("db: the triggers of %s could not be disarmed: %w", workflow, err)
 	}
 	rows, err := n.tx.Query(ctx,
 		`update runs set cancel_requested_at = $3

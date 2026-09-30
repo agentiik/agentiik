@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,7 +15,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"testing/fstest"
 	"time"
@@ -25,6 +25,7 @@ import (
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/repo/store"
+	"github.com/agentiik/agentiik/trigger"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -50,8 +51,8 @@ type Server struct {
 	limits agk.Limits
 	now    func() time.Time
 
-	// declared are the compiled input declarations of the versions runs were started of.
-	declared *declarations
+	// starter is the one path every run this server starts is created by.
+	starter *trigger.Starter
 
 	// logs tells the step log streams this server answers that their log moved on, streaming is
 	// how they spend their time, and stopping ends them.
@@ -121,10 +122,15 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		o.Limits = agk.DefaultLimits()
 	}
 	s := &Server{
-		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now, declared: &declarations{},
+		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now,
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
 		publicURL: o.PublicURL,
 	}
+	starter, err := trigger.New(trigger.Options{Pool: o.Pool, Versions: o.Versions, Objects: o.Objects, Report: s.report, Now: o.Now})
+	if err != nil {
+		return nil, err
+	}
+	s.starter = starter
 	rt.ServeRuns(runsIn{o.Pool})
 	if o.Objects != nil {
 		// An object store that cannot read a range, which no installation's is, leaves the
@@ -158,6 +164,9 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			Needs{Permission: WorkflowWrite, Scope: Workflow}, s.recordImages},
 		{"POST", "/api/v1/{namespace}/workflows/{workflow}/runs",
 			Needs{Permission: WorkflowRun, Scope: Workflow}, s.start},
+		// What the default branch's head has armed, read under what reading the workflow takes.
+		{"GET", "/api/v1/{namespace}/workflows/{workflow}/triggers",
+			Needs{Permission: WorkflowRead, Scope: Workflow}, s.listTriggers},
 		// The run by the path a Location names it by, authorised over its own workflow
 		// rather than over the namespace, so that run:read held on that workflow alone reads
 		// it and a deny of run:read on that workflow refuses it: "a workflow-scope grant only
@@ -630,6 +639,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 			return hosted
 		}
 		if saved.New {
+			// While no git push has given the repository a branch, the version a tree push
+			// recorded last is what a run naming no ref runs, and what arms its triggers.
+			if err := trigger.Reconcile(ctx, ns, over.Workflow, string(who), v.CreatedAt); err != nil {
+				return err
+			}
 			if len(pins.Pins) == 0 {
 				return nil
 			}
@@ -659,6 +673,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	}
 	if errors.Is(err, db.ErrWorkflowMoving) {
 		fail(w, http.StatusConflict, movingSentence(over))
+		return
+	}
+	if errors.As(err, new(*db.HookTaken)) {
+		fail(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {
@@ -901,16 +919,6 @@ type Start struct {
 	Inputs map[string]any `json:"inputs,omitempty"`
 }
 
-// triggered is what run.trigger records of a run started: its workflow and commit, and the ref it
-// was asked by where it was, since the ref may name another commit by the time anybody reads the log.
-func triggered(workflow, commit, ref string) map[string]any {
-	detail := map[string]any{"workflow": workflow, "commit": commit}
-	if ref != "" {
-		detail["ref"] = ref
-	}
-	return detail
-}
-
 // starting is a Start as the API reads one, with its inputs kept as the JSON they were written in
 // until they are bound.
 //
@@ -923,24 +931,14 @@ type starting struct {
 	inputs      jsontext.Value
 }
 
-// startMaxBytes is how large the body starting a run may be, which is what its inputs may weigh.
-//
-// The weight of one envelope, envelope_max_bytes at its default, because that is what they are:
-// an input reaches a step as the envelope of a port it feeds, and the controller carries the
-// inputs in the state it writes at every decision it takes on the run. The documentation lets the
-// controller read an envelope's weight of payload and nothing larger, and a run started with more
-// than that is one whose data belongs in an artifact.
-const startMaxBytes = agk.DefaultEnvelopeMaxBytes
+// startMaxBytes is how large the body starting a run may be, which is what its inputs may weigh:
+// one envelope, as package trigger holds the inputs it binds.
+const startMaxBytes = trigger.InputsMaxBytes
 
-// inputsMaxValues is how many values the inputs of a run may hold, counting every object, array,
-// string, number, boolean and null at any depth, and it is max_items at its default.
-//
-// Counted as well as weighed, because whoever decodes the inputs pays for their values rather than
-// their bytes, a map for three bytes of {}, and the controller decodes them at every decision it
-// takes on the run. An envelope is what the documentation lets the controller read, and max_items
-// is how many items one carries, each of them several values: inputs held to that many values
-// cost the controller no more than an envelope it may already read.
-const inputsMaxValues = agk.DefaultMaxItems
+// inputsMaxValues is how many values the inputs of a run may hold, counted as they are read so that
+// a document that is not worth decoding is refused before it is: max_items at its default, as
+// package trigger holds the inputs it binds.
+const inputsMaxValues = trigger.InputsMaxValues
 
 func (s *starting) field(b *body, name string) error {
 	switch name {
@@ -973,106 +971,23 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		fail(w, statusOf(err), err.Error())
 		return
 	}
-	switch {
-	case start.commit != "" && start.ref != "":
-		fail(w, http.StatusBadRequest, "the request names a commit and a ref, and a run is of one commit: name the commit, or the ref the installation resolves to one")
-		return
-	case start.ref != "":
-		// A ref other than the default branch: a branch or a tag, by its short name or in
-		// full, or a whole commit that is a version, resolved here, once, and the run pinned
-		// to the commit it names now, whatever the ref does next.
-		status := http.StatusOK
-		err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-			var why error
-			start.commit, status, why = resolveRef(ctx, ns, over.Workflow, start.ref)
-			return why
-		})
-		switch {
-		case errors.Is(err, db.ErrNoWorkflow):
-			fail(w, http.StatusNotFound, "no such thing, or not yours")
-			return
-		case err != nil && status == http.StatusOK:
-			s.report(fmt.Errorf("api: the ref %.200s of %s/%s: %w", start.ref, over.Namespace, over.Workflow, err))
-			fail(w, http.StatusInternalServerError, "the ref could not be resolved")
-			return
-		case err != nil:
-			fail(w, status, err.Error())
-			return
-		}
-	case start.commit == "":
-		// "A run naming no ref runs the default branch's head": the commit it points at, or,
-		// while it is unborn, the latest version a tree push recorded. The run is pinned to
-		// that commit from here on, whatever the branch does next.
-		commit, err := s.defaultCommit(r.Context(), over)
-		if errors.Is(err, db.ErrNoWorkflow) || errors.Is(err, db.ErrNoVersion) {
-			fail(w, http.StatusNotFound, "no such thing, or not yours")
-			return
-		}
-		if err != nil {
-			fail(w, http.StatusInternalServerError, "the version could not be read")
-			return
-		}
-		start.commit = commit
-	}
-
-	g, err := s.versions.Graph(r.Context(), over.Namespace, over.Workflow, start.commit)
+	supplied, err := decodeInputs(start.inputs)
 	if err != nil {
-		if errors.Is(err, db.ErrNoVersion) {
-			// The same answer an inaccessible one gets, for the same reason.
-			fail(w, http.StatusNotFound, "no such thing, or not yours")
-			return
-		}
-		if errors.Is(err, version.ErrLibrary) {
-			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("%s at %s is a library: its root agentiik.yaml is written as a fragment, which other workflows include and nothing runs", over.Workflow, start.commit))
-			return
-		}
-		fail(w, http.StatusInternalServerError, "the version could not be read")
+		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	inputs, ok := s.bindInputs(w, r.Context(), over, start.commit, g, start.inputs)
-	if !ok {
-		return
-	}
-
-	run := agk.NewRunID()
-	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		if err := ns.CreateRun(ctx, db.NewRun{
-			ID: run, Workflow: over.Workflow, Commit: start.commit,
-			Trigger: agk.TriggerManual, TriggeredBy: string(who),
-			Inputs: inputs, Steps: g.Steps(),
-		}); err != nil {
-			return err
-		}
-		// In the same transaction, because PostgreSQL delivers the notification only
-		// when it commits: the row and the wake-up are one fact rather than two.
-		if err := ns.NotifyRun(ctx, run); err != nil {
-			return err
-		}
-		// And the manual trigger is recorded in it too, last, so that a run never starts
-		// unrecorded and the chain's lock is held for no longer than the commit.
-		return ns.Audit(ctx, audit.Record{
-			Actor: string(who), Action: audit.RunTrigger, Target: string(run), Result: audit.Done,
-			Detail: triggered(over.Workflow, start.commit, start.ref),
-		})
+	// Manual: "started from the API, the command line, the console or a mobile app by a principal
+	// holding workflow:run", which the route asked, with the inputs supplied explicitly. A ref other
+	// than the default branch is resolved once, when the run is asked for.
+	started, err := s.starter.Start(r.Context(), trigger.Request{
+		Namespace: over.Namespace, Workflow: over.Workflow,
+		Kind: agk.TriggerManual, By: string(who),
+		Commit: start.commit, Ref: start.ref, Inputs: supplied,
 	})
-	if errors.Is(err, db.ErrWorkflowMoving) {
-		fail(w, http.StatusConflict, movingSentence(over))
+	if s.refused(w, over, cmp.Or(started.Commit, start.commit, start.ref), err) {
 		return
 	}
-	var reached *db.RunsPerHourReached
-	if errors.As(err, &reached) {
-		// "Past it the API answers 429 with Retry-After, the seconds until the oldest run
-		// counted leaves the window." No run exists, so a client told to come back then is not
-		// asking for a second one.
-		w.Header().Set("Retry-After", strconv.Itoa(reached.Seconds()))
-		fail(w, http.StatusTooManyRequests, reached.Reason())
-		return
-	}
-	if err != nil {
-		fail(w, http.StatusInternalServerError, "the run could not be created")
-		return
-	}
+	run, commit := started.Run, started.Commit
 
 	// 202 rather than 201: the run exists, and nothing has happened yet. What happens is the
 	// controller's, and it has been told.
@@ -1080,7 +995,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 	// The commit too, since a run asked for by a ref, or by none, is pinned to one its caller
 	// did not name.
 	write(w, http.StatusAccepted, map[string]any{
-		"run": string(run), "state": agk.Queued.String(), "commit": start.commit,
+		"run": string(run), "state": agk.Queued.String(), "commit": commit,
 	})
 }
 

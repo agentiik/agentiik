@@ -274,12 +274,12 @@ func (p *Pool) Installation(ctx context.Context, reason Reason, fn func(context.
 // Reason is why this handle was opened.
 func (w *Wide) Reason() Reason { return w.reason }
 
-// within runs fn over this transaction as In would in namespace, the installation's scope set aside
+// Within runs fn over this transaction as In would in namespace, the installation's scope set aside
 // meanwhile and back once fn has returned: for a change a request makes in its own namespace inside
 // a transaction that reaches across the installation for another reason, so that the change reads
 // and writes what a handle on that namespace reaches and no more. An error fn answers ends the
 // transaction, and the scope is left as it is.
-func (w *Wide) within(ctx context.Context, namespace string, fn func(context.Context, *NS) error) error {
+func (w *Wide) Within(ctx context.Context, namespace string, fn func(context.Context, *NS) error) error {
 	if _, err := w.tx.Exec(ctx,
 		`select set_config('agentiik.scope', '', true), set_config('agentiik.namespace', $1, true)`, namespace); err != nil {
 		return fmt.Errorf("db: the transaction could not be narrowed to %s: %w", namespace, err)

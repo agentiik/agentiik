@@ -163,6 +163,8 @@ var Cases = []Case{
 
 	// Runs and their data.
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/runs", Permission: api.WorkflowRun, Scope: api.Workflow}, Refused: true},
+	// What the default branch's head has armed, "to whoever holds workflow:read".
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/triggers", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs/{run}", Permission: api.RunRead, Scope: api.Workflow, OfRun: true, Reveals: api.RunReadData}},

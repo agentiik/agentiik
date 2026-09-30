@@ -186,8 +186,9 @@ func TestAStepGoesToThePoolWhoseLabelsIncludeItsRunsOn(t *testing.T) {
 // A step's pool is the step's, so a fan-out refused is refused whole on the pass that finds it,
 // every shard, and not a slice at a time as max_parallel and the quota hand them out: one pass per
 // slice, each writing every task of the run again, would hold the controller on one run for as
-// long as a fan-out of ten thousand takes. Nor does a namespace with no slot free keep a refused
-// step waiting for one it would never use.
+// long as a fan-out of ten thousand takes. The run waits in queued while its namespace has no slot
+// free, "waiting on a concurrency lock or on namespace quota", and the pass that lets it in refuses
+// the step whole, taking none of the slots it would never use.
 func TestARefusedFanOutFailsWholeWithoutASlot(t *testing.T) {
 	document := strings.Replace(onPool("site=nowhere", `{ cpu: "1" }`), `    runs_on: [site=nowhere]
 `, `    runs_on: [site=nowhere]
@@ -221,6 +222,16 @@ func TestARefusedFanOutFailsWholeWithoutASlot(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.Queued {
+		t.Fatalf("with no slot free the run is %s", got)
+	}
+	// The slot comes free, and the pass that lets the run in finds the step refused.
+	if _, err := conn.Exec(t.Context(), `update tasks set state = 'succeeded', exit_code = 0, finished_at = now() where id = '01M2H0AAAAAAAAAAAAAAAAAAAA'`); err != nil {
+		t.Fatal(err)
+	}
 	if err := core.Decide(t.Context(), decidedRun); err != nil {
 		t.Fatal(err)
 	}

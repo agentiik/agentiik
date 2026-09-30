@@ -201,6 +201,18 @@ const (
 	RefProtect     = "ref.protect"
 )
 
+// The triggers' events of v0.5.0. TriggerArm is a schedule, a webhook or an event subscription armed,
+// because the version declaring it landed on the default branch: recorded in the namespace with the
+// workflow as its target, its kind, its place under on, the version and what it declares, by
+// whoever moved the branch, or installation where the leading controller armed a head nobody had.
+// TriggerDisarm is one no longer armed, since the version that lands next does not declare it. An
+// entry declared again by the version that lands next changed nothing and is not recorded: a push
+// that leaves the triggers as they were would otherwise record each of them twice.
+const (
+	TriggerArm    = "trigger.arm"
+	TriggerDisarm = "trigger.disarm"
+)
+
 // The results an entry records.
 const (
 	// Done is an act that changed something.

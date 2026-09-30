@@ -128,7 +128,9 @@ func (e *ChangeRefused) Unwrap() error { return e.Err }
 // exist; ErrRunsGoing while a run of it has not finished; SharedOutputs where one of its runs and a
 // run of another workflow share outputs a cache hit republished; ErrWorkflowExists or
 // ErrWorkflowPurging where the target holds the name; NoRoomToMove where the target's
-// max_artifact_bytes cannot hold its live artifacts beside those of the moves asked to it before.
+// max_artifact_bytes cannot hold its live artifacts beside those of the moves asked to it before;
+// and *HookTaken where a webhook it has armed answers a path and a method a workflow of the target
+// has armed, since the triggers go with the workflow and one pair answers one trigger there.
 //
 // Its cache entries go at once, which it could not be refused for: a cache is what it costs to make
 // an output again, and an entry another workflow's run found while this one waits would be outputs
@@ -139,7 +141,7 @@ func (p *Pool) AskMove(ctx context.Context, namespace, workflow, target, by stri
 		var records []audit.Record
 		if change != nil {
 			var refused error
-			if err := w.within(ctx, namespace, func(ctx context.Context, ns *NS) error {
+			if err := w.Within(ctx, namespace, func(ctx context.Context, ns *NS) error {
 				workflow, records, refused = change(ctx, ns)
 				return refused
 			}); err != nil {
@@ -199,6 +201,9 @@ func (p *Pool) AskMove(ctx context.Context, namespace, workflow, target, by stri
 		if err := roomToMove(ctx, tx, namespace, workflow, target); err != nil {
 			return err
 		}
+		if err := hooksFree(ctx, tx, namespace, workflow, target); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx,
 			`insert into workflow_moves (namespace, workflow, target, asked_by, asked_at) values ($1, $2, $3, $4, $5)`,
 			namespace, workflow, target, by, at); err != nil {
@@ -222,6 +227,26 @@ func (p *Pool) AskMove(ctx context.Context, namespace, workflow, target, by stri
 		}
 		return nil
 	})
+}
+
+// hooksFree refuses a workflow a webhook of which answers a path and a method a workflow of target
+// has armed: "within a namespace a path and a method answer one trigger", and the move takes its
+// armed triggers with it.
+func hooksFree(ctx context.Context, tx pgx.Tx, namespace, workflow, target string) error {
+	var path, method, holder string
+	err := tx.QueryRow(ctx,
+		`select m.path, m.method, t.workflow from triggers m
+		 join triggers t on t.namespace = $3 and t.kind = 'webhook' and t.path = m.path and t.method = m.method
+		 where m.namespace = $1 and m.workflow = $2 and m.kind = 'webhook'
+		 order by m.position limit 1`,
+		namespace, workflow, target).Scan(&path, &method, &holder)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("db: the webhooks of %s could not be read: %w", target, err)
+	}
+	return &HookTaken{Namespace: target, Path: path, Method: method, Holder: holder}
 }
 
 // sharedOutputs refuses a workflow one of whose runs republished outputs a run of another workflow

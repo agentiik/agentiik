@@ -6,11 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/trigger"
 )
 
 // Replay is what POST /api/v1/runs/{id}/replay is asked with: the step the replay starts from, left
@@ -104,43 +103,23 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, who Principal, o
 		return
 	}
 
-	run := agk.NewRunID()
-	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		if err := ns.CreateRun(ctx, db.NewRun{
-			ID: run, Workflow: d.Workflow, Commit: d.Commit,
-			Trigger: agk.TriggerManual, TriggeredBy: string(who),
-			Inputs: inputs, Steps: g.Steps(),
-			ReplayOf: of, ReplayFrom: from,
-		}); err != nil {
-			return err
-		}
-		if err := ns.NotifyRun(ctx, run); err != nil {
-			return err
-		}
-		detail := triggered(d.Workflow, d.Commit, "")
-		detail["replay_of"] = string(of)
-		if from != "" {
-			detail["step"] = string(from)
-		}
-		return ns.Audit(ctx, audit.Record{
-			Actor: string(who), Action: audit.RunTrigger, Target: string(run), Result: audit.Done,
-			Detail: detail,
-		})
+	// A replay is a manual run, "attributed to the caller", of the commit the run pinned and the
+	// inputs it was started with as they were bound: the one path, with nothing left to resolve or
+	// to bind.
+	detail := map[string]any{"replay_of": string(of)}
+	if from != "" {
+		detail["step"] = string(from)
+	}
+	started, err := s.starter.Start(r.Context(), trigger.Request{
+		Namespace: over.Namespace, Workflow: d.Workflow,
+		Kind: agk.TriggerManual, By: string(who),
+		Commit: d.Commit, Bound: inputs,
+		ReplayOf: of, ReplayFrom: from, Detail: detail,
 	})
-	if errors.Is(err, db.ErrWorkflowMoving) {
-		fail(w, http.StatusConflict, movingSentence(Target{Namespace: over.Namespace, Workflow: d.Workflow}))
+	if s.refused(w, Target{Namespace: over.Namespace, Workflow: d.Workflow}, d.Commit, err) {
 		return
 	}
-	var reached *db.RunsPerHourReached
-	if errors.As(err, &reached) {
-		w.Header().Set("Retry-After", strconv.Itoa(reached.Seconds()))
-		fail(w, http.StatusTooManyRequests, reached.Reason())
-		return
-	}
-	if err != nil {
-		fail(w, http.StatusInternalServerError, "the replay could not be created")
-		return
-	}
+	run := started.Run
 	w.Header().Set("Location", fmt.Sprintf("/api/v1/%s/runs/%s", over.Namespace, run))
 	answer := map[string]any{"run": string(run), "state": agk.Queued.String(), "commit": d.Commit, "replay_of": string(of)}
 	if from != "" {
