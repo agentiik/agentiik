@@ -9,6 +9,7 @@
   import type { View } from "./lib/route";
   import type { Session } from "./lib/session.svelte";
   import Refused from "./views/Refused.svelte";
+  import Run from "./views/Run.svelte";
   import Runs from "./views/Runs.svelte";
 
   // The console: who it is signed in as, the top bar, the screen the address names, and the key line.
@@ -90,7 +91,9 @@
     <main class="screen">
       {#if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
         <Refused />
-      {:else if route.kind === "namespace" && route.view === "runs" && !route.run}
+      {:else if route.kind === "namespace" && route.view === "runs" && route.run}
+        <Run {api} {place} me={session.me} namespace={route.namespace} id={route.run} />
+      {:else if route.kind === "namespace" && route.view === "runs"}
         <Runs {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else}
         <Refused />

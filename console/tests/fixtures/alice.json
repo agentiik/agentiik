@@ -237,5 +237,274 @@
   },
   "POST /api/v1/auth/sign-out": {
     "status": 204
+  },
+  "GET /api/v1/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A": {
+    "status": 200,
+    "body": {
+      "namespace": "finance",
+      "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+      "workflow": "monthly-invoicing",
+      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+      "state": "failed",
+      "trigger_kind": "manual",
+      "triggered_by": "alice",
+      "created_at": "2026-09-30T05:41:03Z",
+      "started_at": "2026-09-30T05:41:03Z",
+      "finished_at": "2026-09-30T05:42:55Z",
+      "replay_from_start_only": false,
+      "steps": [
+        {
+          "step": "normalize",
+          "verdict": "succeeded",
+          "attempts": 1,
+          "started_at": "2026-09-30T05:41:03Z",
+          "finished_at": "2026-09-30T05:41:04.2Z",
+          "ports": {
+            "ok": {
+              "digest": "sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+              "size": 88120,
+              "items": 214
+            },
+            "rejected": {
+              "digest": "sha256:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+              "size": 312,
+              "items": 0
+            }
+          }
+        },
+        {
+          "step": "invoice",
+          "verdict": "failed",
+          "attempts": 2,
+          "started_at": "2026-09-30T05:41:05Z",
+          "finished_at": "2026-09-30T05:42:55Z",
+          "ports": {
+            "out": {
+              "digest": "sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
+              "size": 42120,
+              "items": 211
+            },
+            "error": {
+              "digest": "sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+              "size": 4212,
+              "items": 3
+            }
+          }
+        },
+        {
+          "step": "archive",
+          "verdict": "pending",
+          "attempts": 0
+        }
+      ],
+      "tasks": [
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+          "step": "normalize",
+          "state": "succeeded",
+          "attempt": 1,
+          "runner": "runner-dmz-02",
+          "exit_code": 0,
+          "started_at": "2026-09-30T05:41:03Z",
+          "finished_at": "2026-09-30T05:41:04.2Z",
+          "inputs": {
+            "orders": {
+              "digest": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "size": 88412,
+              "items": 214
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/1/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 1,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "exit_code": 0,
+          "started_at": "2026-09-30T05:41:11Z",
+          "finished_at": "2026-09-30T05:41:29Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/2/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 2,
+            "of": 8
+          },
+          "runner": "runner-dmz-01",
+          "exit_code": 0,
+          "started_at": "2026-09-30T05:41:12Z",
+          "finished_at": "2026-09-30T05:41:29Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/3/8",
+          "step": "invoice",
+          "state": "failed",
+          "attempt": 1,
+          "shard": {
+            "index": 3,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "exit_code": 108,
+          "started_at": "2026-09-30T05:41:13Z",
+          "finished_at": "2026-09-30T05:41:44Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/4/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 4,
+            "of": 8
+          },
+          "runner": "runner-dmz-01",
+          "exit_code": 0,
+          "started_at": "2026-09-30T05:41:14Z",
+          "finished_at": "2026-09-30T05:41:32Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/5/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 5,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "exit_code": 0,
+          "started_at": "2026-09-30T05:41:15Z",
+          "finished_at": "2026-09-30T05:41:35Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/6/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 6,
+            "of": 8
+          },
+          "runner": "runner-dmz-01",
+          "exit_code": 0,
+          "started_at": "2026-09-30T05:41:16Z",
+          "finished_at": "2026-09-30T05:41:35Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/7/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 7,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "exit_code": 0,
+          "started_at": "2026-09-30T05:41:17Z",
+          "finished_at": "2026-09-30T05:41:35Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/8/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 8,
+            "of": 8
+          },
+          "runner": "runner-dmz-01",
+          "exit_code": 0,
+          "started_at": "2026-09-30T05:41:18Z",
+          "finished_at": "2026-09-30T05:41:34Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+          "step": "invoice",
+          "state": "failed",
+          "attempt": 2,
+          "shard": {
+            "index": 3,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "exit_code": 108,
+          "started_at": "2026-09-30T05:42:24Z",
+          "finished_at": "2026-09-30T05:42:55Z",
+          "inputs": {
+            "in": {
+              "digest": "sha256:3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b",
+              "size": 10412,
+              "items": 27
+            }
+          }
+        }
+      ]
+    }
   }
 }

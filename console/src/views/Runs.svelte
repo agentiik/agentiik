@@ -5,7 +5,7 @@
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import { between, clock, took } from "../lib/format";
-  import type { Place } from "../lib/place.svelte";
+  import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
 
   // The runs view, the screen the console opens on: a namespace's runs, newest first and kept live,
@@ -68,6 +68,11 @@
 
   const retention = $derived(record?.quotas?.max_retention_days);
 
+  // opened is the inspector of one run, under the namespace the run is in.
+  function opened(r: Run) {
+    return { kind: "namespace" as const, namespace: r.namespace, view: "runs" as const, run: r.run };
+  }
+
   function duration(r: Run): string {
     const ms = between(r.started_at, r.finished_at, now);
     return ms === undefined ? "" : took(ms);
@@ -113,7 +118,7 @@
       {#each attention as r (r.run)}
         <div class="failure">
           <StatePill state={r.state} />
-          <span class="mono muted">{r.run}</span>
+          <a class="mono" href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a>
           <span class="mono name">{r.workflow}</span>
           <span class="muted">{r.trigger_kind} by <span class="mono">{r.triggered_by}</span></span>
           <time class="muted mono" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
@@ -142,7 +147,7 @@
       {#each list.runs as r (r.run)}
         <tr>
           <td><StatePill state={r.state} {live} /></td>
-          <td class="mono muted id">{r.run}</td>
+          <td class="mono id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
           <td class="mono name">{r.workflow}</td>
           <td class="trigger"><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="mono">{r.trigger_kind}</span></td>
           <td class="mono by">{r.triggered_by}</td>
@@ -353,6 +358,14 @@
 
   .id {
     font-size: var(--type-identifier-size-min);
+  }
+
+  .id a {
+    color: var(--muted);
+  }
+
+  .id a:hover {
+    color: var(--accent);
   }
 
   .trigger {
