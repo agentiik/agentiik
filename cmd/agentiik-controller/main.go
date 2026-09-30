@@ -232,6 +232,7 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	o.Starter = starter
 
 	log.Info("standing by for the lock", "name", name)
 	err = ctl.Lead(work, func(ctx context.Context, term db.Term) error {
@@ -286,7 +287,7 @@ func options(c config.Controller, q controller.Queue, v controller.Versions) con
 	requeues := c.MaxRequeues
 	return controller.Options{
 		Queue: q, Versions: v, Objects: artifact.Dir(c.Objects),
-		Ceiling: c.TaskCeiling, MaxRequeues: &requeues,
+		Ceiling: c.TaskCeiling, MaxRequeues: &requeues, MaxCallDepth: c.MaxCallDepth,
 	}
 }
 

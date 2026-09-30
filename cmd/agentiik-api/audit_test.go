@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -80,7 +82,12 @@ type actor struct {
 	bearer string
 	cookie *http.Cookie
 	from   string
+	// hook is when a request to a webhook is signed, with hookKey, and zero for any other.
+	hook time.Time
 }
+
+// hookKey is the secret the scenario's webhook is signed with.
+var hookKey = bytes.Repeat([]byte("k"), 32)
 
 // scenario is an installation serve built, asked one act at a time, each step holding the entries
 // it appended to what it says they are.
@@ -119,12 +126,25 @@ func (s *scenario) ask(route, path string, who actor, body any, status int) *htt
 		reader = bytes.NewReader(encoded)
 	}
 	method, _, _ := strings.Cut(route, " ")
+	if method == "" {
+		// A route served on every method, a webhook's, asked on the one its file declares.
+		method = http.MethodPost
+	}
+	var raw []byte
+	if reader != nil && !who.hook.IsZero() {
+		raw, _ = io.ReadAll(reader)
+		reader = bytes.NewReader(raw)
+	}
 	r := httptest.NewRequestWithContext(s.t.Context(), method, path, reader)
 	if reader != nil {
 		r.Header.Set("Content-Type", "application/json")
 		// What git sends, where the route is git's.
 		if _, service, git := strings.Cut(path, ".git/"); git && strings.HasPrefix(service, "git-") {
 			r.Header.Set("Content-Type", "application/x-"+service+"-request")
+		}
+		// What a publisher sends, where the route takes an event.
+		if strings.HasSuffix(path, "/events") {
+			r.Header.Set("Content-Type", "application/cloudevents+json")
 		}
 	}
 	if who.bearer != "" {
@@ -139,12 +159,21 @@ func (s *scenario) ask(route, path string, who actor, body any, status int) *htt
 	if who.from != "" {
 		r.RemoteAddr = who.from + ":4000"
 	}
+	if !who.hook.IsZero() {
+		id, stamp := "msg_"+strconv.FormatInt(s.seq, 10), strconv.FormatInt(who.hook.Unix(), 10)
+		mac := hmac.New(sha256.New, hookKey)
+		mac.Write([]byte(id + "." + stamp + "."))
+		mac.Write(raw)
+		r.Header.Set("webhook-id", id)
+		r.Header.Set("webhook-timestamp", stamp)
+		r.Header.Set("webhook-signature", "v1,"+base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+	}
 	w := httptest.NewRecorder()
 	s.in.router.ServeHTTP(w, r)
 	if w.Code != status {
 		s.t.Fatalf("%s %s answered %d, want %d: %s", method, path, w.Code, status, w.Body)
 	}
-	if r.Pattern != route {
+	if r.Pattern != strings.TrimPrefix(route, " ") {
 		s.t.Fatalf("%s %s was answered by %q, and the case is for %s", method, path, r.Pattern, route)
 	}
 	return w
@@ -505,6 +534,20 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"secret.write carol billing finance done")
 	s.act("DELETE /api/v1/{namespace}/secrets/{name}", "/api/v1/finance/secrets/billing", carol, nil, http.StatusNoContent,
 		"secret.delete carol billing finance done")
+	// A version declaring a webhook and an event trigger pushed to a repository no git push has
+	// given a branch, which arms both, as trigger.arm; the webhook's secret written, as
+	// webhook_credential.write; a request it signs and an event published into the namespace, each
+	// a run started by the namespace's own identity, as run.trigger.
+	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}", "/api/v1/finance/workflows/ledger-export/versions/"+hookedCommit, carol, aHookedPush(t), http.StatusOK,
+		"trigger.arm carol ledger-export finance done", "trigger.arm carol ledger-export finance done")
+	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/webhooks/{method}/{path...}", "/api/v1/finance/workflows/ledger-export/webhooks/POST/ledger", carol,
+		map[string]string{"secret": "whsec_" + base64.StdEncoding.EncodeToString(hookKey)}, http.StatusNoContent,
+		"webhook_credential.write carol ledger-export finance done")
+	w = s.ask(" /hooks/{namespace}/{path...}", "/hooks/finance/ledger", actor{hook: time.Now()}, `{"orders":[]}`, http.StatusAccepted)
+	s.holds(" /hooks/{namespace}/{path...}", "run.trigger finance/agentiik "+s.answer(w)["run"].(string)+" finance done")
+	s.act("POST /api/v1/{namespace}/events", "/api/v1/finance/events", carol,
+		`{"specversion":"1.0","id":"ledger-1","source":"/erp/ledger","type":"com.example.ledger.closed","data":{"orders":[]}}`, http.StatusAccepted,
+		"run.trigger finance/agentiik * finance done")
 	w = s.ask("POST /api/v1/{namespace}/workflows/{workflow}/runs", "/api/v1/finance/workflows/monthly-invoicing/runs", carol,
 		api.Start{Commit: theCommit, Inputs: map[string]any{"orders": []any{}}}, http.StatusAccepted)
 	run := s.answer(w)["run"].(string)
@@ -614,6 +657,38 @@ func aTaggedPush(t *testing.T) api.Push {
 	return api.Push{
 		Entry: v.Entry, Document: v.Document, Includes: v.Includes, Manifests: v.Manifests,
 		Images: map[string]string{tag: theImage}, Branch: "main",
+		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}},
+	}
+}
+
+// hookedCommit is the version declaring the scenario's webhook.
+const hookedCommit = "b4a0d2f6e3c9581a0f72d4b9c1e5a8f3b0d6c2e4"
+
+// aHookedPush is the workflow as ledger-export, with a webhook at /ledger signed with hookKey whose
+// map fills its orders from the body, and an event trigger whose map fills them from the event.
+func aHookedPush(t *testing.T) api.Push {
+	t.Helper()
+	document := strings.Replace(strings.Replace(theWorkflow, "name: monthly-invoicing", "name: ledger-export", 1), "outputs:\n", `on:
+  webhook:
+    - path: /ledger
+      map:
+        orders: ${{ trigger.body.orders }}
+  event:
+    - type: com.example.ledger.closed
+      map:
+        orders: ${{ event.data.orders }}
+outputs:
+`, 1)
+	m, err := brick.ParseManifest([]byte(theManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := version.Capture(fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(document)}}, "agentiik.yaml", map[string]brick.Manifest{theImage: m})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return api.Push{
+		Entry: v.Entry, Document: v.Document, Includes: v.Includes, Manifests: v.Manifests, Branch: "main",
 		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}},
 	}
 }

@@ -75,6 +75,11 @@ type Task struct {
 	Image string `json:"image,omitempty"`
 	Call  *Call  `json:"call,omitempty"`
 
+	// CallInputs are what a call hands the workflow it calls as that workflow's inputs: each
+	// value the step's inputs keyword writes, of whatever type it evaluates to, and each port
+	// another step feeds it, as the list of its items' data. Empty for a step that runs an image.
+	CallInputs map[string]any `json:"call_inputs,omitempty"`
+
 	// The script keywords, where the image is a base image rather than a brick.
 	// after_script runs in the same container even when script failed, so that a
 	// diagnostic dump survives a failure, and its own exit code does not change the
@@ -248,6 +253,10 @@ type Result struct {
 	// MemoisedFrom is the run a cache hit republished these outputs from, for a success no
 	// container reported: "a hit republishes the same envelopes without starting a container".
 	MemoisedFrom agk.RunID `json:"outputs,omitempty"`
+
+	// Called is the run a call started, on the dispatch of a step that calls a workflow: what
+	// the step waits on in place of a container, and whose outputs its ports become.
+	Called agk.RunID `json:"called,omitempty"`
 
 	DispatchedAt time.Time `json:"dispatched_at,omitzero"`
 	StartedAt    time.Time `json:"started_at,omitzero"`

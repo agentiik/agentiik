@@ -213,6 +213,13 @@ const (
 	TriggerDisarm = "trigger.disarm"
 )
 
+// WebhookCredentialWrite is what a webhook checks its caller against written, a secret or a
+// certificate, at PUT /api/v1/{ns}/workflows/{name}/webhooks/{method}/{path}: recorded in the
+// namespace with the workflow as its target, the path, the method and which was written, never the
+// secret. "Audit webhook secret writes", since whoever writes one decides who may start the
+// workflow's runs.
+const WebhookCredentialWrite = "webhook_credential.write"
+
 // The results an entry records.
 const (
 	// Done is an act that changed something.

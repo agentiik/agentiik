@@ -41,7 +41,7 @@ type gitServer struct {
 	objects string
 }
 
-func servingGit(t *testing.T, auth api.Authorizer) *gitServer {
+func servingGit(t *testing.T, auth api.Authorizer, with ...func(*api.ServerOptions)) *gitServer {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Fatal("these tests drive the git binary, and there is none on this machine")
@@ -59,7 +59,11 @@ func servingGit(t *testing.T, auth api.Authorizer) *gitServer {
 		t.Fatal(err)
 	}
 	objects := t.TempDir()
-	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: store, Objects: artifact.Dir(objects), PublicURL: "https://agentiik.example.com"}); err != nil {
+	o := api.ServerOptions{Pool: pool, Versions: store, Objects: artifact.Dir(objects), PublicURL: "https://agentiik.example.com"}
+	for _, w := range with {
+		w(&o)
+	}
+	if _, err := api.NewServer(rt, o); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {

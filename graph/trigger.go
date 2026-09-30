@@ -7,12 +7,15 @@ import (
 	"strings"
 
 	"github.com/agentiik/agentiik/internal/cron"
+	"github.com/agentiik/agentiik/internal/expr"
 )
 
 // newTriggerRules are the shape rules of v0.5.0 about the on block, which the schema states and a
 // version stored before them may break: a schedule's five fields written in cron's grammar and its
 // zone as a name, never Local; a webhook's path in segments no proxy normalises out of its prefix;
-// and a sync response naming the output it answers with. They are newRules', applied where a
+// a sync response naming the output it answers with; and an event trigger naming something it
+// listens for, a type, a source or a filter, since one naming none would start a run on every
+// event its namespace can see. They are newRules', applied where a
 // version is made, so that a version stored before them keeps rebuilding and running; whether its
 // triggers can be armed is Armable's to say.
 func (w *Workflow) newTriggerRules() error {
@@ -35,6 +38,11 @@ func (w *Workflow) newTriggerRules() error {
 		}
 		if h.Response == "sync" && h.Output == "" {
 			return fmt.Errorf("%s answers response: sync and names no output: a sync response returns one workflow output, and output says which", where)
+		}
+	}
+	for i, e := range w.On.Event {
+		if e.Type == "" && e.Source == "" && e.Filter == "" {
+			return fmt.Errorf("on.event[%d] names no type, no source and no filter, and would start a run on every event the namespace it hears is published: a subscription names what it listens for, whichever namespace it hears", i)
 		}
 	}
 	return nil
@@ -95,6 +103,14 @@ func triggersHold(wf *Workflow) error {
 		}
 		answered[pair] = i
 	}
+	for i, e := range wf.On.Event {
+		at := on.at("event", i)
+		for _, name := range keysOf(e.Map) {
+			if _, ok := wf.Inputs[name]; !ok {
+				return place(refuse(RuleEventMapInputNotDeclared, "", "", fmt.Sprintf("the event trigger %d fills the input %s, which the workflow does not declare: map builds the run's inputs, each validated against its schema before the run exists, and an input nobody declared has none, %s", i, name, declared(wf.Inputs))), at.at("map", name).key())
+			}
+		}
+	}
 	return nil
 }
 
@@ -105,4 +121,113 @@ func declared[V any](m map[string]V) string {
 		return "and it declares none"
 	}
 	return "and it declares " + strings.Join(slices.Sorted(maps.Keys(m)), ", ")
+}
+
+// Fired is what a trigger's expressions read of the run it fires before the run exists: the
+// request or the occurrence under trigger, the event under event, and the kind and the principal
+// under run. The run's id and start are not yet, and an expression of the on block reading them is
+// refused where it is evaluated.
+type Fired struct {
+	Commit      string
+	Trigger     map[string]any
+	Event       map[string]any
+	TriggerKind string
+	TriggeredBy string
+}
+
+// Fill evaluates what an entry of the on block fills the workflow inputs with, its map, over what
+// fired it: "Build workflow inputs with map over the trigger context". A string carrying an
+// expression is evaluated, and one filling the whole value keeps its type; a map or a list is
+// evaluated through; anything else is the literal the file wrote. What it answers is bound by the
+// one path every run takes, which holds each input to its schema before the run exists.
+func (g *Graph) Fill(m map[string]any, f Fired) (map[string]any, error) {
+	return g.fillIn(expr.ScopeWebhook, m, f)
+}
+
+// FillFromEvent is Fill for an event trigger's map, which reads the event it matched as well.
+func (g *Graph) FillFromEvent(m map[string]any, f Fired) (map[string]any, error) {
+	return g.fillIn(expr.ScopeTrigger, m, f)
+}
+
+// Hears says whether an event trigger's filter accepts the event f carries: true where it
+// writes none, and otherwise its answer, which is true or false and nothing else, as a run
+// condition's is. "Only an event it accepts starts a run", evaluated before any run exists.
+func (g *Graph) Hears(e Event, f Fired) (bool, error) {
+	if e.Filter == "" {
+		return true, nil
+	}
+	v, err := fill(g.firedContext(f), expr.ScopeTrigger, e.Filter)
+	if err != nil {
+		return false, err
+	}
+	accepted, ok := v.(bool)
+	if !ok {
+		return false, fmt.Errorf("filter: %s answered %T, and a filter answers true or false", e.Filter, v)
+	}
+	return accepted, nil
+}
+
+func (g *Graph) fillIn(scope expr.Scope, m map[string]any, f Fired) (map[string]any, error) {
+	c := g.firedContext(f)
+	out := make(map[string]any, len(m))
+	for _, name := range slices.Sorted(maps.Keys(m)) {
+		v, err := fill(c, scope, m[name])
+		if err != nil {
+			return nil, fmt.Errorf("map.%s: %w", name, err)
+		}
+		out[name] = v
+	}
+	return out, nil
+}
+
+// firedContext is what the on block's expressions read of what fired a run.
+func (g *Graph) firedContext(f Fired) expr.Context {
+	wf := g.wf
+	return expr.Context{
+		Workflow: map[string]any{
+			"name": wf.Metadata.Name, "namespace": wf.Metadata.Namespace, "version": f.Commit,
+			// The inputs are what this fills: read here, they are the ones nothing filled yet.
+			"inputs": map[string]any{},
+		},
+		Run:     map[string]any{"attempt": int64(1), "trigger_kind": f.TriggerKind, "triggered_by": f.TriggeredBy},
+		Trigger: f.Trigger,
+		Event:   f.Event,
+		Vars:    map[string]any(wf.Vars),
+	}
+}
+
+// fill evaluates one value of a map, through the maps and lists it holds, as scope places it.
+func fill(c expr.Context, scope expr.Scope, v any) (any, error) {
+	switch value := v.(type) {
+	case string:
+		if !strings.Contains(value, "${{") {
+			return value, nil
+		}
+		t, err := expr.Interpolate(scope, value)
+		if err != nil {
+			return nil, err
+		}
+		return expr.Evaluate(t, c)
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for _, key := range slices.Sorted(maps.Keys(value)) {
+			resolved, err := fill(c, scope, value[key])
+			if err != nil {
+				return nil, err
+			}
+			out[key] = resolved
+		}
+		return out, nil
+	case []any:
+		out := make([]any, 0, len(value))
+		for _, elem := range value {
+			resolved, err := fill(c, scope, elem)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, resolved)
+		}
+		return out, nil
+	}
+	return v, nil
 }

@@ -127,8 +127,19 @@ func (co *Core) cancel(ctx context.Context, run agk.RunID, why refused) error {
 		// cancelled, its grant no longer redeems, so no container starts for it. The rows then
 		// say more than the document does, which nothing reads again once the run has ended.
 		var err error
-		if held, err = w.CancelTasks(ctx, e.Namespace, run, now); err != nil || why.reason == "" {
+		if held, err = w.CancelTasks(ctx, e.Namespace, run, now); err != nil {
 			return err
+		}
+		// And the runs its calls made, which are cancelled as a container is stopped, and the
+		// run whose call made this one, which hears that it ended.
+		if err := w.CancelCalled(ctx, run, "", now); err != nil {
+			return err
+		}
+		if err := w.WakeCaller(ctx, run, now); err != nil {
+			return err
+		}
+		if why.reason == "" {
+			return nil
 		}
 		// Last, as every append is, since it holds the head of the chain until the commit.
 		detail := map[string]any{"workflow": e.Workflow, "reason": why.reason, "account": why.account}

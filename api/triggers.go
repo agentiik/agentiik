@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -40,8 +41,21 @@ type armedOut struct {
 	Failures *int64     `json:"failures,omitempty"`
 	FailedAt *time.Time `json:"failed_at,omitempty"`
 
+	// Credential is what a webhook checks its caller against, as far as anybody reads it back.
+	Credential *credentialOut `json:"credential,omitempty"`
+
 	ArmedBy string    `json:"armed_by"`
 	ArmedAt time.Time `json:"armed_at"`
+}
+
+// credentialOut is what a listing says of a webhook's credential: whether a secret is written, never
+// the secret, the SHA-256 of the certificate it accepts, which is no secret, and who last wrote
+// either, and when.
+type credentialOut struct {
+	Secret      bool      `json:"secret"`
+	Certificate string    `json:"certificate_sha256,omitempty"`
+	WrittenBy   string    `json:"written_by"`
+	WrittenAt   time.Time `json:"written_at"`
 }
 
 // listTriggers answers what a workflow has armed, and the commit that declares it, which is the
@@ -49,12 +63,16 @@ type armedOut struct {
 func (s *Server) listTriggers(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
 	var commit string
 	var armed []db.Armed
+	var credentials map[[2]string]db.HookCredential
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
 		if commit, err = ns.ArmedCommit(ctx, over.Workflow); err != nil {
 			return err
 		}
-		armed, err = ns.ArmedBy(ctx, over.Workflow)
+		if armed, err = ns.ArmedBy(ctx, over.Workflow); err != nil {
+			return err
+		}
+		credentials, err = ns.HookCredentials(ctx, over.Workflow)
 		return err
 	})
 	if errors.Is(err, db.ErrNoWorkflow) {
@@ -79,6 +97,9 @@ func (s *Server) listTriggers(w http.ResponseWriter, r *http.Request, _ Principa
 		case "webhook":
 			o.URL = s.publicURL + "/hooks/" + over.Namespace + a.Path
 			o.Failures, o.FailedAt = &a.Failures, when(a.FailedAt)
+			if c, ok := credentials[[2]string{a.Method, a.Path}]; ok && (c.Secret != nil || c.Certificate != nil) {
+				o.Credential = &credentialOut{Secret: c.Secret != nil, Certificate: hex.EncodeToString(c.Certificate), WrittenBy: c.WrittenBy, WrittenAt: c.WrittenAt.UTC()}
+			}
 		}
 		out = append(out, o)
 	}

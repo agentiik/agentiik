@@ -130,6 +130,12 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 		return config.Refuse(config.TLSCertFile, err)
 	}
 	if served != nil {
+		// A client certificate asked for and never required, and verified against no authority:
+		// a webhook authenticating by mtls holds a caller to the one certificate written for it,
+		// which the handshake proved the caller holds the key of, and every other route reads
+		// none. Asked here, of the TLS the API serves itself, since a certificate a terminator in
+		// front forwards in a header is one a client could write there too.
+		served.ClientAuth = tls.RequestClientCert
 		ln = tls.NewListener(ln, served)
 	}
 	in, err := open(ctx, s, log)
@@ -305,9 +311,20 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 
+	// The webhooks' secrets are sealed under the master key, as a built-in secret's value is. A nil
+	// keyring is not reachable, and would take no secret and refuse every hmac request.
+	var hooks api.HookSecrets
+	if s.keys != nil {
+		sealed, err := secret.NewHooks(s.keys)
+		if err != nil {
+			return nil, err
+		}
+		hooks = sealed
+	}
 	if _, err := api.NewServer(rt, api.ServerOptions{
 		Pool: pool, Versions: versions, Objects: objects, URLs: signed, Stopping: stopping, Now: s.now, PublicURL: s.PublicURL,
-		Trouble: func(err error) { log.Warn("a log stream could not read back a chunk the API wrote", "error", err) },
+		Hooks:   hooks,
+		Trouble: func(err error) { log.Warn("a request to the API met trouble that is the installation's", "error", err) },
 	}); err != nil {
 		return nil, err
 	}

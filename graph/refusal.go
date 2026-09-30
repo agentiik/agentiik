@@ -18,7 +18,7 @@ var ErrRefused = errors.New("the workflow is refused")
 // then one lookup rather than a translation table somebody has to keep in step. The
 // corpus marks each invalid workflow refused_by "schema" or "validator": everything
 // marked schema is shape, which closed decoding gives for nothing and which is refused
-// here by an ordinary error naming the key, and the nineteen marked validator are, item
+// here by an ordinary error naming the key, and the twenty marked validator are, item
 // for item, the rules below that carry a corpus name.
 type Rule string
 
@@ -163,6 +163,9 @@ const (
 	// declare: map builds the run's inputs, each validated against its schema before the run
 	// exists, and an input nobody declared has none.
 	RuleWebhookMapInputNotDeclared Rule = "webhook-map-input-not-declared"
+	// RuleEventMapInputNotDeclared is an event trigger's map filling an input the workflow does
+	// not declare, for the reason a webhook's is refused.
+	RuleEventMapInputNotDeclared Rule = "event-map-input-not-declared"
 	// RuleWebhookDuplicatePath is two webhooks answering one path with one method: "within a
 	// namespace a path and a method answer one trigger".
 	RuleWebhookDuplicatePath Rule = "webhook-duplicate-path"

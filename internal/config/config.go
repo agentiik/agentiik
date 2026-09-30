@@ -57,6 +57,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/nats-io/jwt/v2"
 )
@@ -77,6 +78,7 @@ const (
 	EnvPrefixes                 = "AGK_ENV_PREFIXES"
 	Listen                      = "AGK_LISTEN"
 	MaxRequeues                 = "AGK_MAX_REQUEUES"
+	MaxCallDepth                = "AGK_MAX_CALL_DEPTH"
 	TaskCeiling                 = "AGK_TASK_CEILING"
 	JoinRotation                = "AGK_JOIN_ROTATION"
 	RevocationGrace             = "AGK_REVOCATION_GRACE"
@@ -326,6 +328,9 @@ type Controller struct {
 	MaxRequeues int
 	TaskCeiling time.Duration
 
+	// MaxCallDepth is how deep a chain of workflow: calls may go.
+	MaxCallDepth int
+
 	// AuditExport is where the controller sends the audit log, and has no URL where the
 	// installation exports it nowhere.
 	AuditExport AuditExport
@@ -466,6 +471,7 @@ func ReadController(lookup Lookup) (Controller, error) {
 	c.Bus = r.bus()
 	c.Objects = r.directory(ObjectsDir, "and it is the directory the built-in object store keeps every object in, which the controller reads envelopes from and writes every task's inputs to")
 	c.MaxRequeues = r.maxRequeues()
+	c.MaxCallDepth = r.maxCallDepth()
 	c.TaskCeiling = r.taskCeiling()
 	c.AuditExport = r.auditExport()
 	c.Metrics = r.metrics()
@@ -802,6 +808,24 @@ func (r *reader) maxRequeues() int {
 	case n < 0:
 		r.refuse(MaxRequeues, fmt.Sprintf("is %d, and max_requeues is how many times one key is handed out again after a loss: zero is what requeues nothing", n))
 		return graph.DefaultMaxRequeues
+	}
+	return n
+}
+
+// maxCallDepth is how deep a chain of workflow: calls may go, agk.DefaultMaxCallDepth where unset.
+func (r *reader) maxCallDepth() int {
+	v, set := r.value(MaxCallDepth)
+	if !set {
+		return agk.DefaultMaxCallDepth
+	}
+	n, err := strconv.Atoi(v)
+	switch {
+	case err != nil:
+		r.refuse(MaxCallDepth, fmt.Sprintf("is %q, and a depth is a whole number of calls", v))
+		return agk.DefaultMaxCallDepth
+	case n < 1:
+		r.refuse(MaxCallDepth, fmt.Sprintf("is %d, and a chain of calls is at least 1 deep, a call that calls nothing: a workflow that may call nothing writes no workflow: step", n))
+		return agk.DefaultMaxCallDepth
 	}
 	return n
 }

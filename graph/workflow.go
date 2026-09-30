@@ -160,10 +160,16 @@ type Webhook struct {
 
 // Event is a CloudEvents 1.0 subscription, with a CEL filter over the attributes and
 // over data.
+//
+// Namespace is the namespace whose events it hears, empty for the workflow's own: another
+// namespace's are heard "where it granted the workflow's namespace read access". Map fills the
+// workflow inputs from the event, as a webhook's fills them from its request.
 type Event struct {
-	Type   string
-	Source string
-	Filter string
+	Type      string
+	Source    string
+	Filter    string
+	Namespace string
+	Map       map[string]any
 }
 
 // Vars are the workflow variables, read by expressions under the vars root.

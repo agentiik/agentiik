@@ -10,6 +10,54 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `AGK_CONSOLE` is `on` or `off` and nothing else, `on` where unset: `off` serves no console and every other route, `/auth` among them, and any other value refuses the start naming the variable.
 - A route is registered under `/api`, `/auth`, `/hooks`, `/mcp`, `/objects` or a repository's path, or refused at registration (`api.Router`), so that the console never takes an address of the API's and a proxy sending the API those paths misses none.
 
+## v0.5.0, 2026-09-30
+
+Triggers: a workflow starts with nobody present. What the default branch's head declares under `on` is armed as the branch moves; schedules fire from the controller that leads, in their zone, late or made up as `catch_up` says; webhooks prove their caller by a Standard Webhooks signature, a service account's token or a client certificate before a run starts, and answer with the run or with an output; an event published to a namespace with `POST /api/v1/{ns}/events` starts a run of each trigger hearing it, in that namespace or in another one it granted read; and a `workflow:` step calls another workflow and waits on the run it starts. Every run, whatever asked for it, is created by one path that binds its inputs, attributes it, charges it to its namespace's quotas and records it, and what fired it is frozen on it for a replay to see. A v0.4.0 installation upgrades with v0.5.0's `compose.yaml` and its own `.env`, and nothing else.
+
+### Upgrading
+
+- A v0.4.0 installation upgrades with v0.5.0's `compose.yaml` and its own `.env`, and nothing else: `init` applies migrations 0058 to 0062, each with nothing to do. 0058 adds `triggers`, empty, and `workflows.armed`; 0059 `runs.trigger_context`, empty on the runs made before; 0060 `webhook_credentials` and `webhook_deliveries`; 0061 the columns of a run a call started, null or 0 on the others; 0062 `triggers.hears` and `event_deliveries`.
+- The triggers of every workflow start unarmed at the upgrade, with nothing to do: the controller that leads arms each default branch's head, as the installation, at the start of its term and every minute after, and records `trigger.arm` for each entry.
+- A version stored before this release that breaks a trigger rule of v0.5.0, a cron value stepped alone, a zone written as `Local` or an offset, a webhook path climbing out of its prefix, a sync webhook naming no output, or an event trigger naming nothing it listens for, rebuilds, starts and runs as before whenever somebody asks for a run, and arms nothing until a version that passes lands on the default branch (`graph.Workflow.Armable`).
+- A run in flight across the upgrade resumes with its kind: a state stored before v0.5.0 carries it as `trigger`, which `graph.State` reads as `trigger_kind`, and a stored state's numbers are read as written, as their callers read them.
+- A webhook's secret is sealed under the master key: an installation without one attached refuses writing a secret, `503`, and serves `bearer`, `mtls` and `none` webhooks as before.
+
+### Workflows
+
+- The `on` block is held to the schema of agentiik/schemas `0.5.0`, where a version is made: five-field cron in cron's grammar, a zone named in the IANA database and never `Local`, a webhook path in segments no proxy normalises out of `/hooks/<namespace>/`, `response: sync` naming its `output`, and an event trigger naming a `type`, a `source` or a `filter`. The validator refuses `cron-value-out-of-range`, `timezone-unknown`, `webhook-output-not-declared`, `webhook-map-input-not-declared`, `webhook-duplicate-path` and `event-map-input-not-declared`. `internal/cron` reads cron and zones with the zone database embedded, a daylight saving gap running the first instant after it and a repeat running once.
+- A webhook's `method`, `auth` and `response` hold the value in force, `POST`, `hmac` and `async` where the file writes none.
+- An event trigger reads `namespace`, the namespace whose events it hears, its own where it names none, and `map`, which fills the inputs from the event.
+- A webhook's `map` reads no `event`, and an event trigger's `filter` and `map` read `event`, `trigger`, `workflow`, `run` and `vars`, as the context table places them.
+- A `workflow:` step calls the workflow it names at the ref it names or its default branch's head, with `trigger_kind: workflow` and a `from` naming the calling run and step, attributed to the calling run's principal and charged to the called namespace. The step waits on that run in place of a container, holds no slot of `max_concurrent_tasks`, and ends as the run did, its ports the called workflow's outputs. A call that cannot be made fails its step with 125: past `AGK_MAX_CALL_DEPTH`, 8 by default, of a workflow that does not exist or that the principal may not run, with inputs refused, or past `max_runs_per_hour`. A caller cancelled cancels the runs its calls made. `agk run --local` makes no call, and says so.
+
+### Triggers
+
+- `package trigger` is the one path a run takes: it resolves the ref to a commit, binds the inputs against that version, writes the run, wakes the controller and records `run.trigger` last, in one transaction. `run.trigger` records `trigger_kind` for every kind but `manual`.
+- What the default branch's head declares under `on` is armed in the transaction that moves the branch, a git push, a `PATCH` naming another default branch, or the tree push while no git push has given the repository a branch. An entry declared again keeps its row and its state; one newly armed is audited as `trigger.arm`, one no longer declared as `trigger.disarm`. A push arming a webhook's path and method another workflow of the namespace holds is refused before its refs move, and so is a move to a namespace where one does. A workflow deleted disarms everything at once.
+- Schedules are fired by the controller that leads, which looks for what is due every second and fires each occurrence in one transaction fenced by its term's token, so that a failover neither skips an occurrence nor fires one twice. `jitter` is drawn once per occurrence and kept on the row. An occurrence reached within ten minutes runs late; one reached later is skipped, or made up exactly once where `catch_up` is true. A firing past `max_runs_per_hour`, or of a version whose inputs a schedule cannot fill, is recorded as a skipped firing.
+- Webhooks are served at `/hooks/{ns}/{path}` on the method each declares. `hmac` follows Standard Webhooks, over the body as received, five minutes either side of the clock, a delivery remembered for ten and answered again with the run it started; `bearer` takes a service account's token holding `workflow:run` on the workflow; `mtls` the one certificate written for it, over the TLS the API serves itself, never one a proxy forwards; `none` is open. A refused caller is `401` and counted on the trigger. The body, to 4 MiB, the headers without credentials and the query are the trigger context, `map` fills the inputs from them, and `response: sync` holds the request up to a minute for the output's envelope.
+- Events: `POST /api/v1/{ns}/events` takes one CloudEvents 1.0 event, structured or binary, under `workflow:run` at namespace scope, and matches it in the request against the event triggers hearing the namespace, those of another namespace counting where its built-in identity holds `workflow:read` here. Each whose `filter` accepts the event starts a run attributed to the listening namespace's built-in identity, its inputs filled by `map`; a filter that fails, inputs refused and `max_runs_per_hour` are recorded as skipped firings. An event with the same `source` and `id` within a day is answered as the first was and starts nothing.
+- What fired a run is frozen on it, `trigger.scheduled_for`, a webhook's request or an event, which the evaluator is started with and a replay is written with.
+
+### API
+
+- `GET /api/v1/{ns}/workflows/{name}/triggers` answers what is armed, under `workflow:read`: each trigger with what it declares, who armed it and when, its last firing or why it started none, a schedule's next occurrence, and a webhook's URL, refused signatures and credential, never the secret.
+- `PUT /api/v1/{ns}/workflows/{name}/webhooks/{method}/{path}` writes a webhook's secret, `whsec_` and 24 to 64 bytes, sealed and never read back, or its certificate, under `workflow:write`, audited as `webhook_credential.write`.
+- `POST /hooks/{ns}/{path}` and `POST /api/v1/{ns}/events` start runs as above.
+- A run is served with `trigger_kind`, `triggered_by` and, for a run a call started, `from`, and each task of a call with the run it `called`.
+- The API asks every client for a certificate on the TLS it serves itself and requires none, for `mtls` webhooks.
+
+### Controller
+
+- The controller that leads arms the heads nobody armed and fires the schedules.
+- A run stays `queued` while its namespace holds every task `max_concurrent_tasks` lets it hold, as the run states say, the concurrency group decided first so that `cancel_in_progress` still cancels the run in the way.
+- `AGK_MAX_CALL_DEPTH`, 8 by default, bounds a chain of `workflow:` calls. The controller starts a server run's evaluator with `triggered_by`, which `run.triggered_by` now reads on a server as it does locally.
+
+### Tests
+
+- The schemas of agentiik/schemas `0.5.0` are vendored in `internal/fixtures`, and the corpus holds 12 valid workflow documents and 75 invalid ones, 20 of them the validator's, each refused by the rule it is named after.
+- `controller/schedule_test.go` fires on a frozen clock: both Paris daylight saving shifts, a leap day, a takeover fenced out of the first controller's firing, an outage with and without `catch_up`, and a spent hourly quota. The milestone's gate, `e2e/gate_test.go`, runs a schedule with nobody present and a webhook refused and accepted by its signature.
+
 ## v0.4.0, 2026-09-30
 
 The workflow is a repository: each workflow is a git repository the installation serves, cloned, fetched and pushed with a plain git client under the command line's token and the permissions that already decide who reads and writes it, and `agk push` pushes it over git's own protocol. The pre-receive hook judges every commit a ref would point at with the one validation `agk validate` runs, and refuses the push whole, naming the file, the line and the rule. A run pins the commit its ref named, whatever the branch does next, and a replay, from the start or from a step, runs that commit again; a workflow includes its own files and another repository's library at a tag or a whole commit; a step reads only the files it selects; a cached step republishes what an identical one made; and a workflow is renamed, moved to another namespace its mover owns, and deleted. A v0.3.0 installation upgrades with v0.4.0's `compose.yaml` and its own `.env`, and nothing else.

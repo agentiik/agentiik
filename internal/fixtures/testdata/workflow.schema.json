@@ -688,11 +688,14 @@
     },
     "eventTrigger": {
       "title": "Event trigger",
-      "description": "Starts a run on a CloudEvents 1.0 message from the bus. A workflow only sees events published into its own namespace, or into a namespace that granted it read access.",
+      "description": "Starts a run on a CloudEvents 1.0 event published into a namespace with POST /api/v1/{ns}/events. A workflow only hears events published into its own namespace, or into the one namespace names where that namespace granted it read access.",
       "type": "object",
-      "minProperties": 1,
+      "anyOf": [{ "required": ["type"] }, { "required": ["source"] }, { "required": ["filter"] }],
       "additionalProperties": false,
-      "examples": [{ "type": "com.example.order.approved", "filter": "${{ event.data.amount > 0 }}" }],
+      "examples": [
+        { "type": "com.example.order.approved", "filter": "${{ event.data.amount > 0 }}" },
+        { "type": "com.example.order.approved", "source": "/erp/orders", "namespace": "sales", "map": { "orders": "${{ event.data.orders }}" } }
+      ],
       "properties": {
         "type": {
           "description": "CloudEvents type consumed. It is the event's own name for what happened, so a workflow subscribes to a fact rather than to a publisher.",
@@ -710,6 +713,21 @@
           "description": "CEL expression evaluated over the event's context attributes and over its data. Only an event it accepts starts a run, which keeps a busy topic from starting runs that would immediately decide they had nothing to do.",
           "$ref": "#/$defs/expression",
           "examples": ["${{ event.data.amount > 0 }}"]
+        },
+        "namespace": {
+          "description": "Namespace whose events the subscription hears, the workflow's own where it names none. Another namespace's events are heard only while that namespace grants this workflow's namespace read access, its built-in identity holding workflow:read there, so that both namespaces chose it.",
+          "$ref": "#/$defs/namespace",
+          "examples": ["sales"]
+        },
+        "map": {
+          "description": "Fills workflow inputs from the event, through expressions over it, each input held to its schema before the run exists. Without it an event starts a run with the inputs' defaults, and nothing reads its data.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "additionalProperties": {
+            "description": "Expression, or literal value, feeding one workflow input.",
+            "examples": ["${{ event.data.orders }}"]
+          },
+          "examples": [{ "orders": "${{ event.data.orders }}" }]
         }
       }
     },

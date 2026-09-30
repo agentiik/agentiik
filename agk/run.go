@@ -231,3 +231,10 @@ func listOf(names []string) string {
 	}
 	return out
 }
+
+// DefaultMaxCallDepth is how deep a chain of workflow: calls may go where the installation says
+// nothing: "maximum depth configurable, default 8". A run nothing called is at depth 0, and the run
+// each call starts one deeper than its caller. Eight is deep enough for a loop written as a call
+// that calls itself a few times, and shallow enough that one written by mistake stops within a
+// handful of runs rather than filling the namespace's quota.
+const DefaultMaxCallDepth = 8

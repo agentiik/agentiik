@@ -369,7 +369,7 @@ func absent() map[string]string {
 		"step": "normalize", "port": "ok", "commit": Commit, "ref": Commit, "login": "nobody", "group": "nobody",
 		"runner": strings.ToLower(ulid.New()), "pool": "nowhere", "key": "nowhere/sha256/" + strings.Repeat("0", 64),
 		"uri":  url.PathEscape("agk://run/" + ulid.New() + "/normalize/ok/invoice.pdf"),
-		"name": "nothing", "id": ulid.New(),
+		"name": "nothing", "id": ulid.New(), "method": "POST", "path": "nowhere",
 	}
 }
 

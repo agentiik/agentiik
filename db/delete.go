@@ -45,6 +45,12 @@ func (n *NS) DeleteWorkflow(ctx context.Context, workflow, by string, at time.Ti
 		`delete from triggers where namespace = $1 and workflow = $2`, n.namespace, workflow); err != nil {
 		return nil, fmt.Errorf("db: the triggers of %s could not be disarmed: %w", workflow, err)
 	}
+	// And what its webhooks checked a caller against, so that a workflow created again under the
+	// name is not armed with a credential written for the one deleted.
+	if _, err := n.tx.Exec(ctx,
+		`delete from webhook_credentials where namespace = $1 and workflow = $2`, n.namespace, workflow); err != nil {
+		return nil, fmt.Errorf("db: the credentials of the webhooks of %s could not be removed: %w", workflow, err)
+	}
 	rows, err := n.tx.Query(ctx,
 		`update runs set cancel_requested_at = $3
 		 where namespace = $1 and workflow = $2 and state in ('queued', 'running', 'waiting')

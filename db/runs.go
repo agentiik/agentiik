@@ -11,6 +11,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/internal/ulid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // The run, its decision document, and the rows that project it.
@@ -62,6 +63,19 @@ type NewRun struct {
 
 	// Context is what fired the run, frozen on it, and empty where nothing did.
 	Context TriggerContext
+
+	// Caller is the step whose call started the run, for a run of trigger kind workflow, and
+	// Depth how deep in a chain of calls it is: its caller's, and one.
+	Caller *Caller
+	Depth  int
+}
+
+// Caller is the step of another run whose call started a run: "a from naming its caller", and the
+// dispatch that made the call.
+type Caller struct {
+	Run  agk.RunID  `json:"run"`
+	Step agk.Step   `json:"step"`
+	Task agk.TaskID `json:"-"`
 }
 
 // TriggerContext is what fired a run as expressions read it: the trigger root, "body, headers,
@@ -153,11 +167,21 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 			return fmt.Errorf("db: the trigger context of run %s: %w", r.ID, err)
 		}
 	}
+	var caller Caller
+	if r.Caller != nil {
+		caller = *r.Caller
+	}
 	if _, err := n.tx.Exec(ctx,
-		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs, replay_of, replay_from, trigger_context)
-		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10)`,
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs, replay_of, replay_from, trigger_context,
+		                   caller_run, caller_step, caller_task, depth)
+		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		n.namespace, string(r.ID), r.Workflow, r.Commit,
-		r.Trigger.String(), nilIfEmpty(by), inputs, nilIfEmpty(string(r.ReplayOf)), nilIfEmpty(string(r.ReplayFrom)), context); err != nil {
+		r.Trigger.String(), nilIfEmpty(by), inputs, nilIfEmpty(string(r.ReplayOf)), nilIfEmpty(string(r.ReplayFrom)), context,
+		nilIfEmpty(string(caller.Run)), nilIfEmpty(string(caller.Step)), nilIfEmpty(string(caller.Task)), r.Depth); err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.ConstraintName == "runs_caller_task" {
+			return ErrCalledAlready
+		}
 		return fmt.Errorf("db: run %s could not be created: %w", r.ID, err)
 	}
 
@@ -368,6 +392,11 @@ type Evaluation struct {
 	// where the namespace sets none. Read with the run, since every pass is decided under the
 	// bound that holds when it is taken.
 	MaxRunDuration string
+
+	// CallerRun is the run whose call started this one, empty for a run nothing called, and
+	// Depth how deep in a chain of calls it is.
+	CallerRun agk.RunID
+	Depth     int
 }
 
 // Run reads one run for deciding.
@@ -388,11 +417,12 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
 		        cancel_requested_at, xmin::text, created_at,
 		        coalesce((select n.max_run_duration from namespaces n where n.name = runs.namespace), ''),
-		        coalesce(triggered_by, ''), coalesce(replay_of, ''), coalesce(replay_from, ''), trigger_context
+		        coalesce(triggered_by, ''), coalesce(replay_of, ''), coalesce(replay_from, ''), trigger_context,
+		        coalesce(caller_run, ''), depth
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
 			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt, &e.MaxRunDuration,
-			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom, &context)
+			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom, &context, &e.CallerRun, &e.Depth)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -528,6 +558,10 @@ type TaskRow struct {
 	// MemoisedFrom is the run whose task published what a cache hit republished for this one,
 	// which no container ran.
 	MemoisedFrom agk.RunID
+
+	// CalledRun is the run a call started, where the task is a workflow: step's, which no
+	// runner holds.
+	CalledRun agk.RunID
 }
 
 // SaveDecision writes one pass, or refuses it because the run has moved.
@@ -771,8 +805,8 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 	err = w.tx.QueryRow(ctx,
 		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, requeue, state,
 		                    runner, exit_code, log_uri, log_lines, log_truncated,
-		                    dispatched_at, started_at, finished_at, deadline, published_at, usage, memoised_from)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+		                    dispatched_at, started_at, finished_at, deadline, published_at, usage, memoised_from, called_run)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 		 on conflict (namespace, idempotency_key, requeue) do update
 		 set state = case when tasks.state = 'lost'
 		                   and excluded.state in ('pending', 'dispatched', 'running', 'publishing')
@@ -797,13 +831,14 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		     deadline = coalesce(excluded.deadline, tasks.deadline),
 		     published_at = coalesce(tasks.published_at, excluded.published_at),
 		     usage = case when excluded.usage = '{}'::jsonb then tasks.usage else excluded.usage end,
-		     memoised_from = coalesce(excluded.memoised_from, tasks.memoised_from)
+		     memoised_from = coalesce(excluded.memoised_from, tasks.memoised_from),
+		     called_run = coalesce(excluded.called_run, tasks.called_run)
 		 returning state, finished_at`,
 		namespace, ulid.New(), string(run), string(t.Step), t.Attempt, shardIndex, shardOf, t.Requeue,
 		t.State.String(), nilIfEmpty(t.Runner), t.ExitCode, log,
 		nilIfZeroInt(t.LogLines), t.LogCut,
 		nilIfZero(t.DispatchedAt), nilIfZero(t.StartedAt), nilIfZero(t.FinishedAt),
-		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage, nilIfEmpty(string(t.MemoisedFrom))).Scan(&held, &finished)
+		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage, nilIfEmpty(string(t.MemoisedFrom)), nilIfEmpty(string(t.CalledRun))).Scan(&held, &finished)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
 	}

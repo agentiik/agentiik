@@ -54,6 +54,12 @@ type Server struct {
 	// starter is the one path every run this server starts is created by.
 	starter *trigger.Starter
 
+	// router is the router the server's routes are on, which a webhook authenticating by a bearer
+	// token asks who the token is and what it holds, as it asks for every guarded route; and hooks
+	// seals and opens the secrets webhooks sign with, nil where no master key is attached.
+	router *Router
+	hooks  HookSecrets
+
 	// logs tells the step log streams this server answers that their log moved on, streaming is
 	// how they spend their time, and stopping ends them.
 	logs      *logWatch
@@ -95,6 +101,11 @@ type ServerOptions struct {
 	// made of: git clones <PublicURL>/<namespace>/<name>.git.
 	PublicURL string
 
+	// Hooks seals and opens the secrets webhooks sign with. Without it a secret written is refused
+	// with 503, and a request to a webhook whose secret an installation holding a master key wrote is
+	// answered 500 and said through Trouble, since what the installation holds it cannot open.
+	Hooks HookSecrets
+
 	// Trouble is where a log stream says that a chunk the API wrote could not be read back, which
 	// its reader is shown as a gap and whoever runs the installation has to explain. One with
 	// nowhere to put it drops it, as RunnerOptions.Trouble does.
@@ -124,7 +135,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	s := &Server{
 		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now,
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
-		publicURL: o.PublicURL,
+		publicURL: o.PublicURL, router: rt, hooks: o.Hooks,
 	}
 	starter, err := trigger.New(trigger.Options{Pool: o.Pool, Versions: o.Versions, Objects: o.Objects, Report: s.report, Now: o.Now})
 	if err != nil {
@@ -143,6 +154,11 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		return nil, err
 	}
 	if err := s.registerWorkflows(rt); err != nil {
+		return nil, err
+	}
+
+	// A webhook, on whichever method its file declares, authenticated per trigger by its handler.
+	if err := rt.Handle("", "/hooks/{namespace}/{path...}", Public{Why: webhooksWhy}, s.webhook); err != nil {
 		return nil, err
 	}
 
@@ -167,6 +183,15 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		// What the default branch's head has armed, read under what reading the workflow takes.
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/triggers",
 			Needs{Permission: WorkflowRead, Scope: Workflow}, s.listTriggers},
+		// What a webhook checks its caller against, written under what changing the workflow
+		// takes, since whoever may push it may already say auth: none.
+		{"PUT", "/api/v1/{namespace}/workflows/{workflow}/webhooks/{method}/{path...}",
+			Needs{Permission: WorkflowWrite, Scope: Workflow}, s.writeHookCredential},
+		// An event published into the namespace, under workflow:run held there: publishing starts
+		// runs, and "a grant on one workflow does not count, since an event reaches every workflow
+		// listening to the namespace".
+		{"POST", "/api/v1/{namespace}/events",
+			Needs{Permission: WorkflowRun, Scope: Namespace}, s.publish},
 		// The run by the path a Location names it by, authorised over its own workflow
 		// rather than over the namespace, so that run:read held on that workflow alone reads
 		// it and a deny of run:read on that workflow refuses it: "a workflow-scope grant only

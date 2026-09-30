@@ -61,10 +61,17 @@ import (
 // the rules the exposed-context table states. It is the last of Check's list, so a
 // workflow whose graph does not hold together is refused by the graph first.
 func checkExpressions(wf *Workflow) error {
+	// A webhook's map reads no event, "the event root in event triggers only", from v0.5.0: a
+	// version stored before it was read in the on block's whole position, and keeps rebuilding
+	// so, as it keeps every rule it was stored under.
+	hooked := expr.ScopeTrigger
+	if wf.made {
+		hooked = expr.ScopeWebhook
+	}
 	for i, hook := range wf.On.Webhook {
 		for _, name := range slices.Sorted(maps.Keys(hook.Map)) {
 			at := fmt.Sprintf("on.webhook[%d].map.%s", i, name)
-			if err := holdValue(wf, expr.ScopeTrigger, nil, "", hook.Map[name], at); err != nil {
+			if err := holdValue(wf, hooked, nil, "", hook.Map[name], at); err != nil {
 				return err
 			}
 		}
@@ -73,6 +80,12 @@ func checkExpressions(wf *Workflow) error {
 		at := fmt.Sprintf("on.event[%d].filter", i)
 		if err := holdValue(wf, expr.ScopeTrigger, nil, "", event.Filter, at); err != nil {
 			return err
+		}
+		for _, name := range slices.Sorted(maps.Keys(event.Map)) {
+			at := fmt.Sprintf("on.event[%d].map.%s", i, name)
+			if err := holdValue(wf, expr.ScopeTrigger, nil, "", event.Map[name], at); err != nil {
+				return err
+			}
 		}
 	}
 
