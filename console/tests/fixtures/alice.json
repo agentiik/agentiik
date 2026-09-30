@@ -506,5 +506,1806 @@
         }
       ]
     }
+  },
+  "GET /api/v1/finance/stats/runs": {
+    "status": 200,
+    "body": {
+      "from": "2026-09-29T07:00:00Z",
+      "to": "2026-09-30T07:00:00Z",
+      "bucket": "1h",
+      "buckets": [
+        {
+          "since": "2026-09-29T07:00:00Z",
+          "until": "2026-09-29T07:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 8,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 196693,
+            "p95": 325601,
+            "p99": 407001
+          },
+          "queue_wait_ms": {
+            "p50": 754,
+            "p95": 3387,
+            "p99": 4403
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T08:00:00Z",
+          "until": "2026-09-29T08:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 12,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 174780,
+            "p95": 282730,
+            "p99": 353412
+          },
+          "queue_wait_ms": {
+            "p50": 977,
+            "p95": 3850,
+            "p99": 5005
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T09:00:00Z",
+          "until": "2026-09-29T09:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 14,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 166655,
+            "p95": 257284,
+            "p99": 321605
+          },
+          "queue_wait_ms": {
+            "p50": 861,
+            "p95": 3068,
+            "p99": 3988
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T10:00:00Z",
+          "until": "2026-09-29T10:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 13,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 161121,
+            "p95": 251214,
+            "p99": 314017
+          },
+          "queue_wait_ms": {
+            "p50": 518,
+            "p95": 3839,
+            "p99": 4990
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T11:00:00Z",
+          "until": "2026-09-29T11:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 11,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 1
+          },
+          "duration_ms": {
+            "p50": 166858,
+            "p95": 285077,
+            "p99": 356346
+          },
+          "queue_wait_ms": {
+            "p50": 864,
+            "p95": 3202,
+            "p99": 4162
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            },
+            {
+              "exit_code": 1,
+              "attempts": 1
+            }
+          ]
+        },
+        {
+          "since": "2026-09-29T12:00:00Z",
+          "until": "2026-09-29T12:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 12,
+            "failed": 1,
+            "cancelled": 1,
+            "timed_out": 1
+          },
+          "duration_ms": {
+            "p50": 182858,
+            "p95": 270510,
+            "p99": 338137
+          },
+          "queue_wait_ms": {
+            "p50": 967,
+            "p95": 3657,
+            "p99": 4754
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            },
+            {
+              "exit_code": 1,
+              "attempts": 1
+            }
+          ]
+        },
+        {
+          "since": "2026-09-29T13:00:00Z",
+          "until": "2026-09-29T13:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 14,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 163657,
+            "p95": 250847,
+            "p99": 313558
+          },
+          "queue_wait_ms": {
+            "p50": 1028,
+            "p95": 4713,
+            "p99": 6126
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T14:00:00Z",
+          "until": "2026-09-29T14:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 13,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 171018,
+            "p95": 272729,
+            "p99": 340911
+          },
+          "queue_wait_ms": {
+            "p50": 545,
+            "p95": 5922,
+            "p99": 7698
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        },
+        {
+          "since": "2026-09-29T15:00:00Z",
+          "until": "2026-09-29T15:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 13,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 172528,
+            "p95": 291716,
+            "p99": 364645
+          },
+          "queue_wait_ms": {
+            "p50": 442,
+            "p95": 3055,
+            "p99": 3971
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T16:00:00Z",
+          "until": "2026-09-29T16:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 7,
+            "failed": 0,
+            "cancelled": 1,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 178203,
+            "p95": 278194,
+            "p99": 347742
+          },
+          "queue_wait_ms": {
+            "p50": 779,
+            "p95": 4282,
+            "p99": 5566
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T17:00:00Z",
+          "until": "2026-09-29T17:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 8,
+            "failed": 2,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 173479,
+            "p95": 236713,
+            "p99": 295891
+          },
+          "queue_wait_ms": {
+            "p50": 527,
+            "p95": 5923,
+            "p99": 7699
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 4
+            }
+          ]
+        },
+        {
+          "since": "2026-09-29T18:00:00Z",
+          "until": "2026-09-29T18:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 7,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 1
+          },
+          "duration_ms": {
+            "p50": 169483,
+            "p95": 271728,
+            "p99": 339660
+          },
+          "queue_wait_ms": {
+            "p50": 723,
+            "p95": 5388,
+            "p99": 7004
+          },
+          "retries": [
+            {
+              "exit_code": 1,
+              "attempts": 1
+            }
+          ]
+        },
+        {
+          "since": "2026-09-29T19:00:00Z",
+          "until": "2026-09-29T19:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 8,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 187625,
+            "p95": 317734,
+            "p99": 397167
+          },
+          "queue_wait_ms": {
+            "p50": 781,
+            "p95": 3801,
+            "p99": 4941
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        },
+        {
+          "since": "2026-09-29T20:00:00Z",
+          "until": "2026-09-29T20:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 9,
+            "failed": 1,
+            "cancelled": 1,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 202646,
+            "p95": 321659,
+            "p99": 402073
+          },
+          "queue_wait_ms": {
+            "p50": 694,
+            "p95": 3741,
+            "p99": 4863
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        },
+        {
+          "since": "2026-09-29T21:00:00Z",
+          "until": "2026-09-29T21:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 5,
+            "failed": 5,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 178729,
+            "p95": 566702,
+            "p99": 708376
+          },
+          "queue_wait_ms": {
+            "p50": 861,
+            "p95": 48000,
+            "p99": 62400
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 10
+            }
+          ]
+        },
+        {
+          "since": "2026-09-29T22:00:00Z",
+          "until": "2026-09-29T22:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 12,
+            "failed": 0,
+            "cancelled": 1,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 159904,
+            "p95": 249929,
+            "p99": 312411
+          },
+          "queue_wait_ms": {
+            "p50": 756,
+            "p95": 3705,
+            "p99": 4816
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T23:00:00Z",
+          "until": "2026-09-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 15,
+            "failed": 1,
+            "cancelled": 1,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 201071,
+            "p95": 301174,
+            "p99": 376467
+          },
+          "queue_wait_ms": {
+            "p50": 1052,
+            "p95": 4902,
+            "p99": 6372
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        },
+        {
+          "since": "2026-09-30T00:00:00Z",
+          "until": "2026-09-30T00:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 15,
+            "failed": 1,
+            "cancelled": 1,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 196930,
+            "p95": 332268,
+            "p99": 415335
+          },
+          "queue_wait_ms": {
+            "p50": 869,
+            "p95": 3213,
+            "p99": 4176
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        },
+        {
+          "since": "2026-09-30T01:00:00Z",
+          "until": "2026-09-30T01:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 13,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 177357,
+            "p95": 289319,
+            "p99": 361648
+          },
+          "queue_wait_ms": {
+            "p50": 914,
+            "p95": 3001,
+            "p99": 3901
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        },
+        {
+          "since": "2026-09-30T02:00:00Z",
+          "until": "2026-09-30T02:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 11,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 1
+          },
+          "duration_ms": {
+            "p50": 189259,
+            "p95": 308653,
+            "p99": 385816
+          },
+          "queue_wait_ms": {
+            "p50": 597,
+            "p95": 4493,
+            "p99": 5840
+          },
+          "retries": [
+            {
+              "exit_code": 1,
+              "attempts": 1
+            }
+          ]
+        },
+        {
+          "since": "2026-09-30T03:00:00Z",
+          "until": "2026-09-30T03:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 10,
+            "failed": 1,
+            "cancelled": 1,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 200899,
+            "p95": 348558,
+            "p99": 435697
+          },
+          "queue_wait_ms": {
+            "p50": 1023,
+            "p95": 3072,
+            "p99": 3993
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        },
+        {
+          "since": "2026-09-30T04:00:00Z",
+          "until": "2026-09-30T04:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 11,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 191003,
+            "p95": 316575,
+            "p99": 395718
+          },
+          "queue_wait_ms": {
+            "p50": 765,
+            "p95": 5806,
+            "p99": 7547
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-30T05:00:00Z",
+          "until": "2026-09-30T05:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 6,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 197522,
+            "p95": 308603,
+            "p99": 385753
+          },
+          "queue_wait_ms": {
+            "p50": 951,
+            "p95": 4495,
+            "p99": 5843
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        },
+        {
+          "since": "2026-09-30T06:00:00Z",
+          "until": "2026-09-30T06:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 3,
+            "waiting": 0,
+            "succeeded": 5,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "duration_ms": {
+            "p50": 176129,
+            "p95": 267127,
+            "p99": 333908
+          },
+          "queue_wait_ms": {
+            "p50": 719,
+            "p95": 3673,
+            "p99": 4774
+          },
+          "retries": [
+            {
+              "exit_code": 108,
+              "attempts": 2
+            }
+          ]
+        }
+      ],
+      "previous": {
+        "from": "2026-09-28T07:00:00Z",
+        "to": "2026-09-29T07:00:00Z",
+        "buckets": [
+          {
+            "since": "2026-09-28T07:00:00Z",
+            "until": "2026-09-28T07:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 4,
+              "failed": 1,
+              "cancelled": 0,
+              "timed_out": 1
+            },
+            "duration_ms": {
+              "p50": 166468,
+              "p95": 245506,
+              "p99": 306882
+            },
+            "queue_wait_ms": {
+              "p50": 880,
+              "p95": 5454,
+              "p99": 7090
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              },
+              {
+                "exit_code": 1,
+                "attempts": 1
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T08:00:00Z",
+            "until": "2026-09-28T08:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 8,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 185409,
+              "p95": 318813,
+              "p99": 398516
+            },
+            "queue_wait_ms": {
+              "p50": 728,
+              "p95": 7500,
+              "p99": 9750
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-28T09:00:00Z",
+            "until": "2026-09-28T09:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 10,
+              "failed": 1,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 166727,
+              "p95": 219911,
+              "p99": 274888
+            },
+            "queue_wait_ms": {
+              "p50": 355,
+              "p95": 4148,
+              "p99": 5392
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T10:00:00Z",
+            "until": "2026-09-28T10:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 12,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 193540,
+              "p95": 323158,
+              "p99": 403947
+            },
+            "queue_wait_ms": {
+              "p50": 679,
+              "p95": 4467,
+              "p99": 5807
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-28T11:00:00Z",
+            "until": "2026-09-28T11:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 16,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 181937,
+              "p95": 283086,
+              "p99": 353857
+            },
+            "queue_wait_ms": {
+              "p50": 566,
+              "p95": 5784,
+              "p99": 7519
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-28T12:00:00Z",
+            "until": "2026-09-28T12:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 11,
+              "failed": 1,
+              "cancelled": 1,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 183283,
+              "p95": 275810,
+              "p99": 344762
+            },
+            "queue_wait_ms": {
+              "p50": 967,
+              "p95": 6801,
+              "p99": 8841
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T13:00:00Z",
+            "until": "2026-09-28T13:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 14,
+              "failed": 1,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 178556,
+              "p95": 273633,
+              "p99": 342041
+            },
+            "queue_wait_ms": {
+              "p50": 879,
+              "p95": 3614,
+              "p99": 4698
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T14:00:00Z",
+            "until": "2026-09-28T14:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 10,
+              "failed": 2,
+              "cancelled": 1,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 172333,
+              "p95": 260220,
+              "p99": 325275
+            },
+            "queue_wait_ms": {
+              "p50": 698,
+              "p95": 3239,
+              "p99": 4210
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 4
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T15:00:00Z",
+            "until": "2026-09-28T15:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 7,
+              "failed": 2,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 152191,
+              "p95": 259881,
+              "p99": 324851
+            },
+            "queue_wait_ms": {
+              "p50": 863,
+              "p95": 3916,
+              "p99": 5090
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 4
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T16:00:00Z",
+            "until": "2026-09-28T16:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 9,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 181143,
+              "p95": 272129,
+              "p99": 340161
+            },
+            "queue_wait_ms": {
+              "p50": 435,
+              "p95": 3782,
+              "p99": 4916
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-28T17:00:00Z",
+            "until": "2026-09-28T17:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 2,
+              "failed": 2,
+              "cancelled": 1,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 165597,
+              "p95": 233628,
+              "p99": 292035
+            },
+            "queue_wait_ms": {
+              "p50": 427,
+              "p95": 3295,
+              "p99": 4283
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 4
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T18:00:00Z",
+            "until": "2026-09-28T18:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 8,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 1
+            },
+            "duration_ms": {
+              "p50": 177116,
+              "p95": 282813,
+              "p99": 353516
+            },
+            "queue_wait_ms": {
+              "p50": 681,
+              "p95": 3350,
+              "p99": 4355
+            },
+            "retries": [
+              {
+                "exit_code": 1,
+                "attempts": 1
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T19:00:00Z",
+            "until": "2026-09-28T19:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 5,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 156224,
+              "p95": 255287,
+              "p99": 319108
+            },
+            "queue_wait_ms": {
+              "p50": 633,
+              "p95": 3462,
+              "p99": 4500
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-28T20:00:00Z",
+            "until": "2026-09-28T20:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 8,
+              "failed": 1,
+              "cancelled": 1,
+              "timed_out": 1
+            },
+            "duration_ms": {
+              "p50": 181518,
+              "p95": 281174,
+              "p99": 351467
+            },
+            "queue_wait_ms": {
+              "p50": 659,
+              "p95": 3419,
+              "p99": 4444
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              },
+              {
+                "exit_code": 1,
+                "attempts": 1
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T21:00:00Z",
+            "until": "2026-09-28T21:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 10,
+              "failed": 0,
+              "cancelled": 1,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 156540,
+              "p95": 237684,
+              "p99": 297105
+            },
+            "queue_wait_ms": {
+              "p50": 984,
+              "p95": 3848,
+              "p99": 5002
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-28T22:00:00Z",
+            "until": "2026-09-28T22:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 12,
+              "failed": 1,
+              "cancelled": 0,
+              "timed_out": 1
+            },
+            "duration_ms": {
+              "p50": 174203,
+              "p95": 258182,
+              "p99": 322727
+            },
+            "queue_wait_ms": {
+              "p50": 576,
+              "p95": 3355,
+              "p99": 4361
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              },
+              {
+                "exit_code": 1,
+                "attempts": 1
+              }
+            ]
+          },
+          {
+            "since": "2026-09-28T23:00:00Z",
+            "until": "2026-09-28T23:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 10,
+              "failed": 2,
+              "cancelled": 0,
+              "timed_out": 1
+            },
+            "duration_ms": {
+              "p50": 208038,
+              "p95": 313151,
+              "p99": 391438
+            },
+            "queue_wait_ms": {
+              "p50": 863,
+              "p95": 4562,
+              "p99": 5930
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 4
+              },
+              {
+                "exit_code": 1,
+                "attempts": 1
+              }
+            ]
+          },
+          {
+            "since": "2026-09-29T00:00:00Z",
+            "until": "2026-09-29T00:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 14,
+              "failed": 0,
+              "cancelled": 1,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 170989,
+              "p95": 300884,
+              "p99": 376105
+            },
+            "queue_wait_ms": {
+              "p50": 675,
+              "p95": 3451,
+              "p99": 4486
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-29T01:00:00Z",
+            "until": "2026-09-29T01:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 14,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 199348,
+              "p95": 351357,
+              "p99": 439196
+            },
+            "queue_wait_ms": {
+              "p50": 937,
+              "p95": 3213,
+              "p99": 4176
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-29T02:00:00Z",
+            "until": "2026-09-29T02:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 9,
+              "failed": 1,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 208295,
+              "p95": 330867,
+              "p99": 413583
+            },
+            "queue_wait_ms": {
+              "p50": 912,
+              "p95": 4353,
+              "p99": 5658
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              }
+            ]
+          },
+          {
+            "since": "2026-09-29T03:00:00Z",
+            "until": "2026-09-29T03:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 11,
+              "failed": 1,
+              "cancelled": 1,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 184392,
+              "p95": 311534,
+              "p99": 389417
+            },
+            "queue_wait_ms": {
+              "p50": 793,
+              "p95": 3293,
+              "p99": 4280
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              }
+            ]
+          },
+          {
+            "since": "2026-09-29T04:00:00Z",
+            "until": "2026-09-29T04:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 10,
+              "failed": 1,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 166466,
+              "p95": 282386,
+              "p99": 352982
+            },
+            "queue_wait_ms": {
+              "p50": 656,
+              "p95": 6662,
+              "p99": 8660
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              }
+            ]
+          },
+          {
+            "since": "2026-09-29T05:00:00Z",
+            "until": "2026-09-29T05:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 5,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 179583,
+              "p95": 292990,
+              "p99": 366237
+            },
+            "queue_wait_ms": {
+              "p50": 828,
+              "p95": 4171,
+              "p99": 5422
+            },
+            "retries": []
+          },
+          {
+            "since": "2026-09-29T06:00:00Z",
+            "until": "2026-09-29T06:59:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 3,
+              "waiting": 0,
+              "succeeded": 4,
+              "failed": 1,
+              "cancelled": 1,
+              "timed_out": 0
+            },
+            "duration_ms": {
+              "p50": 199883,
+              "p95": 355999,
+              "p99": 444998
+            },
+            "queue_wait_ms": {
+              "p50": 519,
+              "p95": 3999,
+              "p99": 5198
+            },
+            "retries": [
+              {
+                "exit_code": 108,
+                "attempts": 2
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "GET /api/v1/finance/stats/quotas": {
+    "status": 200,
+    "body": {
+      "from": "2026-09-29T07:00:00Z",
+      "to": "2026-09-30T07:00:00Z",
+      "bucket": "1h",
+      "quotas": {
+        "max_concurrent_tasks": 32,
+        "max_runs_per_hour": 120,
+        "max_artifact_bytes": 536870912000,
+        "max_retention_days": 30,
+        "max_run_duration": "2h",
+        "allowed_runner_pools": [
+          "default",
+          "dmz"
+        ]
+      },
+      "buckets": [
+        {
+          "since": "2026-09-29T07:00:00Z",
+          "until": "2026-09-29T07:59:59.999999999Z",
+          "runs_created": 25,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 8,
+          "artifact_bytes": 355414427144,
+          "artifact_bytes_added": 49181550
+        },
+        {
+          "since": "2026-09-29T08:00:00Z",
+          "until": "2026-09-29T08:59:59.999999999Z",
+          "runs_created": 47,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 5,
+          "artifact_bytes": 355489149621,
+          "artifact_bytes_added": 75781437
+        },
+        {
+          "since": "2026-09-29T09:00:00Z",
+          "until": "2026-09-29T09:59:59.999999999Z",
+          "runs_created": 25,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 8,
+          "artifact_bytes": 355487760662,
+          "artifact_bytes_added": 52480288
+        },
+        {
+          "since": "2026-09-29T10:00:00Z",
+          "until": "2026-09-29T10:59:59.999999999Z",
+          "runs_created": 24,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 8,
+          "artifact_bytes": 355609716956,
+          "artifact_bytes_added": 150505255
+        },
+        {
+          "since": "2026-09-29T11:00:00Z",
+          "until": "2026-09-29T11:59:59.999999999Z",
+          "runs_created": 41,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 12,
+          "artifact_bytes": 355646632743,
+          "artifact_bytes_added": 94509455
+        },
+        {
+          "since": "2026-09-29T12:00:00Z",
+          "until": "2026-09-29T12:59:59.999999999Z",
+          "runs_created": 59,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 6,
+          "artifact_bytes": 355649372126,
+          "artifact_bytes_added": 47379573
+        },
+        {
+          "since": "2026-09-29T13:00:00Z",
+          "until": "2026-09-29T13:59:59.999999999Z",
+          "runs_created": 27,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 6,
+          "artifact_bytes": 355712872502,
+          "artifact_bytes_added": 74897094
+        },
+        {
+          "since": "2026-09-29T14:00:00Z",
+          "until": "2026-09-29T14:59:59.999999999Z",
+          "runs_created": 39,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 14,
+          "artifact_bytes": 355745410604,
+          "artifact_bytes_added": 80321600
+        },
+        {
+          "since": "2026-09-29T15:00:00Z",
+          "until": "2026-09-29T15:59:59.999999999Z",
+          "runs_created": 38,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 11,
+          "artifact_bytes": 355839086860,
+          "artifact_bytes_added": 104868748
+        },
+        {
+          "since": "2026-09-29T16:00:00Z",
+          "until": "2026-09-29T16:59:59.999999999Z",
+          "runs_created": 42,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 4,
+          "artifact_bytes": 356003842180,
+          "artifact_bytes_added": 167079972
+        },
+        {
+          "since": "2026-09-29T17:00:00Z",
+          "until": "2026-09-29T17:59:59.999999999Z",
+          "runs_created": 21,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 12,
+          "artifact_bytes": 356103203674,
+          "artifact_bytes_added": 111281066
+        },
+        {
+          "since": "2026-09-29T18:00:00Z",
+          "until": "2026-09-29T18:59:59.999999999Z",
+          "runs_created": 50,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 7,
+          "artifact_bytes": 356256065356,
+          "artifact_bytes_added": 159548326
+        },
+        {
+          "since": "2026-09-29T19:00:00Z",
+          "until": "2026-09-29T19:59:59.999999999Z",
+          "runs_created": 47,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 14,
+          "artifact_bytes": 356307784640,
+          "artifact_bytes_added": 104228652
+        },
+        {
+          "since": "2026-09-29T20:00:00Z",
+          "until": "2026-09-29T20:59:59.999999999Z",
+          "runs_created": 45,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 12,
+          "artifact_bytes": 356374917725,
+          "artifact_bytes_added": 80671110
+        },
+        {
+          "since": "2026-09-29T21:00:00Z",
+          "until": "2026-09-29T21:59:59.999999999Z",
+          "runs_created": 104,
+          "runs_refused": 9,
+          "tasks_in_flight_max": 27,
+          "artifact_bytes": 356386367388,
+          "artifact_bytes_added": 66935783
+        },
+        {
+          "since": "2026-09-29T22:00:00Z",
+          "until": "2026-09-29T22:59:59.999999999Z",
+          "runs_created": 60,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 6,
+          "artifact_bytes": 356457367092,
+          "artifact_bytes_added": 92865796
+        },
+        {
+          "since": "2026-09-29T23:00:00Z",
+          "until": "2026-09-29T23:59:59.999999999Z",
+          "runs_created": 23,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 6,
+          "artifact_bytes": 356461754037,
+          "artifact_bytes_added": 43736750
+        },
+        {
+          "since": "2026-09-30T00:00:00Z",
+          "until": "2026-09-30T00:59:59.999999999Z",
+          "runs_created": 36,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 10,
+          "artifact_bytes": 356518922914,
+          "artifact_bytes_added": 62484205
+        },
+        {
+          "since": "2026-09-30T01:00:00Z",
+          "until": "2026-09-30T01:59:59.999999999Z",
+          "runs_created": 44,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 12,
+          "artifact_bytes": 356627502119,
+          "artifact_bytes_added": 126316913
+        },
+        {
+          "since": "2026-09-30T02:00:00Z",
+          "until": "2026-09-30T02:59:59.999999999Z",
+          "runs_created": 35,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 8,
+          "artifact_bytes": 356663476011,
+          "artifact_bytes_added": 47635233
+        },
+        {
+          "since": "2026-09-30T03:00:00Z",
+          "until": "2026-09-30T03:59:59.999999999Z",
+          "runs_created": 37,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 11,
+          "artifact_bytes": 356682965101,
+          "artifact_bytes_added": 42398882
+        },
+        {
+          "since": "2026-09-30T04:00:00Z",
+          "until": "2026-09-30T04:59:59.999999999Z",
+          "runs_created": 41,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 12,
+          "artifact_bytes": 356763450926,
+          "artifact_bytes_added": 82653025
+        },
+        {
+          "since": "2026-09-30T05:00:00Z",
+          "until": "2026-09-30T05:59:59.999999999Z",
+          "runs_created": 39,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 7,
+          "artifact_bytes": 356850195356,
+          "artifact_bytes_added": 86811680
+        },
+        {
+          "since": "2026-09-30T06:00:00Z",
+          "until": "2026-09-30T06:59:59.999999999Z",
+          "runs_created": 44,
+          "runs_refused": 0,
+          "tasks_in_flight_max": 5,
+          "artifact_bytes": 356920231209,
+          "artifact_bytes_added": 101667029
+        }
+      ],
+      "previous": {
+        "from": "2026-09-28T07:00:00Z",
+        "to": "2026-09-29T07:00:00Z",
+        "buckets": [
+          {
+            "since": "2026-09-28T07:00:00Z",
+            "until": "2026-09-28T07:59:59.999999999Z",
+            "runs_created": 32,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 7,
+            "artifact_bytes": 352292460293,
+            "artifact_bytes_added": 105453481
+          },
+          {
+            "since": "2026-09-28T08:00:00Z",
+            "until": "2026-09-28T08:59:59.999999999Z",
+            "runs_created": 36,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 5,
+            "artifact_bytes": 352315587448,
+            "artifact_bytes_added": 60045464
+          },
+          {
+            "since": "2026-09-28T09:00:00Z",
+            "until": "2026-09-28T09:59:59.999999999Z",
+            "runs_created": 45,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 4,
+            "artifact_bytes": 352355619284,
+            "artifact_bytes_added": 79647239
+          },
+          {
+            "since": "2026-09-28T10:00:00Z",
+            "until": "2026-09-28T10:59:59.999999999Z",
+            "runs_created": 25,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 13,
+            "artifact_bytes": 352464379277,
+            "artifact_bytes_added": 162441683
+          },
+          {
+            "since": "2026-09-28T11:00:00Z",
+            "until": "2026-09-28T11:59:59.999999999Z",
+            "runs_created": 29,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 14,
+            "artifact_bytes": 352569335101,
+            "artifact_bytes_added": 154283425
+          },
+          {
+            "since": "2026-09-28T12:00:00Z",
+            "until": "2026-09-28T12:59:59.999999999Z",
+            "runs_created": 58,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 10,
+            "artifact_bytes": 352662109672,
+            "artifact_bytes_added": 138115664
+          },
+          {
+            "since": "2026-09-28T13:00:00Z",
+            "until": "2026-09-28T13:59:59.999999999Z",
+            "runs_created": 51,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 6,
+            "artifact_bytes": 352700884711,
+            "artifact_bytes_added": 77700728
+          },
+          {
+            "since": "2026-09-28T14:00:00Z",
+            "until": "2026-09-28T14:59:59.999999999Z",
+            "runs_created": 29,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 4,
+            "artifact_bytes": 352801634196,
+            "artifact_bytes_added": 145734087
+          },
+          {
+            "since": "2026-09-28T15:00:00Z",
+            "until": "2026-09-28T15:59:59.999999999Z",
+            "runs_created": 52,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 14,
+            "artifact_bytes": 352853482260,
+            "artifact_bytes_added": 95954523
+          },
+          {
+            "since": "2026-09-28T16:00:00Z",
+            "until": "2026-09-28T16:59:59.999999999Z",
+            "runs_created": 52,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 6,
+            "artifact_bytes": 352962549356,
+            "artifact_bytes_added": 156433402
+          },
+          {
+            "since": "2026-09-28T17:00:00Z",
+            "until": "2026-09-28T17:59:59.999999999Z",
+            "runs_created": 56,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 4,
+            "artifact_bytes": 353071732755,
+            "artifact_bytes_added": 145929372
+          },
+          {
+            "since": "2026-09-28T18:00:00Z",
+            "until": "2026-09-28T18:59:59.999999999Z",
+            "runs_created": 34,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 5,
+            "artifact_bytes": 353109223197,
+            "artifact_bytes_added": 45863941
+          },
+          {
+            "since": "2026-09-28T19:00:00Z",
+            "until": "2026-09-28T19:59:59.999999999Z",
+            "runs_created": 43,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 5,
+            "artifact_bytes": 353170157019,
+            "artifact_bytes_added": 89332584
+          },
+          {
+            "since": "2026-09-28T20:00:00Z",
+            "until": "2026-09-28T20:59:59.999999999Z",
+            "runs_created": 23,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 14,
+            "artifact_bytes": 353181035209,
+            "artifact_bytes_added": 44313745
+          },
+          {
+            "since": "2026-09-28T21:00:00Z",
+            "until": "2026-09-28T21:59:59.999999999Z",
+            "runs_created": 35,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 11,
+            "artifact_bytes": 353227422361,
+            "artifact_bytes_added": 75135867
+          },
+          {
+            "since": "2026-09-28T22:00:00Z",
+            "until": "2026-09-28T22:59:59.999999999Z",
+            "runs_created": 24,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 12,
+            "artifact_bytes": 353376557545,
+            "artifact_bytes_added": 154919669
+          },
+          {
+            "since": "2026-09-28T23:00:00Z",
+            "until": "2026-09-28T23:59:59.999999999Z",
+            "runs_created": 53,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 5,
+            "artifact_bytes": 353482522277,
+            "artifact_bytes_added": 135777326
+          },
+          {
+            "since": "2026-09-29T00:00:00Z",
+            "until": "2026-09-29T00:59:59.999999999Z",
+            "runs_created": 24,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 8,
+            "artifact_bytes": 353506417008,
+            "artifact_bytes_added": 71485908
+          },
+          {
+            "since": "2026-09-29T01:00:00Z",
+            "until": "2026-09-29T01:59:59.999999999Z",
+            "runs_created": 34,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 14,
+            "artifact_bytes": 353640059366,
+            "artifact_bytes_added": 164718928
+          },
+          {
+            "since": "2026-09-29T02:00:00Z",
+            "until": "2026-09-29T02:59:59.999999999Z",
+            "runs_created": 44,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 5,
+            "artifact_bytes": 353699261365,
+            "artifact_bytes_added": 102216467
+          },
+          {
+            "since": "2026-09-29T03:00:00Z",
+            "until": "2026-09-29T03:59:59.999999999Z",
+            "runs_created": 22,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 13,
+            "artifact_bytes": 353808352836,
+            "artifact_bytes_added": 121566806
+          },
+          {
+            "since": "2026-09-29T04:00:00Z",
+            "until": "2026-09-29T04:59:59.999999999Z",
+            "runs_created": 58,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 6,
+            "artifact_bytes": 353851051576,
+            "artifact_bytes_added": 83689737
+          },
+          {
+            "since": "2026-09-29T05:00:00Z",
+            "until": "2026-09-29T05:59:59.999999999Z",
+            "runs_created": 39,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 13,
+            "artifact_bytes": 353963651075,
+            "artifact_bytes_added": 113383994
+          },
+          {
+            "since": "2026-09-29T06:00:00Z",
+            "until": "2026-09-29T06:59:59.999999999Z",
+            "runs_created": 23,
+            "runs_refused": 0,
+            "tasks_in_flight_max": 11,
+            "artifact_bytes": 353997134872,
+            "artifact_bytes_added": 75762480
+          }
+        ]
+      }
+    }
   }
 }

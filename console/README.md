@@ -31,6 +31,7 @@ Shipped in the build:
 | Package | Why |
 | --- | --- |
 | `svelte` | The framework, compiled into the code that updates each component, so the browser loads a small runtime rather than a library. The site records the choice and its reasons (#ui). MIT. |
+| `uplot` | The charts, 51 kB and no dependency of its own, drawing on a canvas with zoom by dragging and a readout kept in step across a page's charts. The site records the choice and the others weighed (#console-statistics). MIT. |
 | `openapi-fetch` | The client, typed from the paths `openapi-typescript` generates, a thin layer over `fetch` that adds nothing of its own at run time. MIT. |
 | `@fontsource-variable/archivo`, `@fontsource-variable/jetbrains-mono` | The design system's two faces, as variable fonts served from the console's own files, since a font service would learn who opens the console and when. Only the Latin subsets are loaded. SIL Open Font License 1.1. |
 
