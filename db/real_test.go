@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/internal/dbtest/dbname"
+	"github.com/agentiik/agentiik/internal/dbtest/dbtemplate"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -38,7 +39,7 @@ import (
 // every namespace check in this package is also a check of what Provision grants.
 func database(t *testing.T) (super string, app string) {
 	t.Helper()
-	super, role := blank(t)
+	super, role := copied(t)
 
 	ctx := t.Context()
 	sc, err := pgx.Connect(ctx, super)
@@ -57,6 +58,19 @@ func database(t *testing.T) (super string, app string) {
 // created yet.
 func blank(t *testing.T) (super string, role string) {
 	t.Helper()
+	return prepared(t, false)
+}
+
+// copied is blank with every migration applied: a copy of the database dbtemplate built them into
+// once, rather than a database migrated again for every test, and no role yet.
+func copied(t *testing.T) (super string, role string) {
+	t.Helper()
+	return prepared(t, true)
+}
+
+// prepared is blank, or copied where migrated says so.
+func prepared(t *testing.T, migrated bool) (super string, role string) {
+	t.Helper()
 	url := os.Getenv("AGENTIIK_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("no PostgreSQL on this machine: set AGENTIIK_TEST_DATABASE_URL")
@@ -69,6 +83,26 @@ func blank(t *testing.T) (super string, role string) {
 	}
 	defer conn.Close(ctx)
 
+	from := ""
+	if migrated {
+		all, err := Migrations()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema []byte
+		for _, m := range all {
+			schema = append(append(append(append(schema, m.Name...), 0), m.SQL...), 0)
+		}
+		template, err := dbtemplate.Named(ctx, url, schema, func(ctx context.Context, c *pgx.Conn) error {
+			_, err := Migrate(ctx, c)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("the migrated database every test's is copied from could not be built: %s", err)
+		}
+		from = " template " + template
+	}
+
 	// One database per test, so that two tests cannot see each other's rows, under a name
 	// no test of another package shares.
 	name := dbname.Of(t)
@@ -77,7 +111,7 @@ func blank(t *testing.T) (super string, role string) {
 	for _, stmt := range []string{
 		fmt.Sprintf(`drop database if exists %s with (force)`, name),
 		`drop role if exists ` + name,
-		fmt.Sprintf(`create database %s`, name),
+		fmt.Sprintf(`create database %s%s`, name, from),
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("%s: %s", stmt, err)
