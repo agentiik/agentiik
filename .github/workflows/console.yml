@@ -1,0 +1,39 @@
+name: console
+
+# The web console, built and tested on its own: the client generated from openapi.json, regenerated
+# here and compared with the one committed so that the two never differ; its types and components;
+# its tests on recorded answers of the API; and its build, which package console then has the API
+# accept, as agentiik-api would carry it.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - name: the client is the one openapi.json generates
+        run: npm run generate && git diff --exit-code -- src/api/schema.d.ts
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: the build is one the API serves
+        run: go test ./console
+        working-directory: .

@@ -1,0 +1,241 @@
+{
+  "GET /api/v1/me": {
+    "status": 200,
+    "body": {
+      "principal": "alice",
+      "admin": false,
+      "user": {
+        "kind": "user",
+        "login": "alice",
+        "display_name": "Alice Martin",
+        "admin": false,
+        "suspended": false,
+        "created_at": "2026-09-27T08:50:00Z"
+      },
+      "groups": [
+        "group:team-finance"
+      ],
+      "permissions": {
+        "alice": [
+          "workflow:read",
+          "workflow:run",
+          "workflow:write",
+          "workflow:delete",
+          "run:read",
+          "run:read_data",
+          "secret:use",
+          "secret:write",
+          "grant:manage"
+        ],
+        "finance": [
+          "workflow:read",
+          "workflow:run",
+          "workflow:write",
+          "run:read",
+          "run:read_data",
+          "secret:use"
+        ],
+        "team-ops": [
+          "workflow:read",
+          "run:read"
+        ]
+      },
+      "notifications": [
+        {
+          "id": "01M2AG2R4T6W8Y0A2C4E6G8J0M",
+          "kind": "passkey_counter_refused",
+          "at": "2026-09-29T15:10:00Z",
+          "credential": "aVBob25lUGFzc2tleQ"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/namespaces": {
+    "status": 200,
+    "body": {
+      "namespaces": [
+        {
+          "name": "alice",
+          "kind": "personal",
+          "owner": "alice",
+          "quotas": {
+            "max_concurrent_tasks": 20,
+            "max_retention_days": 90
+          }
+        },
+        {
+          "name": "finance",
+          "kind": "shared",
+          "owner": "group:finance-leads",
+          "quotas": {
+            "max_concurrent_tasks": 20,
+            "max_runs_per_hour": 500,
+            "max_retention_days": 30
+          }
+        },
+        {
+          "name": "team-ops",
+          "kind": "shared",
+          "owner": "group:ops",
+          "quotas": {
+            "max_concurrent_tasks": 10,
+            "max_retention_days": 30
+          }
+        }
+      ]
+    }
+  },
+  "GET /api/v1/runs": {
+    "status": 200,
+    "body": {
+      "runs": [
+        {
+          "namespace": "finance",
+          "run": "01JMZ8W4K2R7QX6T1N3P5V7Y9A",
+          "workflow": "monthly-invoicing",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "running",
+          "trigger_kind": "schedule",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T06:00:12Z",
+          "started_at": "2026-09-30T06:00:12Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+          "workflow": "monthly-invoicing",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "failed",
+          "trigger_kind": "manual",
+          "triggered_by": "alice",
+          "created_at": "2026-09-30T05:41:03Z",
+          "started_at": "2026-09-30T05:41:03Z",
+          "finished_at": "2026-09-30T05:42:55Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8T7B2M0QK2N4D6F8H0A2C",
+          "workflow": "dunning-reminders",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "failed",
+          "trigger_kind": "schedule",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T05:30:00Z",
+          "started_at": "2026-09-30T05:30:00Z",
+          "finished_at": "2026-09-30T05:30:22Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8S3H6X8QK2N4D6F8H0A2D",
+          "workflow": "ledger-export",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "running",
+          "trigger_kind": "webhook",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T05:28:44Z",
+          "started_at": "2026-09-30T05:28:45Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8R0D4K2QK2N4D6F8H0A2E",
+          "workflow": "vat-reconcile",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "queued",
+          "trigger_kind": "event",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T05:22:10Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8Q6F1T7QK2N4D6F8H0A2F",
+          "workflow": "monthly-invoicing",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "succeeded",
+          "trigger_kind": "manual",
+          "triggered_by": "bruno",
+          "created_at": "2026-09-30T04:58:31Z",
+          "started_at": "2026-09-30T04:58:31Z",
+          "finished_at": "2026-09-30T05:02:18Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8P2N8Y5QK2N4D6F8H0A2G",
+          "workflow": "ledger-export",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "succeeded",
+          "trigger_kind": "webhook",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T04:41:09Z",
+          "started_at": "2026-09-30T04:41:09Z",
+          "finished_at": "2026-09-30T04:42:07Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8N9J3W1QK2N4D6F8H0A2H",
+          "workflow": "vat-reconcile",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "cancelled",
+          "trigger_kind": "manual",
+          "triggered_by": "alice",
+          "created_at": "2026-09-30T04:12:55Z",
+          "started_at": "2026-09-30T04:12:55Z",
+          "finished_at": "2026-09-30T04:15:11Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8M5Z7Q3QK2N4D6F8H0A2J",
+          "workflow": "dunning-reminders",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "succeeded",
+          "trigger_kind": "schedule",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T03:30:00Z",
+          "started_at": "2026-09-30T03:30:00Z",
+          "finished_at": "2026-09-30T03:30:41Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8K1V4R9QK2N4D6F8H0A2K",
+          "workflow": "ledger-export",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "succeeded",
+          "trigger_kind": "webhook",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T02:41:12Z",
+          "started_at": "2026-09-30T02:41:12Z",
+          "finished_at": "2026-09-30T02:42:15Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8H8C0L6QK2N4D6F8H0A2M",
+          "workflow": "monthly-invoicing",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "succeeded",
+          "trigger_kind": "schedule",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T02:00:07Z",
+          "started_at": "2026-09-30T02:00:07Z",
+          "finished_at": "2026-09-30T02:04:29Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01JMZ8G4X6D2QK2N4D6F8H0A2N",
+          "workflow": "vat-reconcile",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "timed_out",
+          "trigger_kind": "event",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-09-30T01:18:39Z",
+          "started_at": "2026-09-30T01:18:39Z",
+          "finished_at": "2026-09-30T01:28:30Z"
+        }
+      ]
+    }
+  },
+  "DELETE /api/v1/me/notifications/01M2AG2R4T6W8Y0A2C4E6G8J0M": {
+    "status": 204
+  },
+  "POST /api/v1/auth/sign-out": {
+    "status": 204
+  }
+}

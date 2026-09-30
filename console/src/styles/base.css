@@ -1,0 +1,122 @@
+/* What every screen of the console shares, on the design system's tokens: the ground, the two faces
+   and the sizes they are set in. Components style themselves; this is what they stand on. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--type-body-font);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#console {
+  height: 100%;
+  min-width: var(--window-min);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: var(--border-focus) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mono {
+  font-family: var(--type-identifier-font);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.faint {
+  color: var(--faint);
+}
+
+/* What a screen reader reads and a sighted reader does not need written out. */
+.unseen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A control: a button drawn on the raised surface, or in the accent for the one act a screen is for. */
+.control {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--unit) * 3);
+  height: 29px;
+  padding: 0 calc(var(--unit) * 5);
+  border: var(--border-hairline) solid var(--lineStrong);
+  border-radius: var(--radius-control);
+  background: var(--raised);
+  font-family: var(--type-control-font);
+  font-size: var(--type-control-size);
+  font-weight: var(--type-control-weight);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.control:hover {
+  border-color: var(--faint);
+}
+
+.control.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--onAccent);
+}
+
+.control:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 19px;
+  padding: 0 calc(var(--unit) * 2);
+  border: var(--border-hairline) solid var(--lineStrong);
+  border-radius: var(--radius-chip);
+  background: var(--raised);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
