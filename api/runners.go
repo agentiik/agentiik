@@ -187,6 +187,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		{"POST", "/api/v1/runner-pools/{pool}/join-tokens", s.issue},
 		{"POST", "/api/v1/runners/{runner}/drain", s.drain},
 		{"POST", "/api/v1/runners/{runner}/revoke", s.revoke},
+		{"GET", "/api/v1/stats/pools", s.poolStatistics},
 	} {
 		if err := rt.Handle(r.method, r.pattern, admin, r.handler); err != nil {
 			return nil, err

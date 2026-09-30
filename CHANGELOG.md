@@ -6,7 +6,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Upgrading
 
-- `init` applies migrations 0063 and 0064 with nothing to do. 0063 adds `tasks.ready_at`, when a task could first be handed out, null on the tasks written before, which no series counts a queue wait for. 0064 adds `run_refusals`, empty: the runs a namespace is refused for `max_runs_per_hour` from this release on, a count a minute.
+- `init` applies migrations 0063 to 0065 with nothing to do. 0063 adds `tasks.ready_at`, when a task could first be handed out, null on the tasks written before, which no series counts a queue wait for. 0064 adds `run_refusals`, empty: the runs a namespace is refused for `max_runs_per_hour` from this release on, a count a minute. 0065 adds `runner_silences`, empty, and `runner_capacity`, holding what each runner not revoked offers as the release starts.
 
 ### API
 
@@ -18,6 +18,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `GET /api/v1/{ns}/stats/ports?workflow=` answers what each step of one workflow published, port by port, bucket by bucket: the items of each envelope as the step's record counts them, never its items, so `run:read_data` is never asked. Every port the latest version declares is named, 0 where it published nothing. A workflow the caller does not hold `run:read` on is answered `404`, as one that does not exist. `Accept: text/csv` has it in CSV.
 - `GET /api/v1/{ns}/stats/quotas` answers a namespace's load bucket by bucket beside its quotas as they stand now: the runs created and those refused for `max_runs_per_hour`, the most tasks in flight at once, and the artifact bytes `max_artifact_bytes` counted at each bucket's end and those written in it, each digest once. Read by whoever reads the namespace's quotas. `Accept: text/csv` has it in CSV, each quota a column beside the series it bounds.
 - A run refused for `max_runs_per_hour` is counted, a minute at a time, whatever asked for it: a request answered 429, a schedule or an event firing recorded as skipped, or a call failed. The minutes older than the namespace's `max_retention_days` are let go as another is written.
+- `GET /api/v1/stats/pools` answers administrators every pool's slots and each of its runners', bucket by bucket: the most tasks held at once, from when the runner redeemed each to when it ended, and what the runners offered at the bucket's end, their concurrency while ready and reporting ready, nothing while drained, draining, unhealthy or revoked, and nothing once silent for 30 seconds. Beside them every silence of 20 seconds or more between a runner's heartbeats that began over the range, with its length and the tasks the sweep declared lost in it, a silence still going counted to the range's end. `Accept: text/csv` has the slots in CSV. Served at that path alone, so that a namespace named `stats` made before v0.3.0 keeps every route of its own.
+- A heartbeat writes the silence since the one before where they are 20 seconds or more apart, and what its runner offers where it changed: the history the chart of the pools reads, which `runners` keeps only the latest of.
 - A task's queue wait runs from when it could be handed out, its creation or, for a further attempt, the end of its retry's backoff, which is the step's policy rather than a wait for room, to its dispatch; a wait a skew between two clocks reads below zero is counted as none.
 
 ## v0.5.0, 2026-09-30

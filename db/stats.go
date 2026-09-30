@@ -704,3 +704,251 @@ func (n *NS) QuotaStatistics(ctx context.Context, b Buckets) ([]QuotaBucket, err
 	}
 	return out, nil
 }
+
+// SlotBucket is what a runner, or a pool's runners together, held and offered in one bucket: the
+// most tasks at once it held, and what it offered at the bucket's end.
+type SlotBucket struct {
+	InUseMax int
+	Capacity int64
+}
+
+// RunnerSilence is one silence between two heartbeats of a runner of Silence or more: from the
+// last heartbeat before it, lasting until the next, or until the end of the range for one still
+// going, and the tasks of the runner the sweep declared lost in it.
+type RunnerSilence struct {
+	At        time.Time
+	Length    time.Duration
+	TasksLost int
+}
+
+// RunnerSeries is one runner's slots, bucket by bucket, and its silences over the range.
+type RunnerSeries struct {
+	Runner   string
+	Buckets  []SlotBucket
+	Silences []RunnerSilence
+}
+
+// PoolSeries is one pool's slots, its runners' together, bucket by bucket, and each runner's.
+type PoolSeries struct {
+	Pool    string
+	Buckets []SlotBucket
+	Runners []RunnerSeries
+}
+
+// lostAfter is LostAfter as an interval SQL reads: how long a runner is silent before the sweep
+// declares its tasks lost, and from which it is counted as offering nothing.
+var lostAfter = fmt.Sprintf("%d seconds", int(LostAfter/time.Second))
+
+// PoolStatistics answers every pool, by name, with its runners, by name, bucket by bucket: those
+// that were in it at any time over the range, whether or not they are there now. A task holds a
+// slot of its runner from when the runner redeemed it, or started it where no redemption is
+// recorded, to when it ended, or until now for one that has not. A runner offers what it last
+// wrote at the bucket's end, or nothing once it has been silent for lostAfter.
+func (w *Wide) PoolStatistics(ctx context.Context, b Buckets) ([]PoolSeries, error) {
+	if err := b.check(); err != nil {
+		return nil, err
+	}
+	zero := func() []SlotBucket { return make([]SlotBucket, b.Count) }
+	var pools []PoolSeries
+	at := map[string]int{}
+	rows, err := w.tx.Query(ctx, `select name from runner_pools order by name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the pools could not be read: %w", err)
+	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("db: the pools could not be read: %w", err)
+		}
+		at[name] = len(pools)
+		pools = append(pools, PoolSeries{Pool: name, Buckets: zero(), Runners: []RunnerSeries{}})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: the pools could not be read: %w", err)
+	}
+
+	args := []any{b.First, b.End(), b.Width.Seconds()}
+	// The runners that were in a pool at any time over the range: joined before its end and heard,
+	// or joined, within lostAfter of its start or later.
+	rows, err = w.tx.Query(ctx, `
+		select id, pool from runners
+		where joined_at < $2
+		  and coalesce(last_heartbeat_at, joined_at) > $1::timestamptz - interval '`+lostAfter+`'
+		order by pool, id`, b.First, b.End())
+	if err != nil {
+		return nil, fmt.Errorf("db: the runners could not be read: %w", err)
+	}
+	where := map[string][2]int{}
+	var runners []string
+	for rows.Next() {
+		var id, pool string
+		if err := rows.Scan(&id, &pool); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("db: the runners could not be read: %w", err)
+		}
+		p, ok := at[pool]
+		if !ok {
+			continue
+		}
+		where[id] = [2]int{p, len(pools[p].Runners)}
+		pools[p].Runners = append(pools[p].Runners, RunnerSeries{Runner: id, Buckets: zero(), Silences: []RunnerSilence{}})
+		runners = append(runners, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: the runners could not be read: %w", err)
+	}
+	if len(runners) == 0 {
+		return pools, nil
+	}
+	runner := func(id string) *RunnerSeries {
+		w := where[id]
+		return &pools[w[0]].Runners[w[1]]
+	}
+
+	// The slots held, as a level per runner and per pool that rises and falls where a task is taken
+	// and ends, read at each bucket's highest and carried into the next from where the bucket
+	// before left it. Instants are merged, so that a task ending as another is taken is not two.
+	rows, err = w.tx.Query(ctx, `
+		with held as (
+		  select t.runner, r.pool,
+		         greatest(coalesce((select min(g.redeemed_at) from task_grants g
+		                             where g.namespace = t.namespace and g.task_id = t.id),
+		                           t.started_at, t.dispatched_at), $1::timestamptz) as began,
+		         coalesce(t.finished_at,
+		                  case when t.state in ('succeeded', 'failed', 'lost', 'timed_out', 'cancelled')
+		                       then coalesce(t.started_at, t.dispatched_at) else now() end) as ended
+		  from tasks t
+		  join runners r on r.id = t.runner
+		  where t.runner = any($4) and coalesce(t.started_at, t.dispatched_at) < $2
+		),
+		changes as (
+		  select grp, at, sum(d) as d from (
+		    select 'r' || runner as grp, began as at, 1 as d from held where ended > began
+		    union all
+		    select 'r' || runner, ended, -1 from held where ended > began and ended < $2
+		    union all
+		    select 'p' || pool, began, 1 from held where ended > began
+		    union all
+		    select 'p' || pool, ended, -1 from held where ended > began and ended < $2
+		  ) c
+		  group by grp, at
+		),
+		levels as (
+		  select grp, at, sum(d) over (partition by grp order by at) as level from changes
+		)
+		select grp, floor(extract(epoch from at - $1::timestamptz) / $3::float8)::int,
+		       max(level), (array_agg(level order by at desc))[1]
+		from levels
+		group by 1, 2
+		order by 1, 2`, append(args, runners)...)
+	if err != nil {
+		return nil, fmt.Errorf("db: the slots held could not be counted: %w", err)
+	}
+	type read struct{ high, last int }
+	levels := map[string]map[int]read{}
+	for rows.Next() {
+		var grp string
+		var i int
+		var high, last int64
+		if err := rows.Scan(&grp, &i, &high, &last); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("db: the slots held could not be counted: %w", err)
+		}
+		if levels[grp] == nil {
+			levels[grp] = map[int]read{}
+		}
+		levels[grp][i] = read{int(high), int(last)}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: the slots held could not be counted: %w", err)
+	}
+	carry := func(grp string, into []SlotBucket) {
+		carried := 0
+		for i := range into {
+			into[i].InUseMax = carried
+			if l, changed := levels[grp][i]; changed {
+				into[i].InUseMax, carried = max(carried, l.high), l.last
+			}
+		}
+	}
+	for p := range pools {
+		carry("p"+pools[p].Pool, pools[p].Buckets)
+		for r := range pools[p].Runners {
+			carry("r"+pools[p].Runners[r].Runner, pools[p].Runners[r].Buckets)
+		}
+	}
+
+	// What each runner offered at each bucket's end, or at now for a bucket that has not ended.
+	rows, err = w.tx.Query(ctx, `
+		select r.id, e.i,
+		       case when r.joined_at > e.at then 0
+		            when exists (select 1 from runner_silences s
+		                         where s.runner = r.id and e.at >= s.began + interval '`+lostAfter+`' and e.at < s.ended) then 0
+		            when r.last_heartbeat_at is not null and e.at >= r.last_heartbeat_at + interval '`+lostAfter+`' then 0
+		            else coalesce((select c.capacity from runner_capacity c
+		                           where c.runner = r.id and c.at <= e.at order by c.at desc limit 1), 0)
+		       end
+		from runners r
+		cross join lateral (
+		  select i, least($1::timestamptz + make_interval(secs => (i + 1) * $3::float8), now()) as at
+		  from generate_series(0, `+fmt.Sprint(b.Count-1)+`) i
+		) e
+		where r.id = any($4) and e.at <= $2::timestamptz`, append(args, runners)...)
+	if err != nil {
+		return nil, fmt.Errorf("db: what the runners offered could not be read: %w", err)
+	}
+	for rows.Next() {
+		var id string
+		var i int
+		var capacity int64
+		if err := rows.Scan(&id, &i, &capacity); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("db: what the runners offered could not be read: %w", err)
+		}
+		if i < 0 || i >= b.Count {
+			continue
+		}
+		runner(id).Buckets[i].Capacity = capacity
+		pools[where[id][0]].Buckets[i].Capacity += capacity
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: what the runners offered could not be read: %w", err)
+	}
+
+	// The silences that began over the range, those written and the one still going, with the
+	// runner's tasks the sweep declared lost in each.
+	rows, err = w.tx.Query(ctx, `
+		with silences as (
+		  select runner, began, ended from runner_silences
+		  where runner = any($3) and began >= $1 and began < $2
+		  union all
+		  select id, last_heartbeat_at, least($2::timestamptz, now()) from runners
+		  where id = any($3) and last_heartbeat_at >= $1 and last_heartbeat_at < $2
+		    and least($2::timestamptz, now()) >= last_heartbeat_at + interval '`+fmt.Sprintf("%d seconds", int(Silence/time.Second))+`'
+		)
+		select s.runner, s.began, s.ended,
+		       (select count(*) from tasks t
+		         where t.runner = s.runner and t.state = 'lost' and t.finished_at >= s.began and t.finished_at <= s.ended)
+		from silences s
+		order by s.runner, s.began`, b.First, b.End(), runners)
+	if err != nil {
+		return nil, fmt.Errorf("db: the runners' silences could not be read: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var began, ended time.Time
+		var lost int
+		if err := rows.Scan(&id, &began, &ended, &lost); err != nil {
+			return nil, fmt.Errorf("db: the runners' silences could not be read: %w", err)
+		}
+		r := runner(id)
+		r.Silences = append(r.Silences, RunnerSilence{At: began, Length: ended.Sub(began), TasksLost: lost})
+	}
+	return pools, rows.Err()
+}
