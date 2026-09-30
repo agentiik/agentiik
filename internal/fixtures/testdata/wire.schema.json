@@ -3145,6 +3145,25 @@
         "timed_out"
       ]
     },
+    "triggerKind": {
+      "title": "Trigger kind",
+      "description": "What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it.",
+      "type": "string",
+      "enum": [
+        "manual",
+        "schedule",
+        "webhook",
+        "event",
+        "mcp",
+        "terraform",
+        "workflow"
+      ],
+      "examples": [
+        "schedule",
+        "manual",
+        "workflow"
+      ]
+    },
     "taskState": {
       "title": "Task state",
       "description": "Where one task is, in the nine states the documentation names. The four endings are told apart on purpose and never collapsed: failed is charged to the brick and its exit code says which band it falls in; lost is charged to the infrastructure, is declared only by the absence of three heartbeats, and is requeued only where the step is idempotent; timed_out is the attempt stopped at its deadline, where nothing decided anything and there is no exit code of its own to read; and cancelled is somebody stopping the run, which is not a property of the work at all. A retry policy reads the cause, so a vocabulary that folded them together would make retry.on answer a deadline the way it answers a bad minute.",
@@ -6597,6 +6616,181 @@
           }
         }
       ]
+    },
+    "run": {
+      "title": "Run",
+      "description": "One execution of one workflow at one commit, as the API lists and reads it: where it is, what it pins, how far it got, and what started it on whose behalf. Every run names its trigger kind and the principal it is attributed to, whatever created it, since a run appearing with neither is one nobody can account for.",
+      "type": "object",
+      "required": [
+        "namespace",
+        "run",
+        "workflow",
+        "commit",
+        "state",
+        "trigger_kind",
+        "triggered_by",
+        "created_at"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "A run another workflow called names its caller, and no other run does.",
+          "if": {
+            "properties": {
+              "trigger_kind": {
+                "const": "workflow"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "from"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "from"
+              ]
+            }
+          }
+        }
+      ],
+      "examples": [
+        {
+          "namespace": "finance",
+          "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+          "workflow": "monthly-invoicing",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "state": "succeeded",
+          "trigger_kind": "schedule",
+          "triggered_by": "finance/agentiik",
+          "created_at": "2026-10-01T04:03:12Z",
+          "started_at": "2026-10-01T04:03:13Z",
+          "finished_at": "2026-10-01T04:09:41Z"
+        },
+        {
+          "namespace": "finance",
+          "run": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "workflow": "common",
+          "commit": "0f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
+          "state": "running",
+          "trigger_kind": "workflow",
+          "triggered_by": "finance/agentiik",
+          "from": {
+            "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+            "step": "remind"
+          },
+          "created_at": "2026-10-01T04:05:02Z",
+          "started_at": "2026-10-01T04:05:02Z"
+        }
+      ],
+      "properties": {
+        "namespace": {
+          "$ref": "#/$defs/namespace",
+          "description": "The namespace the run is in, whose quotas it is charged to and whose grants decide who reads it.",
+          "examples": [
+            "finance"
+          ]
+        },
+        "run": {
+          "$ref": "#/$defs/ulid",
+          "description": "The run's identifier.",
+          "examples": [
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          ]
+        },
+        "workflow": {
+          "$ref": "#/$defs/identifier",
+          "description": "The workflow it is a run of, within its namespace.",
+          "examples": [
+            "monthly-invoicing"
+          ]
+        },
+        "commit": {
+          "$ref": "#/$defs/commit",
+          "description": "The commit the run is pinned to: its ref resolved when the run was created, the default branch for a schedule, a webhook or an event, whatever the ref does next.",
+          "examples": [
+            "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/runState",
+          "description": "Where the run is.",
+          "examples": [
+            "queued",
+            "succeeded"
+          ]
+        },
+        "trigger_kind": {
+          "$ref": "#/$defs/triggerKind",
+          "description": "What started it.",
+          "examples": [
+            "schedule",
+            "manual"
+          ]
+        },
+        "triggered_by": {
+          "$ref": "#/$defs/principalRef",
+          "description": "The principal the run is attributed to and whose grants it is let in by: the namespace's built-in identity for a schedule, a webhook or an event; the person, the MCP client's or the token's principal for the kinds somebody asks for; and for a call from another workflow, the principal its caller is attributed to, since a call is that run asking.",
+          "examples": [
+            "finance/agentiik",
+            "alice"
+          ]
+        },
+        "from": {
+          "description": "The run and the step that called this one, for a run whose trigger_kind is workflow. The caller may be in another namespace, and is named all the same: the callee's reader learns which run asked, and reading that run is still held to its own namespace's grants.",
+          "type": "object",
+          "required": [
+            "run",
+            "step"
+          ],
+          "additionalProperties": false,
+          "examples": [
+            {
+              "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+              "step": "remind"
+            }
+          ],
+          "properties": {
+            "run": {
+              "$ref": "#/$defs/ulid",
+              "description": "The calling run.",
+              "examples": [
+                "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+              ]
+            },
+            "step": {
+              "$ref": "#/$defs/identifier",
+              "description": "The workflow: step of the calling run that made the call.",
+              "examples": [
+                "remind"
+              ]
+            }
+          }
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the run was written, which for a schedule is when it fired and not the occurrence it fired for.",
+          "examples": [
+            "2026-10-01T04:03:12Z"
+          ]
+        },
+        "started_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it was let in and its first step became runnable. Absent while it is queued.",
+          "examples": [
+            "2026-10-01T04:03:13Z"
+          ]
+        },
+        "finished_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it reached a terminal state. Absent until then.",
+          "examples": [
+            "2026-10-01T04:09:41Z"
+          ]
+        }
+      }
     }
   }
 }

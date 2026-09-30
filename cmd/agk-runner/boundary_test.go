@@ -63,6 +63,7 @@ var runnerMayImport = map[string]bool{
 	"graph":           true,
 	"schema":          true,
 	"internal/docker": true,
+	"internal/cron":   true, // a schedule's expression, which the evaluator's validator reads
 	"internal/expr":   true,
 	"internal/ulid":   true,
 	// The bound on what a YAML document's aliases stand for, which a manifest read out of an

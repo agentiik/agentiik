@@ -1,0 +1,15 @@
+{
+  "namespace": "finance",
+  "run": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+  "workflow": "common",
+  "commit": "0f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
+  "state": "running",
+  "trigger_kind": "workflow",
+  "triggered_by": "finance/agentiik",
+  "from": {
+    "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+    "step": "remind"
+  },
+  "created_at": "2026-10-01T04:05:02Z",
+  "started_at": "2026-10-01T04:05:02Z"
+}

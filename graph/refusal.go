@@ -18,7 +18,7 @@ var ErrRefused = errors.New("the workflow is refused")
 // then one lookup rather than a translation table somebody has to keep in step. The
 // corpus marks each invalid workflow refused_by "schema" or "validator": everything
 // marked schema is shape, which closed decoding gives for nothing and which is refused
-// here by an ordinary error naming the key, and the fifteen marked validator are, item
+// here by an ordinary error naming the key, and the nineteen marked validator are, item
 // for item, the rules below that carry a corpus name.
 type Rule string
 
@@ -144,6 +144,28 @@ const (
 	RuleOnInIncludedFile          Rule = "on-in-included-file"
 	RuleConcurrencyInIncludedFile Rule = "concurrency-in-included-file"
 	RuleTimeoutInIncludedFile     Rule = "timeout-in-included-file"
+)
+
+// The rules about the triggers a workflow declares, each one what the schema lets through and
+// the Triggers chapter refuses.
+const (
+	// RuleCronValueOutOfRange is a schedule whose five fields are cron's shape and name a value
+	// its field does not count, a minute of 60, a step of 0, a range written backwards, or no
+	// day that comes, the 30th of February: an occurrence that never comes.
+	RuleCronValueOutOfRange Rule = "cron-value-out-of-range"
+	// RuleTimezoneUnknown is a schedule's zone written as a name the IANA time zone database
+	// does not hold, so that no instant can be read from it.
+	RuleTimezoneUnknown Rule = "timezone-unknown"
+	// RuleWebhookOutputNotDeclared is a sync webhook answering with an output the workflow does
+	// not declare: what a caller is answered with is one of the workflow's own outputs.
+	RuleWebhookOutputNotDeclared Rule = "webhook-output-not-declared"
+	// RuleWebhookMapInputNotDeclared is a webhook's map filling an input the workflow does not
+	// declare: map builds the run's inputs, each validated against its schema before the run
+	// exists, and an input nobody declared has none.
+	RuleWebhookMapInputNotDeclared Rule = "webhook-map-input-not-declared"
+	// RuleWebhookDuplicatePath is two webhooks answering one path with one method: "within a
+	// namespace a path and a method answer one trigger".
+	RuleWebhookDuplicatePath Rule = "webhook-duplicate-path"
 	// RulePortPastBound is a port past agk.PortMaxBytes, wherever it is written: "a port
 	// becomes the file <name>.json, which a filesystem holds to 255 characters with its
 	// suffix". The value is the name the corpus files the fixture pinning it under.

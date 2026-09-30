@@ -1,0 +1,12 @@
+{
+  "namespace": "finance",
+  "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+  "workflow": "monthly-invoicing",
+  "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+  "state": "succeeded",
+  "trigger_kind": "schedule",
+  "triggered_by": "finance/agentiik",
+  "created_at": "2026-10-01T04:03:12Z",
+  "started_at": "2026-10-01T04:03:13Z",
+  "finished_at": "2026-10-01T04:09:41Z"
+}

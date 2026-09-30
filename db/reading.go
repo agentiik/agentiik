@@ -66,7 +66,8 @@ type RunSummary struct {
 	Commit   string       `json:"commit"`
 	State    agk.RunState `json:"state"`
 
-	Trigger     agk.TriggerKind `json:"trigger"`
+	// Trigger is served as trigger_kind, the name an expression reads it by.
+	Trigger     agk.TriggerKind `json:"trigger_kind"`
 	TriggeredBy string          `json:"triggered_by,omitempty"`
 
 	CreatedAt  time.Time `json:"created_at"`

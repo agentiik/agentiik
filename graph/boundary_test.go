@@ -31,14 +31,16 @@ const boundaryModule = "github.com/agentiik/agentiik/"
 
 // insideTheModule is what the layout says the evaluator may reach for: the vocabulary,
 // the store, the brick contract, the schemas a user writes, the door CEL is behind, the
-// identifier mint that door and the vocabulary share, and the bound on what a YAML
-// document's aliases stand for, which the entry point and a manifest are held to before
-// either is read.
+// identifier mint that door and the vocabulary share, the bound on what a YAML document's
+// aliases stand for, which the entry point and a manifest are held to before either is
+// read, and the reader of a schedule's expression, which the validator and the controller
+// firing it have to read alike.
 var insideTheModule = map[string]bool{
 	"agk":                true,
 	"artifact":           true,
 	"brick":              true,
 	"schema":             true,
+	"internal/cron":      true,
 	"internal/expr":      true,
 	"internal/ulid":      true,
 	"internal/yamlbound": true,
@@ -213,6 +215,7 @@ func TestTheBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 		boundaryModule + "brick",
 		boundaryModule + "schema",
 		boundaryModule + "artifact",
+		boundaryModule + "internal/cron",
 		boundaryModule + "internal/expr",
 		boundaryModule + "internal/ulid",
 		"github.com/goccy/go-yaml",

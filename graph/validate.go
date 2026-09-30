@@ -32,6 +32,7 @@ func Check(wf *Workflow) error {
 		checkEdges,
 		checkCycles,
 		checkWorkflowOutputs,
+		checkTriggers,
 		checkMCP,
 		// The expression rules belong to this list too. They are checked where the
 		// scopes are known, because which roots a keyword may read depends on where

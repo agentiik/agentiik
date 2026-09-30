@@ -596,9 +596,11 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 				return nil, fmt.Errorf("controller: run %s cannot replay %s from %s: %s", e.Run, e.ReplayOf, e.ReplayFrom, why)
 			}
 		}
+		// TriggeredBy is carried in, so that run.triggered_by reads on a server what it reads
+		// locally: the principal the run is attributed to, and never an empty string.
 		return graph.Start(g, agk.Run{
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
-			Trigger: e.Trigger,
+			Trigger: e.Trigger, TriggeredBy: e.TriggeredBy,
 		}, graph.Options{Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound, Reuse: reuse}, now)
 	}
 

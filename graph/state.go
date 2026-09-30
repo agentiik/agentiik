@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -52,6 +53,42 @@ type State struct {
 	// A call that leaves the state as it was is no decision and does not move it,
 	// so a caller has nothing to write when it has not moved.
 	Seq int `json:"seq"`
+}
+
+// UnmarshalJSON reads a state as it is written, and as it was written before v0.5.0, whose run
+// carried its trigger kind as trigger rather than trigger_kind: a run in flight across the upgrade
+// resumes from a state an earlier release stored.
+//
+// Here rather than on agk.Run, whose method a struct embedding a run would take for its own and
+// then decode nothing else with.
+func (s *State) UnmarshalJSON(b []byte) error {
+	type written State
+	var v struct {
+		*written
+		// Run shadows the embedded field, so that the run is read apart, once, from its own bytes.
+		Run json.RawMessage `json:"run"`
+	}
+	v.written = (*written)(s)
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	if len(v.Run) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(v.Run, &s.Run); err != nil {
+		return err
+	}
+	var kind struct {
+		Now    *agk.TriggerKind `json:"trigger_kind"`
+		Before *agk.TriggerKind `json:"trigger"`
+	}
+	if err := json.Unmarshal(v.Run, &kind); err != nil {
+		return err
+	}
+	if kind.Now == nil && kind.Before != nil {
+		s.Run.Trigger = *kind.Before
+	}
+	return nil
 }
 
 // StepState is what has happened to one step: the verdict it has reached, the shards it

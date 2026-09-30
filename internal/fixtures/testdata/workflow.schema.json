@@ -93,7 +93,7 @@
     },
     "on": {
       "title": "Triggers",
-      "description": "What starts a run. A run started by a schedule, a webhook or an event is attributed to the namespace service identity rather than to whoever last edited the file, so production traffic does not stop when an author leaves. Three of the seven kinds of trigger are declared here; the other four are declared elsewhere or by the caller, and are listed in the comment beside this block.",
+      "description": "What starts a run. A run started by a schedule, a webhook or an event is attributed to the namespace service identity rather than to whoever last edited the file, so production traffic does not stop when an author leaves. Three of the seven kinds of trigger are declared here; the other four are declared elsewhere or by the caller, and are listed in the comment beside this block. A manual run needs no declaration: any principal holding workflow:run starts one, supplying the inputs the workflow declares under inputs.",
       "$comment": "The documentation names seven kinds of trigger and this block carries three of them, because the other four are not written here. manual is started from the API, the command line, the console or a mobile app by a principal holding workflow:run, which supplies the inputs at the call; its settings column reads inputs for that reason and not because a manual entry is declared in the file. mcp is declared in the mcp block, one entry per published tool. terraform is an apply by the provider, and workflow is a call from another workflow step, so both are the caller\u0027s to make. The documentation\u0027s own on block shows exactly these three, and a fourth key would be a spelling it never gives.",
       "type": "object",
       "minProperties": 1,
@@ -593,16 +593,19 @@
       "examples": [{ "cron": "0 6 1 * *", "timezone": "Europe/Paris", "jitter": "5m", "catch_up": false }],
       "properties": {
         "cron": {
-          "description": "Five-field cron expression, read in the timezone given beside it.",
+          "description": "Five-field cron expression: minute, hour, day of the month, month and day of the week, read in the timezone given beside it. A field is *, a value, a range a-b, * or a range stepped by /n, or a list of these joined by commas; a month may be written JAN to DEC and a day of the week SUN to SAT, with 0 and 7 both Sunday. Where both day fields are restricted, neither beginning with *, a day matching either runs, as in every cron since Vixie's. A value stepped alone, 5/15, is refused, since crons disagree on whether it means 5-59/15. No sixth field and no @daily: a schedule is read the same way by everyone who reads it, and five fields is what everyone reads.",
           "type": "string",
-          "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$",
-          "examples": ["0 6 1 * *", "*/15 * * * *"]
+          "pattern": "^(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?)(?:,(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?))*\\s+(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?)(?:,(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?))*\\s+(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?)(?:,(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?))*\\s+(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?)(?:,(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?))*\\s+(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?)(?:,(?:\\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?))*$",
+          "examples": ["0 6 1 * *", "*/15 * * * *", "30 7 * * MON-FRI", "0 0 1,15 * *"]
         },
         "timezone": {
-          "description": "IANA timezone the expression is read in, so that a schedule written for a country keeps its local hour across a daylight saving change.",
+          "description": "Name of the IANA time zone the expression is read in, so that a schedule written for a country keeps its local hour across a daylight saving change. UTC when absent, never the installation's own zone, so that one file fires at the same instants on every installation it is pushed to. An occurrence a change skips runs at the first instant after the gap, and one a change repeats runs once, at its first instance.",
           "type": "string",
-          "minLength": 1,
-          "examples": ["Europe/Paris", "UTC"]
+          "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*$",
+          "not": { "const": "Local" },
+          "maxLength": 64,
+          "default": "UTC",
+          "examples": ["Europe/Paris", "UTC", "America/Argentina/Buenos_Aires"]
         },
         "jitter": {
           "description": "Random delay of at most this long added to each occurrence, so that many workflows sharing an hour do not all start in the same second.",
@@ -610,7 +613,7 @@
           "examples": ["30s", "5m"]
         },
         "catch_up": {
-          "description": "Whether an occurrence missed during an outage is run once the engine is back. False by default, because a burst of late runs is rarely what a schedule meant.",
+          "description": "Whether the occurrences missed while no controller led are made up once one leads again, each exactly once and with the instant it was due as trigger.scheduled_for. False by default, because a burst of late runs is rarely what a schedule meant: a missed occurrence is then skipped, and the next one runs on time.",
           "type": "boolean",
           "default": false,
           "examples": [false, true]
@@ -623,32 +626,53 @@
       "type": "object",
       "required": ["path"],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "A sync response returns one workflow output, so it names which.",
+          "if": { "required": ["response"], "properties": { "response": { "const": "sync" } } },
+          "then": { "required": ["output"] }
+        },
+        {
+          "description": "An output is named only for a sync response: an async one answers with the run id before any output exists.",
+          "if": { "required": ["output"] },
+          "then": { "required": ["response"], "properties": { "response": { "const": "sync" } } }
+        }
+      ],
       "examples": [
-        { "path": "/invoicing", "method": "POST", "auth": "hmac", "map": { "orders": "${{ trigger.body.orders }}" } }
+        { "path": "/invoicing", "method": "POST", "auth": "hmac", "map": { "orders": "${{ trigger.body.orders }}" } },
+        { "path": "/quotes", "auth": "bearer", "response": "sync", "output": "quote" }
       ],
       "properties": {
         "path": {
-          "description": "Path the trigger answers on, below the namespaced prefix. Two namespaces can therefore use the same word without colliding.",
+          "description": "Path the trigger answers on, below the namespaced prefix. Two namespaces can therefore use the same word without colliding, and within one namespace a path and a method answer one trigger: a push arming a second is refused. Each segment starts with a letter, a digit, an underscore, a tilde or a hyphen, so that no segment is . or .. and no path climbs out of its namespace's prefix once a proxy normalises it.",
           "type": "string",
-          "pattern": "^/[A-Za-z0-9._~/-]*$",
+          "pattern": "^(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$",
+          "maxLength": 255,
           "examples": ["/invoicing", "/orders/approved"]
         },
         "method": {
-          "description": "HTTP method the trigger accepts. A request arriving with another one is refused before a run is created.",
+          "description": "HTTP method the trigger accepts. A request arriving with another one is refused before a run is created. POST when absent, the method a sender delivers an event with.",
           "type": "string",
           "pattern": "^[A-Z]+$",
-          "examples": ["POST"]
+          "default": "POST",
+          "examples": ["POST", "PUT"]
         },
         "auth": {
-          "description": "How the caller is proved: hmac over the raw body with a per-trigger secret, bearer for a token bound to a service account, mtls for client certificates, or none where the endpoint is deliberately open.",
+          "description": "How the caller is proved: hmac over the raw body with a per-trigger secret, bearer for a token bound to a service account, mtls for client certificates, or none where the endpoint is deliberately open. hmac when absent, so that an endpoint is open only where the file says none.",
           "enum": ["hmac", "bearer", "mtls", "none"],
+          "default": "hmac",
           "examples": ["hmac", "bearer"]
         },
         "response": {
-          "description": "What the caller gets back. async answers 202 with the run id; sync holds the request until the run finishes and returns a named workflow output.",
-          "$comment": "The documentation states that a sync response returns a named workflow output and gives no key that names which one. The enum stays bare rather than gaining an invented companion key: a webhook cannot yet write what the sentence describes, and the day the documentation spells that key it belongs here.",
+          "description": "What the caller gets back. async answers 202 with the run id; sync holds the request until the run finishes and returns the workflow output that output names. async when absent.",
           "enum": ["async", "sync"],
+          "default": "async",
           "examples": ["async", "sync"]
+        },
+        "output": {
+          "description": "The workflow output a sync response returns, one of those the file declares under outputs. Required with response: sync and refused without it.",
+          "$ref": "#/$defs/portName",
+          "examples": ["quote", "invoices"]
         },
         "map": {
           "description": "Fills workflow inputs from the request, through expressions over the trigger context. Without it a body is received and nothing reads it.",
