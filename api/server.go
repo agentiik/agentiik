@@ -228,6 +228,19 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			return nil, err
 		}
 	}
+	// A namespace's runs as series count what its listing lists, and are asked about each workflow
+	// the same way: an aggregate over runs discloses the runs.
+	if err := rt.HandleAcross("GET", "/api/v1/{namespace}/stats/runs", Across{Permission: RunRead}, s.runStatistics); err != nil {
+		return nil, err
+	}
+	// And one workflow's steps and what they published, the workflow named in the query and asked
+	// about the same way.
+	if err := rt.HandleAcross("GET", "/api/v1/{namespace}/stats/steps", Across{Permission: RunRead}, s.stepStatistics); err != nil {
+		return nil, err
+	}
+	if err := rt.HandleAcross("GET", "/api/v1/{namespace}/stats/ports", Across{Permission: RunRead}, s.portStatistics); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 

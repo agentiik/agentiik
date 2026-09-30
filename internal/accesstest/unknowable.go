@@ -121,13 +121,14 @@ var naming = map[string]any{
 // rest, where the routes a namespace's owner may ask are sent what takes them to a lookup.
 func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 	t.Helper()
-	asked := 0
+	asked, at := 0, time.Now()
 	for _, c := range Cases {
 		ids := identities(c.Pattern)
 		if len(ids) == 0 || c.Pattern == "/auth/assets/{name}" {
 			// The sign-in page's own files, which name nothing anybody holds.
 			continue
 		}
+		query := Pinned(c.Method, c.Pattern, at)
 		for _, within := range []string{"", HR} {
 			named, nothing := f.financial(c.Pattern), absent()
 			varying := ids
@@ -144,13 +145,13 @@ func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 				body = b
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			none := f.ask(t, ctx, c.Method, written(c.Pattern, nothing), who, body)
+			none := f.ask(t, ctx, c.Method, written(c.Pattern, nothing)+query, who, body)
 			for i := range varying {
 				mixed := maps.Clone(nothing)
 				for _, p := range varying[:i+1] {
 					mixed[p] = named[p]
 				}
-				path := written(c.Pattern, mixed)
+				path := written(c.Pattern, mixed) + query
 				a := f.ask(t, ctx, c.Method, path, who, body)
 				asked++
 				if diff := Difference(none, a); diff != "" {
@@ -167,7 +168,8 @@ func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 
 // unknowableByBody asks what names finance in a body or a query rather than a path, as who, where
 // it may ask it: a service account made in finance, a token minted for finance's, a grant in hr for
-// finance's service account and its built-in identity, and a listing of runs narrowed to finance.
+// finance's service account and its built-in identity, a listing of runs narrowed to finance, and
+// the steps of one of finance's workflows and what they published.
 // A refusal saying back what it was asked about says the caller's own words, which are replaced
 // before the two are compared.
 func (f *Fixture) unknowableByBody(t testing.TB, who Asker) {
@@ -189,6 +191,10 @@ func (f *Fixture) unknowableByBody(t testing.TB, who Asker) {
 		{"GET", "/api/v1/runs?namespace=nowhere", "/api/v1/runs?namespace=" + Finance, nil, nil},
 		{"GET", "/api/v1/runs?namespace=" + Finance + "&workflow=nothing", "/api/v1/runs?namespace=" + Finance + "&workflow=" + Invoicing, nil, nil},
 		{"GET", "/api/v1/" + Finance + "/runs?workflow=nothing", "/api/v1/" + Finance + "/runs?workflow=" + Invoicing, nil, nil},
+		{"GET", "/api/v1/nowhere/stats/steps?workflow=" + Invoicing, "/api/v1/" + Finance + "/stats/steps?workflow=" + Invoicing, nil, nil},
+		{"GET", "/api/v1/" + Finance + "/stats/steps?workflow=nothing", "/api/v1/" + Finance + "/stats/steps?workflow=" + Invoicing, nil, nil},
+		{"GET", "/api/v1/nowhere/stats/ports?workflow=" + Invoicing, "/api/v1/" + Finance + "/stats/ports?workflow=" + Invoicing, nil, nil},
+		{"GET", "/api/v1/" + Finance + "/stats/ports?workflow=nothing", "/api/v1/" + Finance + "/stats/ports?workflow=" + Invoicing, nil, nil},
 	} {
 		none := f.ask(t, t.Context(), c.method, c.absent, who, c.nothing)
 		a := f.ask(t, t.Context(), c.method, c.present, who, c.something)

@@ -157,13 +157,22 @@ func (co *Core) call(ctx context.Context, e db.Evaluation, t graph.Task, now tim
 	}
 
 	var run agk.RunID
+	var reached *db.RunsPerHourReached
 	err = co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		return w.Within(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
 			var err error
 			run, err = prepared.Create(ctx, ns)
+			if errors.As(err, &reached) {
+				// Committed rather than rolled back, so that the refusal counted where it was
+				// decided is kept for the chart of the namespace against its quotas.
+				return nil
+			}
 			return err
 		})
 	})
+	if err == nil && reached != nil {
+		err = reached
+	}
 	if errors.Is(err, db.ErrCalledAlready) {
 		// Made by another pass since this one looked.
 		return co.call(ctx, e, t, now)

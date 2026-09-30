@@ -127,11 +127,21 @@ func (s *Starter) Start(ctx context.Context, r Request) (Started, error) {
 		return Started{Commit: p.commit}, err
 	}
 	var run agk.RunID
+	var reached *db.RunsPerHourReached
 	err = s.pool.In(ctx, r.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
 		run, err = p.Create(ctx, ns)
+		if errors.As(err, &reached) {
+			// Committed rather than rolled back: the refusal is counted where it was decided, in
+			// this transaction, for the chart of the namespace against its quotas, and nothing
+			// else was written in it.
+			return nil
+		}
 		return err
 	})
+	if err == nil && reached != nil {
+		err = reached
+	}
 	if err != nil {
 		return Started{Commit: p.commit}, err
 	}

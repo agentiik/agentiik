@@ -27,6 +27,7 @@ import (
 
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest/dbname"
+	"github.com/agentiik/agentiik/internal/dbtest/dbtemplate"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -69,13 +70,23 @@ func Migrated(t *testing.T) string {
 	}
 	defer conn.Close(ctx)
 
+	template, err := dbtemplate.Named(ctx, url, Schema(t), func(ctx context.Context, c *pgx.Conn) error {
+		_, err := db.Migrate(ctx, c)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("the migrated database every test's is copied from could not be built: %s", err)
+	}
+
 	name := dbname.Of(t)
 	// A role left by a run that never tidied up goes too, once the database that granted it
-	// something has, so that the role a test starts from is one it created.
+	// something has, so that the role a test starts from is one it created. The database is a
+	// copy of one the migrations were applied to once, rather than migrated again for every test,
+	// and Provision below finds nothing left to apply and creates the role.
 	for _, stmt := range []string{
 		fmt.Sprintf(`drop database if exists %s with (force)`, name),
 		`drop role if exists ` + name,
-		fmt.Sprintf(`create database %s`, name),
+		fmt.Sprintf(`create database %s template %s`, name, template),
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("%s: %s", stmt, err)
@@ -99,6 +110,21 @@ func Migrated(t *testing.T) string {
 		t.Fatalf("the database could not be provisioned: %s", err)
 	}
 	return super
+}
+
+// Schema is every migration the db package carries, by name and content, which names the template
+// a test's database is copied from, so that a change to any of them builds another.
+func Schema(t testing.TB) []byte {
+	t.Helper()
+	all, err := db.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema []byte
+	for _, m := range all {
+		schema = append(append(append(append(schema, m.Name...), 0), m.SQL...), 0)
+	}
+	return schema
 }
 
 // Application is the address the application role signs in at, for the database super names: what

@@ -274,4 +274,13 @@ func TestAFiringPastTheHourlyQuotaIsRecordedAsSkipped(t *testing.T) {
 	if !strings.Contains(row.Skipped, "max_runs_per_hour, 1") || !row.FiredFor.Equal(time.Date(2026, 10, 1, 6, 0, 0, 0, time.UTC)) || row.FiredRun != "" {
 		t.Errorf("the second firing is recorded for %s as %q, run %q", row.FiredFor, row.Skipped, row.FiredRun)
 	}
+	// And counted among the runs the namespace was refused, as a request answered 429 is.
+	var refused int
+	if err := dbtest.Superuser(t, s.super).QueryRow(t.Context(),
+		`select coalesce(sum(refused), 0) from run_refusals where namespace = 'finance'`).Scan(&refused); err != nil {
+		t.Fatal(err)
+	}
+	if refused != 1 {
+		t.Errorf("finance counts %d runs refused, where one firing was", refused)
+	}
 }

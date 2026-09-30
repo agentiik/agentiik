@@ -158,6 +158,12 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 		return err
 	}
 	if err := n.withinRunsPerHour(ctx); err != nil {
+		var reached *RunsPerHourReached
+		if errors.As(err, &reached) {
+			if err := n.refused(ctx); err != nil {
+				return err
+			}
+		}
 		return err
 	}
 
@@ -257,6 +263,25 @@ func (n *NS) withinRunsPerHour(ctx context.Context) error {
 		return fmt.Errorf("db: the runs namespace %s created in the last 60 minutes could not be counted: %w", n.namespace, err)
 	}
 	return &RunsPerHourReached{Namespace: n.namespace, Limit: limit, RetryAfter: leaves.Sub(now)}
+}
+
+// refused counts one run refused for max_runs_per_hour in the minute it was refused in, in the
+// transaction that refused it, and lets go of the minutes older than the namespace keeps its runs:
+// see migration 0064. The transaction is the caller's to commit, which a caller that answers the
+// refusal rather than recording it elsewhere does with nothing else in it.
+func (n *NS) refused(ctx context.Context) error {
+	if _, err := n.tx.Exec(ctx,
+		`delete from run_refusals r using namespaces s
+		 where r.namespace = $1 and s.name = r.namespace
+		   and r.minute < now() - make_interval(days => s.max_retention_days)`, n.namespace); err != nil {
+		return fmt.Errorf("db: the refusals namespace %s no longer keeps could not be let go: %w", n.namespace, err)
+	}
+	if _, err := n.tx.Exec(ctx,
+		`insert into run_refusals (namespace, minute, refused) values ($1, date_trunc('minute', now()), 1)
+		 on conflict (namespace, minute) do update set refused = run_refusals.refused + 1`, n.namespace); err != nil {
+		return fmt.Errorf("db: the run refused in namespace %s could not be counted: %w", n.namespace, err)
+	}
+	return nil
 }
 
 // RequestCancel records that a run is to be cancelled, and answers the state it is in and whether
@@ -555,6 +580,11 @@ type TaskRow struct {
 	Deadline     time.Time
 	PublishedAt  time.Time
 
+	// ReadyAt is when an attempt that waits out a retry's backoff may be handed out, and zero for
+	// any other task, which is ready when its row is first written. It is written once, with the
+	// row, and is what a task's queue wait is read from: see migration 0063.
+	ReadyAt time.Time
+
 	// MemoisedFrom is the run whose task published what a cache hit republished for this one,
 	// which no container ran.
 	MemoisedFrom agk.RunID
@@ -805,8 +835,10 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 	err = w.tx.QueryRow(ctx,
 		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, requeue, state,
 		                    runner, exit_code, log_uri, log_lines, log_truncated,
-		                    dispatched_at, started_at, finished_at, deadline, published_at, usage, memoised_from, called_run)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		                    dispatched_at, started_at, finished_at, deadline, published_at, usage, memoised_from, called_run,
+		                    ready_at)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+		         coalesce($23::timestamptz, now()))
 		 on conflict (namespace, idempotency_key, requeue) do update
 		 set state = case when tasks.state = 'lost'
 		                   and excluded.state in ('pending', 'dispatched', 'running', 'publishing')
@@ -838,7 +870,8 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		t.State.String(), nilIfEmpty(t.Runner), t.ExitCode, log,
 		nilIfZeroInt(t.LogLines), t.LogCut,
 		nilIfZero(t.DispatchedAt), nilIfZero(t.StartedAt), nilIfZero(t.FinishedAt),
-		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage, nilIfEmpty(string(t.MemoisedFrom)), nilIfEmpty(string(t.CalledRun))).Scan(&held, &finished)
+		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage, nilIfEmpty(string(t.MemoisedFrom)), nilIfEmpty(string(t.CalledRun)),
+		nilIfZero(t.ReadyAt)).Scan(&held, &finished)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
 	}
