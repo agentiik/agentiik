@@ -386,13 +386,14 @@ func answerOf(w *httptest.ResponseRecorder) accesstest.Answer {
 // finance a namespace he sees and every other workflow of it one he does not.
 func TestAnAbsentNameAndAnInvisibleOneAreAnsweredAlike(t *testing.T) {
 	x := someTenants(t)
-	asked := 0
+	asked, at := 0, time.Now()
 	for _, route := range x.in.router.Routes() {
 		name := route.Method + " " + route.Pattern
 		ids := identities(route.Pattern)
 		if len(ids) == 0 || staticAssets[name] {
 			continue
 		}
+		query := accesstest.Pinned(route.Method, route.Pattern, at)
 		for _, c := range []struct {
 			// within fixes the namespace a path names to one the caller holds something in, where
 			// it is not empty.
@@ -410,14 +411,14 @@ func TestAnAbsentNameAndAnInvisibleOneAreAnsweredAlike(t *testing.T) {
 				}
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-			none := x.ask(ctx, route.Method, fill(route.Pattern, nothing), x.as[c.who], "{}")
+			none := x.ask(ctx, route.Method, fill(route.Pattern, nothing)+query, x.as[c.who], "{}")
 			// Each identity named as it is in turn, those before it too, and the rest as nothing.
 			for i := range varying {
 				mixed := maps.Clone(nothing)
 				for _, p := range varying[:i+1] {
 					mixed[p] = named[p]
 				}
-				path := fill(route.Pattern, mixed)
+				path := fill(route.Pattern, mixed) + query
 				w := x.ask(ctx, route.Method, path, x.as[c.who], "{}")
 				asked++
 				if diff := sameAnswer(none, w); diff != "" {

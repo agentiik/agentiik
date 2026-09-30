@@ -121,13 +121,14 @@ var naming = map[string]any{
 // rest, where the routes a namespace's owner may ask are sent what takes them to a lookup.
 func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 	t.Helper()
-	asked := 0
+	asked, at := 0, time.Now()
 	for _, c := range Cases {
 		ids := identities(c.Pattern)
 		if len(ids) == 0 || c.Pattern == "/auth/assets/{name}" {
 			// The sign-in page's own files, which name nothing anybody holds.
 			continue
 		}
+		query := Pinned(c.Method, c.Pattern, at)
 		for _, within := range []string{"", HR} {
 			named, nothing := f.financial(c.Pattern), absent()
 			varying := ids
@@ -144,13 +145,13 @@ func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 				body = b
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			none := f.ask(t, ctx, c.Method, written(c.Pattern, nothing), who, body)
+			none := f.ask(t, ctx, c.Method, written(c.Pattern, nothing)+query, who, body)
 			for i := range varying {
 				mixed := maps.Clone(nothing)
 				for _, p := range varying[:i+1] {
 					mixed[p] = named[p]
 				}
-				path := written(c.Pattern, mixed)
+				path := written(c.Pattern, mixed) + query
 				a := f.ask(t, ctx, c.Method, path, who, body)
 				asked++
 				if diff := Difference(none, a); diff != "" {
