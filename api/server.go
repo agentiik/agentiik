@@ -233,6 +233,10 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	if err := rt.HandleAcross("GET", "/api/v1/{namespace}/stats/runs", Across{Permission: RunRead}, s.runStatistics); err != nil {
 		return nil, err
 	}
+	// And one workflow's steps, the workflow named in the query and asked about the same way.
+	if err := rt.HandleAcross("GET", "/api/v1/{namespace}/stats/steps", Across{Permission: RunRead}, s.stepStatistics); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 

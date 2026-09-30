@@ -298,3 +298,206 @@ func (w *Wide) RunDurations(ctx context.Context, among []Workflow, b Buckets, bi
 	}
 	return out, rows.Err()
 }
+
+// StepBucket is what one step came to in the runs created in one bucket.
+type StepBucket struct {
+	// Attempts are the attempts it was handed out, retries and shards included: a shard of a
+	// fan-out is an attempt of its own, and a lost dispatch handed out again is the same one.
+	Attempts int
+
+	// Duration is how long the attempts that ended ran, from their last dispatch to their end.
+	Duration Percentiles
+
+	// ExitCodes are the attempts that ended by the exit code they ended with, the most frequent
+	// first, one with none under a nil code.
+	ExitCodes []ExitCodeCount
+
+	// ItemsPerMinute is, for a step that fans out, the items its shards consumed a minute while
+	// any of them ran, and nil for any other step or where none ran.
+	ItemsPerMinute *float64
+}
+
+// attempts is every attempt of the step or steps a series reads, each as its last dispatch left
+// it: a lost dispatch handed out again is the same attempt, a row of its own under the same key,
+// so an attempt ends as its last dispatch did. dispatched says whether any dispatch of it went
+// out, which a requeue not yet handed out has not, and items is what its last dispatch was handed,
+// the longest of its input ports, which is what a fan-out cuts on.
+const attempts = `
+	attempts as (
+	  select distinct on (t.namespace, t.run_id, t.step, t.shard_index, t.attempt)
+	         c.b, t.step::text as step, t.shard_of, t.state::text as state, t.exit_code,
+	         t.dispatched_at, t.finished_at,
+	         bool_or(t.dispatched_at is not null)
+	           over (partition by t.namespace, t.run_id, t.step, t.shard_index, t.attempt) as dispatched,
+	         (select max((i ->> 'items')::bigint)
+	            from task_grants g, jsonb_array_elements(coalesce(g.scope -> 'inputs', '[]'::jsonb)) i
+	           where g.namespace = t.namespace and g.task_id = t.id) as items
+	  from counted c
+	  join tasks t on t.namespace = c.namespace and t.run_id = c.id
+	  order by t.namespace, t.run_id, t.step, t.shard_index, t.attempt, t.requeue desc
+	)`
+
+// ended is the states an attempt has ended in, which a running one and one waiting to be handed
+// out again have not.
+const ended = `state in ('succeeded', 'failed', 'lost', 'timed_out', 'cancelled')`
+
+// StepStatistics counts the steps of the one workflow of, which the authorizer allowed, bucket by
+// bucket, answering each step whose tasks the buckets reach. Every bucket of a step is answered,
+// those counting nothing included, oldest first.
+func (w *Wide) StepStatistics(ctx context.Context, of Workflow, b Buckets) (map[string][]StepBucket, error) {
+	if err := b.check(); err != nil {
+		return nil, err
+	}
+	out := map[string][]StepBucket{}
+	at := func(step string, i int) *StepBucket {
+		if out[step] == nil {
+			out[step] = make([]StepBucket, b.Count)
+			for j := range out[step] {
+				out[step][j].ExitCodes = []ExitCodeCount{}
+			}
+		}
+		return &out[step][i]
+	}
+	args := []any{[]string{of.Namespace}, []string{of.Name}, b.First, b.End(), b.Width.Seconds()}
+
+	rows, err := w.tx.Query(ctx, `with `+counted+`, `+attempts+`
+		select b, step, exit_code, count(*) filter (where dispatched), count(*) filter (where dispatched and `+ended+`)
+		from attempts
+		group by b, step, exit_code
+		order by b, step, count(*) filter (where dispatched and `+ended+`) desc, exit_code nulls last`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("db: the attempts of the steps could not be counted: %w", err)
+	}
+	for rows.Next() {
+		var i, dispatched, finished int
+		var step string
+		var code *int
+		if err := rows.Scan(&i, &step, &code, &dispatched, &finished); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("db: the attempts of the steps could not be counted: %w", err)
+		}
+		if i < 0 || i >= b.Count {
+			continue
+		}
+		s := at(step, i)
+		s.Attempts += dispatched
+		if finished > 0 {
+			s.ExitCodes = append(s.ExitCodes, ExitCodeCount{ExitCode: code, Attempts: finished})
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: the attempts of the steps could not be counted: %w", err)
+	}
+
+	rows, err = w.tx.Query(ctx, `with `+counted+`, `+attempts+`
+		select b, step, percentile_cont(array[0.5, 0.95, 0.99]) within group (order by `+ms("dispatched_at", "finished_at")+`)
+		from attempts
+		where dispatched and `+ended+` and dispatched_at is not null and finished_at is not null
+		group by b, step`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("db: the durations of the steps could not be read: %w", err)
+	}
+	for rows.Next() {
+		var i int
+		var step string
+		var p []float64
+		if err := rows.Scan(&i, &step, &p); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("db: the durations of the steps could not be read: %w", err)
+		}
+		if i >= 0 && i < b.Count && len(p) == 3 {
+			at(step, i).Duration = Percentiles{P50: round(p[0]), P95: round(p[1]), P99: round(p[2]), Taken: true}
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: the durations of the steps could not be read: %w", err)
+	}
+
+	// A fan-out's throughput: the items of the shards that succeeded, over the time any shard of
+	// the step ran in the bucket's runs, every dispatch counted, so that a minute two shards ran
+	// side by side is one minute and a gap between them is none. One still running runs until now.
+	rows, err = w.tx.Query(ctx, `with `+counted+`, `+attempts+`,
+		items as (
+		  select b, step, sum(items) filter (where state = 'succeeded') as items
+		  from attempts
+		  where shard_of is not null
+		  group by b, step
+		),
+		ran as (
+		  select c.b, t.step::text as step,
+		         range_agg(tstzrange(t.started_at, greatest(t.started_at, coalesce(t.finished_at, now())))) as spans
+		  from counted c
+		  join tasks t on t.namespace = c.namespace and t.run_id = c.id
+		  where t.shard_of is not null and t.started_at is not null
+		  group by c.b, t.step
+		)
+		select i.b, i.step, coalesce(i.items, 0),
+		       coalesce((select sum(extract(epoch from upper(s) - lower(s))) from unnest(r.spans) s), 0)::float8
+		from items i
+		join ran r on r.b = i.b and r.step = i.step`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("db: the throughput of the fan-outs could not be read: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var i int
+		var step string
+		var items int64
+		var seconds float64
+		if err := rows.Scan(&i, &step, &items, &seconds); err != nil {
+			return nil, fmt.Errorf("db: the throughput of the fan-outs could not be read: %w", err)
+		}
+		if i < 0 || i >= b.Count || seconds <= 0 {
+			continue
+		}
+		perMinute := math.Round(float64(items)/(seconds/60)*10) / 10
+		at(step, i).ItemsPerMinute = &perMinute
+	}
+	return out, rows.Err()
+}
+
+// HoursOfTheWeek is how many cells a heatmap of a week holds, an hour of each of its days.
+const HoursOfTheWeek = 7 * 24
+
+// StepHours is the median of how long each step of the one workflow of ran, by the weekday and the
+// hour of the day its attempts were dispatched, in UTC, over the runs created from from to to: a
+// cell for every hour of the week, Monday at midnight first, and not Taken where none ran.
+func (w *Wide) StepHours(ctx context.Context, of Workflow, from, to time.Time) (map[string][]Percentiles, error) {
+	if !from.Before(to) {
+		return nil, fmt.Errorf("db: a heatmap from %s to %s, which is no range", from, to)
+	}
+	out := map[string][]Percentiles{}
+	// The runs are counted in one bucket spanning the range, which is what counted needs to hand
+	// every run a b; nothing here reads it.
+	rows, err := w.tx.Query(ctx, `with `+counted+`, `+attempts+`
+		select step,
+		       extract(isodow from dispatched_at at time zone 'UTC')::int,
+		       extract(hour from dispatched_at at time zone 'UTC')::int,
+		       percentile_cont(0.5) within group (order by `+ms("dispatched_at", "finished_at")+`)
+		from attempts
+		where dispatched and `+ended+` and dispatched_at is not null and finished_at is not null
+		group by 1, 2, 3`,
+		[]string{of.Namespace}, []string{of.Name}, from, to, to.Sub(from).Seconds())
+	if err != nil {
+		return nil, fmt.Errorf("db: the steps' hours could not be read: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var step string
+		var weekday, hour int
+		var p50 float64
+		if err := rows.Scan(&step, &weekday, &hour, &p50); err != nil {
+			return nil, fmt.Errorf("db: the steps' hours could not be read: %w", err)
+		}
+		if weekday < 1 || weekday > 7 || hour < 0 || hour > 23 {
+			continue
+		}
+		if out[step] == nil {
+			out[step] = make([]Percentiles, HoursOfTheWeek)
+		}
+		out[step][(weekday-1)*24+hour] = Percentiles{P50: round(p50), Taken: true}
+	}
+	return out, rows.Err()
+}

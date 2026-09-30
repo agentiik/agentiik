@@ -52,7 +52,7 @@ func TestAStatsRangeIsReadAsDocumented(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := readStatsRange(query, now)
+		got, err := readStatsRange(query, now, true)
 		if err != nil {
 			t.Errorf("%q was refused: %v", c.query, err)
 			continue
@@ -90,12 +90,16 @@ func TestAStatsRangeAddsTheSpanBeforeAndAHistogram(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := readStatsRange(query, now)
+		got, err := readStatsRange(query, now, true)
 		if err != nil {
 			t.Fatalf("%q was refused: %v", c.query, err)
 		}
-		if got.Histogram != c.histogram || got.Previous != c.previous {
-			t.Errorf("%q asked for a histogram of %d and the span before %v, want %d and %v", c.query, got.Histogram, got.Previous, c.histogram, c.previous)
+		bins, err := readHistogram(query)
+		if err != nil {
+			t.Fatalf("%q was refused: %v", c.query, err)
+		}
+		if bins != c.histogram || got.Previous != c.previous {
+			t.Errorf("%q asked for a histogram of %d and the span before %v, want %d and %v", c.query, bins, got.Previous, c.histogram, c.previous)
 		}
 		if !c.previous {
 			continue
@@ -137,7 +141,10 @@ func TestAStatsRangeThatIsNoneIsRefused(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = readStatsRange(query, now)
+		_, err = readStatsRange(query, now, true)
+		if err == nil {
+			_, err = readHistogram(query)
+		}
 		switch {
 		case err == nil:
 			t.Errorf("%q was read as a range", c.query)
@@ -171,6 +178,33 @@ func TestAStatsSeriesIsCSVOnlyWhereAcceptPrefersIt(t *testing.T) {
 	} {
 		if got := wantsCSV(accept); got != csv {
 			t.Errorf("Accept %q was answered in CSV %v, want %v", accept, got, csv)
+		}
+	}
+}
+
+// A range read for a heatmap of the hours of a week takes no buckets: a bucket is refused where it
+// is none and bounds nothing where it is one, so a year of minutes is a range, and the span before
+// is not taken.
+func TestAHeatmapsRangeTakesNoBuckets(t *testing.T) {
+	now := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	query, err := url.ParseQuery("from=2025-09-30T00:00:00Z&to=2026-09-30T00:00:00Z&bucket=1m&compare=previous")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := readStatsRange(query, now, false)
+	if err != nil {
+		t.Fatalf("a year of minutes was refused for a heatmap: %v", err)
+	}
+	if got.Bucket != "" || got.Buckets.Count != 0 || got.Previous {
+		t.Errorf("a heatmap's range was read as %+v, with buckets or the span before", got)
+	}
+	for _, refused := range []string{"bucket=5m", "compare=next", "from=yesterday", "from=2026-09-30T09:00:00Z"} {
+		query, err := url.ParseQuery(refused)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readStatsRange(query, now, false); err == nil {
+			t.Errorf("%q was read as a heatmap's range", refused)
 		}
 	}
 }

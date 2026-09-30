@@ -34,13 +34,12 @@ const statsSpan = 24 * time.Hour
 const statsHistogramBins = 100
 
 // statsRange is what a request for a series asks for: the range as it was given or taken, the
-// buckets it is counted in, and what is added to it.
+// buckets it is counted in, and whether the span before is added to it.
 type statsRange struct {
-	From, To  time.Time
-	Bucket    string
-	Buckets   db.Buckets
-	Previous  bool
-	Histogram int
+	From, To time.Time
+	Bucket   string
+	Buckets  db.Buckets
+	Previous bool
 }
 
 // before is the span just before the range, in as many buckets of the same length, so that a chart
@@ -55,7 +54,10 @@ func (s statsRange) before() (from, to time.Time, b db.Buckets) {
 }
 
 // readStatsRange reads the range a series is asked over, now being when the request is answered.
-func readStatsRange(query url.Values, now time.Time) (statsRange, error) {
+// Where bucketed is false, as for a heatmap of the hours of a week, a bucket is read to be refused
+// where it is none and neither shapes the answer nor bounds the range, and the span before is not
+// taken.
+func readStatsRange(query url.Values, now time.Time, bucketed bool) (statsRange, error) {
 	// Whether each was given rather than whether it is zero, since 0001-01-01T00:00:00Z is a time
 	// a query can name.
 	rng := statsRange{To: now.UTC()}
@@ -97,6 +99,18 @@ func readStatsRange(query url.Values, now time.Time) (statsRange, error) {
 	default:
 		rng.Bucket = "1d"
 	}
+	switch compare := query.Get("compare"); compare {
+	case "":
+	case "previous":
+		rng.Previous = bucketed
+	default:
+		return statsRange{}, fmt.Errorf("compare is %q, and the one comparison is previous, the same span just before", compare)
+	}
+	if !bucketed {
+		rng.Bucket = ""
+		return rng, nil
+	}
+
 	// Whole minutes, quarters, hours and days in UTC: the zero time Truncate counts from is a
 	// midnight in UTC, and every length divides a day.
 	width := statsBuckets[rng.Bucket]
@@ -109,23 +123,20 @@ func readStatsRange(query url.Values, now time.Time) (statsRange, error) {
 		return statsRange{}, fmt.Errorf("from %s to %s is %d buckets of %s, and a series takes at most %d: more than any chart draws, which a query would pay for all the same", stamp(rng.From), stamp(rng.To), count, rng.Bucket, db.MaxBuckets)
 	}
 	rng.Buckets = db.Buckets{First: first, Width: width, Count: int(count)}
-
-	switch compare := query.Get("compare"); compare {
-	case "":
-	case "previous":
-		rng.Previous = true
-	default:
-		return statsRange{}, fmt.Errorf("compare is %q, and the one comparison is previous, the same span just before", compare)
-	}
-
-	if written := query.Get("histogram"); written != "" {
-		bins, err := strconv.Atoi(written)
-		if err != nil || bins < 1 || bins > statsHistogramBins {
-			return statsRange{}, fmt.Errorf("histogram is %q, and a histogram takes 1 to %d bins, more than a chart has room to draw", written, statsHistogramBins)
-		}
-		rng.Histogram = bins
-	}
 	return rng, nil
+}
+
+// readHistogram reads how many bins a histogram of durations is asked in, and 0 where none is.
+func readHistogram(query url.Values) (int, error) {
+	written := query.Get("histogram")
+	if written == "" {
+		return 0, nil
+	}
+	bins, err := strconv.Atoi(written)
+	if err != nil || bins < 1 || bins > statsHistogramBins {
+		return 0, fmt.Errorf("histogram is %q, and a histogram takes 1 to %d bins, more than a chart has room to draw", written, statsHistogramBins)
+	}
+	return bins, nil
 }
 
 // stamp writes an instant as the API writes every one, in RFC 3339 in UTC.
@@ -137,7 +148,12 @@ func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 // run:read and never run:read_data, since a series carries counts, durations and exit codes and
 // never an item.
 func (s *Server) runStatistics(w http.ResponseWriter, r *http.Request, who Principal, within Target, _ Holds) {
-	rng, err := readStatsRange(r.URL.Query(), s.now())
+	rng, err := readStatsRange(r.URL.Query(), s.now(), true)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	bins, err := readHistogram(r.URL.Query())
 	if err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
@@ -156,13 +172,13 @@ func (s *Server) runStatistics(w http.ResponseWriter, r *http.Request, who Princ
 	var out statsRuns
 	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		out.Buckets, out.Histogram, err = runSeries(ctx, wide, among, rng.Buckets, rng.Histogram)
+		out.Buckets, out.Histogram, err = runSeries(ctx, wide, among, rng.Buckets, bins)
 		if err != nil || !rng.Previous {
 			return err
 		}
 		from, to, b := rng.before()
 		out.Previous = &statsRunsBefore{From: stamp(from), To: stamp(to)}
-		out.Previous.Buckets, out.Previous.Histogram, err = runSeries(ctx, wide, among, b, rng.Histogram)
+		out.Previous.Buckets, out.Previous.Histogram, err = runSeries(ctx, wide, among, b, bins)
 		return err
 	})
 	if err != nil {

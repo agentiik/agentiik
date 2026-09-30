@@ -201,8 +201,9 @@ const (
 	RunRoute Reason = "a route that names a run and not its namespace"
 
 	// RunListing is GET /api/v1/runs, "across every namespace the caller can read", and GET
-	// /api/v1/{ns}/runs, the same listing within one, and GET /api/v1/{ns}/stats/runs, which
-	// counts what that listing lists, since "an aggregate over runs discloses the runs". What it
+	// /api/v1/{ns}/runs, the same listing within one, and GET /api/v1/{ns}/stats/runs and
+	// /stats/steps, which count what that listing lists, since "an aggregate over runs discloses
+	// the runs". What it
 	// reads is which workflows there are, for the authorizer to be asked about each, and then the
 	// runs of the ones it allowed and of no others: the namespaces a listing reaches are the ones the authorisation
 	// decision named, as In's always are. One namespace's listing steps past In too, rather
