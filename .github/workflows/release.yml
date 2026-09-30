@@ -1,6 +1,7 @@
-# The images an installation pulls, ghcr.io/agentiik/api, controller, runner and postgres-upgrade,
-# built for linux/amd64 and linux/arm64 from what build/*.Dockerfile say they hold, and pushed with
-# the GITHUB_TOKEN, so that publishing needs no secret of its own.
+# The images an installation pulls, ghcr.io/agentiik/agentiik, runner and postgres-upgrade, built
+# for linux/amd64 and linux/arm64 from what build/*.Dockerfile say they hold, and pushed with the
+# GITHUB_TOKEN, so that publishing needs no secret of its own. agentiik holds the API, carrying the
+# web console, and the controller, which an installation runs as two containers by their commands.
 #
 #   a v* tag        pushes X.Y.Z and vX.Y.Z, and latest when it is the highest release
 #   main            pushes dev, the same build as a release, at every commit
@@ -58,10 +59,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - image: api
-            commands: agentiik-api
-          - image: controller
-            commands: agentiik-controller
+          # The API carries the web console that is built when it is compiled, and none where it is
+          # not, so this image's programs are compiled after the console is built.
+          - image: agentiik
+            commands: agentiik-api agentiik-controller
+            console: true
           # The helper goes into the runner's image, where a script step is given it.
           - image: runner
             commands: agk-runner agk-helper
@@ -126,6 +128,32 @@ jobs:
         with:
           # The version go.mod requires, pinned to the minor for the reason test.yml gives.
           go-version: '1.27'
+
+      - uses: actions/setup-node@v4
+        if: matrix.console
+        with:
+          # The version console.yml builds and tests it with.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      # The console, built into console/dist as console/README.md says, where go:embed takes it into
+      # agentiik-api. It is named with the version the programs record, which it reads from a build
+      # of the smallest of them, since they are compiled after it and would carry none of it before.
+      # Neither its dependencies nor its build leave the checkout dirty, since both are ignored, so
+      # the version the programs record is the one it was given.
+      - name: console
+        if: matrix.console
+        working-directory: console
+        run: |
+          probe=$RUNNER_TEMP/version-agk-helper
+          (cd .. && CGO_ENABLED=0 go build -trimpath -o "$probe" ./cmd/agk-helper)
+          recorded=$(go version -m "$probe" | awk '$1 == "mod" { print $3; exit }')
+          echo "the console is built as ${recorded#v}"
+          npm ci
+          AGK_VERSION=${recorded#v} npm run build
+          test -f dist/index.html || { echo "the console's build wrote no dist/index.html"; exit 1; }
+          test -z "$(git status --porcelain)" || { git status --porcelain; echo "the console's build left the checkout dirty"; exit 1; }
 
       # The binaries, built as build/*.Dockerfile and cmd/*/static_test.go build them, and the files
       # an image takes from the checkout, into a context of their own outside the checkout, which a
@@ -195,7 +223,7 @@ jobs:
         if: steps.plan.outputs.publish != 'true'
         run: docker run -d --name registry -p 5000:5000 registry:2
 
-      # arm64 under QEMU for the RUN steps the api, controller and postgres-upgrade images take from
+      # arm64 under QEMU for the RUN steps the agentiik and postgres-upgrade images take from
       # alpine; the binaries themselves are cross-compiled above. The builder shares the job's
       # network, so a dry run reaches the registry at localhost.
       - uses: docker/setup-qemu-action@v3

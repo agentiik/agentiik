@@ -83,8 +83,9 @@ type Installation struct {
 	client  *http.Client
 	network string
 
-	// apiIm, controllerIm and runnerIm are the images built from this checkout.
-	apiIm, controllerIm, runnerIm string
+	// agentiikIm and runnerIm are the images built from this checkout: the first run as init, the
+	// API and the controller by their commands, as the Compose file runs it.
+	agentiikIm, runnerIm string
 
 	// volumes are init's, by the service each is for, as the Compose file names them.
 	volumes map[string]string
@@ -379,7 +380,7 @@ func (in *Installation) initialize(ctx context.Context, socket string) {
 		defer cancel()
 		docker(gone, "rm", "-f", "-v", name)
 	})
-	out, err := dockerCombined(ctx, append(args, in.apiIm, "init")...)
+	out, err := dockerCombined(ctx, append(args, in.agentiikIm, "agentiik-api", "init")...)
 	in.logged(name, func() string { return out })
 	if err != nil {
 		in.t.Fatalf("agentiik-api init: %s\n%s", err, out)
@@ -470,10 +471,10 @@ func (in *Installation) serve(ctx context.Context, ca authority, socket, busURL 
 		"-e", config.ProxyURL+"="+in.PublicURL,
 		"-e", "SSL_CERT_DIR=/agentiik/trust",
 		"-v", in.volumes["api"]+":/agentiik", "-v", in.volumes["bus"]+":/bus", "-v", in.volumes["objects"]+":/objects", "-v", socket+":/run/postgresql",
-		in.apiIm)
+		in.agentiikIm)
 	// The Compose file's health check, run as it runs it, in the API's own container.
 	eventually(in.ctx, in.t, time.Minute, "agentiik-api health said the API is ready", func() error {
-		out, err := dockerCombined(ctx, "exec", api, "/agentiik-api", "health")
+		out, err := dockerCombined(ctx, "exec", api, "agentiik-api", "health")
 		if err != nil {
 			return fmt.Errorf("%w: %s", err, out)
 		}
@@ -499,7 +500,7 @@ func (in *Installation) serve(ctx context.Context, ca authority, socket, busURL 
 		"-e", config.ObjectsDir+"=/objects",
 		"-e", "SSL_CERT_DIR=/agentiik/trust",
 		"-v", in.volumes["controller"]+":/agentiik", "-v", in.volumes["bus"]+":/bus:ro", "-v", in.volumes["objects"]+":/objects", "-v", socket+":/run/postgresql",
-		in.controllerIm)
+		in.agentiikIm, "agentiik-controller")
 }
 
 // call is one request of the operator's to the API, through the terminator, and what it answered.
