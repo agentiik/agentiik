@@ -13,7 +13,9 @@ import (
 // newTriggerRules are the shape rules of v0.5.0 about the on block, which the schema states and a
 // version stored before them may break: a schedule's five fields written in cron's grammar and its
 // zone as a name, never Local; a webhook's path in segments no proxy normalises out of its prefix;
-// and a sync response naming the output it answers with. They are newRules', applied where a
+// a sync response naming the output it answers with; and an event trigger naming something it
+// listens for, a type, a source or a filter, since one naming none would start a run on every
+// event its namespace can see. They are newRules', applied where a
 // version is made, so that a version stored before them keeps rebuilding and running; whether its
 // triggers can be armed is Armable's to say.
 func (w *Workflow) newTriggerRules() error {
@@ -36,6 +38,11 @@ func (w *Workflow) newTriggerRules() error {
 		}
 		if h.Response == "sync" && h.Output == "" {
 			return fmt.Errorf("%s answers response: sync and names no output: a sync response returns one workflow output, and output says which", where)
+		}
+	}
+	for i, e := range w.On.Event {
+		if e.Type == "" && e.Source == "" && e.Filter == "" {
+			return fmt.Errorf("on.event[%d] names no type, no source and no filter, and would start a run on every event its namespace can see: a subscription names what it listens for", i)
 		}
 	}
 	return nil

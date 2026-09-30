@@ -9,7 +9,8 @@ import (
 )
 
 // A version stored before v0.5.0 was held to none of its rules about triggers: a sync webhook
-// naming no output, a schedule stepping a value alone, a minute of 60. It keeps being read back
+// naming no output, a schedule stepping a value alone, a minute of 60, an event trigger naming
+// nothing it listens for. It keeps being read back
 // and built, since its runs and replays have to go on after the upgrade, and it is Armable's to
 // say that its triggers cannot be armed.
 func TestAVersionStoredBeforeTheTriggerRulesRebuildsAndIsNotArmable(t *testing.T) {
@@ -24,6 +25,8 @@ on:
   webhook:
     - path: /quotes/../admin
       response: sync
+  event:
+    - {}
 steps:
   quote:
     image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
@@ -31,7 +34,7 @@ steps:
     outputs: [out]
 `
 	if _, err := Parse([]byte(stored)); err == nil {
-		t.Fatal("a version made today was read without complaint, and it breaks four rules of v0.5.0")
+		t.Fatal("a version made today was read without complaint, and it breaks five rules of v0.5.0")
 	}
 	wf, err := LoadStored(fstest.MapFS{"agentiik.yaml": {Data: []byte(stored)}}, "agentiik.yaml", nil)
 	if err != nil {
@@ -137,5 +140,33 @@ steps:
     - type: com.example.order.approved
       filter: ${{ event.data.total > 100 }}`); err != nil {
 		t.Errorf("an event trigger's filter reading the event was refused: %v", err)
+	}
+}
+
+// An event trigger names a type, a source or a filter: one naming none would start a run on every
+// event its namespace can see, which the schema refuses by its shape and so does a version made
+// today. Any one of the three is a subscription.
+func TestAnEventTriggerListeningForNothingIsRefused(t *testing.T) {
+	const doc = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: order-fulfilment, namespace: sales }
+on:
+  event:
+    - %s
+steps:
+  ship:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    script: [ship]
+    outputs: [out]
+`
+	_, err := Parse([]byte(fmt.Sprintf(doc, "{}")))
+	if err == nil || !strings.Contains(err.Error(), "on.event[0] names no type, no source and no filter") {
+		t.Errorf("an event trigger listening for nothing was read, or refused for %v", err)
+	}
+	for _, entry := range []string{"{ type: com.example.order.approved }", "{ source: /erp/orders }", `{ filter: "${{ event.data.amount > 0 }}" }`} {
+		if _, err := Parse([]byte(fmt.Sprintf(doc, entry))); err != nil {
+			t.Errorf("the event trigger %s was refused: %v", entry, err)
+		}
 	}
 }
