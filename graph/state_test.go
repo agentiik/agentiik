@@ -3,6 +3,7 @@ package graph
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,7 +82,7 @@ func TestTheStateSurvivesBeingWrittenDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	run, _ := doc["run"].(map[string]any)
-	if run["state"] != "running" || run["trigger"] != "schedule" {
+	if run["state"] != "running" || run["trigger_kind"] != "schedule" {
 		t.Errorf("the run travels as %v", run)
 	}
 	steps, _ := doc["steps"].(map[string]any)
@@ -106,5 +107,28 @@ func TestAStepNobodyHasReachedIsAnEntryAndNotAnAbsence(t *testing.T) {
 	}
 	if got := runVerdict(s, nil); got != agk.Running {
 		t.Errorf("a run with a step still to come is %s", got)
+	}
+}
+
+// A state stored before v0.5.0 carried its run's trigger kind as trigger, and a run in flight across
+// the upgrade resumes from it with the kind it had; one written now carries trigger_kind alone.
+func TestAStateWrittenBeforeTriggerKindWasItsNameResumesWithItsKind(t *testing.T) {
+	var old State
+	if err := json.Unmarshal([]byte(`{"version":1,"run":{"id":"01JMZ8V1P9C4","trigger":"schedule","triggered_by":"finance/agentiik","state":"running"},"steps":{},"seq":3}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Run.Trigger != agk.TriggerSchedule || old.Run.TriggeredBy != "finance/agentiik" || old.Seq != 3 {
+		t.Fatalf("a state stored before v0.5.0 reads as %s by %q at %d", old.Run.Trigger, old.Run.TriggeredBy, old.Seq)
+	}
+	b, err := json.Marshal(&old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"trigger_kind":"schedule"`) || strings.Contains(string(b), `"trigger":"schedule"`) {
+		t.Fatalf("a state is written %s, and its run's kind is written trigger_kind alone", b)
+	}
+	var now State
+	if err := json.Unmarshal([]byte(`{"version":1,"run":{"trigger_kind":"manual","trigger":"schedule"},"steps":{}}`), &now); err != nil || now.Run.Trigger != agk.TriggerManual {
+		t.Fatalf("trigger_kind manual beside a stale trigger reads as %s, %v", now.Run.Trigger, err)
 	}
 }

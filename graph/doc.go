@@ -108,7 +108,7 @@
 // in the code. It is made by corpus_test.go, which runs the vendored fixture corpus and
 // holds each invalid document to the rule its index entry names. The index marks every
 // invalid workflow fixture refused_by "schema" or "validator"; everything marked schema
-// is shape, which closed decoding gives for nothing, and the fifteen marked validator
+// is shape, which closed decoding gives for nothing, and the nineteen marked validator
 // are, item for item, the rules this package owns. Rule values are spelled as the corpus
 // spells them, so that holding a fixture to its rule is one lookup and not a translation
 // table somebody has to keep in step.

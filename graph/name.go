@@ -81,6 +81,9 @@ func (w *Workflow) newRules() error {
 			}
 		}
 	}
+	if err := w.newTriggerRules(); err != nil {
+		return err
+	}
 	return newStepRules(w.values, w.blocks, w.Defaults)
 }
 

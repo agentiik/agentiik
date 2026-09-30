@@ -40,6 +40,7 @@ var busMayImport = map[string]bool{
 	"brick":         true,
 	"graph":         true,
 	"schema":        true,
+	"internal/cron": true, // a schedule's expression, which the evaluator's validator reads
 	"internal/expr": true,
 	"internal/ulid": true,
 	// The bound on what a YAML document's aliases stand for, which the evaluator and the brick

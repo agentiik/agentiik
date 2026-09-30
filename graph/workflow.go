@@ -66,6 +66,10 @@ type Workflow struct {
 	// includes has not been given them by Parse, so an extends naming a block this
 	// document does not carry is left for Load rather than refused here.
 	resolved bool
+
+	// made says the workflow was read by Parse, to make a version of, rather than read back
+	// out of a stored one: the rules added since a version could be stored hold it.
+	made bool
 }
 
 // Included is one include as resolution applied it: a file of this tree by its path from the
@@ -142,11 +146,15 @@ type Schedule struct {
 
 // Webhook is one HTTP entry point. "Paths are namespaced as /hooks/<namespace>/<path>",
 // which is the API's doing and not written here.
+//
+// Method, Auth and Response hold the value in force: POST, hmac and async where the file writes
+// none. Output is the workflow output a sync response returns, and empty for an async one.
 type Webhook struct {
 	Path     string
 	Method   string
 	Auth     string
 	Response string
+	Output   string
 	Map      map[string]any
 }
 

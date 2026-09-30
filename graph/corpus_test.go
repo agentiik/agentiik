@@ -18,7 +18,7 @@ import (
 // refused, by the reader where the corpus says the schema refuses it and by the validator
 // where the corpus says only a validator can.
 //
-// The fifteen the corpus marks refused_by "validator" are held to the rule they pin,
+// The nineteen the corpus marks refused_by "validator" are held to the rule they pin,
 // which is one lookup because a Rule is spelled the way the corpus names the fixture.
 func TestTheWorkflowCorpus(t *testing.T) {
 	cases, err := fixtures.Workflows()

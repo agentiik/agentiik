@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -85,6 +86,7 @@ func Parse(doc []byte) (*Workflow, error) {
 	if err := wf.newRules(); err != nil {
 		return nil, err
 	}
+	wf.made = true
 	return wf, nil
 }
 
@@ -589,7 +591,7 @@ func triggerOf(root map[string]any) (Trigger, error) {
 		if err != nil {
 			return Trigger{}, err
 		}
-		if err := closedTo(entry, where, "path", "method", "auth", "response", "map"); err != nil {
+		if err := closedTo(entry, where, "path", "method", "auth", "response", "output", "map"); err != nil {
 			return Trigger{}, err
 		}
 		var w Webhook
@@ -597,7 +599,7 @@ func triggerOf(root map[string]any) (Trigger, error) {
 		if w.Path, written, err = textAt(entry, "path", where); err != nil {
 			return Trigger{}, err
 		}
-		if !written || !webhookPath.MatchString(w.Path) {
+		if !written || !storedHookPath.MatchString(w.Path) {
 			return Trigger{}, fmt.Errorf("%s.path is %q: a webhook path begins with a slash and is namespaced as /hooks/<namespace>/<path> when it is served", where, w.Path)
 		}
 		if w.Method, _, err = textAt(entry, "method", where); err != nil {
@@ -612,6 +614,22 @@ func triggerOf(root map[string]any) (Trigger, error) {
 		if w.Response, err = enumAt(entry, "response", where, "async", "sync"); err != nil {
 			return Trigger{}, err
 		}
+		if w.Output, written, err = textAt(entry, "output", where); err != nil {
+			return Trigger{}, err
+		}
+		if written {
+			if err := identifier(w.Output, "the output", where); err != nil {
+				return Trigger{}, err
+			}
+		}
+		if written && w.Response != "sync" {
+			return Trigger{}, fmt.Errorf("%s names the output %s and answers %s: an async response answers with the run id before any output exists, so an output is named beside response: sync alone", where, w.Output, cmp.Or(w.Response, "async, the default"))
+		}
+		// The defaults the Triggers chapter gives, written in so that whatever arms, serves or
+		// draws the trigger reads one value rather than knowing the default itself: POST, the
+		// method a sender delivers an event with; hmac, so that an endpoint is open only where
+		// the file says none; and async.
+		w.Method, w.Auth, w.Response = cmp.Or(w.Method, "POST"), cmp.Or(w.Auth, "hmac"), cmp.Or(w.Response, "async")
 		if m, ok := entry["map"]; ok {
 			mapped, err := mapping(m, where+".map")
 			if err != nil {
@@ -1752,14 +1770,24 @@ func commandsAt(b map[string]any, key, where string) ([]string, error) {
 
 // The grammars the values are written on, each one the released schema's own.
 var (
-	webhookPath   = regexp.MustCompile(`^/[A-Za-z0-9._~/-]*$`)
-	httpMethod    = regexp.MustCompile(`^[A-Z]+$`)
-	runnerLabel   = regexp.MustCompile(`^[^\s=]+=[^\s=]+$`)
-	fileMode      = regexp.MustCompile(`^0?[0-7]{3}$`)
-	cpuRequest    = regexp.MustCompile(`^(?:[0-9]*[1-9][0-9]*(?:\.[0-9]+)?|[0-9]+\.[0-9]*[1-9][0-9]*)$`)
-	memoryRequest = regexp.MustCompile(`^[1-9][0-9]*(Ki|Mi|Gi|Ti)$`)
-	egressEntry   = regexp.MustCompile(`^([^\s/:]+):([0-9]{1,5})$`)
+	// storedHookPath is the grammar a webhook's path was written to before v0.5.0, which a stored
+	// version is read back by; webhookPath is the one a version is made by (newTriggerRules).
+	storedHookPath = regexp.MustCompile(`^/[A-Za-z0-9._~/-]*$`)
+	webhookPath    = regexp.MustCompile(`^(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$`)
+	zoneName       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*$`)
+	cronShape      = regexp.MustCompile(`^` + cronField + `\s+` + cronField + `\s+` + cronField + `\s+` + cronField + `\s+` + cronField + `$`)
+	httpMethod     = regexp.MustCompile(`^[A-Z]+$`)
+	runnerLabel    = regexp.MustCompile(`^[^\s=]+=[^\s=]+$`)
+	fileMode       = regexp.MustCompile(`^0?[0-7]{3}$`)
+	cpuRequest     = regexp.MustCompile(`^(?:[0-9]*[1-9][0-9]*(?:\.[0-9]+)?|[0-9]+\.[0-9]*[1-9][0-9]*)$`)
+	memoryRequest  = regexp.MustCompile(`^[1-9][0-9]*(Ki|Mi|Gi|Ti)$`)
+	egressEntry    = regexp.MustCompile(`^([^\s/:]+):([0-9]{1,5})$`)
 )
+
+// cronField is one field of a schedule's expression as the schema writes it: *, a value or a
+// range, * and a range optionally stepped, joined by commas. Whether each value is inside its
+// field is the validator's to say, with internal/cron.
+const cronField = `(?:\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?)(?:,(?:\*(?:/[0-9]+)?|[0-9A-Za-z]+(?:-[0-9A-Za-z]+(?:/[0-9]+)?)?))*`
 
 // hostPort holds an egress entry to the pair the runner proxy opens a connection to.
 func hostPort(entry string) error {

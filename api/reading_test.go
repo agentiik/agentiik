@@ -26,6 +26,7 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/version"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // Reading runs by the identifiers a client holds: every run it can read, wherever it is; one run by
@@ -221,6 +222,44 @@ func TestRunsAreListedAcrossEveryNamespaceTheCallerCanRead(t *testing.T) {
 
 	if w, _ := call(t, h, "GET", "/api/v1/runs", "", nil); w.Code != http.StatusUnauthorized {
 		t.Errorf("a caller with no credential answered %d", w.Code)
+	}
+}
+
+// Every run a listing answers is the record agentiik/schemas publishes as a run, and names what
+// started it and whom it is attributed to under the names an expression reads them by:
+// trigger_kind and triggered_by.
+func TestEveryRunListedIsTheRunTheSchemasDescribe(t *testing.T) {
+	s := withSomeRuns(t)
+	h := s.servedTo(t, granted{"alice": {{api.RunRead, api.Target{Namespace: "finance"}}}})
+	w, _ := call(t, h, "GET", "/api/v1/runs", "alice", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("listing answered %d: %s", w.Code, w.Body)
+	}
+	var answer struct {
+		Runs []json.RawMessage `json:"runs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Runs) != 3 {
+		t.Fatalf("alice listed %d runs, want the three of finance", len(answer.Runs))
+	}
+	record := wire(t, "/$defs/run")
+	for _, raw := range answer.Runs {
+		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := record.Validate(doc); err != nil {
+			t.Errorf("the run %s is not the record the schemas publish: %v", raw, err)
+		}
+		var run map[string]any
+		if err := json.Unmarshal(raw, &run); err != nil {
+			t.Fatal(err)
+		}
+		if run["trigger_kind"] != "manual" || run["triggered_by"] != "admin" {
+			t.Errorf("a run admin asked for reads as %v by %v", run["trigger_kind"], run["triggered_by"])
+		}
 	}
 }
 

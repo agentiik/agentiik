@@ -29,6 +29,7 @@
     "repository": "../wire.schema.json",
     "ref": "../wire.schema.json",
     "version": "../wire.schema.json",
+    "run": "../wire.schema.json",
     "resolved-graph": "../wire.schema.json"
   },
   "notes": [
@@ -94,6 +95,11 @@
         {
           "file": "workflow/valid/names-at-their-bounds.yaml",
           "covers": "a step name of 255 characters, a sub-workflow called with each half of its reference at 255, and a port, the edge naming it and a workflow output of 250, each the longest it may be"
+        },
+        {
+          "file": "workflow/valid/triggers.yaml",
+          "covers": "on.schedule with a stepped, a ranged and a named field, a timezone and its absence, jitter and catch_up; on.webhook with hmac, several segments, a sync response naming a declared output, and map; on.event with type, source and filter; concurrency cancelling the run in progress",
+          "source": "https://agentiik.github.io/docs/#triggers"
         }
       ],
       "invalid": [
@@ -452,6 +458,84 @@
           "rule": "A file relocated to a relative path. Inside a container there is no directory a relative path could be relative to, the runner refuses one, and the task message holds that field to the same absolute grammar.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/cron-field-not-cron.yaml",
+          "rule": "A cron field written in a syntax no five-field cron reads. ? and L belong to other schedulers' grammars, and a schedule is read the same way by everyone who reads it.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/cron-value-stepped-alone.yaml",
+          "rule": "A cron value stepped on its own. Some crons read 5/15 as 5-59/15 and others refuse it, so a step follows * or a range and the file says which.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/cron-value-out-of-range.yaml",
+          "rule": "A cron field naming a minute past the hour's last. Each field is bounded by what it counts, and a value outside it names an occurrence that never comes.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/timezone-local.yaml",
+          "rule": "A schedule read in the installation's own zone. One file would fire at different instants on two installations, so a schedule names its zone or is read in UTC.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/timezone-offset.yaml",
+          "rule": "A schedule's zone written as an offset. An offset does not move with daylight saving, which is what a named zone is for.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/timezone-unknown.yaml",
+          "rule": "A schedule's zone the time zone database does not hold. The name is well formed and names no zone, so no instant can be read from it.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/webhook-sync-without-output.yaml",
+          "rule": "A sync webhook naming no output. A sync response returns one workflow output, and the trigger says which.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/webhook-output-without-sync.yaml",
+          "rule": "A webhook naming an output it never returns. An async response answers with the run id before any output exists.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/webhook-output-not-declared.yaml",
+          "rule": "A sync webhook returning an output the workflow does not declare. What a caller is answered with is one of the workflow's own outputs.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/webhook-map-input-not-declared.yaml",
+          "rule": "A webhook filling an input the workflow does not declare. map builds the run's inputs, each validated against its schema before the run exists, and an input nobody declared has none.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/webhook-path-climbs.yaml",
+          "rule": "A webhook path with a .. segment. Normalised by a proxy on its way in, it would climb out of the namespace's prefix.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/webhook-duplicate-path.yaml",
+          "rule": "Two webhooks answering one path with one method. A request would start whichever the engine found first, so a path and a method answer one trigger.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/concurrency-cancel-not-boolean.yaml",
+          "rule": "A concurrency policy whose cancel_in_progress is not a boolean. The arriving run either waits or cancels, and there is no third answer.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
         }
       ]
     },
@@ -1614,6 +1698,54 @@
           "rule": "A version naming nobody who pushed it. The pusher answers for what it names, secrets included.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs#storage"
+        }
+      ]
+    },
+    "run": {
+      "valid": [
+        {
+          "file": "wire/valid/run-scheduled.json",
+          "covers": "a run a schedule started, attributed to its namespace's built-in identity, finished"
+        },
+        {
+          "file": "wire/valid/run-manual-queued.json",
+          "covers": "a run a person asked for, still queued, with neither a start nor an end"
+        },
+        {
+          "file": "wire/valid/run-called.json",
+          "covers": "a run another workflow called, naming the calling run and step, and attributed to the principal its caller is"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/run-called-without-caller.json",
+          "rule": "A run another workflow called that names no caller. A call is a run asking, and its callee's reader is owed which one.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#triggers"
+        },
+        {
+          "file": "wire/invalid/run-manual-naming-a-caller.json",
+          "rule": "A run a person asked for naming a calling run. Only a call from another workflow has a caller, so from is one shape for one kind.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#triggers"
+        },
+        {
+          "file": "wire/invalid/run-trigger-kind-unknown.json",
+          "rule": "A run started by a kind the Triggers table does not name. cron is a field of a schedule, and the kind is schedule.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#triggers"
+        },
+        {
+          "file": "wire/invalid/run-attributed-to-nobody.json",
+          "rule": "A run attributed to no principal. Every run is let in by the grants of the principal it is attributed to, so one naming nobody is one nobody can account for.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#principals"
+        },
+        {
+          "file": "wire/invalid/run-trigger-spelled-trigger.json",
+          "rule": "A run carrying its trigger kind as trigger. An expression reads run.trigger_kind, and an identifier is the same string in the YAML, the API and the schema.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#exposed-context"
         }
       ]
     },

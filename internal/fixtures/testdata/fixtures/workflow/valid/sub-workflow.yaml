@@ -2,8 +2,9 @@
 # three forms the language accepts, beside a concurrency policy and the two
 # triggers the other fixtures do not exercise.
 # covers: workflow as a string, as a string with a ref after an @, and as an
-#         object; concurrency; webhook response and auth bearer; schedule jitter
-#         and catch_up; retain with a fetch count above one.
+#         object; concurrency; webhook response, the output it returns and auth
+#         bearer; schedule jitter and catch_up; retain with a fetch count above
+#         one.
 # reference: https://agentiik.github.io/docs/#step-keywords
 
 apiVersion: agentiik.dev/v1
@@ -26,6 +27,7 @@ on:
       method: POST
       auth: bearer
       response: sync
+      output: report
       map:
         cycle: ${{ trigger.body.cycle }}
   schedule:

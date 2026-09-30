@@ -10,12 +10,15 @@ import (
 // driver stamps AGK_RUN_ID, AGK_WORKFLOW, AGK_NAMESPACE and AGK_COMMIT from it, and the
 // controller persists it. It lives here rather than in the evaluator because the driver
 // imports this package and will never import the evaluator.
+//
+// Trigger is written trigger_kind, the name an expression reads it by, run.trigger_kind, and the
+// API serves it under: an identifier is the same string everywhere it is written.
 type Run struct {
 	ID          RunID       `json:"id"`
 	Workflow    string      `json:"workflow"`
 	Namespace   string      `json:"namespace"`
 	Commit      string      `json:"commit"`
-	Trigger     TriggerKind `json:"trigger"`
+	Trigger     TriggerKind `json:"trigger_kind"`
 	TriggeredBy string      `json:"triggered_by"`
 	State       RunState    `json:"state"`
 	StartedAt   time.Time   `json:"started_at"`
