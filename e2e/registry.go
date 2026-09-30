@@ -165,16 +165,15 @@ func (in *Installation) carry(tag string) string {
 	return ""
 }
 
-// images builds the three images of the installation from build/*.Dockerfile, around the programs
-// built from this checkout, as a release builds them around the binaries it ships: the API's, which
-// init runs from too, the controller's and the runner's.
+// images builds the two images of the installation from build/*.Dockerfile, around the programs
+// built from this checkout, as a release builds them around the binaries it ships: agentiik's, which
+// init, the API and the controller run from, and the runner's.
 func (in *Installation) images(ctx context.Context) {
 	for _, image := range []struct {
 		name string
 		into *string
 	}{
-		{"api", &in.apiIm},
-		{"controller", &in.controllerIm},
+		{"agentiik", &in.agentiikIm},
 		{"runner", &in.runnerIm},
 	} {
 		tag := "agk-e2e/" + image.name + ":" + in.id
