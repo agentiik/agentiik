@@ -164,7 +164,7 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 	defer stopWatching()
 	go watchCredential(watching, expiry(s.Bus), renewer(in.issuer, s.Bus.CredentialsFile, time.Now), log, time.Now, sleep)
 
-	log.Info("serving", "address", ln.Addr().String(), "tls", s.TLS.Served(), "public_url", s.PublicURL, "console", consoleState(s))
+	log.Info("serving", "address", ln.Addr().String(), "tls", s.TLS.Served(), "public_url", s.PublicURL, "console", consoleState(s), "mcp", mcpState(s))
 	select {
 	case err := <-stopped:
 		return fmt.Errorf("the listener stopped: %w", err)
@@ -192,6 +192,15 @@ func consoleState(s settings) string {
 	default:
 		return "not carried by this build"
 	}
+}
+
+// mcpState is what the start says of the MCP endpoints: served, or off as AGK_MCP asked, so that
+// somebody reading a 404 at /mcp is not left to guess why.
+func mcpState(s settings) string {
+	if s.MCP {
+		return "served"
+	}
+	return "off"
 }
 
 // installation is what serve answers with: the router, over what it holds open.
@@ -415,6 +424,13 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	// The web console, at every address outside the API's roots, where there is one to serve.
 	if s.console != nil {
 		if _, err := api.NewConsole(rt, api.ConsoleOptions{Files: s.console, PublicURL: s.PublicURL}); err != nil {
+			return nil, err
+		}
+	}
+	// The platform's MCP server at /mcp, unless AGK_MCP is off, from this process: "MCP deploys no
+	// new component and opens no new port."
+	if s.MCP {
+		if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: s.PublicURL, Version: moduleVersion()}); err != nil {
 			return nil, err
 		}
 	}

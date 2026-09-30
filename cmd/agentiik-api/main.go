@@ -138,6 +138,15 @@ https://agentiik.github.io/docs/#configuration lists them. --version and --help 
 `, program)
 }
 
+// moduleVersion is the module's version as the build recorded it, which the MCP server names itself
+// with, and (devel) for a build from a working tree, which records none.
+func moduleVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "(devel)"
+}
+
 // versionLine is what --version prints: the module's version, the commit and the toolchain, as
 // the build recorded them, which is the line agk --version prints for itself.
 func versionLine() string {
