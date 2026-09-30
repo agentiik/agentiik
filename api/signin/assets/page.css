@@ -3,15 +3,15 @@
    system's own, since the page loads nothing from anywhere else. */
 :root {
   color-scheme: light dark;
-  --bg: #EFF2ED;
-  --surface: #FBFCF9;
-  --sunken: #E7EBE3;
+  --bg: #F1F1F1;
+  --surface: #FBFBFB;
+  --sunken: #E9E9E9;
   --raised: #FFFFFF;
-  --ink: #16201B;
-  --muted: #5A6961;
-  --line: #DCE2D7;
-  --line-strong: #C0CABB;
-  --accent: #0E6A5F;
+  --ink: #1D1D1D;
+  --muted: #656565;
+  --line: #DFDFDF;
+  --line-strong: #C6C6C6;
+  --accent: #015DA2;
   --on-accent: #FFFFFF;
   --signal: #B23C1E;
   --radius: 6px;
@@ -21,16 +21,16 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0E1310;
-    --surface: #151C18;
-    --sunken: #0A0F0C;
-    --raised: #1B2420;
-    --ink: #E4EAE3;
-    --muted: #94A29A;
-    --line: #26312B;
-    --line-strong: #35423A;
-    --accent: #4FBFAC;
-    --on-accent: #0E1310;
+    --bg: #121212;
+    --surface: #1A1A1A;
+    --sunken: #0E0E0E;
+    --raised: #222222;
+    --ink: #E8E8E8;
+    --muted: #9E9E9E;
+    --line: #2E2E2E;
+    --line-strong: #3E3E3E;
+    --accent: #68AEF5;
+    --on-accent: #121212;
     --signal: #E0705A;
   }
 }
