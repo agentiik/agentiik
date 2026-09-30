@@ -46,7 +46,7 @@ const publicOrigin = "https://agentiik.example.com"
 var reads = []string{
 	"GET /api/v1/runner-pools", "GET /api/v1/runners", "GET /api/v1/users", "GET /api/v1/users/{login}",
 	"GET /api/v1/groups", "GET /api/v1/groups/{group}", "GET /api/v1/auth/tokens", "GET /api/v1/service-accounts",
-	"GET /api/v1/runs", "GET /api/v1/{namespace}/runs", "GET /api/v1/runs/{run}", "GET /api/v1/{namespace}/runs/{run}",
+	"GET /api/v1/runs", "GET /api/v1/{namespace}/runs", "GET /api/v1/{namespace}/stats/runs", "GET /api/v1/runs/{run}", "GET /api/v1/{namespace}/runs/{run}",
 	"GET /api/v1/runs/{run}/steps/{step}/logs", "GET /api/v1/runs/{run}/outputs/{name}",
 	"GET /api/v1/runs/{run}/steps/{step}/outputs/{port}", "GET /api/v1/runs/{run}/steps/{step}/inputs/{port}",
 	"GET /api/v1/artifacts/{uri}", "GET /api/v1/{namespace}/secrets", "GET /api/v1/{namespace}/secrets/{name}",

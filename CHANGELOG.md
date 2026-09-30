@@ -4,11 +4,17 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ## Unreleased
 
+### Upgrading
+
+- `init` applies migration 0063 with nothing to do: it adds `tasks.ready_at`, when a task could first be handed out, null on the tasks written before, which no series counts a queue wait for.
+
 ### API
 
 - The web console is served at the root of the public URL from a build embedded in `agentiik-api` (package `console`), at every address outside `/api`, `/auth`, `/hooks`, `/mcp`, `/objects` and a repository's: a `GET` or a `HEAD` is answered the build's file it names, or else the console's page with its `<base href="/">` rewritten to the public URL's path, and any other method `404` as before. Every answer carries a Content-Security-Policy holding the console to its own origin, `nosniff`, `Referrer-Policy: no-referrer` and an ETag it is revalidated by at every load. A build that skipped the console's stage carries none and serves none, and the line the start logs says whether the console is `served`, `off` or `not carried by this build`.
 - `AGK_CONSOLE` is `on` or `off` and nothing else, `on` where unset: `off` serves no console and every other route, `/auth` among them, and any other value refuses the start naming the variable.
 - A route is registered under `/api`, `/auth`, `/hooks`, `/mcp`, `/objects` or a repository's path, or refused at registration (`api.Router`), so that the console never takes an address of the API's and a proxy sending the API those paths misses none.
+- `GET /api/v1/{ns}/stats/runs` answers the runs of the namespace's workflows as series, bucket by bucket over `from` to `to`, the last 24 hours by default: their states, the p50, p95 and p99 of their duration and of their tasks' queue wait, and the attempts retried by exit code, with `compare=previous` the same span just before and with `histogram` their durations in 1 to 100 bins. Buckets of `1m`, `15m`, `1h` or `1d` fall on whole minutes, quarters, hours and days in UTC and follow the range where none is asked for, 1,000 at most. It counts the workflows the caller holds `run:read` on as `GET /api/v1/runs` lists them, so a namespace or a workflow the caller cannot read counts nothing, as one that does not exist, and a range reaches back as far as the namespace's `max_retention_days`. `Accept: text/csv` has it in CSV.
+- A task's queue wait runs from when it could be handed out, its creation or, for a further attempt, the end of its retry's backoff, which is the step's policy rather than a wait for room, to its dispatch; a wait a skew between two clocks reads below zero is counted as none.
 
 ## v0.5.0, 2026-09-30
 

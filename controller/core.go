@@ -910,6 +910,10 @@ func taskOf(run agk.RunID, step agk.Step, sh graph.ShardState) db.TaskRow {
 		FinishedAt:   sh.FinishedAt,
 		MemoisedFrom: sh.MemoisedFrom,
 		CalledRun:    sh.Called,
+
+		// A further attempt is ready once its backoff has passed, and not when it was decided:
+		// the backoff is the step's retry policy, which the queue wait read from this is not.
+		ReadyAt: sh.NextAttemptAt,
 	}
 	// A code is written for every ending that carries one. The evaluator reads a code only for a
 	// task that succeeded or failed, since a stop and not the code decided the verdict of one

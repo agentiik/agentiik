@@ -555,6 +555,11 @@ type TaskRow struct {
 	Deadline     time.Time
 	PublishedAt  time.Time
 
+	// ReadyAt is when an attempt that waits out a retry's backoff may be handed out, and zero for
+	// any other task, which is ready when its row is first written. It is written once, with the
+	// row, and is what a task's queue wait is read from: see migration 0063.
+	ReadyAt time.Time
+
 	// MemoisedFrom is the run whose task published what a cache hit republished for this one,
 	// which no container ran.
 	MemoisedFrom agk.RunID
@@ -805,8 +810,10 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 	err = w.tx.QueryRow(ctx,
 		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, requeue, state,
 		                    runner, exit_code, log_uri, log_lines, log_truncated,
-		                    dispatched_at, started_at, finished_at, deadline, published_at, usage, memoised_from, called_run)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		                    dispatched_at, started_at, finished_at, deadline, published_at, usage, memoised_from, called_run,
+		                    ready_at)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+		         coalesce($23::timestamptz, now()))
 		 on conflict (namespace, idempotency_key, requeue) do update
 		 set state = case when tasks.state = 'lost'
 		                   and excluded.state in ('pending', 'dispatched', 'running', 'publishing')
@@ -838,7 +845,8 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		t.State.String(), nilIfEmpty(t.Runner), t.ExitCode, log,
 		nilIfZeroInt(t.LogLines), t.LogCut,
 		nilIfZero(t.DispatchedAt), nilIfZero(t.StartedAt), nilIfZero(t.FinishedAt),
-		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage, nilIfEmpty(string(t.MemoisedFrom)), nilIfEmpty(string(t.CalledRun))).Scan(&held, &finished)
+		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage, nilIfEmpty(string(t.MemoisedFrom)), nilIfEmpty(string(t.CalledRun)),
+		nilIfZero(t.ReadyAt)).Scan(&held, &finished)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
 	}
