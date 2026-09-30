@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -97,5 +98,44 @@ steps:
 	}
 	if _, err := g.Fill(map[string]any{"orders": "${{ run.id }}"}, fired); err == nil {
 		t.Error("a map read the id of a run that does not exist yet")
+	}
+}
+
+// "The event root in event triggers only": a webhook's map reading it is refused where the file is
+// read, as any root its position does not expose is, and an event trigger's filter reads it.
+func TestAWebhooksMapReadsNoEvent(t *testing.T) {
+	const doc = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: price-quotes, namespace: sales }
+inputs:
+  orders: {}
+on:
+  %s
+steps:
+  quote:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    script: [quote]
+    outputs: [out]
+`
+	checked := func(on string) error {
+		wf, err := Parse([]byte(fmt.Sprintf(doc, on)))
+		if err != nil {
+			return err
+		}
+		return Check(wf)
+	}
+	err := checked(`webhook:
+    - path: /quotes
+      map:
+        orders: ${{ event.data.orders }}`)
+	var r *Refusal
+	if !errors.As(err, &r) || r.Rule != RuleExpressionUnknownRoot || !strings.Contains(r.Error(), "a webhook's map") {
+		t.Errorf("a webhook's map reading the event was read with %v", err)
+	}
+	if err := checked(`event:
+    - type: com.example.order.approved
+      filter: ${{ event.data.total > 100 }}`); err != nil {
+		t.Errorf("an event trigger's filter reading the event was refused: %v", err)
 	}
 }

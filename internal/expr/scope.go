@@ -62,17 +62,16 @@ func ParseRoot(name string) (Root, bool) {
 }
 
 // Scope is a position in the workflow file, named by what that position may read. It is
-// the table's third column, which is why there are five of them and not one per keyword:
-// the table distinguishes the on block, a step, the shard of a step, and the two
-// positions secrets reaches.
+// the table's third column, which is why there are six of them and not one per keyword:
+// the table distinguishes the on block, where an event trigger reads what a webhook does
+// not, a step, the shard of a step, and the two positions secrets reaches.
 type Scope int
 
-// The five positions the table distinguishes.
+// The six positions the table distinguishes.
 const (
-	// ScopeTrigger is the on block. trigger is the request or the schedule that
-	// started the run, and event is the CloudEvents document an event trigger
-	// matched, which is why both are here and neither is anywhere else in this list
-	// except where the table says so.
+	// ScopeTrigger is an event trigger's entry of the on block, its filter. trigger is
+	// what the on block reads, and event is the CloudEvents document an event trigger
+	// matched, which is why event is here and nowhere else: "Event triggers".
 	ScopeTrigger Scope = iota + 1
 
 	// ScopeStep is a step keyword read once for the step, if and when among them.
@@ -92,6 +91,10 @@ const (
 	// ScopeShardParams is params and secrets of a sharded step: what ScopeParams
 	// reads, and the shard's own item and matrix with it.
 	ScopeShardParams
+
+	// ScopeWebhook is a webhook's entry of the on block, its map: the on block, less the
+	// event, which is an event trigger's alone and which no request carries.
+	ScopeWebhook
 )
 
 // scopeRoots is the table's third column, read the other way round: what each position
@@ -107,6 +110,7 @@ const (
 // expression actually reads.
 var scopeRoots = map[Scope][]Root{
 	ScopeTrigger: {RootWorkflow, RootRun, RootTrigger, RootEvent, RootVars},
+	ScopeWebhook: {RootWorkflow, RootRun, RootTrigger, RootVars},
 	ScopeStep:    {RootWorkflow, RootRun, RootVars, RootInputs, RootSteps},
 	ScopeParams:  {RootWorkflow, RootRun, RootTrigger, RootVars, RootInputs, RootSteps, RootSecrets},
 	ScopeShard:   {RootWorkflow, RootRun, RootVars, RootInputs, RootSteps, RootItem, RootMatrix},
@@ -119,7 +123,8 @@ var scopeRoots = map[Scope][]Root{
 // scopeNames names a position as an error message names it, which is by what an author
 // would call the place they wrote the expression.
 var scopeNames = map[Scope]string{
-	ScopeTrigger:     "the on block",
+	ScopeTrigger:     "an event trigger",
+	ScopeWebhook:     "a webhook's map",
 	ScopeStep:        "a step",
 	ScopeParams:      "the params and secrets of a step",
 	ScopeShard:       "a sharded step",
