@@ -96,6 +96,7 @@ var Cases = []Case{
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}", Scope: api.Namespace, Members: true}},
 	{Route: administer("DELETE", "/api/v1/namespaces/{namespace}")},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}/quotas", Scope: api.Namespace, Members: true}},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/quotas", Scope: api.Namespace, Members: true}},
 	{Route: administer("PUT", "/api/v1/namespaces/{namespace}/quotas"), Refused: true},
 	{Route: administer("GET", "/api/v1/users")},
 	{Route: administer("POST", "/api/v1/users"), Refused: true},

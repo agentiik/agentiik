@@ -7,9 +7,10 @@ import "time"
 // for the range they cover are unlike for no reason that has to do with access, so a clocked route
 // is asked over one range written out.
 var clocked = map[string]bool{
-	"GET /api/v1/{namespace}/stats/runs":  true,
-	"GET /api/v1/{namespace}/stats/steps": true,
-	"GET /api/v1/{namespace}/stats/ports": true,
+	"GET /api/v1/{namespace}/stats/runs":   true,
+	"GET /api/v1/{namespace}/stats/steps":  true,
+	"GET /api/v1/{namespace}/stats/ports":  true,
+	"GET /api/v1/{namespace}/stats/quotas": true,
 }
 
 // Pinned is the query a route is asked with so that what it answers does not follow the clock: for a

@@ -265,11 +265,15 @@ func (q Quotas) stored() db.Quotas {
 // NamespaceOptions are what the namespace routes are given.
 type NamespaceOptions struct {
 	Pool *db.Pool
+
+	// Now is the clock a statistics range defaults to, an argument so that a test has one.
+	Now func() time.Time
 }
 
-// NamespaceAPI serves /api/v1/namespaces.
+// NamespaceAPI serves /api/v1/namespaces, and a namespace's load against its quotas.
 type NamespaceAPI struct {
 	pool *db.Pool
+	now  func() time.Time
 }
 
 // NewNamespaces registers the namespace routes on a router. The router's authorizer has to say
@@ -282,7 +286,10 @@ func NewNamespaces(rt *Router, o NamespaceOptions) (*NamespaceAPI, error) {
 	case o.Pool == nil:
 		return nil, errors.New("api: no database, and a namespace is a row")
 	}
-	s := &NamespaceAPI{pool: o.Pool}
+	if o.Now == nil {
+		o.Now = func() time.Time { return time.Now().UTC() }
+	}
+	s := &NamespaceAPI{pool: o.Pool, now: o.Now}
 
 	admin := Needs{Permission: GrantManage, Scope: Installation}
 	for _, r := range []struct {
@@ -297,6 +304,9 @@ func NewNamespaces(rt *Router, o NamespaceOptions) (*NamespaceAPI, error) {
 		{"DELETE", "/api/v1/namespaces/{namespace}", admin, s.remove},
 		{"GET", "/api/v1/namespaces/{namespace}/quotas", OnNamespace{}, s.quotas},
 		{"PUT", "/api/v1/namespaces/{namespace}/quotas", admin, s.setQuotas},
+		// A namespace's load against its quotas, to whoever reads the quotas, "since a quota
+		// bounds every workflow of it alike".
+		{"GET", "/api/v1/{namespace}/stats/quotas", OnNamespace{}, s.statistics},
 	} {
 		if err := rt.Handle(r.method, r.pattern, r.guard, r.handler); err != nil {
 			return nil, err

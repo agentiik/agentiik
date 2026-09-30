@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // The statistics the console's charts read, computed from the run and task records rather than
@@ -541,4 +543,164 @@ func (w *Wide) PortStatistics(ctx context.Context, of Workflow, b Buckets) (map[
 		out[step][i][port] = items
 	}
 	return out, rows.Err()
+}
+
+// QuotaBucket is what a namespace asked of its quotas in one bucket.
+type QuotaBucket struct {
+	// RunsCreated are the runs created in the bucket, against max_runs_per_hour, and RunsRefused
+	// those refused for it, whatever asked for them: see migration 0064.
+	RunsCreated, RunsRefused int
+
+	// TasksInFlightMax is the most tasks on their way to a runner or at one and not yet ended at
+	// once in the bucket, which is what max_concurrent_tasks counts.
+	TasksInFlightMax int
+
+	// ArtifactBytes is what max_artifact_bytes counted at the bucket's end: the bytes of the live
+	// artifacts, each digest once. ArtifactBytesAdded is the bytes of the artifacts written in the
+	// bucket, each digest once.
+	ArtifactBytes, ArtifactBytesAdded int64
+}
+
+// QuotaStatistics counts what the namespace asked of its quotas, bucket by bucket, every bucket
+// answered, oldest first. A bucket that ended before the namespace's max_retention_days counts
+// nothing, as a series of its runs does: "a range reaches back as far as the namespace keeps its
+// runs, and no further".
+//
+// Read through the namespace's own handle, since what it counts is every workflow of the namespace
+// alike, as a quota bounds them, and whoever reads the namespace reads it.
+func (n *NS) QuotaStatistics(ctx context.Context, b Buckets) ([]QuotaBucket, error) {
+	if err := b.check(); err != nil {
+		return nil, err
+	}
+	w, namespace := n, n.namespace
+	out := make([]QuotaBucket, b.Count)
+	var kept time.Time
+	if err := w.tx.QueryRow(ctx,
+		`select now() - make_interval(days => max_retention_days) from namespaces where name = $1`,
+		namespace).Scan(&kept); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return out, nil
+		}
+		return nil, fmt.Errorf("db: the retention of namespace %s could not be read: %w", namespace, err)
+	}
+	first := b.First
+	if kept.After(first) {
+		first = kept
+	}
+	args := []any{namespace, b.First, b.End(), b.Width.Seconds(), first}
+	bucket := func(at string) string {
+		return "floor(extract(epoch from " + at + " - $2::timestamptz) / $4::float8)::int"
+	}
+	each := func(what, query string, into func(i int, v int64)) error {
+		rows, err := w.tx.Query(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("db: %s could not be counted: %w", what, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var i int
+			var v int64
+			if err := rows.Scan(&i, &v); err != nil {
+				return fmt.Errorf("db: %s could not be counted: %w", what, err)
+			}
+			if i >= 0 && i < b.Count {
+				into(i, v)
+			}
+		}
+		return rows.Err()
+	}
+
+	if err := each("the runs created", `
+		select `+bucket("created_at")+`, count(*) from runs
+		where namespace = $1 and created_at >= $5 and created_at < $3
+		group by 1`, func(i int, v int64) { out[i].RunsCreated = int(v) }); err != nil {
+		return nil, err
+	}
+	if err := each("the runs refused", `
+		select `+bucket("minute")+`, sum(refused) from run_refusals
+		where namespace = $1 and minute >= $5 and minute < $3
+		group by 1`, func(i int, v int64) { out[i].RunsRefused = int(v) }); err != nil {
+		return nil, err
+	}
+	if err := each("the artifact bytes written", `
+		select `+bucket("created_at")+`, sum(bytes) from (
+		  select min(created_at) as created_at, max(size_bytes) as bytes from artifacts
+		  where namespace = $1 and created_at >= $5 and created_at < $3
+		  group by digest, `+bucket("created_at")+`
+		) written
+		group by 1`, func(i int, v int64) { out[i].ArtifactBytesAdded = v }); err != nil {
+		return nil, err
+	}
+	// Live at the end of each bucket, as max_artifact_bytes counted it then: written by then, not
+	// yet expired, and not yet retired, each digest once.
+	if err := each("the artifact bytes held", `
+		select e.i, coalesce((
+		  select sum(bytes) from (
+		    select max(a.size_bytes) as bytes from artifacts a
+		    where a.namespace = $1 and a.created_at < e.at and a.expires_at > e.at
+		      and (a.retired_at is null or a.retired_at > e.at)
+		    group by a.digest) held), 0)::bigint
+		from (select i, $2::timestamptz + make_interval(secs => (i + 1) * $4::float8) as at
+		      from generate_series(0, `+fmt.Sprint(b.Count-1)+`) i) e
+		where e.at > $5 and e.at <= $3::timestamptz`, func(i int, v int64) { out[i].ArtifactBytes = v }); err != nil {
+		return nil, err
+	}
+
+	// The tasks in flight, from when each was handed to the bus to when it ended, or until now for
+	// one that has not: a level that rises and falls at those instants, read at each bucket's
+	// highest and carried into the next from where the bucket before left it. Instants are merged,
+	// so that a task ending as another starts is not two at once.
+	rows, err := w.tx.Query(ctx, `
+		with spans as (
+		  select greatest(published_at, $5::timestamptz) as began,
+		         coalesce(finished_at, case when state in ('succeeded', 'failed', 'lost', 'timed_out', 'cancelled')
+		                                    then published_at else now() end) as ended
+		  from tasks
+		  where namespace = $1 and published_at is not null and published_at < $3
+		),
+		changes as (
+		  select at, sum(d) as d from (
+		    select began as at, 1 as d from spans where ended > began
+		    union all
+		    select ended, -1 from spans where ended > began and ended < $3
+		  ) c
+		  group by at
+		),
+		levels as (
+		  select at, sum(d) over (order by at) as level from changes
+		)
+		select `+bucket("at")+`, max(level), (array_agg(level order by at desc))[1]
+		from levels
+		where at >= $5
+		group by 1
+		order by 1`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("db: the tasks in flight could not be counted: %w", err)
+	}
+	defer rows.Close()
+	type read struct{ high, last int }
+	levels := map[int]read{}
+	for rows.Next() {
+		var i int
+		var high, last int64
+		if err := rows.Scan(&i, &high, &last); err != nil {
+			return nil, fmt.Errorf("db: the tasks in flight could not be counted: %w", err)
+		}
+		levels[i] = read{int(high), int(last)}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: the tasks in flight could not be counted: %w", err)
+	}
+	carried := 0
+	for i := range out {
+		if !b.First.Add(time.Duration(i+1) * b.Width).After(first) {
+			continue
+		}
+		out[i].TasksInFlightMax = carried
+		if l, changed := levels[i]; changed {
+			out[i].TasksInFlightMax = max(carried, l.high)
+			carried = l.last
+		}
+	}
+	return out, nil
 }

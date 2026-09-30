@@ -158,6 +158,12 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 		return err
 	}
 	if err := n.withinRunsPerHour(ctx); err != nil {
+		var reached *RunsPerHourReached
+		if errors.As(err, &reached) {
+			if err := n.refused(ctx); err != nil {
+				return err
+			}
+		}
 		return err
 	}
 
@@ -257,6 +263,25 @@ func (n *NS) withinRunsPerHour(ctx context.Context) error {
 		return fmt.Errorf("db: the runs namespace %s created in the last 60 minutes could not be counted: %w", n.namespace, err)
 	}
 	return &RunsPerHourReached{Namespace: n.namespace, Limit: limit, RetryAfter: leaves.Sub(now)}
+}
+
+// refused counts one run refused for max_runs_per_hour in the minute it was refused in, in the
+// transaction that refused it, and lets go of the minutes older than the namespace keeps its runs:
+// see migration 0064. The transaction is the caller's to commit, which a caller that answers the
+// refusal rather than recording it elsewhere does with nothing else in it.
+func (n *NS) refused(ctx context.Context) error {
+	if _, err := n.tx.Exec(ctx,
+		`delete from run_refusals r using namespaces s
+		 where r.namespace = $1 and s.name = r.namespace
+		   and r.minute < now() - make_interval(days => s.max_retention_days)`, n.namespace); err != nil {
+		return fmt.Errorf("db: the refusals namespace %s no longer keeps could not be let go: %w", n.namespace, err)
+	}
+	if _, err := n.tx.Exec(ctx,
+		`insert into run_refusals (namespace, minute, refused) values ($1, date_trunc('minute', now()), 1)
+		 on conflict (namespace, minute) do update set refused = run_refusals.refused + 1`, n.namespace); err != nil {
+		return fmt.Errorf("db: the run refused in namespace %s could not be counted: %w", n.namespace, err)
+	}
+	return nil
 }
 
 // RequestCancel records that a run is to be cancelled, and answers the state it is in and whether
