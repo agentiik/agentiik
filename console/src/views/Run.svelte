@@ -1,0 +1,516 @@
+<script lang="ts">
+  import { untrack } from "svelte";
+  import type { API, Me } from "../api/client";
+  import Pane from "../components/Pane.svelte";
+  import StatePill from "../components/StatePill.svelte";
+  import Refused from "./Refused.svelte";
+  import { band } from "../lib/exit";
+  import { between, clock, took } from "../lib/format";
+  import { holds } from "../lib/permissions";
+  import { follow, type Place } from "../lib/place.svelte";
+  import { lastAttempt, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
+
+  // The run inspector: one run, each step's verdict and shards on the left, and on the right the step
+  // chosen, its tasks, the exit code of the one chosen and what it means, and the envelopes its ports
+  // published and were handed, by digest, size and item count. What an envelope holds is envelope
+  // contents, which run:read_data guards, and a principal without it is shown no pane of it at all.
+  let { api, place, me, namespace, id }: { api: API; place: Place; me: Me; namespace: string; id: string } = $props();
+
+  const reader = $derived(new RunReader(api, id));
+  let now = $state(Date.now());
+
+  $effect(() => {
+    const r = reader;
+    untrack(() => r.read());
+  });
+
+  // Read again every five seconds until the run has ended, and move the durations every second.
+  $effect(() => {
+    const r = reader;
+    const reading = setInterval(() => {
+      if (!r.ended && document.visibilityState === "visible") {
+        r.read();
+      }
+    }, 5000);
+    const ticking = setInterval(() => (now = Date.now()), 1000);
+    return () => {
+      clearInterval(reading);
+      clearInterval(ticking);
+    };
+  });
+
+  const run = $derived(reader.run);
+  // A run read under another namespace's address is not this address's run: the address names both.
+  const here = $derived(run !== null && run.namespace === namespace);
+
+  // The step chosen: the one the address names, or the first that failed, or the last that ran.
+  const chosenStep = $derived.by(() => {
+    if (!run) return undefined;
+    const named = place.query.get("step");
+    if (named && run.steps.some((s) => s.step === named)) return named;
+    return (run.steps.find((s) => s.verdict === "failed") ?? [...run.steps].reverse().find((s) => s.verdict !== "pending") ?? run.steps[0])?.step;
+  });
+  const step = $derived(run?.steps.find((s) => s.step === chosenStep));
+  const tasks = $derived(run && chosenStep ? tasksOf(run, chosenStep) : []);
+
+  // The task chosen: the one the address names, or the first of the last attempt that failed.
+  const task = $derived.by((): TaskSummary | undefined => {
+    const named = place.query.get("task");
+    return tasks.find((t) => t.task === named) ?? tasks.find((t) => t.state === "failed" || t.state === "timed_out" || t.state === "lost") ?? tasks[0];
+  });
+
+  const readsData = $derived(run ? holds(me, "run:read_data", run.namespace, run.workflow) : false);
+
+  let side = $state<"output" | "input">("output");
+  const ports = $derived<Record<string, EnvelopeReference>>((side === "output" ? step?.ports : task?.inputs) ?? {});
+
+  function choose(query: Record<string, string>) {
+    const q = new URLSearchParams(place.query);
+    for (const [k, v] of Object.entries(query)) q.set(k, v);
+    if (query.step) q.delete("task");
+    place.narrow(q);
+  }
+
+  function shortDigest(d: string): string {
+    return d.replace(/^sha256:/, "").slice(0, 12);
+  }
+
+  function bytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MiB`;
+  }
+
+  function lasted(start?: string, end?: string): string {
+    const ms = between(start, end, now);
+    return ms === undefined ? "" : took(ms);
+  }
+
+  const runs = $derived({ kind: "namespace" as const, namespace, view: "runs" as const });
+</script>
+
+{#if reader.missing || (run && !here)}
+  <Refused />
+{:else if reader.refused}
+  <Pane title="Run"><p class="refused" role="alert">The run could not be read: {reader.refused}</p></Pane>
+{:else if run}
+  <div class="inspector">
+    <Pane title="Run" aside="{run.namespace}/{run.workflow}@{run.commit.slice(0, 7)}">
+      <div class="head">
+        <StatePill state={run.state} live={!reader.ended} />
+        <span class="mono id">{run.run}</span>
+        <span class="mono name">{run.workflow}</span>
+        <span class="muted">
+          <span class="mono">{run.trigger_kind}</span>
+          · created <time class="mono" datetime={run.created_at} title={run.created_at}>{clock(run.created_at, now)}</time>
+          {#if run.started_at}· took <span class="mono">{lasted(run.started_at, run.finished_at)}</span>{/if}
+          · by <span class="mono">{run.triggered_by}</span>
+        </span>
+        <a class="back" href={place.href(runs)} onclick={follow(place, runs)}>All runs of {namespace}</a>
+      </div>
+      {#if run.reason}<p class="reason">{run.reason}</p>{/if}
+      {#if run.replay_of}
+        <p class="muted">Replays <span class="mono">{run.replay_of}</span>{#if run.replay_from}&nbsp;from <span class="mono">{run.replay_from}</span>{/if}.</p>
+      {/if}
+      <ol class="path" aria-label="Steps in order">
+        {#each run.steps as s (s.step)}
+          <li class={s.verdict}><span class="dot" aria-hidden="true"></span><span class="mono">{s.step}</span></li>
+        {/each}
+      </ol>
+    </Pane>
+
+    <div class="columns">
+      <Pane title="Steps" aside={String(run.steps.length)}>
+        <ul class="steps">
+          {#each run.steps as s (s.step)}
+            {@const cells = lastAttempt(run, s.step)}
+            <li>
+              <button class="step" class:chosen={s.step === chosenStep} aria-pressed={s.step === chosenStep} onclick={() => choose({ step: s.step })}>
+                <StatePill state={s.verdict} live={!reader.ended} />
+                <span class="mono name">{s.step}</span>
+                <span class="mono muted took">{lasted(s.started_at, s.finished_at)}</span>
+                <span class="sub muted">
+                  {#if s.verdict === "pending" && s.attempts === 0}
+                    not reached
+                  {:else}
+                    {cells.length > 1 || cells[0]?.shard ? `${cells.length} shards · ` : ""}attempt {s.attempts}
+                  {/if}
+                </span>
+                {#if cells.length > 1 || cells[0]?.shard}
+                  <span class="cells" aria-hidden="true">
+                    {#each cells as c (c.task)}<span class="cell {c.state}"></span>{/each}
+                  </span>
+                {/if}
+              </button>
+            </li>
+          {/each}
+        </ul>
+        {#if run.outputs && Object.keys(run.outputs).length > 0}
+          <h3>Workflow outputs</h3>
+          <dl class="outputs">
+            {#each Object.entries(run.outputs) as [name, out] (name)}
+              <dt class="mono">{name}</dt>
+              <dd class="muted mono">{out.step}.{out.port} · {out.count} items</dd>
+            {/each}
+          </dl>
+        {/if}
+      </Pane>
+
+      {#if step}
+        <Pane title={task?.shard ? `${step.step} · shard ${task.shard.index}/${task.shard.of} · attempt ${task.attempt}` : task ? `${step.step} · attempt ${task.attempt}` : step.step} focused>
+          {#if task?.exit_code !== undefined}
+            {@const meaning = band(task.exit_code)}
+            <p class="exit {meaning.tone}">
+              <strong class="mono">exit {task.exit_code}</strong>
+              <span>{meaning.name}: {meaning.handling}</span>
+            </p>
+          {/if}
+
+          <table class="tasks">
+            <thead>
+              <tr><th>Task</th><th>State</th><th>Runner</th><th class="number">Exit</th><th class="number">Took</th></tr>
+            </thead>
+            <tbody>
+              {#each tasks as t (t.task)}
+                <tr class:chosen={t.task === task?.task} onclick={() => choose({ step: step.step, task: t.task })}>
+                  <td class="mono">
+                    <button class="link" onclick={(e) => { e.stopPropagation(); choose({ step: step.step, task: t.task }); }}>
+                      {t.shard ? `${t.shard.index}/${t.shard.of} · ` : ""}attempt {t.attempt}
+                    </button>
+                  </td>
+                  <td><StatePill state={t.state} live={!reader.ended} /></td>
+                  <td class="mono muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : "")}</td>
+                  <td class="number mono">{t.exit_code ?? ""}</td>
+                  <td class="number mono">{lasted(t.started_at, t.finished_at)}</td>
+                </tr>
+              {:else}
+                <tr><td colspan="5" class="muted empty">No task of this step has been created.</td></tr>
+              {/each}
+            </tbody>
+          </table>
+
+          <div class="ports">
+            <div class="sides" role="tablist" aria-label="Envelopes">
+              <button role="tab" aria-selected={side === "output"} onclick={() => (side = "output")}>Output</button>
+              <button role="tab" aria-selected={side === "input"} onclick={() => (side = "input")}>Input</button>
+            </div>
+            {#if Object.keys(ports).length === 0}
+              <p class="muted">{side === "output" ? "The step has published nothing yet." : "The task chosen was handed nothing, or was never dispatched."}</p>
+            {:else}
+              <table class="envelopes">
+                <thead><tr><th>Port</th><th class="number">Items</th><th class="number">Size</th><th>Digest</th></tr></thead>
+                <tbody>
+                  {#each Object.entries(ports) as [port, e] (port)}
+                    <tr>
+                      <td class="mono name port {port}">{port}</td>
+                      <td class="number mono">{e.items}</td>
+                      <td class="number mono">{bytes(e.size)}</td>
+                      <td class="mono muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            {/if}
+            {#if !readsData}
+              <p class="faint">What the envelopes hold is not shown: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+            {/if}
+          </div>
+        </Pane>
+      {/if}
+    </div>
+  </div>
+{/if}
+
+<style>
+  .inspector {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--unit) * 12);
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--unit) * 6);
+    font-size: var(--type-identifier-size-max);
+  }
+
+  .id {
+    font-weight: 600;
+  }
+
+  .name {
+    font-weight: 600;
+  }
+
+  .back {
+    margin-left: auto;
+    font-size: var(--type-control-size);
+  }
+
+  .reason {
+    margin: calc(var(--unit) * 5) 0 0;
+    color: var(--failed);
+  }
+
+  .path {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--unit) * 3) calc(var(--unit) * 8);
+    margin: calc(var(--unit) * 6) 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--muted);
+    font-size: var(--type-identifier-size-min);
+  }
+
+  .path li {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--unit) * 2);
+  }
+
+  .path .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-round);
+    background: var(--faint);
+  }
+
+  .path .succeeded .dot {
+    background: var(--succeeded);
+  }
+
+  .path .failed .dot {
+    background: var(--failed);
+  }
+
+  .path .running .dot {
+    background: var(--running);
+  }
+
+  .columns {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: calc(var(--unit) * 7);
+    align-items: start;
+  }
+
+  .steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: calc(var(--unit) * 2) calc(var(--unit) * 5);
+    width: 100%;
+    padding: calc(var(--unit) * 5) calc(var(--unit) * 5);
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: var(--radius-control);
+    background: none;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .step:hover {
+    background: var(--raised);
+  }
+
+  .step.chosen {
+    border-left-color: var(--accent);
+    background: var(--raised);
+  }
+
+  .step .took {
+    font-size: var(--type-identifier-size-min);
+  }
+
+  .step .sub {
+    grid-column: 2 / 4;
+    font-size: var(--type-identifier-size-min);
+  }
+
+  .cells {
+    grid-column: 2 / 4;
+    display: flex;
+    gap: 3px;
+  }
+
+  .cell {
+    width: 12px;
+    height: 8px;
+    border-radius: 2px;
+    background: var(--line);
+  }
+
+  .cell.succeeded {
+    background: var(--succeeded);
+  }
+
+  .cell.failed,
+  .cell.timed_out,
+  .cell.lost {
+    background: var(--failed);
+  }
+
+  .cell.running,
+  .cell.dispatched,
+  .cell.publishing {
+    background: var(--running);
+  }
+
+  h3 {
+    margin: calc(var(--unit) * 9) 0 calc(var(--unit) * 3);
+    color: var(--faint);
+    font-size: var(--type-columnHead-size);
+    font-weight: var(--type-columnHead-weight);
+    letter-spacing: var(--type-columnHead-tracking);
+    text-transform: var(--type-columnHead-case);
+  }
+
+  .outputs {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: calc(var(--unit) * 2) calc(var(--unit) * 6);
+    margin: 0;
+    font-size: var(--type-identifier-size-min);
+  }
+
+  .outputs dd {
+    margin: 0;
+  }
+
+  .exit {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--unit) * 5);
+    margin: 0 0 calc(var(--unit) * 7);
+    padding: calc(var(--unit) * 4) calc(var(--unit) * 6);
+    border-radius: var(--radius-innerPanel);
+    font-size: var(--type-navigation-size);
+  }
+
+  .exit.failed {
+    background: var(--failedFill);
+    color: var(--failed);
+  }
+
+  .exit.waiting {
+    background: var(--waitingFill);
+    color: var(--waiting);
+  }
+
+  .exit.succeeded {
+    background: var(--succeededFill);
+    color: var(--succeeded);
+  }
+
+  .exit.quiet {
+    background: var(--sunken);
+    color: var(--muted);
+  }
+
+  .exit span {
+    color: var(--text);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  th {
+    height: var(--row-header);
+    padding: 0 calc(var(--unit) * 4);
+    border-bottom: var(--border-hairline) solid var(--line);
+    color: var(--faint);
+    font-size: var(--type-columnHead-size);
+    font-weight: var(--type-columnHead-weight);
+    letter-spacing: var(--type-columnHead-tracking);
+    text-align: left;
+    text-transform: var(--type-columnHead-case);
+  }
+
+  td {
+    height: 36px;
+    padding: 0 calc(var(--unit) * 4);
+    border-bottom: var(--border-hairline) solid var(--line);
+    font-size: var(--type-identifier-size-min);
+    white-space: nowrap;
+  }
+
+  .tasks tbody tr {
+    cursor: pointer;
+  }
+
+  .tasks tbody tr:hover,
+  .tasks tbody tr.chosen {
+    background: var(--raised);
+  }
+
+  .tasks tr.chosen td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .number {
+    text-align: right;
+  }
+
+  .link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .empty {
+    height: 64px;
+    text-align: center;
+  }
+
+  .ports {
+    margin-top: calc(var(--unit) * 9);
+  }
+
+  .sides {
+    display: flex;
+    gap: calc(var(--unit) * 2);
+    margin-bottom: calc(var(--unit) * 4);
+    border-bottom: var(--border-hairline) solid var(--line);
+  }
+
+  .sides button {
+    padding: calc(var(--unit) * 3) calc(var(--unit) * 5);
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--muted);
+    font-size: var(--type-control-size);
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .sides button[aria-selected="true"] {
+    border-bottom-color: var(--accent);
+    color: var(--text);
+  }
+
+  .port.rejected {
+    color: var(--waiting);
+  }
+
+  .port.error {
+    color: var(--failed);
+  }
+
+  .refused {
+    color: var(--failed);
+  }
+</style>

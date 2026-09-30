@@ -4,8 +4,8 @@
   "info": {
     "title": "Agentiik API",
     "version": "0.5.0",
-    "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces and their quotas, grants and API tokens; the workflow repositories; the runs listed; and the statistics the console's charts read.",
-    "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, and the runs listing and the statistics routes of v0.6.0, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
+    "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces and their quotas, grants and API tokens; the workflow repositories; the runs listed and read; and the statistics the console's charts read.",
+    "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, and the runs listing, a run read whole and the statistics routes of v0.6.0, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
   },
   "externalDocs": {
     "description": "The documentation, which decides what the API does: this document follows it.",
@@ -66,7 +66,7 @@
     },
     {
       "name": "runs",
-      "description": "Runs, listed across the namespaces the caller reads. From v0.6.0 in this document, served since v0.2.0."
+      "description": "Runs, listed across the namespaces the caller reads, and read one by one. From v0.6.0 in this document, served since v0.2.0."
     },
     {
       "name": "statistics",
@@ -5111,6 +5111,141 @@
           },
           "401": {
             "$ref": "#/components/responses/unauthorised"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runId"
+        }
+      ],
+      "get": {
+        "operationId": "getRun",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Read a run",
+        "description": "A run whole: its state, what started it and whom it is attributed to, each step's verdict and the envelopes it published, each task with the envelopes it was handed, its runner and its exit code, and for a replay the run and the step it replays from. Its inputs are envelope contents, answered only to a caller holding run:read_data on the run's workflow and otherwise left out. Requires run:read on the run's workflow. The same answer as GET /api/v1/{ns}/runs/{id}, the path a Location names a run by.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "200": {
+            "description": "The run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runDetail"
+                },
+                "examples": {
+                  "failed": {
+                    "summary": "a run whose invoice step failed",
+                    "value": {
+                      "namespace": "finance",
+                      "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                      "workflow": "monthly-invoicing",
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "state": "failed",
+                      "trigger_kind": "manual",
+                      "triggered_by": "alice",
+                      "created_at": "2026-10-01T05:41:03Z",
+                      "started_at": "2026-10-01T05:41:03Z",
+                      "finished_at": "2026-10-01T05:42:55Z",
+                      "inputs": {
+                        "orders": {
+                          "meta": {
+                            "count": 214
+                          }
+                        }
+                      },
+                      "replay_from_start_only": false,
+                      "steps": [
+                        {
+                          "step": "normalize",
+                          "verdict": "succeeded",
+                          "attempts": 1,
+                          "started_at": "2026-10-01T05:41:03Z",
+                          "finished_at": "2026-10-01T05:41:05Z",
+                          "ports": {
+                            "ok": {
+                              "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                              "size": 10412,
+                              "items": 214
+                            }
+                          }
+                        },
+                        {
+                          "step": "invoice",
+                          "verdict": "failed",
+                          "attempts": 2,
+                          "started_at": "2026-10-01T05:41:05Z",
+                          "finished_at": "2026-10-01T05:42:55Z",
+                          "ports": {
+                            "out": {
+                              "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                              "size": 4212,
+                              "items": 211
+                            },
+                            "error": {
+                              "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+                              "size": 212,
+                              "items": 3
+                            }
+                          }
+                        },
+                        {
+                          "step": "archive",
+                          "verdict": "pending",
+                          "attempts": 0
+                        }
+                      ],
+                      "tasks": [
+                        {
+                          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+                          "step": "normalize",
+                          "state": "succeeded",
+                          "attempt": 1,
+                          "runner": "runner-dmz-02",
+                          "exit_code": 0,
+                          "started_at": "2026-10-01T05:41:03Z",
+                          "finished_at": "2026-10-01T05:41:05Z"
+                        },
+                        {
+                          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+                          "step": "invoice",
+                          "state": "failed",
+                          "attempt": 2,
+                          "shard": {
+                            "index": 3,
+                            "of": 8
+                          },
+                          "runner": "runner-dmz-02",
+                          "exit_code": 108,
+                          "started_at": "2026-10-01T05:42:24Z",
+                          "finished_at": "2026-10-01T05:42:32Z",
+                          "inputs": {
+                            "in": {
+                              "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                              "size": 10412,
+                              "items": 27
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
           }
         }
       }
@@ -13072,6 +13207,752 @@
             "runs": []
           }
         ]
+      },
+      "envelopeReference": {
+        "title": "Envelope reference",
+        "type": "object",
+        "required": [
+          "digest",
+          "size",
+          "items"
+        ],
+        "additionalProperties": false,
+        "description": "An envelope as the database keeps it: its digest, its size and how many items it holds, never its items. The bytes are in the object store, read with run:read_data by the routes that answer an envelope; this is what run:read sees of one.",
+        "examples": [
+          {
+            "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+            "size": 4212,
+            "items": 211
+          },
+          {
+            "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+            "size": 212,
+            "items": 3,
+            "purged_at": "2026-10-31T05:42:55Z"
+          }
+        ],
+        "properties": {
+          "digest": {
+            "$ref": "wire.schema.json#/$defs/digest",
+            "description": "The envelope's digest, which names it in the object store and is kept after its bytes are purged.",
+            "examples": [
+              "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+            ]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The envelope's size in bytes.",
+            "examples": [
+              4212
+            ]
+          },
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many items the envelope holds, from its meta.count.",
+            "examples": [
+              211,
+              0
+            ]
+          },
+          "purged_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When the bytes behind the digest were purged with the run's retention. Absent while they are there.",
+            "examples": [
+              "2026-10-31T05:42:55Z"
+            ]
+          }
+        }
+      },
+      "stepSummary": {
+        "title": "Step summary",
+        "type": "object",
+        "required": [
+          "step",
+          "verdict",
+          "attempts"
+        ],
+        "additionalProperties": false,
+        "description": "One step of a run as a screen shows it: its verdict, how many attempts it took, when it ran, and the envelope each of its output ports published.",
+        "examples": [
+          {
+            "step": "invoice",
+            "verdict": "failed",
+            "attempts": 2,
+            "started_at": "2026-10-01T05:41:04Z",
+            "finished_at": "2026-10-01T05:42:55Z",
+            "ports": {
+              "out": {
+                "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                "size": 4212,
+                "items": 211
+              },
+              "error": {
+                "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+                "size": 212,
+                "items": 3
+              }
+            }
+          }
+        ],
+        "properties": {
+          "step": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The step, by the name the workflow file gives it.",
+            "examples": [
+              "invoice"
+            ]
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "skipped",
+              "cancelled"
+            ],
+            "description": "Where the step stands: pending before it starts, or while it waits for another attempt; running while a shard of it is in flight; succeeded once it published its ports; failed, which continue_on_error does not change; skipped where its if was false; cancelled with its run.",
+            "examples": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many attempts the step has been given, 0 before its first.",
+            "examples": [
+              1,
+              2
+            ]
+          },
+          "started_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When its first attempt started. Absent before.",
+            "examples": [
+              "2026-10-01T05:41:04Z"
+            ]
+          },
+          "finished_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When it reached its verdict. Absent while it has none.",
+            "examples": [
+              "2026-10-01T05:42:55Z"
+            ]
+          },
+          "ports": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "wire.schema.json#/$defs/identifier"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/envelopeReference"
+            },
+            "description": "The envelope each output port published, by port. Absent before the step published anything.",
+            "examples": [
+              {
+                "out": {
+                  "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                  "size": 4212,
+                  "items": 211
+                }
+              }
+            ]
+          }
+        }
+      },
+      "taskSummary": {
+        "title": "Task summary",
+        "type": "object",
+        "required": [
+          "task",
+          "step",
+          "state",
+          "attempt"
+        ],
+        "additionalProperties": false,
+        "description": "One task of a run, which is one shard of one attempt of one step: where it stands, which runner held it, how it ended, and the envelopes it was handed.",
+        "examples": [
+          {
+            "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+            "step": "invoice",
+            "state": "failed",
+            "attempt": 2,
+            "shard": {
+              "index": 3,
+              "of": 8
+            },
+            "runner": "runner-dmz-02",
+            "exit_code": 108,
+            "started_at": "2026-10-01T05:42:24Z",
+            "finished_at": "2026-10-01T05:42:32Z",
+            "inputs": {
+              "in": {
+                "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                "size": 10412,
+                "items": 27
+              }
+            }
+          },
+          {
+            "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+            "step": "normalize",
+            "state": "succeeded",
+            "attempt": 1,
+            "memoised_from": "01JMZ8Q6F1T7QK2N4D6F8H0A2F",
+            "started_at": "2026-10-01T05:41:03Z",
+            "finished_at": "2026-10-01T05:41:03Z"
+          }
+        ],
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The task's identifier: the run, the step and the attempt, run/step/attempt, and the shard's index and cardinality after them, run/step/attempt/index/of, where a fan-out produced it.",
+            "examples": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+            ]
+          },
+          "step": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The step it is an attempt of.",
+            "examples": [
+              "invoice"
+            ]
+          },
+          "state": {
+            "$ref": "wire.schema.json#/$defs/taskState",
+            "description": "Where the task stands.",
+            "examples": [
+              "failed",
+              "running"
+            ]
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Which attempt of its step it is, counted from one, as AGK_ATTEMPT carries it.",
+            "examples": [
+              2
+            ]
+          },
+          "shard": {
+            "$ref": "wire.schema.json#/$defs/shard",
+            "description": "Which shard of a fan-out it is. Absent where the step is not fanned out.",
+            "examples": [
+              {
+                "index": 3,
+                "of": 8
+              }
+            ]
+          },
+          "runner": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The runner that held it, by name, never its host. Absent before one held it, and for a cache hit or a call, which no runner holds.",
+            "examples": [
+              "runner-dmz-02"
+            ]
+          },
+          "exit_code": {
+            "type": "integer",
+            "description": "The exit code its ending carries, a stopped container's included, where a container started and reported one, or where the engine could not build the task, which is 120. Absent otherwise.",
+            "examples": [
+              108,
+              0
+            ]
+          },
+          "started_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When its container started. Absent before.",
+            "examples": [
+              "2026-10-01T05:42:24Z"
+            ]
+          },
+          "finished_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When it ended. Absent while it has not.",
+            "examples": [
+              "2026-10-01T05:42:32Z"
+            ]
+          },
+          "memoised_from": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "For a cache hit, which republished envelopes without starting a container, the run whose task published them.",
+            "examples": [
+              "01JMZ8Q6F1T7QK2N4D6F8H0A2F"
+            ]
+          },
+          "called": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "For a workflow: step's task, the run the call started, whose ending is this task's.",
+            "examples": [
+              "01M2AAZ9G62NQXFAFCXKRPJEH5"
+            ]
+          },
+          "inputs": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "wire.schema.json#/$defs/identifier"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/envelopeReference"
+            },
+            "description": "The envelopes the task was handed on its input ports, by digest, from the grant it was dispatched with. Absent for a task never dispatched.",
+            "examples": [
+              {
+                "in": {
+                  "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                  "size": 10412,
+                  "items": 27
+                }
+              }
+            ]
+          }
+        }
+      },
+      "runDetail": {
+        "title": "Run detail",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "namespace",
+          "run",
+          "workflow",
+          "commit",
+          "state",
+          "trigger_kind",
+          "created_at",
+          "replay_from_start_only",
+          "steps",
+          "tasks"
+        ],
+        "description": "One run whole: the record the listing gives, then what became of every part of it, its steps and each of their tasks, the envelopes they published and were handed by digest, and why it ended where nothing in its workflow ended it. Its inputs are envelope contents, answered only to a caller holding run:read_data on the run's workflow.",
+        "examples": [
+          {
+            "namespace": "finance",
+            "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+            "workflow": "monthly-invoicing",
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            "state": "failed",
+            "trigger_kind": "manual",
+            "triggered_by": "alice",
+            "created_at": "2026-10-01T05:41:03Z",
+            "started_at": "2026-10-01T05:41:03Z",
+            "finished_at": "2026-10-01T05:42:55Z",
+            "inputs": {
+              "orders": {
+                "meta": {
+                  "count": 214
+                }
+              }
+            },
+            "replay_from_start_only": false,
+            "steps": [
+              {
+                "step": "normalize",
+                "verdict": "succeeded",
+                "attempts": 1,
+                "started_at": "2026-10-01T05:41:03Z",
+                "finished_at": "2026-10-01T05:41:05Z",
+                "ports": {
+                  "ok": {
+                    "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                    "size": 10412,
+                    "items": 214
+                  }
+                }
+              },
+              {
+                "step": "invoice",
+                "verdict": "failed",
+                "attempts": 2,
+                "started_at": "2026-10-01T05:41:05Z",
+                "finished_at": "2026-10-01T05:42:55Z",
+                "ports": {
+                  "out": {
+                    "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                    "size": 4212,
+                    "items": 211
+                  },
+                  "error": {
+                    "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+                    "size": 212,
+                    "items": 3
+                  }
+                }
+              },
+              {
+                "step": "archive",
+                "verdict": "pending",
+                "attempts": 0
+              }
+            ],
+            "tasks": [
+              {
+                "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+                "step": "normalize",
+                "state": "succeeded",
+                "attempt": 1,
+                "runner": "runner-dmz-02",
+                "exit_code": 0,
+                "started_at": "2026-10-01T05:41:03Z",
+                "finished_at": "2026-10-01T05:41:05Z"
+              },
+              {
+                "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+                "step": "invoice",
+                "state": "failed",
+                "attempt": 2,
+                "shard": {
+                  "index": 3,
+                  "of": 8
+                },
+                "runner": "runner-dmz-02",
+                "exit_code": 108,
+                "started_at": "2026-10-01T05:42:24Z",
+                "finished_at": "2026-10-01T05:42:32Z",
+                "inputs": {
+                  "in": {
+                    "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                    "size": 10412,
+                    "items": 27
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "namespace": {
+            "$ref": "wire.schema.json#/$defs/namespace",
+            "description": "The namespace the run is in.",
+            "examples": [
+              "finance"
+            ]
+          },
+          "run": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "The run's identifier.",
+            "examples": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+            ]
+          },
+          "workflow": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The workflow it is a run of.",
+            "examples": [
+              "monthly-invoicing"
+            ]
+          },
+          "commit": {
+            "$ref": "wire.schema.json#/$defs/commit",
+            "description": "The commit the run is pinned to.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          },
+          "state": {
+            "$ref": "wire.schema.json#/$defs/runState",
+            "description": "Where the run is.",
+            "examples": [
+              "failed"
+            ]
+          },
+          "trigger_kind": {
+            "$ref": "wire.schema.json#/$defs/triggerKind",
+            "description": "What started it.",
+            "examples": [
+              "manual"
+            ]
+          },
+          "triggered_by": {
+            "$ref": "wire.schema.json#/$defs/principalRef",
+            "description": "The principal the run is attributed to.",
+            "examples": [
+              "alice",
+              "finance/agentiik"
+            ]
+          },
+          "from": {
+            "$ref": "wire.schema.json#/$defs/run/properties/from",
+            "description": "The run and the step that called this one, for a run whose trigger_kind is workflow.",
+            "examples": [
+              {
+                "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                "step": "remind"
+              }
+            ]
+          },
+          "created_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When the run was written.",
+            "examples": [
+              "2026-10-01T05:41:03Z"
+            ]
+          },
+          "started_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When it was let in. Absent while it is queued.",
+            "examples": [
+              "2026-10-01T05:41:03Z"
+            ]
+          },
+          "finished_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When it ended. Absent while it has not.",
+            "examples": [
+              "2026-10-01T05:42:55Z"
+            ]
+          },
+          "inputs": {
+            "type": "object",
+            "description": "What the run was started with, each workflow input as it was given. Envelope contents, so answered only to a caller holding run:read_data on the run's workflow, and otherwise left out, as for a run started with none.",
+            "examples": [
+              {
+                "orders": {
+                  "meta": {
+                    "count": 214
+                  }
+                }
+              }
+            ]
+          },
+          "outputs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "step",
+                "port",
+                "count"
+              ],
+              "additionalProperties": false,
+              "description": "A declared output: the step and the port it is a view of, and how many items that port published.",
+              "examples": [
+                {
+                  "step": "archive",
+                  "port": "out",
+                  "count": 211
+                }
+              ],
+              "properties": {
+                "step": {
+                  "$ref": "wire.schema.json#/$defs/identifier",
+                  "description": "The step the output is a view of.",
+                  "examples": [
+                    "archive"
+                  ]
+                },
+                "port": {
+                  "$ref": "wire.schema.json#/$defs/identifier",
+                  "description": "Its port.",
+                  "examples": [
+                    "out"
+                  ]
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "How many items it holds.",
+                  "examples": [
+                    211
+                  ]
+                }
+              }
+            },
+            "description": "The run's declared outputs, recorded when it succeeds with every one of them published, by name. Absent before.",
+            "examples": [
+              {
+                "archived": {
+                  "step": "archive",
+                  "port": "out",
+                  "count": 211
+                }
+              }
+            ]
+          },
+          "replay_from_start_only": {
+            "type": "boolean",
+            "description": "Whether an input a step could restart from has been purged, so that the run replays from its start only and a screen does not offer a step.",
+            "examples": [
+              false,
+              true
+            ]
+          },
+          "replay_of": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "For a replay, the run it replays.",
+            "examples": [
+              "01JMZ8Q6F1T7QK2N4D6F8H0A2F"
+            ]
+          },
+          "replay_from": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "For a replay from a step, that step: the steps above it were reused rather than run, and carry a verdict and no task. Absent for a replay from the start.",
+            "examples": [
+              "invoice"
+            ]
+          },
+          "includes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "workflow",
+                "ref",
+                "commit"
+              ],
+              "additionalProperties": false,
+              "description": "One workflow include of the version the run pinned.",
+              "examples": [
+                {
+                  "workflow": "finance/common",
+                  "ref": "v2.1.0",
+                  "commit": "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"
+                }
+              ],
+              "properties": {
+                "workflow": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The workflow the file included, NS/NAME as it wrote it.",
+                  "examples": [
+                    "finance/common"
+                  ]
+                },
+                "ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The ref the file wrote.",
+                  "examples": [
+                    "v2.1.0"
+                  ]
+                },
+                "commit": {
+                  "$ref": "wire.schema.json#/$defs/commit",
+                  "description": "The commit the ref resolved to when the version was pushed.",
+                  "examples": [
+                    "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"
+                  ]
+                }
+              }
+            },
+            "description": "The workflow includes of the version the run pinned, each with the commit its ref resolved to. Absent where it includes no other repository.",
+            "examples": [
+              [
+                {
+                  "workflow": "finance/common",
+                  "ref": "v2.1.0",
+                  "commit": "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"
+                }
+              ]
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Why the run ended as it did, where nothing in its workflow is what ended it: a run its principal no longer held workflow:run for when it was created. Absent on every other run.",
+            "examples": [
+              "alice no longer holds workflow:run on finance/monthly-invoicing: the grant that gave it expired at 2026-10-01T05:00:00Z"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/stepSummary"
+            },
+            "description": "Every step of the run, each with its verdict.",
+            "examples": [
+              [
+                {
+                  "step": "normalize",
+                  "verdict": "succeeded",
+                  "attempts": 1,
+                  "started_at": "2026-10-01T05:41:03Z",
+                  "finished_at": "2026-10-01T05:41:05Z",
+                  "ports": {
+                    "ok": {
+                      "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                      "size": 10412,
+                      "items": 214
+                    }
+                  }
+                },
+                {
+                  "step": "invoice",
+                  "verdict": "failed",
+                  "attempts": 2,
+                  "started_at": "2026-10-01T05:41:05Z",
+                  "finished_at": "2026-10-01T05:42:55Z",
+                  "ports": {
+                    "out": {
+                      "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                      "size": 4212,
+                      "items": 211
+                    },
+                    "error": {
+                      "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+                      "size": 212,
+                      "items": 3
+                    }
+                  }
+                },
+                {
+                  "step": "archive",
+                  "verdict": "pending",
+                  "attempts": 0
+                }
+              ]
+            ]
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/taskSummary"
+            },
+            "description": "Every task of the run, each shard of each attempt of each step.",
+            "examples": [
+              [
+                {
+                  "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+                  "step": "normalize",
+                  "state": "succeeded",
+                  "attempt": 1,
+                  "runner": "runner-dmz-02",
+                  "exit_code": 0,
+                  "started_at": "2026-10-01T05:41:03Z",
+                  "finished_at": "2026-10-01T05:41:05Z"
+                },
+                {
+                  "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+                  "step": "invoice",
+                  "state": "failed",
+                  "attempt": 2,
+                  "shard": {
+                    "index": 3,
+                    "of": 8
+                  },
+                  "runner": "runner-dmz-02",
+                  "exit_code": 108,
+                  "started_at": "2026-10-01T05:42:24Z",
+                  "finished_at": "2026-10-01T05:42:32Z",
+                  "inputs": {
+                    "in": {
+                      "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                      "size": 10412,
+                      "items": 27
+                    }
+                  }
+                }
+              ]
+            ]
+          }
+        }
       }
     },
     "parameters": {
@@ -13589,6 +14470,21 @@
           "a page": {
             "summary": "a page of the console's list",
             "value": 25
+          }
+        }
+      },
+      "runId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "The run, by its identifier. One the caller may not read is answered as one that does not exist.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/ulid"
+        },
+        "examples": {
+          "a run": {
+            "summary": "a failed run of monthly-invoicing",
+            "value": "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
           }
         }
       }

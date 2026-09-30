@@ -3,17 +3,29 @@
   // word, so that no state is told by its colour alone. queued, skipped and cancelled are faint rather
   // than a colour of the ramp, since nothing is happening to them; running turns its dot into a ring
   // that spins while the console is live.
-  export type State = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "timed_out" | "skipped";
+  //
+  // A step's verdict and a task's state are drawn the same way, in the same words the API writes:
+  // dispatched and publishing are a task on its way, and lost is one the infrastructure lost.
+  export type State = string;
 
   let { state, live = true }: { state: State; live?: boolean } = $props();
 
-  const tone = $derived(
-    ({ running: "running", waiting: "waiting", succeeded: "succeeded", failed: "failed", timed_out: "failed" } as Record<string, string>)[state] ?? "quiet",
-  );
+  const tones: Record<string, string> = {
+    running: "running",
+    dispatched: "running",
+    publishing: "running",
+    waiting: "waiting",
+    succeeded: "succeeded",
+    failed: "failed",
+    timed_out: "failed",
+    lost: "failed",
+  };
+  const tone = $derived(tones[state] ?? "quiet");
+  const going = $derived(tone === "running");
 </script>
 
 <span class="pill {tone}">
-  {#if state === "running"}
+  {#if going}
     <span class="ring" class:spinning={live} aria-hidden="true"></span>
   {:else}
     <span class="dot" class:hollow={state === "cancelled" || state === "skipped"} aria-hidden="true"></span>

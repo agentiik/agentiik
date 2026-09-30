@@ -983,6 +983,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read a run
+         * @description A run whole: its state, what started it and whom it is attributed to, each step's verdict and the envelopes it published, each task with the envelopes it was handed, its runner and its exit code, and for a replay the run and the step it replays from. Its inputs are envelope contents, answered only to a caller holding run:read_data on the run's workflow and otherwise left out. Requires run:read on the run's workflow. The same answer as GET /api/v1/{ns}/runs/{id}, the path a Location names a run by.
+         */
+        get: operations["getRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/stats/runs": {
         parameters: {
             query?: never;
@@ -6255,6 +6278,547 @@ export interface components {
             runs: components["schemas"]["run"][];
         };
         /**
+         * Envelope reference
+         * @description An envelope as the database keeps it: its digest, its size and how many items it holds, never its items. The bytes are in the object store, read with run:read_data by the routes that answer an envelope; this is what run:read sees of one.
+         * @example {
+         *       "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+         *       "size": 4212,
+         *       "items": 211
+         *     }
+         * @example {
+         *       "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+         *       "size": 212,
+         *       "items": 3,
+         *       "purged_at": "2026-10-31T05:42:55Z"
+         *     }
+         */
+        envelopeReference: {
+            /**
+             * @description The envelope's digest, which names it in the object store and is kept after its bytes are purged.
+             * @example sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11
+             */
+            digest: components["schemas"]["digest"];
+            /**
+             * @description The envelope's size in bytes.
+             * @example 4212
+             */
+            size: number;
+            /**
+             * @description How many items the envelope holds, from its meta.count.
+             * @example 211
+             * @example 0
+             */
+            items: number;
+            /**
+             * @description When the bytes behind the digest were purged with the run's retention. Absent while they are there.
+             * @example 2026-10-31T05:42:55Z
+             */
+            purged_at?: components["schemas"]["timestamp"];
+        };
+        /**
+         * Step summary
+         * @description One step of a run as a screen shows it: its verdict, how many attempts it took, when it ran, and the envelope each of its output ports published.
+         * @example {
+         *       "step": "invoice",
+         *       "verdict": "failed",
+         *       "attempts": 2,
+         *       "started_at": "2026-10-01T05:41:04Z",
+         *       "finished_at": "2026-10-01T05:42:55Z",
+         *       "ports": {
+         *         "out": {
+         *           "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+         *           "size": 4212,
+         *           "items": 211
+         *         },
+         *         "error": {
+         *           "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+         *           "size": 212,
+         *           "items": 3
+         *         }
+         *       }
+         *     }
+         */
+        stepSummary: {
+            /**
+             * @description The step, by the name the workflow file gives it.
+             * @example invoice
+             */
+            step: components["schemas"]["identifier"];
+            /**
+             * @description Where the step stands: pending before it starts, or while it waits for another attempt; running while a shard of it is in flight; succeeded once it published its ports; failed, which continue_on_error does not change; skipped where its if was false; cancelled with its run.
+             * @example succeeded
+             * @example failed
+             * @enum {string}
+             */
+            verdict: "pending" | "running" | "succeeded" | "failed" | "skipped" | "cancelled";
+            /**
+             * @description How many attempts the step has been given, 0 before its first.
+             * @example 1
+             * @example 2
+             */
+            attempts: number;
+            /**
+             * @description When its first attempt started. Absent before.
+             * @example 2026-10-01T05:41:04Z
+             */
+            started_at?: components["schemas"]["timestamp"];
+            /**
+             * @description When it reached its verdict. Absent while it has none.
+             * @example 2026-10-01T05:42:55Z
+             */
+            finished_at?: components["schemas"]["timestamp"];
+            /**
+             * @description The envelope each output port published, by port. Absent before the step published anything.
+             * @example {
+             *       "out": {
+             *         "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+             *         "size": 4212,
+             *         "items": 211
+             *       }
+             *     }
+             */
+            ports?: {
+                [key: string]: components["schemas"]["envelopeReference"];
+            };
+        };
+        /**
+         * Task summary
+         * @description One task of a run, which is one shard of one attempt of one step: where it stands, which runner held it, how it ended, and the envelopes it was handed.
+         * @example {
+         *       "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+         *       "step": "invoice",
+         *       "state": "failed",
+         *       "attempt": 2,
+         *       "shard": {
+         *         "index": 3,
+         *         "of": 8
+         *       },
+         *       "runner": "runner-dmz-02",
+         *       "exit_code": 108,
+         *       "started_at": "2026-10-01T05:42:24Z",
+         *       "finished_at": "2026-10-01T05:42:32Z",
+         *       "inputs": {
+         *         "in": {
+         *           "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+         *           "size": 10412,
+         *           "items": 27
+         *         }
+         *       }
+         *     }
+         * @example {
+         *       "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+         *       "step": "normalize",
+         *       "state": "succeeded",
+         *       "attempt": 1,
+         *       "memoised_from": "01JMZ8Q6F1T7QK2N4D6F8H0A2F",
+         *       "started_at": "2026-10-01T05:41:03Z",
+         *       "finished_at": "2026-10-01T05:41:03Z"
+         *     }
+         */
+        taskSummary: {
+            /**
+             * @description The task's identifier: the run, the step and the attempt, run/step/attempt, and the shard's index and cardinality after them, run/step/attempt/index/of, where a fan-out produced it.
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1
+             */
+            task: string;
+            /**
+             * @description The step it is an attempt of.
+             * @example invoice
+             */
+            step: components["schemas"]["identifier"];
+            /**
+             * @description Where the task stands.
+             * @example failed
+             * @example running
+             */
+            state: components["schemas"]["taskState"];
+            /**
+             * @description Which attempt of its step it is, counted from one, as AGK_ATTEMPT carries it.
+             * @example 2
+             */
+            attempt: number;
+            /**
+             * @description Which shard of a fan-out it is. Absent where the step is not fanned out.
+             * @example {
+             *       "index": 3,
+             *       "of": 8
+             *     }
+             */
+            shard?: components["schemas"]["shard"];
+            /**
+             * @description The runner that held it, by name, never its host. Absent before one held it, and for a cache hit or a call, which no runner holds.
+             * @example runner-dmz-02
+             */
+            runner?: string;
+            /**
+             * @description The exit code its ending carries, a stopped container's included, where a container started and reported one, or where the engine could not build the task, which is 120. Absent otherwise.
+             * @example 108
+             * @example 0
+             */
+            exit_code?: number;
+            /**
+             * @description When its container started. Absent before.
+             * @example 2026-10-01T05:42:24Z
+             */
+            started_at?: components["schemas"]["timestamp"];
+            /**
+             * @description When it ended. Absent while it has not.
+             * @example 2026-10-01T05:42:32Z
+             */
+            finished_at?: components["schemas"]["timestamp"];
+            /**
+             * @description For a cache hit, which republished envelopes without starting a container, the run whose task published them.
+             * @example 01JMZ8Q6F1T7QK2N4D6F8H0A2F
+             */
+            memoised_from?: components["schemas"]["ulid"];
+            /**
+             * @description For a workflow: step's task, the run the call started, whose ending is this task's.
+             * @example 01M2AAZ9G62NQXFAFCXKRPJEH5
+             */
+            called?: components["schemas"]["ulid"];
+            /**
+             * @description The envelopes the task was handed on its input ports, by digest, from the grant it was dispatched with. Absent for a task never dispatched.
+             * @example {
+             *       "in": {
+             *         "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+             *         "size": 10412,
+             *         "items": 27
+             *       }
+             *     }
+             */
+            inputs?: {
+                [key: string]: components["schemas"]["envelopeReference"];
+            };
+        };
+        /**
+         * Run detail
+         * @description One run whole: the record the listing gives, then what became of every part of it, its steps and each of their tasks, the envelopes they published and were handed by digest, and why it ended where nothing in its workflow ended it. Its inputs are envelope contents, answered only to a caller holding run:read_data on the run's workflow.
+         * @example {
+         *       "namespace": "finance",
+         *       "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+         *       "workflow": "monthly-invoicing",
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "state": "failed",
+         *       "trigger_kind": "manual",
+         *       "triggered_by": "alice",
+         *       "created_at": "2026-10-01T05:41:03Z",
+         *       "started_at": "2026-10-01T05:41:03Z",
+         *       "finished_at": "2026-10-01T05:42:55Z",
+         *       "inputs": {
+         *         "orders": {
+         *           "meta": {
+         *             "count": 214
+         *           }
+         *         }
+         *       },
+         *       "replay_from_start_only": false,
+         *       "steps": [
+         *         {
+         *           "step": "normalize",
+         *           "verdict": "succeeded",
+         *           "attempts": 1,
+         *           "started_at": "2026-10-01T05:41:03Z",
+         *           "finished_at": "2026-10-01T05:41:05Z",
+         *           "ports": {
+         *             "ok": {
+         *               "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+         *               "size": 10412,
+         *               "items": 214
+         *             }
+         *           }
+         *         },
+         *         {
+         *           "step": "invoice",
+         *           "verdict": "failed",
+         *           "attempts": 2,
+         *           "started_at": "2026-10-01T05:41:05Z",
+         *           "finished_at": "2026-10-01T05:42:55Z",
+         *           "ports": {
+         *             "out": {
+         *               "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+         *               "size": 4212,
+         *               "items": 211
+         *             },
+         *             "error": {
+         *               "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+         *               "size": 212,
+         *               "items": 3
+         *             }
+         *           }
+         *         },
+         *         {
+         *           "step": "archive",
+         *           "verdict": "pending",
+         *           "attempts": 0
+         *         }
+         *       ],
+         *       "tasks": [
+         *         {
+         *           "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+         *           "step": "normalize",
+         *           "state": "succeeded",
+         *           "attempt": 1,
+         *           "runner": "runner-dmz-02",
+         *           "exit_code": 0,
+         *           "started_at": "2026-10-01T05:41:03Z",
+         *           "finished_at": "2026-10-01T05:41:05Z"
+         *         },
+         *         {
+         *           "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+         *           "step": "invoice",
+         *           "state": "failed",
+         *           "attempt": 2,
+         *           "shard": {
+         *             "index": 3,
+         *             "of": 8
+         *           },
+         *           "runner": "runner-dmz-02",
+         *           "exit_code": 108,
+         *           "started_at": "2026-10-01T05:42:24Z",
+         *           "finished_at": "2026-10-01T05:42:32Z",
+         *           "inputs": {
+         *             "in": {
+         *               "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+         *               "size": 10412,
+         *               "items": 27
+         *             }
+         *           }
+         *         }
+         *       ]
+         *     }
+         */
+        runDetail: {
+            /**
+             * @description The namespace the run is in.
+             * @example finance
+             */
+            namespace: components["schemas"]["namespace"];
+            /**
+             * @description The run's identifier.
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A
+             */
+            run: components["schemas"]["ulid"];
+            /**
+             * @description The workflow it is a run of.
+             * @example monthly-invoicing
+             */
+            workflow: components["schemas"]["identifier"];
+            /**
+             * @description The commit the run is pinned to.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit: components["schemas"]["commit"];
+            /**
+             * @description Where the run is.
+             * @example failed
+             */
+            state: components["schemas"]["runState"];
+            /**
+             * @description What started it.
+             * @example manual
+             */
+            trigger_kind: components["schemas"]["triggerKind"];
+            /**
+             * @description The principal the run is attributed to.
+             * @example alice
+             * @example finance/agentiik
+             */
+            triggered_by?: components["schemas"]["principalRef"];
+            /**
+             * @description The run and the step that called this one, for a run whose trigger_kind is workflow.
+             * @example {
+             *       "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+             *       "step": "remind"
+             *     }
+             */
+            from?: components["schemas"]["from"];
+            /**
+             * @description When the run was written.
+             * @example 2026-10-01T05:41:03Z
+             */
+            created_at: components["schemas"]["timestamp"];
+            /**
+             * @description When it was let in. Absent while it is queued.
+             * @example 2026-10-01T05:41:03Z
+             */
+            started_at?: components["schemas"]["timestamp"];
+            /**
+             * @description When it ended. Absent while it has not.
+             * @example 2026-10-01T05:42:55Z
+             */
+            finished_at?: components["schemas"]["timestamp"];
+            /**
+             * @description What the run was started with, each workflow input as it was given. Envelope contents, so answered only to a caller holding run:read_data on the run's workflow, and otherwise left out, as for a run started with none.
+             * @example {
+             *       "orders": {
+             *         "meta": {
+             *           "count": 214
+             *         }
+             *       }
+             *     }
+             */
+            inputs?: Record<string, never>;
+            /**
+             * @description The run's declared outputs, recorded when it succeeds with every one of them published, by name. Absent before.
+             * @example {
+             *       "archived": {
+             *         "step": "archive",
+             *         "port": "out",
+             *         "count": 211
+             *       }
+             *     }
+             */
+            outputs?: {
+                [key: string]: {
+                    /**
+                     * @description The step the output is a view of.
+                     * @example archive
+                     */
+                    step: components["schemas"]["identifier"];
+                    /**
+                     * @description Its port.
+                     * @example out
+                     */
+                    port: components["schemas"]["identifier"];
+                    /**
+                     * @description How many items it holds.
+                     * @example 211
+                     */
+                    count: number;
+                };
+            };
+            /**
+             * @description Whether an input a step could restart from has been purged, so that the run replays from its start only and a screen does not offer a step.
+             * @example false
+             * @example true
+             */
+            replay_from_start_only: boolean;
+            /**
+             * @description For a replay, the run it replays.
+             * @example 01JMZ8Q6F1T7QK2N4D6F8H0A2F
+             */
+            replay_of?: components["schemas"]["ulid"];
+            /**
+             * @description For a replay from a step, that step: the steps above it were reused rather than run, and carry a verdict and no task. Absent for a replay from the start.
+             * @example invoice
+             */
+            replay_from?: components["schemas"]["identifier"];
+            /**
+             * @description The workflow includes of the version the run pinned, each with the commit its ref resolved to. Absent where it includes no other repository.
+             * @example [
+             *       {
+             *         "workflow": "finance/common",
+             *         "ref": "v2.1.0",
+             *         "commit": "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09"
+             *       }
+             *     ]
+             */
+            includes?: {
+                /**
+                 * @description The workflow the file included, NS/NAME as it wrote it.
+                 * @example finance/common
+                 */
+                workflow: string;
+                /**
+                 * @description The ref the file wrote.
+                 * @example v2.1.0
+                 */
+                ref: string;
+                /**
+                 * @description The commit the ref resolved to when the version was pushed.
+                 * @example c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09
+                 */
+                commit: components["schemas"]["commit"];
+            }[];
+            /**
+             * @description Why the run ended as it did, where nothing in its workflow is what ended it: a run its principal no longer held workflow:run for when it was created. Absent on every other run.
+             * @example alice no longer holds workflow:run on finance/monthly-invoicing: the grant that gave it expired at 2026-10-01T05:00:00Z
+             */
+            reason?: string;
+            /**
+             * @description Every step of the run, each with its verdict.
+             * @example [
+             *       {
+             *         "step": "normalize",
+             *         "verdict": "succeeded",
+             *         "attempts": 1,
+             *         "started_at": "2026-10-01T05:41:03Z",
+             *         "finished_at": "2026-10-01T05:41:05Z",
+             *         "ports": {
+             *           "ok": {
+             *             "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+             *             "size": 10412,
+             *             "items": 214
+             *           }
+             *         }
+             *       },
+             *       {
+             *         "step": "invoice",
+             *         "verdict": "failed",
+             *         "attempts": 2,
+             *         "started_at": "2026-10-01T05:41:05Z",
+             *         "finished_at": "2026-10-01T05:42:55Z",
+             *         "ports": {
+             *           "out": {
+             *             "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+             *             "size": 4212,
+             *             "items": 211
+             *           },
+             *           "error": {
+             *             "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+             *             "size": 212,
+             *             "items": 3
+             *           }
+             *         }
+             *       },
+             *       {
+             *         "step": "archive",
+             *         "verdict": "pending",
+             *         "attempts": 0
+             *       }
+             *     ]
+             */
+            steps: components["schemas"]["stepSummary"][];
+            /**
+             * @description Every task of the run, each shard of each attempt of each step.
+             * @example [
+             *       {
+             *         "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+             *         "step": "normalize",
+             *         "state": "succeeded",
+             *         "attempt": 1,
+             *         "runner": "runner-dmz-02",
+             *         "exit_code": 0,
+             *         "started_at": "2026-10-01T05:41:03Z",
+             *         "finished_at": "2026-10-01T05:41:05Z"
+             *       },
+             *       {
+             *         "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+             *         "step": "invoice",
+             *         "state": "failed",
+             *         "attempt": 2,
+             *         "shard": {
+             *           "index": 3,
+             *           "of": 8
+             *         },
+             *         "runner": "runner-dmz-02",
+             *         "exit_code": 108,
+             *         "started_at": "2026-10-01T05:42:24Z",
+             *         "finished_at": "2026-10-01T05:42:32Z",
+             *         "inputs": {
+             *           "in": {
+             *             "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+             *             "size": 10412,
+             *             "items": 27
+             *           }
+             *         }
+             *       }
+             *     ]
+             */
+            tasks: components["schemas"]["taskSummary"][];
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -8408,6 +8972,63 @@ export interface components {
              */
             finished_at?: components["schemas"]["timestamp"];
         } & unknown;
+        /**
+         * @description The run and the step that called this one, for a run whose trigger_kind is workflow. The caller may be in another namespace, and is named all the same: the callee's reader learns which run asked, and reading that run is still held to its own namespace's grants.
+         * @example {
+         *       "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+         *       "step": "remind"
+         *     }
+         */
+        from: {
+            /**
+             * @description The calling run.
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A
+             */
+            run: components["schemas"]["ulid"];
+            /**
+             * @description The workflow: step of the calling run that made the call.
+             * @example remind
+             */
+            step: components["schemas"]["identifier"];
+        };
+        /**
+         * Digest
+         * @description A sha256 written as the algorithm, a colon and sixty-four hexadecimal characters. It is how an envelope, an image and an artifact are named on the wire, because a name that is the content cannot be confused with a name that merely points at it.
+         * @example sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11
+         */
+        digest: string;
+        /**
+         * Task state
+         * @description Where one task is, in the nine states the documentation names. The four endings are told apart on purpose and never collapsed: failed is charged to the brick and its exit code says which band it falls in; lost is charged to the infrastructure, is declared only by the absence of three heartbeats, and is requeued only where the step is idempotent; timed_out is the attempt stopped at its deadline, where nothing decided anything and there is no exit code of its own to read; and cancelled is somebody stopping the run, which is not a property of the work at all. A retry policy reads the cause, so a vocabulary that folded them together would make retry.on answer a deadline the way it answers a bad minute.
+         * @example running
+         * @example publishing
+         * @example lost
+         * @example timed_out
+         * @enum {string}
+         */
+        taskState: "pending" | "dispatched" | "running" | "publishing" | "succeeded" | "failed" | "lost" | "timed_out" | "cancelled";
+        /**
+         * Shard
+         * @description Which container of a fan-out this is, and how many there are. Absent when the step is not fanned out, which is how a reader tells one container of eight from the only container there is.
+         * @example {
+         *       "index": 3,
+         *       "of": 8
+         *     }
+         */
+        shard: {
+            /**
+             * Index
+             * @description The position of this shard, counted from one, so that it reads as the AGK_SHARD the container is given.
+             * @example 3
+             */
+            index: number;
+            /**
+             * Cardinality
+             * @description How many shards the step was divided into.
+             * @example 8
+             */
+            of: number;
+        };
     };
     responses: {
         /** @description The request is refused before it is read as one: a body that is not JSON, not UTF-8, holding a field the route does not read, a field written twice or anything after the document, or a value outside its grammar; a body sent to a route that reads none; or two credentials, a bearer token beside the session cookie or two session cookies, since a request is answered as one principal and which was meant is not the API's to guess. */
@@ -8568,6 +9189,8 @@ export interface components {
         runsUntil: components["schemas"]["timestamp"];
         /** @description How many runs at most, newest first: 50 when left out, and at most 500. A limit outside 1 to 500, or no whole number, is read as 50 rather than refused. */
         runsLimit: number;
+        /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+        runId: components["schemas"]["ulid"];
     };
     requestBodies: never;
     headers: {
@@ -10597,6 +11220,31 @@ export interface operations {
                 };
             };
             401: components["responses"]["unauthorised"];
+        };
+    };
+    getRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runDetail"];
+                };
+            };
+            401: components["responses"]["unauthorised"];
+            404: components["responses"]["notFound"];
         };
     };
     getRunStatistics: {
