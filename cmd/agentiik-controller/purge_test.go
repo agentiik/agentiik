@@ -90,7 +90,7 @@ func TestATermPurgesWhatHasRunOut(t *testing.T) {
 	ended := make(chan error, 1)
 	go func() {
 		ended <- lead(ctx, ctl, tm, queue, options(c, queue, versionsOf(t, pool)), nil, nil,
-			purger(pool, c.Objects, ctl, tm, counts, logger(&log)), logger(&log))
+			purger(pool, c.Objects, ctl, tm, counts, logger(&log)), nil, logger(&log))
 	}()
 
 	eventually(t, 20*time.Second, "the term retiring the artifact past its retain", func() bool {
@@ -192,7 +192,7 @@ func TestATermEndsOnlyOnceItsPassHasStopped(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	ended := make(chan error, 1)
 	go func() {
-		ended <- lead(ctx, ctl, tm, queue, options(c, queue, versionsOf(t, pool)), nil, nil, p, logger(io.Discard))
+		ended <- lead(ctx, ctl, tm, queue, options(c, queue, versionsOf(t, pool)), nil, nil, p, nil, logger(io.Discard))
 	}()
 	<-entered
 	stop()

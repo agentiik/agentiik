@@ -443,12 +443,12 @@ func TestAWorkflowOfV030BecomesAnEmptyRepositoryWithEveryVersionItHeld(t *testin
 
 	// Every row as it is stored, where it is stored and by which transaction: a row written again,
 	// even with the same values, moves or changes its xmin. Less the columns the migrations after
-	// v0.3.0 add, source and a run's replay_of and replay_from, which a row v0.3.0 wrote reads as
-	// their default without being written again.
+	// v0.3.0 add, source and a run's replay_of, replay_from and trigger_context, which a row v0.3.0
+	// wrote reads as their default without being written again.
 	rows := func(table string) []string {
 		t.Helper()
 		var out []string
-		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - array['source', 'replay_of', 'replay_from'])::text
+		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - array['source', 'replay_of', 'replay_from', 'trigger_context'])::text
 		                                         from %s t order by 1`, pgx.Identifier{table}.Sanitize()))
 		if err != nil {
 			t.Fatal(err)

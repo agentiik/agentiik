@@ -236,11 +236,11 @@ func TestAnInstallationOfV030KeepsItsWorkflowsAsEmptyRepositories(t *testing.T) 
 			t.Fatalf("filling the database as v0.3.0 would have: %s", err)
 		}
 	}
-	// Each row less the columns the migrations after v0.3.0 add, source and a run's replay_of and
-	// replay_from, which a row v0.3.0 wrote reads as their default.
+	// Each row less the columns the migrations after v0.3.0 add, source and a run's replay_of,
+	// replay_from and trigger_context, which a row v0.3.0 wrote reads as their default.
 	held := func(table string) []string {
 		t.Helper()
-		rows, err := admin.Query(ctx, `select (to_jsonb(t) - array['source', 'replay_of', 'replay_from'])::text from `+pgx.Identifier{table}.Sanitize()+` t order by 1`)
+		rows, err := admin.Query(ctx, `select (to_jsonb(t) - array['source', 'replay_of', 'replay_from', 'trigger_context'])::text from `+pgx.Identifier{table}.Sanitize()+` t order by 1`)
 		if err != nil {
 			t.Fatal(err)
 		}
