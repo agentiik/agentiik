@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 
@@ -69,13 +70,13 @@ func (s *State) UnmarshalJSON(b []byte) error {
 		Run json.RawMessage `json:"run"`
 	}
 	v.written = (*written)(s)
-	if err := json.Unmarshal(b, &v); err != nil {
+	if err := asWritten(b, &v); err != nil {
 		return err
 	}
 	if len(v.Run) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(v.Run, &s.Run); err != nil {
+	if err := asWritten(v.Run, &s.Run); err != nil {
 		return err
 	}
 	var kind struct {
@@ -174,4 +175,14 @@ type ShardState struct {
 	StartedAt     time.Time `json:"started_at,omitzero"`
 	FinishedAt    time.Time `json:"finished_at,omitzero"`
 	NextAttemptAt time.Time `json:"next_attempt_at,omitzero"`
+}
+
+// asWritten decodes a state with every number a json.Number, as the state is stored and read back:
+// a method decoding it is handed its bytes and not its caller's decoder, so it keeps the caller's
+// reading itself, or a var of 3 read on a later pass would be a float64, and vars.n + 1 have no
+// overload.
+func asWritten(b []byte, v any) error {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	return d.Decode(v)
 }
