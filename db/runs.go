@@ -59,7 +59,22 @@ type NewRun struct {
 	// a replay from the start: the steps above it are reused rather than run.
 	ReplayOf   agk.RunID
 	ReplayFrom agk.Step
+
+	// Context is what fired the run, frozen on it, and empty where nothing did.
+	Context TriggerContext
 }
+
+// TriggerContext is what fired a run as expressions read it: the trigger root, "body, headers,
+// query, scheduled_for", and the event an event trigger matched. Frozen on the run, so that the
+// controller starts the evaluator with it, a controller taking over reads the same, and "a replay
+// sees what fired it, not what is true now".
+type TriggerContext struct {
+	Trigger map[string]any `json:"trigger,omitempty"`
+	Event   map[string]any `json:"event,omitempty"`
+}
+
+// empty says whether nothing fired the run.
+func (c TriggerContext) empty() bool { return len(c.Trigger) == 0 && len(c.Event) == 0 }
 
 // RunsPerHourReached is a run refused at creation because its namespace has created as many runs
 // in the last 60 minutes as its max_runs_per_hour allows.
@@ -132,11 +147,17 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 		return err
 	}
 
+	var context any
+	if !r.Context.empty() {
+		if context, err = json.Marshal(r.Context); err != nil {
+			return fmt.Errorf("db: the trigger context of run %s: %w", r.ID, err)
+		}
+	}
 	if _, err := n.tx.Exec(ctx,
-		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs, replay_of, replay_from)
-		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9)`,
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs, replay_of, replay_from, trigger_context)
+		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10)`,
 		n.namespace, string(r.ID), r.Workflow, r.Commit,
-		r.Trigger.String(), nilIfEmpty(by), inputs, nilIfEmpty(string(r.ReplayOf)), nilIfEmpty(string(r.ReplayFrom))); err != nil {
+		r.Trigger.String(), nilIfEmpty(by), inputs, nilIfEmpty(string(r.ReplayOf)), nilIfEmpty(string(r.ReplayFrom)), context); err != nil {
 		return fmt.Errorf("db: run %s could not be created: %w", r.ID, err)
 	}
 
@@ -321,6 +342,9 @@ type Evaluation struct {
 	ReplayOf   agk.RunID
 	ReplayFrom agk.Step
 
+	// Context is what fired the run, frozen on it, which the evaluator is started with.
+	Context TriggerContext
+
 	// TriggeredBy is who the run is attributed to, as a grant names a principal, and empty where
 	// the row names nobody. It is who the controller asks about before it lets the run in, since
 	// "authorisation is re-evaluated when a run is created".
@@ -358,17 +382,17 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	// pgx would read a text column into an int by refusing it, and a state whose name the
 	// database holds is exactly the case UnmarshalText exists for.
 	var state, trigger string
-	var inputs []byte
+	var inputs, context []byte
 	var wake, cancel *time.Time
 	err := w.tx.QueryRow(ctx,
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
 		        cancel_requested_at, xmin::text, created_at,
 		        coalesce((select n.max_run_duration from namespaces n where n.name = runs.namespace), ''),
-		        coalesce(triggered_by, ''), coalesce(replay_of, ''), coalesce(replay_from, '')
+		        coalesce(triggered_by, ''), coalesce(replay_of, ''), coalesce(replay_from, ''), trigger_context
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
 			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt, &e.MaxRunDuration,
-			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom)
+			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom, &context)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -384,6 +408,11 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	if len(inputs) > 0 {
 		if err := asWritten(inputs, &e.Inputs); err != nil {
 			return Evaluation{}, fmt.Errorf("db: the inputs of run %s could not be read: %w", run, err)
+		}
+	}
+	if len(context) > 0 {
+		if err := asWritten(context, &e.Context); err != nil {
+			return Evaluation{}, fmt.Errorf("db: the trigger context of run %s could not be read: %w", run, err)
 		}
 	}
 	if wake != nil {
@@ -1648,4 +1677,24 @@ func asWritten(b []byte, v any) error {
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.UseNumber()
 	return d.Decode(v)
+}
+
+// ContextOf is what fired a run, frozen on it, which a replay of the run is written with.
+func (n *NS) ContextOf(ctx context.Context, run agk.RunID) (TriggerContext, error) {
+	var raw []byte
+	err := n.tx.QueryRow(ctx,
+		`select trigger_context from runs where namespace = $1 and id = $2`, n.namespace, string(run)).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TriggerContext{}, fmt.Errorf("%w: %s", ErrNoRun, run)
+	}
+	if err != nil {
+		return TriggerContext{}, fmt.Errorf("db: the trigger context of run %s could not be read: %w", run, err)
+	}
+	var c TriggerContext
+	if len(raw) > 0 {
+		if err := asWritten(raw, &c); err != nil {
+			return TriggerContext{}, fmt.Errorf("db: the trigger context of run %s could not be read: %w", run, err)
+		}
+	}
+	return c, nil
 }

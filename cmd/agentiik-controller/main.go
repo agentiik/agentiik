@@ -23,6 +23,7 @@ import (
 	"github.com/agentiik/agentiik/internal/stopsignal"
 	"github.com/agentiik/agentiik/purge"
 	"github.com/agentiik/agentiik/repo/store"
+	"github.com/agentiik/agentiik/trigger"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -225,13 +226,20 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		o.Tracer = traces
 	}
 
+	// The one path every run is started by, which the schedules this controller fires take as a
+	// request to the API does.
+	starter, err := trigger.New(trigger.Options{Pool: pool, Versions: o.Versions, Objects: o.Objects})
+	if err != nil {
+		return err
+	}
+
 	log.Info("standing by for the lock", "name", name)
 	err = ctl.Lead(work, func(ctx context.Context, term db.Term) error {
 		log.Info("leading", "name", name, "term", term.Token)
 		defer counts.lead(ctl, term)()
 		o := o
 		o.Observer = counts
-		return lead(ctx, ctl, term, queue, o, export, verifier(pool.AuditTrail(), 0, log), purger(pool, c.Objects, ctl, term, counts, log), log)
+		return lead(ctx, ctl, term, queue, o, export, verifier(pool.AuditTrail(), 0, log), purger(pool, c.Objects, ctl, term, counts, log), starter, log)
 	})
 	return ended(err)
 }
@@ -381,7 +389,12 @@ func purger(pool *db.Pool, dir string, ctl *controller.Controller, term db.Term,
 // could not finish, and a minute is soon enough for either.
 const armEvery = time.Minute
 
-func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, verify func(context.Context), purges *purge.Purger, log *slog.Logger) error {
+// fireEvery is how often the controller that leads looks for the schedules due. A second, so that
+// a schedule fires within a second of the instant it is due, its jitter aside, and a query on the
+// index of what fires next costs next to nothing when nothing is due.
+const fireEvery = time.Second
+
+func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, verify func(context.Context), purges *purge.Purger, starter *trigger.Starter, log *slog.Logger) error {
 	core, err := controller.NewCore(ctl, term, o)
 	if err != nil {
 		return err
@@ -431,21 +444,37 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 		}()
 	}
 
-	// The triggers every workflow's default branch declares, armed where nobody armed them: at the
-	// start of the term, and every minute after, for a head whose arming a request could not finish.
+	// The triggers: the schedules due fired every second, "only from the election-lock holder", and
+	// what every workflow's default branch declares armed where nobody armed it, at the start of the
+	// term and every minute after, for a head whose arming a request could not finish.
 	armed := make(chan struct{})
 	go func() {
 		defer close(armed)
-		tick := time.NewTicker(armEvery)
+		tick := time.NewTicker(fireEvery)
 		defer tick.Stop()
+		var armedAt time.Time
 		for {
-			if err := core.Arm(ctx, func(err error) { log.Warn("a workflow's triggers could not be armed", "error", err) }); err != nil {
+			if time.Since(armedAt) >= armEvery {
+				if err := core.Arm(ctx, func(err error) { log.Warn("a workflow's triggers could not be armed", "error", err) }); err != nil {
+					if errors.Is(err, db.ErrFenced) {
+						cancel(err)
+						return
+					}
+					if ctx.Err() == nil {
+						log.Warn("the triggers could not be armed, and the next pass comes round", "error", err)
+					}
+				}
+				armedAt = time.Now()
+			}
+			if starter == nil {
+				// A term with nothing to start runs by, as a test's is, fires nothing.
+			} else if err := core.Fire(ctx, starter, func(err error) { log.Warn("a schedule could not fire, and the next pass comes round", "error", err) }); err != nil {
 				if errors.Is(err, db.ErrFenced) {
 					cancel(err)
 					return
 				}
 				if ctx.Err() == nil {
-					log.Warn("the triggers could not be armed, and the next pass comes round", "error", err)
+					log.Warn("the schedules could not be read, and the next pass comes round", "error", err)
 				}
 			}
 			select {

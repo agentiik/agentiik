@@ -601,7 +601,12 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		return graph.Start(g, agk.Run{
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger, TriggeredBy: e.TriggeredBy,
-		}, graph.Options{Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound, Reuse: reuse}, now)
+		}, graph.Options{
+			Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound, Reuse: reuse,
+			// What fired the run, as it was frozen on the run when it was created: "the trigger
+			// root" and "the event root", which the state carries from here on.
+			Trigger: e.Context.Trigger, Event: e.Context.Event,
+		}, now)
 	}
 
 	var doc Document

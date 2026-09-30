@@ -110,11 +110,23 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, who Principal, o
 	if from != "" {
 		detail["step"] = string(from)
 	}
+	// And with what fired the run as it was frozen on it, "so a replay sees what fired it, not what
+	// is true now".
+	var fired db.TriggerContext
+	if err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		fired, err = ns.ContextOf(ctx, of)
+		return err
+	}); err != nil {
+		fail(w, http.StatusInternalServerError, "the run could not be read")
+		return
+	}
 	started, err := s.starter.Start(r.Context(), trigger.Request{
 		Namespace: over.Namespace, Workflow: d.Workflow,
 		Kind: agk.TriggerManual, By: string(who),
 		Commit: d.Commit, Bound: inputs,
 		ReplayOf: of, ReplayFrom: from, Detail: detail,
+		Context: fired,
 	})
 	if s.refused(w, Target{Namespace: over.Namespace, Workflow: d.Workflow}, d.Commit, err) {
 		return
