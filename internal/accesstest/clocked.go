@@ -9,6 +9,7 @@ import "time"
 var clocked = map[string]bool{
 	"GET /api/v1/{namespace}/stats/runs":  true,
 	"GET /api/v1/{namespace}/stats/steps": true,
+	"GET /api/v1/{namespace}/stats/ports": true,
 }
 
 // Pinned is the query a route is asked with so that what it answers does not follow the clock: for a

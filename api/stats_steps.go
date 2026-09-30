@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -37,25 +38,17 @@ func (s *Server) stepStatistics(w http.ResponseWriter, r *http.Request, who Prin
 		return
 	}
 
-	var among []db.Workflow
-	if storable(within.Namespace) && storable(workflow) {
-		var ok bool
-		if among, ok = s.readable(w, r, within.Namespace, workflow, "the statistics could not be read"); !ok {
-			return
-		}
-	}
-	if len(among) != 1 {
-		// Not there, or not the caller's to read, which are answered alike.
-		refuse(w, http.StatusNotFound, "no such thing, or not yours")
+	of, ok := s.oneWorkflow(w, r, within.Namespace, workflow)
+	if !ok {
 		return
 	}
-	of := among[0]
 
-	order, err := s.stepOrder(r.Context(), of)
+	latest, err := s.latestGraph(r.Context(), of)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the statistics could not be read")
 		return
 	}
+	order := stepOrder(latest)
 	out := statsSteps{From: stamp(rng.From), To: stamp(rng.To), Bucket: rng.Bucket, By: by, Workflow: workflow}
 	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
 		if by == "hour" {
@@ -105,13 +98,29 @@ func (s *Server) stepStatistics(w http.ResponseWriter, r *http.Request, who Prin
 	write(w, http.StatusOK, out)
 }
 
-// stepOrder is the steps of a workflow in the order its latest version runs them, upstream first and
-// those no edge orders by name, which is graph.Graph.Order: the order a reader of the workflow meets
-// them in. The graph keeps no order of declaration, a step being a key of a map. The latest version
-// is the head of the default branch, or, for a workflow no git push has filled, the last version a
-// tree push recorded. Nothing where there is none, or where it builds no graph, as a library's does:
-// the steps are then the ones the range's runs ran, by name.
-func (s *Server) stepOrder(ctx context.Context, of db.Workflow) ([]string, error) {
+// oneWorkflow is the one workflow a series of its steps is about, found and asked about as a listing
+// finds and asks about every workflow, or false once it has answered the refusal itself: 404 where
+// it is not there or not the caller's to read, which are answered alike, having been asked about
+// all the same.
+func (s *Server) oneWorkflow(w http.ResponseWriter, r *http.Request, namespace, workflow string) (db.Workflow, bool) {
+	var among []db.Workflow
+	if storable(namespace) && storable(workflow) {
+		var ok bool
+		if among, ok = s.readable(w, r, namespace, workflow, "the statistics could not be read"); !ok {
+			return db.Workflow{}, false
+		}
+	}
+	if len(among) != 1 {
+		refuse(w, http.StatusNotFound, "no such thing, or not yours")
+		return db.Workflow{}, false
+	}
+	return among[0], true
+}
+
+// latestGraph is the graph of a workflow's latest version: the head of its default branch, or, for a
+// workflow no git push has filled, the last version a tree push recorded. Nil where there is none,
+// or where it builds no graph, as a library's does.
+func (s *Server) latestGraph(ctx context.Context, of db.Workflow) (*graph.Graph, error) {
 	var v db.Version
 	latest := false
 	err := s.pool.In(ctx, of.Namespace, func(ctx context.Context, n *db.NS) error {
@@ -144,11 +153,22 @@ func (s *Server) stepOrder(ctx context.Context, of db.Workflow) ([]string, error
 	if err != nil {
 		return nil, nil
 	}
+	return g, nil
+}
+
+// stepOrder is the steps of g in the order it runs them, upstream first and those no edge orders by
+// name, which is graph.Graph.Order: the order a reader of the workflow meets them in. The graph keeps
+// no order of declaration, a step being a key of a map. Nothing where g is nil: the steps are then
+// the ones the range's runs ran, by name.
+func stepOrder(g *graph.Graph) []string {
+	if g == nil {
+		return nil
+	}
 	order := make([]string, 0, len(g.Order()))
 	for _, step := range g.Order() {
 		order = append(order, string(step))
 	}
-	return order, nil
+	return order
 }
 
 // stepsIn is order, then every step the series counted that order does not name, by name: a step

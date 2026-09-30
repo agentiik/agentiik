@@ -501,3 +501,44 @@ func (w *Wide) StepHours(ctx context.Context, of Workflow, from, to time.Time) (
 	}
 	return out, rows.Err()
 }
+
+// PortStatistics counts what each step of the one workflow of published, port by port, bucket by
+// bucket: the items of the envelope each port published, which the step's row records with its
+// digest, from the envelope's meta.count and never its items. A port that published in no run of a
+// bucket is absent from it; every bucket of a step that published anywhere is answered.
+func (w *Wide) PortStatistics(ctx context.Context, of Workflow, b Buckets) (map[string][]map[string]int64, error) {
+	if err := b.check(); err != nil {
+		return nil, err
+	}
+	rows, err := w.tx.Query(ctx, `with `+counted+`
+		select c.b, s.step::text, p.key, sum(coalesce((p.value ->> 'items')::bigint, 0))
+		from counted c
+		join steps s on s.namespace = c.namespace and s.run_id = c.id
+		cross join lateral jsonb_each(s.ports) p
+		group by 1, 2, 3`,
+		[]string{of.Namespace}, []string{of.Name}, b.First, b.End(), b.Width.Seconds())
+	if err != nil {
+		return nil, fmt.Errorf("db: what the steps published could not be counted: %w", err)
+	}
+	defer rows.Close()
+	out := map[string][]map[string]int64{}
+	for rows.Next() {
+		var i int
+		var step, port string
+		var items int64
+		if err := rows.Scan(&i, &step, &port, &items); err != nil {
+			return nil, fmt.Errorf("db: what the steps published could not be counted: %w", err)
+		}
+		if i < 0 || i >= b.Count {
+			continue
+		}
+		if out[step] == nil {
+			out[step] = make([]map[string]int64, b.Count)
+			for j := range out[step] {
+				out[step][j] = map[string]int64{}
+			}
+		}
+		out[step][i][port] = items
+	}
+	return out, rows.Err()
+}
