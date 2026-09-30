@@ -255,6 +255,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// What a workflow's default branch has armed, and its state, the workflow's in its namespace:
 		// a schedule's next occurrence and a webhook's failures are no other namespace's to read.
 		"triggers": true,
+		// What a webhook checks its caller against, and the deliveries it took: a namespace's own,
+		// as its secrets are.
+		"webhook_credentials": true, "webhook_deliveries": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -552,6 +555,8 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		{`insert into triggers (namespace, workflow, kind, position, commit, declared, path, method, armed_by)
 		  values ('finance', $1, 'webhook', 0, $2, '{}', '/invoicing', 'POST', 'alice')`,
 			[]any{workflow, strings.Repeat("a", 40)}},
+		{`insert into webhook_credentials (namespace, workflow, path, method, written_by)
+		  values ('finance', $1, '/invoicing', 'POST', 'alice')`, []any{workflow}},
 	} {
 		if _, err := conn.Exec(ctx, s.sql, s.args...); err != nil {
 			t.Fatalf("%s: %s", s.sql, err)
@@ -559,23 +564,24 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 	}
 
 	written := map[string][]string{
-		"workflows.name":             {workflow, twin},
-		"workflow_versions.workflow": {workflow},
-		"runs.workflow":              {workflow},
-		"steps.step":                 {step},
-		"tasks.step":                 {step},
-		"workflow_moves.workflow":    {workflow},
-		"move_targets.name":          {workflow},
-		"step_cache.step":            {step},
-		"artifacts.step":             {step},
-		"artifacts.port":             {port},
-		"secret_declarations.name":   {secret},
-		"secret_values.name":         {secret},
-		"grants.workflow":            {workflow},
-		"workflow_refs.workflow":     {workflow},
-		"image_pins.workflow":        {workflow},
-		"brick_manifests.workflow":   {workflow},
-		"triggers.workflow":          {workflow},
+		"workflows.name":               {workflow, twin},
+		"workflow_versions.workflow":   {workflow},
+		"runs.workflow":                {workflow},
+		"steps.step":                   {step},
+		"tasks.step":                   {step},
+		"workflow_moves.workflow":      {workflow},
+		"move_targets.name":            {workflow},
+		"step_cache.step":              {step},
+		"artifacts.step":               {step},
+		"artifacts.port":               {port},
+		"secret_declarations.name":     {secret},
+		"secret_values.name":           {secret},
+		"grants.workflow":              {workflow},
+		"workflow_refs.workflow":       {workflow},
+		"image_pins.workflow":          {workflow},
+		"brick_manifests.workflow":     {workflow},
+		"triggers.workflow":            {workflow},
+		"webhook_credentials.workflow": {workflow},
 	}
 	for _, c := range schemaColumns(t, conn) {
 		if c.typeName == "identifier" && written[c.table+"."+c.column] == nil {

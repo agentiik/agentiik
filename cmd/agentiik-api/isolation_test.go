@@ -301,7 +301,8 @@ func (x *tenants) present(route string) map[string]string {
 		"namespace": "finance", "ns": "finance", "workflow": "monthly-invoicing", "repository": "monthly-invoicing.git", "run": x.run,
 		"step": "normalize", "port": "ok", "commit": theCommit, "ref": theCommit, "login": "alice", "group": "auditors",
 		"runner": x.runner, "pool": "dmz", "key": x.object,
-		"uri": url.PathEscape("agk://run/" + x.run + "/normalize/ok/invoice.pdf"),
+		"uri":    url.PathEscape("agk://run/" + x.run + "/normalize/ok/invoice.pdf"),
+		"method": "POST", "path": "invoicing",
 	}
 	switch {
 	case strings.Contains(route, "/auth/assets/"):
@@ -335,7 +336,7 @@ func absent() map[string]string {
 		"step": "normalize", "port": "ok", "commit": theCommit, "ref": theCommit, "login": "nobody", "group": "nobody",
 		"runner": nowhere, "pool": "nowhere", "key": "nowhere/sha256/" + strings.Repeat("0", 64),
 		"uri":  url.PathEscape("agk://run/" + ulid.New() + "/normalize/ok/invoice.pdf"),
-		"name": "nothing", "id": ulid.New(),
+		"name": "nothing", "id": ulid.New(), "method": "POST", "path": "invoicing",
 	}
 	return named
 }
@@ -346,7 +347,7 @@ func identities(pattern string) []string {
 	var out []string
 	for _, m := range parameter.FindAllStringSubmatch(pattern, -1) {
 		switch m[1] {
-		case "step", "port", "commit", "ref":
+		case "step", "port", "commit", "ref", "method", "path":
 		default:
 			out = append(out, m[1])
 		}
