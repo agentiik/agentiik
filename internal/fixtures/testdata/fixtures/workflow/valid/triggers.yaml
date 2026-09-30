@@ -4,7 +4,8 @@
 #         and its absence, jitter and catch_up; on.webhook with hmac and the
 #         defaults it replaces, a path of several segments, a sync response
 #         naming a declared output, and map over the trigger context; on.event
-#         with type, source and filter; concurrency with cancel_in_progress.
+#         with type, source and filter, and with another namespace's events
+#         filling an input by map; concurrency with cancel_in_progress.
 # reference: https://agentiik.github.io/docs/#triggers
 
 apiVersion: agentiik.dev/v1
@@ -38,6 +39,10 @@ on:
     - type: com.example.price.changed
       source: /erp/prices
       filter: ${{ event.data.delta > 0.05 }}
+    - type: com.example.customer.onboarded
+      namespace: crm
+      map:
+        customer: ${{ event.data.customer }}
 
 inputs:
   customer:
