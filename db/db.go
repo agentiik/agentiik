@@ -244,6 +244,15 @@ const (
 	// other and counts its objects in the target as it lets them go in the source.
 	WorkflowMove Reason = "a workflow moved from one namespace to another"
 
+	// EventDelivery is an event published into one namespace and heard in the others that name
+	// it: "only events published into the workflow's own namespace, or into the one namespace
+	// names where it granted the workflow's namespace read access". What it reads is the event
+	// triggers armed across the installation that hear the namespace published into, for the
+	// authorizer to be asked about each namespace they are armed in; what it writes, the runs
+	// they start, the firings recorded on them and the event remembered, it writes through
+	// Within, in the namespace each belongs to.
+	EventDelivery Reason = "an event published into one namespace, heard in those that name it"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"

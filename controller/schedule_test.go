@@ -70,7 +70,7 @@ func scheduling(t *testing.T, at time.Time, entry string) scheduled {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries, err := trigger.Entries(wf, at)
+	entries, err := trigger.Entries(wf, "finance", at)
 	if err != nil {
 		t.Fatal(err)
 	}

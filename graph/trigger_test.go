@@ -170,3 +170,94 @@ steps:
 		}
 	}
 }
+
+// An event trigger names the namespace it hears, on the namespace grammar, and fills the inputs the
+// workflow declares by map, over the event and nothing a run carries once it exists: "event stays
+// where the context table places it, in the on block".
+func TestAnEventTriggerHearsANamespaceAndFillsInputs(t *testing.T) {
+	const doc = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: order-fulfilment, namespace: sales }
+inputs:
+  orders: { schema: { type: array } }
+on:
+  event:
+    - type: com.example.order.approved
+      %s
+steps:
+  ship:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    script: [ship]
+    outputs: [out]
+`
+	wf, err := Parse([]byte(fmt.Sprintf(doc, "namespace: erp\n      map: { orders: \"${{ event.data.orders }}\" }")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := wf.On.Event[0]; e.Namespace != "erp" || e.Map["orders"] != "${{ event.data.orders }}" {
+		t.Errorf("the event trigger reads as %+v", e)
+	}
+	if err := Check(wf); err != nil {
+		t.Fatalf("an event trigger filling a declared input was refused: %v", err)
+	}
+	g, err := Build(wf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filled, err := g.FillFromEvent(wf.On.Event[0].Map, Fired{Event: map[string]any{"data": map[string]any{"orders": []any{"o-1"}}}})
+	if err != nil || fmt.Sprint(filled["orders"]) != "[o-1]" {
+		t.Errorf("the map filled %v, %v", filled, err)
+	}
+
+	for entry, want := range map[string]string{
+		"namespace: Sales Team":                       "on.event[0].namespace",
+		"map: { order: \"${{ event.data.order }}\" }": string(RuleEventMapInputNotDeclared),
+		"map: { orders: \"${{ inputs.in.count }}\" }": "inputs is not exposed to an event trigger",
+	} {
+		wf, err := Parse([]byte(fmt.Sprintf(doc, entry)))
+		if err == nil {
+			err = Check(wf)
+		}
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s was refused for %v, and the refusal names %s", entry, err, want)
+		}
+	}
+}
+
+// A filter answers true or false, over the event, before any run exists; one naming none hears
+// every event its type and source match.
+func TestAnEventTriggersFilterIsTrueOrFalse(t *testing.T) {
+	wf, err := Parse([]byte(`
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: order-fulfilment, namespace: sales }
+on:
+  event:
+    - filter: "${{ event.data.amount > 0 }}"
+    - filter: "${{ event.data.amount }}"
+    - type: com.example.order.approved
+steps:
+  ship:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    script: [ship]
+    outputs: [out]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := Build(wf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fired := Fired{Event: map[string]any{"data": map[string]any{"amount": int64(5)}}}
+	if heard, err := g.Hears(wf.On.Event[0], fired); !heard || err != nil {
+		t.Errorf("a filter accepting the event answered %v, %v", heard, err)
+	}
+	if _, err := g.Hears(wf.On.Event[1], fired); err == nil || !strings.Contains(err.Error(), "true or false") {
+		t.Errorf("a filter answering a number was taken for %v", err)
+	}
+	if heard, err := g.Hears(wf.On.Event[2], fired); !heard || err != nil {
+		t.Errorf("a trigger with no filter answered %v, %v", heard, err)
+	}
+}

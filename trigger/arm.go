@@ -26,9 +26,10 @@ var Draw = func(jitter time.Duration) time.Duration {
 	return rand.N(jitter + 1)
 }
 
-// Entries are the triggers a workflow declares under on, as they are armed at now: each with what it
-// declares, the values in force written in, and a schedule with its next occurrence after now.
-func Entries(wf *graph.Workflow, now time.Time) ([]db.Entry, error) {
+// Entries are the triggers a workflow declares under on, as they are armed in namespace at now: each
+// with what it declares, the values in force written in, a schedule with its next occurrence after
+// now, and an event trigger with the namespace it hears, namespace where the file names none.
+func Entries(wf *graph.Workflow, namespace string, now time.Time) ([]db.Entry, error) {
 	var out []db.Entry
 	for i, s := range wf.On.Schedule {
 		schedule, err := cron.Parse(s.Cron)
@@ -69,17 +70,24 @@ func Entries(wf *graph.Workflow, now time.Time) ([]db.Entry, error) {
 		out = append(out, db.Entry{Kind: agk.TriggerWebhook, Position: i, Declared: declared, Path: w.Path, Method: w.Method})
 	}
 	for i, e := range wf.On.Event {
-		entry := map[string]any{}
+		hears := e.Namespace
+		if hears == "" {
+			hears = namespace
+		}
+		entry := map[string]any{"namespace": hears}
 		for k, v := range map[string]string{"type": e.Type, "source": e.Source, "filter": e.Filter} {
 			if v != "" {
 				entry[k] = v
 			}
 		}
+		if len(e.Map) > 0 {
+			entry["map"] = e.Map
+		}
 		declared, err := json.Marshal(entry)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, db.Entry{Kind: agk.TriggerEvent, Position: i, Declared: declared, Type: e.Type, Source: e.Source})
+		out = append(out, db.Entry{Kind: agk.TriggerEvent, Position: i, Declared: declared, Type: e.Type, Source: e.Source, Hears: hears})
 	}
 	return out, nil
 }
@@ -130,7 +138,7 @@ func Reconcile(ctx context.Context, ns *db.NS, workflow, by string, now time.Tim
 		err = g.Workflow().Armable()
 	}
 	if err == nil {
-		entries, err = Entries(g.Workflow(), now)
+		entries, err = Entries(g.Workflow(), ns.Namespace(), now)
 	}
 	if err != nil {
 		// Recorded as armed with nothing, so that it is not tried again at every pass: what it

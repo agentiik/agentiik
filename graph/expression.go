@@ -81,6 +81,12 @@ func checkExpressions(wf *Workflow) error {
 		if err := holdValue(wf, expr.ScopeTrigger, nil, "", event.Filter, at); err != nil {
 			return err
 		}
+		for _, name := range slices.Sorted(maps.Keys(event.Map)) {
+			at := fmt.Sprintf("on.event[%d].map.%s", i, name)
+			if err := holdValue(wf, expr.ScopeTrigger, nil, "", event.Map[name], at); err != nil {
+				return err
+			}
+		}
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(wf.Steps)) {

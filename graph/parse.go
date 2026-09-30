@@ -630,18 +630,8 @@ func triggerOf(root map[string]any) (Trigger, error) {
 		// method a sender delivers an event with; hmac, so that an endpoint is open only where
 		// the file says none; and async.
 		w.Method, w.Auth, w.Response = cmp.Or(w.Method, "POST"), cmp.Or(w.Auth, "hmac"), cmp.Or(w.Response, "async")
-		if m, ok := entry["map"]; ok {
-			mapped, err := mapping(m, where+".map")
-			if err != nil {
-				return Trigger{}, err
-			}
-			w.Map = make(map[string]any, len(mapped))
-			for _, name := range keysOf(mapped) {
-				if err := identifier(name, "the input", where+".map"); err != nil {
-					return Trigger{}, err
-				}
-				w.Map[name] = mapped[name]
-			}
+		if w.Map, err = inputMap(entry, where); err != nil {
+			return Trigger{}, err
 		}
 		t.Webhook = append(t.Webhook, w)
 	}
@@ -656,7 +646,7 @@ func triggerOf(root map[string]any) (Trigger, error) {
 		if err != nil {
 			return Trigger{}, err
 		}
-		if err := closedTo(entry, where, "type", "source", "filter"); err != nil {
+		if err := closedTo(entry, where, "type", "source", "filter", "namespace", "map"); err != nil {
 			return Trigger{}, err
 		}
 		var e Event
@@ -669,9 +659,42 @@ func triggerOf(root map[string]any) (Trigger, error) {
 		if e.Filter, _, err = textAt(entry, "filter", where); err != nil {
 			return Trigger{}, err
 		}
+		written := false
+		if e.Namespace, written, err = textAt(entry, "namespace", where); err != nil {
+			return Trigger{}, err
+		}
+		if written {
+			if err := namespaceName(e.Namespace, where+".namespace"); err != nil {
+				return Trigger{}, err
+			}
+		}
+		if e.Map, err = inputMap(entry, where); err != nil {
+			return Trigger{}, err
+		}
 		t.Event = append(t.Event, e)
 	}
 	return t, nil
+}
+
+// inputMap reads the map of an entry of the on block, what fills the workflow inputs: each key an
+// input's name, each value an expression or a literal. Nil where the entry writes none.
+func inputMap(entry map[string]any, where string) (map[string]any, error) {
+	m, ok := entry["map"]
+	if !ok {
+		return nil, nil
+	}
+	mapped, err := mapping(m, where+".map")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(mapped))
+	for _, name := range keysOf(mapped) {
+		if err := identifier(name, "the input", where+".map"); err != nil {
+			return nil, err
+		}
+		out[name] = mapped[name]
+	}
+	return out, nil
 }
 
 func mcpOf(root map[string]any) (*MCP, error) {

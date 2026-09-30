@@ -33,8 +33,9 @@ type Entry struct {
 	// Path and Method are a webhook's, which one trigger of the namespace answers.
 	Path, Method string
 
-	// Type and Source are an event's, where the event consumer looks for a subscription.
-	Type, Source string
+	// Type and Source are an event's, where a publication looks for a subscription, and Hears the
+	// namespace whose events it hears, its own where the file names none.
+	Type, Source, Hears string
 
 	// DueAt and FireAt are a schedule's next occurrence and when it fires, its jitter drawn: what
 	// it is armed with where the push arms it afresh. An entry declared again keeps the row's.
@@ -217,12 +218,12 @@ func armedDetail(e Entry, commit string) map[string]any {
 func (n *NS) insertArmed(ctx context.Context, a Armed) error {
 	_, err := n.tx.Exec(ctx,
 		`insert into triggers (namespace, workflow, kind, position, commit, declared, path, method, type, source,
-		   due_at, fire_at, fired_at, fired_for, fired_run, skipped, failures, failed_at, armed_by, armed_at)
+		   due_at, fire_at, fired_at, fired_for, fired_run, skipped, failures, failed_at, armed_by, armed_at, hears)
 		 values ($1, $2, $3, $4, $5, $6, nullif($7, ''), nullif($8, ''), nullif($9, ''), nullif($10, ''),
-		   $11, $12, $13, $14, nullif($15, ''), nullif($16, ''), $17, $18, $19, $20)`,
+		   $11, $12, $13, $14, nullif($15, ''), nullif($16, ''), $17, $18, $19, $20, nullif($21, ''))`,
 		n.namespace, a.Workflow, a.Kind.String(), a.Position, a.Commit, a.Declared, a.Path, a.Method, a.Type, a.Source,
 		orNil(a.DueAt), orNil(a.FireAt), orNil(a.FiredAt), orNil(a.FiredFor), string(a.FiredRun), a.Skipped,
-		a.Failures, orNil(a.FailedAt), a.ArmedBy, a.ArmedAt)
+		a.Failures, orNil(a.FailedAt), a.ArmedBy, a.ArmedAt, a.Hears)
 	// Found here only where another push armed the pair while this one was judged, since Arm asks
 	// first: the transaction is aborted by then, and the holder is not asked for.
 	var pgErr *pgconn.PgError
@@ -251,7 +252,7 @@ func (n *NS) ArmedBy(ctx context.Context, workflow string) ([]Armed, error) {
 func (n *NS) armed(ctx context.Context, workflow string, lock bool) ([]Armed, error) {
 	sql := `select kind, position, commit, declared, coalesce(path, ''), coalesce(method, ''), coalesce(type, ''),
 	   coalesce(source, ''), due_at, fire_at, fired_at, fired_for, coalesce(fired_run, ''), coalesce(skipped, ''),
-	   failures, failed_at, armed_by, armed_at
+	   failures, failed_at, armed_by, armed_at, coalesce(hears, '')
 	 from triggers where namespace = $1 and workflow = $2
 	 order by case kind when 'schedule' then 0 when 'webhook' then 1 else 2 end, position`
 	if lock {
@@ -268,7 +269,7 @@ func (n *NS) armed(ctx context.Context, workflow string, lock bool) ([]Armed, er
 		var kind, run string
 		var due, fire, firedAt, firedFor, failedAt *time.Time
 		if err := rows.Scan(&kind, &a.Position, &a.Commit, &a.Declared, &a.Path, &a.Method, &a.Type, &a.Source,
-			&due, &fire, &firedAt, &firedFor, &run, &a.Skipped, &a.Failures, &failedAt, &a.ArmedBy, &a.ArmedAt); err != nil {
+			&due, &fire, &firedAt, &firedFor, &run, &a.Skipped, &a.Failures, &failedAt, &a.ArmedBy, &a.ArmedAt, &a.Hears); err != nil {
 			return nil, fmt.Errorf("db: the triggers of %s could not be read: %w", workflow, err)
 		}
 		if err := a.Kind.UnmarshalText([]byte(kind)); err != nil {

@@ -163,6 +163,9 @@ const (
 	// declare: map builds the run's inputs, each validated against its schema before the run
 	// exists, and an input nobody declared has none.
 	RuleWebhookMapInputNotDeclared Rule = "webhook-map-input-not-declared"
+	// RuleEventMapInputNotDeclared is an event trigger's map filling an input the workflow does
+	// not declare, for the reason a webhook's is refused.
+	RuleEventMapInputNotDeclared Rule = "event-map-input-not-declared"
 	// RuleWebhookDuplicatePath is two webhooks answering one path with one method: "within a
 	// namespace a path and a method answer one trigger".
 	RuleWebhookDuplicatePath Rule = "webhook-duplicate-path"

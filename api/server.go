@@ -187,6 +187,11 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		// takes, since whoever may push it may already say auth: none.
 		{"PUT", "/api/v1/{namespace}/workflows/{workflow}/webhooks/{method}/{path...}",
 			Needs{Permission: WorkflowWrite, Scope: Workflow}, s.writeHookCredential},
+		// An event published into the namespace, under workflow:run held there: publishing starts
+		// runs, and "a grant on one workflow does not count, since an event reaches every workflow
+		// listening to the namespace".
+		{"POST", "/api/v1/{namespace}/events",
+			Needs{Permission: WorkflowRun, Scope: Namespace}, s.publish},
 		// The run by the path a Location names it by, authorised over its own workflow
 		// rather than over the namespace, so that run:read held on that workflow alone reads
 		// it and a deny of run:read on that workflow refuses it: "a workflow-scope grant only
