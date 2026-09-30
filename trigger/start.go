@@ -97,6 +97,11 @@ type Request struct {
 	// body, headers, query and scheduled_for, and an event trigger's event. A replay is handed the
 	// context of the run it replays, so that it sees what fired it and not what is true now.
 	Context db.TriggerContext
+
+	// Caller is the step whose call asks for the run, for the kind workflow, and Depth how deep
+	// in a chain of calls the run is.
+	Caller *db.Caller
+	Depth  int
 }
 
 // Started is a run created: its identifier and the commit it is pinned to.
@@ -203,6 +208,10 @@ func (p Prepared) Create(ctx context.Context, ns *db.NS) (agk.RunID, error) {
 	if r.Kind != agk.TriggerManual {
 		detail["trigger_kind"] = r.Kind.String()
 	}
+	if r.Caller != nil {
+		detail["from"] = map[string]any{"run": string(r.Caller.Run), "step": string(r.Caller.Step)}
+		detail["depth"] = r.Depth
+	}
 	for k, v := range r.Detail {
 		detail[k] = v
 	}
@@ -212,6 +221,7 @@ func (p Prepared) Create(ctx context.Context, ns *db.NS) (agk.RunID, error) {
 		Inputs: p.inputs, Steps: p.g.Steps(),
 		ReplayOf: r.ReplayOf, ReplayFrom: r.ReplayFrom,
 		Context: r.Context,
+		Caller:  r.Caller, Depth: r.Depth,
 	}); err != nil {
 		return "", err
 	}

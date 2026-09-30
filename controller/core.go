@@ -13,6 +13,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/trigger"
 )
 
 // The loop, which is the whole of what a controller does.
@@ -48,6 +49,11 @@ type Core struct {
 	now      func() time.Time
 	tracer   Tracer
 	observer Observer
+
+	// starter is the one path a run a call makes is started by, and maxCallDepth how deep a
+	// chain of calls may go.
+	starter      *trigger.Starter
+	maxCallDepth int
 }
 
 // Options are what a Core is given. Everything in it is somebody else's work: the bus, the
@@ -114,6 +120,14 @@ type Options struct {
 	// Observer is told what was dispatched, retried, lost and ended, once it is written down.
 	// Nil counts nothing.
 	Observer Observer
+
+	// Starter is the one path a run is created by, which a workflow: step's call takes. Nil
+	// makes no call, and a step calling a workflow fails saying so.
+	Starter *trigger.Starter
+
+	// MaxCallDepth is how deep a chain of calls may go, "maximum depth configurable, default
+	// 8": the call past it fails, and not the run that made it. Zero is the default.
+	MaxCallDepth int
 }
 
 // NewCore builds the deciding half of a controller, for the term it holds.
@@ -129,6 +143,8 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 		return nil, errors.New("controller: a core with no object store, and the envelopes live there")
 	case term.Token < 1:
 		return nil, errors.New("controller: a core outside a term: deciding is what the election decides who may do")
+	case o.MaxCallDepth < 0:
+		return nil, fmt.Errorf("controller: a chain of calls %d deep is no depth: zero is the default, %d", o.MaxCallDepth, agk.DefaultMaxCallDepth)
 	case o.MaxRequeues != nil && *o.MaxRequeues < 0:
 		return nil, fmt.Errorf("controller: max_requeues is how many times one key is handed out again after a loss, and %d is no number of times: zero is what requeues nothing", *o.MaxRequeues)
 	}
@@ -145,11 +161,15 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 	if o.MaxRequeues != nil {
 		requeues = *o.MaxRequeues
 	}
+	if o.MaxCallDepth == 0 {
+		o.MaxCallDepth = agk.DefaultMaxCallDepth
+	}
 	return &Core{
 		controller: c, term: term,
 		queue: o.Queue, versions: o.Versions, objects: o.Objects,
 		limits: o.Limits, ceiling: o.Ceiling, requeues: requeues, now: o.Now,
 		observer: o.Observer, tracer: o.Tracer,
+		starter: o.Starter, maxCallDepth: o.MaxCallDepth,
 	}, nil
 }
 
@@ -313,6 +333,12 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		}
 	}
 
+	// The calls whose runs have ended are heard here too, before anything is decided: the
+	// run a call made has ended, and the step waiting on it ends as that run did.
+	if _, err := co.returned(ctx, ev, e, now); err != nil {
+		return fmt.Errorf("controller: the calls of run %s could not be read: %w", run, err)
+	}
+
 	plan, err := ev.Next(now)
 	if err != nil {
 		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
@@ -340,6 +366,16 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		if plan, err = refuseUnpooled(ev, e.Namespace, ns.Quotas.AllowedRunnerPools, pools, plan, now); err != nil {
 			return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 		}
+	}
+
+	// A call is made here, and never handed to the bus: it holds no slot, and what it waits on
+	// is the run it starts. A call made or refused may make a step below it runnable, which the
+	// plan that follows starts, and a call among those is made in turn.
+	if plan, err = co.calls(ctx, ev, e, plan, now); err != nil {
+		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
+	}
+	if plan, err = refuseUnpooled(ev, e.Namespace, ns.Quotas.AllowedRunnerPools, pools, plan, now); err != nil {
+		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 	}
 
 	// What a namespace may hold at once bounds what leaves here, and it bounds it before the
@@ -400,8 +436,24 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			if err := w.SaveDecision(ctx, decision); err != nil {
 				return err
 			}
+			// A call this pass stopped cancels the run it made, as a container stopped is.
+			for _, s := range plan.Stop {
+				if called(state, s.Task) {
+					if err := w.CancelCalled(ctx, run, s.Task, now); err != nil {
+						return err
+					}
+				}
+			}
 			if !state.Run.State.Terminal() {
 				return nil
+			}
+			// A run that ended cancels the runs its calls made that are still going, and wakes
+			// the run whose call made it, where one did.
+			if err := w.CancelCalled(ctx, run, "", now); err != nil {
+				return err
+			}
+			if err := w.WakeCaller(ctx, run, now); err != nil {
+				return err
 			}
 			// A run that has just ended ends its tasks here, in the same transaction, as a
 			// cancelled run does, whatever its verdict: the evaluator ends the run and
@@ -857,6 +909,7 @@ func taskOf(run agk.RunID, step agk.Step, sh graph.ShardState) db.TaskRow {
 		StartedAt:    sh.StartedAt,
 		FinishedAt:   sh.FinishedAt,
 		MemoisedFrom: sh.MemoisedFrom,
+		CalledRun:    sh.Called,
 	}
 	// A code is written for every ending that carries one. The evaluator reads a code only for a
 	// task that succeeded or failed, since a stop and not the code decided the verdict of one

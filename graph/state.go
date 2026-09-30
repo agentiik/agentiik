@@ -162,6 +162,9 @@ type ShardState struct {
 	// shard, which no container ran.
 	MemoisedFrom agk.RunID `json:"memoised_from,omitempty"`
 
+	// Called is the run this shard's call started, where its step calls a workflow.
+	Called agk.RunID `json:"called,omitempty"`
+
 	// CacheKey is the memoisation key the shard's current attempt was handed out with, where
 	// its step is cached, so that whoever records its ending can remember what it published
 	// under the key it was asked for by, without building the task again.

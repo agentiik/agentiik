@@ -53,7 +53,7 @@ const drainGrace = 5 * time.Second
 func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	if t.Call != nil && t.Image == "" {
 		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargeBrick,
-			"the step is a call to another workflow, which the evaluator expands and no container runs")
+			"the step calls another workflow, which the controller of a server starts as a run of its own and no container runs: agk run --local makes no call")
 	}
 	// A tag is refused before anything is asked of the host, since no runner of any pool
 	// could run it: what a tag names is whatever this host last pulled under it. It is the

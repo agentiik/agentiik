@@ -99,6 +99,7 @@ func anInstallation(t *testing.T) *installation {
 		config.EnvPrefixes:                 "finance=AGK_DEV_FINANCE_,team-ops=AGK_DEV_TEAM_OPS_",
 		config.Listen:                      "127.0.0.1:9090",
 		config.MaxRequeues:                 "1",
+		config.MaxCallDepth:                "4",
 		config.TaskCeiling:                 "2h",
 		config.JoinRotation:                "240h",
 		config.RevocationGrace:             "90m",
@@ -132,7 +133,7 @@ func (i *installation) write(t *testing.T, name string, content []byte) string {
 func (i *installation) onlyWhatIsRequired() {
 	for _, name := range []string{
 		config.DatabasePasswordFile, config.MigrateDatabasePasswordFile, config.EnvPrefixes,
-		config.Listen, config.MaxRequeues, config.TaskCeiling, config.JoinRotation,
+		config.Listen, config.MaxRequeues, config.MaxCallDepth, config.TaskCeiling, config.JoinRotation,
 		config.RevocationGrace, config.MetricsListen, config.MetricsTokenFile, config.OTLPEndpoint,
 	} {
 		delete(i.env, name)
@@ -280,7 +281,7 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Controller{
-		Database: wantDatabase, Bus: wantBus, Objects: i.env[config.ObjectsDir], MaxRequeues: 1, TaskCeiling: 2 * time.Hour,
+		Database: wantDatabase, Bus: wantBus, Objects: i.env[config.ObjectsDir], MaxRequeues: 1, TaskCeiling: 2 * time.Hour, MaxCallDepth: 4,
 		Metrics:      config.Metrics{Listen: "10.0.0.5:9464", TokenHash: i.metricsToken},
 		OTLPEndpoint: "http://127.0.0.1:4318",
 	}
@@ -330,6 +331,7 @@ func TestEverySettingLeftOutTakesItsDefault(t *testing.T) {
 		"the task ceiling, an hour":                   {controller.TaskCeiling, time.Hour},
 		"max_requeues, three":                         {controller.MaxRequeues, 3},
 		"max_requeues, the evaluator's own default":   {controller.MaxRequeues, graph.DefaultMaxRequeues},
+		"the call depth, eight":                       {controller.MaxCallDepth, 8},
 		"the collector, none, so nothing is traced":   {controller.OTLPEndpoint, ""},
 		"the database password, none":                 {string(api.Database.Password), ""},
 		"the admin's password, none":                  {string(migration.Admin.Password), ""},
@@ -897,7 +899,7 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 		migrating.name: {
 			config.BusURL, config.BusCredentialsFile, config.BusAccountSeedFile,
 			config.PublicURL, config.PresignKeyFile, config.MasterKeyFile, config.EnvPrefixes,
-			config.Listen, config.MaxRequeues, config.TaskCeiling, config.JoinRotation,
+			config.Listen, config.MaxRequeues, config.MaxCallDepth, config.TaskCeiling, config.JoinRotation,
 			config.RevocationGrace, config.AuditExportURL, config.AuditExportTokenFile,
 			config.MetricsListen, config.MetricsTokenFile, config.OTLPEndpoint, config.TLSCertFile,
 			config.TLSKeyFile,
