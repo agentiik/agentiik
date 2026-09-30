@@ -83,10 +83,11 @@ jobs:
       # ordinary case rather than a race to avoid, and that promise is only held if it
       # is tested under -race.
       - name: test
-        # The api package runs over two minutes without -race and past Go's default ten minutes
-        # with it, since v0.3.0's access routes each start a server over PostgreSQL: the bound
-        # is raised rather than the tests thinned.
-        run: go test ./... -race -timeout 30m
+        # Every package but api, which the job below runs in shards side by side: it holds some
+        # five hundred tests that each start a server over a database of their own, one after
+        # another, and it alone kept this job waiting twenty minutes after every other package
+        # had finished.
+        run: go test $(go list ./... | grep -vx 'github.com/agentiik/agentiik/api') -race -timeout 30m
         env:
           # A superuser, because the tests create a database of their own, the schema, and
           # the unprivileged role the application connects as. What is under test is what
@@ -119,6 +120,52 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+  # The api package, its tests dealt in turn to three shards run side by side, each against a
+  # PostgreSQL of its own. A test lands in one shard and only one, by its place in go test -list, so a
+  # test added anywhere is run somewhere; the three together are the package, under -race as every
+  # other package is. The package needs a database and nothing else: no bus, no daemon.
+  api:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # A failure in one shard says nothing about the others, which run to the end all the same.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: agk
+          POSTGRES_DB: agk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: test
+        run: |
+          # Listed from the binary the run below uses, built once under -race for both.
+          tests=$(go test -race -list '.*' ./api | grep -E '^(Test|Example|Fuzz)' | awk -v n=3 -v i=${{ matrix.shard }} '(NR - 1) % n == i - 1' | paste -sd '|' -)
+          if [ -z "$tests" ]; then
+            echo "shard ${{ matrix.shard }} of the api package was dealt no test, which three shards of hundreds never are"
+            exit 1
+          fi
+          go test ./api -race -timeout 30m -run "^($tests)\$"
+        env:
+          AGENTIIK_TEST_DATABASE_URL: postgres://postgres:agk@127.0.0.1:5432/agk
 
   # The image that upgrades PostgreSQL's data, on data the official image wrote, each run as the
   # Compose file of agentiik/deploy runs it: PostgreSQL 17 given a database, rows and an extension
