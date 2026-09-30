@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/agentiik/agentiik/internal/cron"
+	"github.com/agentiik/agentiik/internal/expr"
 )
 
 // newTriggerRules are the shape rules of v0.5.0 about the on block, which the schema states and a
@@ -105,4 +106,81 @@ func declared[V any](m map[string]V) string {
 		return "and it declares none"
 	}
 	return "and it declares " + strings.Join(slices.Sorted(maps.Keys(m)), ", ")
+}
+
+// Fired is what a trigger's expressions read of the run it fires before the run exists: the
+// request or the occurrence under trigger, the event under event, and the kind and the principal
+// under run. The run's id and start are not yet, and an expression of the on block reading them is
+// refused where it is evaluated.
+type Fired struct {
+	Commit      string
+	Trigger     map[string]any
+	Event       map[string]any
+	TriggerKind string
+	TriggeredBy string
+}
+
+// Fill evaluates what an entry of the on block fills the workflow inputs with, its map, over what
+// fired it: "Build workflow inputs with map over the trigger context". A string carrying an
+// expression is evaluated, and one filling the whole value keeps its type; a map or a list is
+// evaluated through; anything else is the literal the file wrote. What it answers is bound by the
+// one path every run takes, which holds each input to its schema before the run exists.
+func (g *Graph) Fill(m map[string]any, f Fired) (map[string]any, error) {
+	wf := g.wf
+	c := expr.Context{
+		Workflow: map[string]any{
+			"name": wf.Metadata.Name, "namespace": wf.Metadata.Namespace, "version": f.Commit,
+			// The inputs are what this fills: read here, they are the ones nothing filled yet.
+			"inputs": map[string]any{},
+		},
+		Run:     map[string]any{"attempt": int64(1), "trigger_kind": f.TriggerKind, "triggered_by": f.TriggeredBy},
+		Trigger: f.Trigger,
+		Event:   f.Event,
+		Vars:    map[string]any(wf.Vars),
+	}
+	out := make(map[string]any, len(m))
+	for _, name := range slices.Sorted(maps.Keys(m)) {
+		v, err := fill(c, m[name])
+		if err != nil {
+			return nil, fmt.Errorf("map.%s: %w", name, err)
+		}
+		out[name] = v
+	}
+	return out, nil
+}
+
+// fill evaluates one value of a map, through the maps and lists it holds.
+func fill(c expr.Context, v any) (any, error) {
+	switch value := v.(type) {
+	case string:
+		if !strings.Contains(value, "${{") {
+			return value, nil
+		}
+		t, err := expr.Interpolate(expr.ScopeTrigger, value)
+		if err != nil {
+			return nil, err
+		}
+		return expr.Evaluate(t, c)
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for _, key := range slices.Sorted(maps.Keys(value)) {
+			resolved, err := fill(c, value[key])
+			if err != nil {
+				return nil, err
+			}
+			out[key] = resolved
+		}
+		return out, nil
+	case []any:
+		out := make([]any, 0, len(value))
+		for _, elem := range value {
+			resolved, err := fill(c, elem)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, resolved)
+		}
+		return out, nil
+	}
+	return v, nil
 }

@@ -774,6 +774,13 @@ func (p *Pool) CompleteMove(ctx context.Context, m Move, copied MoveObjects, gra
 			`delete from workflow_moves where namespace = $1 and workflow = $2`, m.Namespace, m.Workflow); err != nil {
 			return fmt.Errorf("db: the move of %s could not be closed: %w", m.Workflow, err)
 		}
+		// A webhook's credential stays behind, as a secret the workflow names does: it belongs to
+		// the namespace it was written in, and a secret sealed there opens in no other. Each is
+		// written again in the target.
+		if _, err := tx.Exec(ctx,
+			`delete from webhook_credentials where namespace = $1 and workflow = $2`, m.Namespace, m.Workflow); err != nil {
+			return fmt.Errorf("db: the credentials of the webhooks of %s could not be left behind: %w", m.Workflow, err)
+		}
 		if _, err := tx.Exec(ctx,
 			`update workflows set namespace = $3 where namespace = $1 and name = $2`,
 			m.Namespace, m.Workflow, m.Target); err != nil {

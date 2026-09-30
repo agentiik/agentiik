@@ -461,8 +461,14 @@ func (rt *Router) register(method, pattern string, h http.HandlerFunc) (err erro
 		}
 	}()
 	mux, word := rt.mux, ""
+	// A route served on every method names none: a webhook's, which answers on the method its
+	// file declares, whichever that is.
+	served := method + " " + pattern
+	if method == "" {
+		served = pattern
+	}
 	if strings.HasPrefix(pattern, "/{namespace}/{repository}/") {
-		rt.git.HandleFunc(method+" "+pattern, h)
+		rt.git.HandleFunc(served, h)
 		return nil
 	}
 	if rest, under := strings.CutPrefix(pattern, apiPrefix); under {
@@ -476,7 +482,7 @@ func (rt *Router) register(method, pattern string, h http.HandlerFunc) (err erro
 	if word != "" && !agk.IsReservedNamespace(word) {
 		return fmt.Errorf("api: %s %s routes on %q, which is not a reserved namespace name: a namespace of that name would lose its routes to this one, so the word joins agk.ReservedNamespaces, and the schemas' list, first", method, pattern, word)
 	}
-	mux.HandleFunc(method+" "+pattern, h)
+	mux.HandleFunc(served, h)
 	if word != "" {
 		rt.words[word] = true
 	}

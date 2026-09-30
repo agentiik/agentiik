@@ -46,6 +46,7 @@ type Case struct {
 // holds there; a secret's declarations take workflow:read at namespace scope and writing one
 // secret:write there; a push workflow:write, and secret:use where it names a secret; recording a
 // repository's image pins and brick manifests workflow:write, and reading them workflow:read;
+// reading what a workflow has armed workflow:read, and writing a webhook's credential workflow:write;
 // starting a run and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
 // being envelope contents that run:read_data alone reveals; outputs, a step's inputs and outputs and
 // an artifact run:read_data. Registration is authenticated by the join token in its body, the
@@ -165,6 +166,10 @@ var Cases = []Case{
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/runs", Permission: api.WorkflowRun, Scope: api.Workflow}, Refused: true},
 	// What the default branch's head has armed, "to whoever holds workflow:read".
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/triggers", Permission: api.WorkflowRead, Scope: api.Workflow}},
+	// What a webhook checks its caller against, written by whoever may change the workflow, and the
+	// webhook itself, authenticated per trigger on whichever method its file declares.
+	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/workflows/{workflow}/webhooks/{method}/{path...}", Permission: api.WorkflowWrite, Scope: api.Workflow}, Refused: true},
+	public("", "/hooks/{namespace}/{path...}"),
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs/{run}", Permission: api.RunRead, Scope: api.Workflow, OfRun: true, Reveals: api.RunReadData}},
