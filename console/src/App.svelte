@@ -11,6 +11,7 @@
   import Refused from "./views/Refused.svelte";
   import Run from "./views/Run.svelte";
   import Runs from "./views/Runs.svelte";
+  import Statistics from "./views/Statistics.svelte";
 
   // The console: who it is signed in as, the top bar, the screen the address names, and the key line.
   let { api, session, place, version }: { api: API; session: Session; place: Place; version: string } = $props();
@@ -33,7 +34,7 @@
   ];
 
   // Built so far: the views the console draws in this release. The others arrive with theirs.
-  const built = new Set<View>(["runs"]);
+  const built = new Set<View>(["runs", "statistics"]);
 
   const known = $derived(namespace !== undefined && session.namespaces.some((n) => n.name === namespace));
   const shown = $derived(namespace && known ? all.filter((v) => built.has(v.view) && v.shows(namespace)) : []);
@@ -95,6 +96,8 @@
         <Run {api} {place} me={session.me} namespace={route.namespace} id={route.run} />
       {:else if route.kind === "namespace" && route.view === "runs"}
         <Runs {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
+      {:else if route.kind === "namespace" && route.view === "statistics"}
+        <Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else}
         <Refused />
       {/if}

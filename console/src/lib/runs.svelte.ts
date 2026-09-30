@@ -21,17 +21,24 @@ export const spans = {
 
 export type Span = keyof typeof spans;
 
-export type Filters = { state?: RunState; workflow?: string; span: Span };
+// A list is narrowed by a span counted back from now, or by the bounds of a statistics bucket, which
+// a point of a chart opens: since and until, both included, as GET /api/v1/runs takes them.
+export type Filters = { state?: RunState; workflow?: string; span: Span; since?: string; until?: string };
 
 // filtersOf reads the filters out of the address's query, ignoring what is no filter of this view.
 export function filtersOf(query: URLSearchParams): Filters {
   const state = query.get("state") as RunState | null;
   const span = query.get("span") as Span | null;
   const workflow = query.get("workflow");
+  const since = query.get("since");
+  const until = query.get("until");
+  const bounded = since !== null && until !== null && !Number.isNaN(Date.parse(since)) && !Number.isNaN(Date.parse(until));
   return {
     state: state && states.includes(state) ? state : undefined,
     workflow: workflow || undefined,
     span: span && span in spans ? span : "24h",
+    since: bounded ? since : undefined,
+    until: bounded ? until : undefined,
   };
 }
 
@@ -40,7 +47,12 @@ export function queryOf(filters: Filters): URLSearchParams {
   const q = new URLSearchParams();
   if (filters.state) q.set("state", filters.state);
   if (filters.workflow) q.set("workflow", filters.workflow);
-  if (filters.span !== "24h") q.set("span", filters.span);
+  if (filters.since && filters.until) {
+    q.set("since", filters.since);
+    q.set("until", filters.until);
+  } else if (filters.span !== "24h") {
+    q.set("span", filters.span);
+  }
   return q;
 }
 
@@ -70,12 +82,13 @@ export class RunList {
 
   #query(limit: number, until?: string) {
     const span = spans[this.#filters.span].ms;
+    const since = this.#filters.since ?? (span === undefined ? undefined : new Date(this.#now() - span).toISOString());
     return {
       namespace: this.#namespace,
       workflow: this.#filters.workflow,
       state: this.#filters.state,
-      since: span === undefined ? undefined : new Date(this.#now() - span).toISOString(),
-      until,
+      since,
+      until: until ?? this.#filters.until,
       limit,
     };
   }

@@ -46,6 +46,8 @@
     place.narrow(queryOf({ ...filters, ...change }));
   }
 
+  const bounded = $derived(filters.since && filters.until ? `${filters.since.slice(0, 16).replace("T", " ")} to ${filters.until.slice(11, 16)} UTC` : "");
+
   // The runs that need somebody: the ones that failed or timed out in the last hour, unless the
   // reader has set them aside.
   let setAside = $state(new Set<string>());
@@ -94,13 +96,20 @@
       </select>
       <Icon name="control-expand" size={14} />
     </label>
-    <label class="select">
-      <span class="unseen">Created</span>
-      <select value={filters.span} onchange={(e) => narrow({ span: e.currentTarget.value as Span })}>
-        {#each Object.entries(spans) as [value, span] (value)}<option {value}>{span.label}</option>{/each}
-      </select>
-      <Icon name="control-expand" size={14} />
-    </label>
+    {#if bounded}
+      <span class="bounds">
+        Created <span class="mono">{bounded}</span>
+        <button class="clear" aria-label="Show the last 24 hours again" onclick={() => narrow({ since: undefined, until: undefined, span: "24h" })}><Icon name="control-close" size={12} /></button>
+      </span>
+    {:else}
+      <label class="select">
+        <span class="unseen">Created</span>
+        <select value={filters.span} onchange={(e) => narrow({ span: e.currentTarget.value as Span })}>
+          {#each Object.entries(spans) as [value, span] (value)}<option {value}>{span.label}</option>{/each}
+        </select>
+        <Icon name="control-expand" size={14} />
+      </label>
+    {/if}
     <label class="live">
       <input type="checkbox" role="switch" bind:checked={live} />
       <span class="track" aria-hidden="true"><span class="knob"></span></span>
@@ -226,6 +235,28 @@
     position: absolute;
     right: calc(var(--unit) * 4);
     pointer-events: none;
+  }
+
+  .bounds {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--unit) * 3);
+    height: 29px;
+    padding: 0 calc(var(--unit) * 3) 0 calc(var(--unit) * 5);
+    border: var(--border-hairline) solid var(--accentLine);
+    border-radius: var(--radius-control);
+    background: var(--accentDim);
+    color: var(--accent);
+    font-size: var(--type-control-size);
+  }
+
+  .clear {
+    display: inline-flex;
+    padding: 2px;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
   }
 
   .live {
