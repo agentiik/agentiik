@@ -21,6 +21,7 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/repo"
+	"github.com/agentiik/agentiik/trigger"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -961,8 +962,12 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 				return err
 			}
 		}
-		return nil
+		// "Schedules, webhooks and events" run the default branch: where this push moved it, what
+		// its new head declares is armed in the transaction that moves it, so that no head is ever
+		// without its triggers or with another's.
+		return trigger.Reconcile(ctx, ns, over.Workflow, string(who), now)
 	})
+	var taken *db.HookTaken
 	switch {
 	case errors.Is(err, db.ErrStaleRef):
 		return &pushRefusal{short: "a ref moved while this push was judged: fetch, and push again"}
@@ -976,6 +981,10 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 		return &pushRefusal{short: "a commit this push makes a version was recorded with another tree, which one commit cannot have"}
 	case errors.Is(err, db.ErrWorkflowMoving):
 		return &pushRefusal{short: "refused: " + movingSentence(over)}
+	case errors.As(err, &taken):
+		return &pushRefusal{short: "refused: " + taken.Error()}
+	case errors.Is(err, trigger.ErrUnarmable):
+		return &pushRefusal{short: "refused: " + err.Error() + ": the default branch runs its schedules, webhooks and events, so it is left at a version whose triggers are read by the rules of this release"}
 	case err != nil:
 		return err
 	}

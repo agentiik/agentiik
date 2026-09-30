@@ -505,3 +505,84 @@ func deref(s *string) string {
 	}
 	return *s
 }
+
+// RefUnresolved is a ref a run was asked by that names no commit to run, or two: no branch, no tag
+// and no version of that name, or a name a branch and a tag both hold.
+type RefUnresolved struct {
+	Ref string
+	// Ambiguous says the ref names a branch and a tag both, rather than nothing.
+	Ambiguous bool
+}
+
+func (e *RefUnresolved) Error() string {
+	if e.Ambiguous {
+		return fmt.Sprintf("%.200s is both a branch and a tag of the workflow: name the one meant in full, refs/heads/%.200s or refs/tags/%.200s", e.Ref, e.Ref, e.Ref)
+	}
+	if wholeCommit.MatchString(e.Ref) {
+		return fmt.Sprintf("%s is no version of the workflow", e.Ref)
+	}
+	return fmt.Sprintf("%.200s names no branch, no tag and no version of the workflow", e.Ref)
+}
+
+// wholeCommit is a commit named in full, as a version is.
+var wholeCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// ResolveRef is the commit a ref names in a workflow's repository: a branch or a tag by its short
+// name or in full, or a commit named in full that is a version. A ref naming nothing, or two things,
+// is a *RefUnresolved.
+func (n *NS) ResolveRef(ctx context.Context, workflow, ref string) (string, error) {
+	if wholeCommit.MatchString(ref) {
+		if _, err := n.Version(ctx, workflow, ref); err != nil {
+			if errors.Is(err, ErrNoVersion) {
+				return "", &RefUnresolved{Ref: ref}
+			}
+			return "", err
+		}
+		return ref, nil
+	}
+	repository, err := n.Repository(ctx, workflow)
+	if err != nil {
+		return "", err
+	}
+	held := map[string]Ref{}
+	for _, r := range repository.Refs {
+		held[r.Name] = r
+	}
+	candidates := []string{ref}
+	if !strings.HasPrefix(ref, "refs/") {
+		candidates = []string{"refs/heads/" + ref, "refs/tags/" + ref}
+	}
+	var found []Ref
+	for _, name := range candidates {
+		if r, ok := held[name]; ok && r.Commit != "" {
+			found = append(found, r)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return "", &RefUnresolved{Ref: ref}
+	case 1:
+		return found[0].Commit, nil
+	}
+	return "", &RefUnresolved{Ref: ref, Ambiguous: true}
+}
+
+// DefaultCommit is the commit a run naming none runs: the default branch's head, or while it is
+// unborn the latest version a tree push recorded, or ErrNoVersion where there is neither.
+func (n *NS) DefaultCommit(ctx context.Context, workflow string) (string, error) {
+	record, err := n.WorkflowRecord(ctx, workflow)
+	if err != nil {
+		return "", err
+	}
+	if record.Head != "" {
+		return record.Head, nil
+	}
+	latest, _, err := n.TreeVersions(ctx, workflow, "", 1)
+	if err != nil {
+		return "", err
+	}
+	if len(latest) == 0 {
+		return "", fmt.Errorf("%w: %s/%s has no version to run", ErrNoVersion, n.namespace, workflow)
+	}
+	return latest[0].Commit, nil
+}

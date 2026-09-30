@@ -43,25 +43,38 @@ func (co *Core) admitted(ctx context.Context, e db.Evaluation, g *graph.Graph) (
 		}
 		if group == "" {
 			admit = true
+		} else {
+			holder, err := w.Holding(ctx, e.Namespace, group)
+			if err != nil {
+				return err
+			}
+			switch {
+			case holder == "":
+				// The group is free, and it goes to whoever queued first.
+				if admit, err = w.NextInLine(ctx, e.Namespace, group, e.Run); err != nil {
+					return err
+				}
+			case holder == e.Run:
+				admit = true
+			case g.Workflow() != nil && g.Workflow().Concurrency.CancelInProgress:
+				cancel = holder
+			}
+		}
+		if !admit {
 			return nil
 		}
-
-		holder, err := w.Holding(ctx, e.Namespace, group)
+		// "queued: Created, waiting on a concurrency lock or on namespace quota." A namespace
+		// holding every task max_concurrent_tasks lets it hold lets no run in: one admitted then
+		// would read running with nothing of it running, and a person looking at the run list
+		// would see work going on that is waiting. It is let in by the pass that finds a slot
+		// free, which the sweep makes, since a run never decided is swept until it is. Asked after
+		// the group, so that cancel_in_progress still cancels the run in the way, whose tasks may
+		// be what holds the slots.
+		free, err := w.Slots(ctx, e.Namespace)
 		if err != nil {
 			return err
 		}
-		if holder == "" {
-			// The group is free, and it goes to whoever queued first.
-			admit, err = w.NextInLine(ctx, e.Namespace, group, e.Run)
-			return err
-		}
-		if holder == e.Run {
-			admit = true
-			return nil
-		}
-		if wf := g.Workflow(); wf != nil && wf.Concurrency.CancelInProgress {
-			cancel = holder
-		}
+		admit = free > 0
 		return nil
 	})
 	if err != nil {

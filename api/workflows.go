@@ -19,6 +19,7 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/repo"
+	"github.com/agentiik/agentiik/trigger"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -658,6 +659,10 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 			fail(w, http.StatusConflict, fmt.Sprintf("%s holds a workflow named %s already: a name is one workflow in its namespace", over.Namespace, *u.Name))
 		case errors.Is(err, db.ErrWorkflowPurging):
 			fail(w, http.StatusConflict, fmt.Sprintf("a workflow named %s was deleted from %s and is still being purged: the name is free once its runs, versions and packs are gone", *u.Name, over.Namespace))
+		case errors.As(err, new(*db.HookTaken)):
+			fail(w, http.StatusConflict, err.Error())
+		case errors.Is(err, trigger.ErrUnarmable):
+			fail(w, http.StatusConflict, err.Error()+": the default branch runs its schedules, webhooks and events, so it is named at a version whose triggers are read by the rules of this release")
 		case errors.Is(err, db.ErrNoBranch):
 			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("%s holds no branch %s: the default branch is one the repository holds, since HEAD names it and a clone checks it out, and only a repository nothing was pushed to names the branch its first push will create", over.Workflow, *u.DefaultBranch))
 		default:
@@ -686,7 +691,12 @@ func (s *Server) updateWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 		if name, records, err = change(ctx, ns); err != nil {
 			return err
 		}
-		return appendAll(ctx, ns, records)
+		if err := appendAll(ctx, ns, records); err != nil {
+			return err
+		}
+		// Another branch named the default runs its schedules, webhooks and events from now on:
+		// what its head declares is armed in the transaction that names it.
+		return trigger.Reconcile(ctx, ns, name, string(who), s.now())
 	})
 	if refused(err) {
 		return
@@ -831,68 +841,29 @@ func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, o
 	fail(w, http.StatusNotFound, fmt.Sprintf("the tree at %.200s holds no file %.200s", ref, name))
 }
 
-// resolveRef is the commit a ref names in a workflow's repository: a branch or a tag by its short
-// name or in full, or a commit named in full that is a version. It answers the status and the
-// sentence of a ref naming nothing, or two things.
+// resolveRef is the commit a ref names in a workflow's repository, as db.NS.ResolveRef finds it,
+// with the status and the sentence of a ref naming nothing, or two things.
 func resolveRef(ctx context.Context, ns *db.NS, workflow, ref string) (string, int, error) {
-	if wholeCommit.MatchString(ref) {
-		if _, err := ns.Version(ctx, workflow, ref); err != nil {
-			if errors.Is(err, db.ErrNoVersion) {
-				return "", http.StatusNotFound, fmt.Errorf("%s is no version of the workflow", ref)
-			}
-			return "", http.StatusOK, err
-		}
-		return ref, http.StatusOK, nil
-	}
-	repository, err := ns.Repository(ctx, workflow)
-	if err != nil {
+	commit, err := ns.ResolveRef(ctx, workflow, ref)
+	var unresolved *db.RefUnresolved
+	switch {
+	case errors.As(err, &unresolved) && unresolved.Ambiguous:
+		return "", http.StatusBadRequest, err
+	case errors.As(err, &unresolved):
+		return "", http.StatusNotFound, err
+	case err != nil:
 		return "", http.StatusOK, err
 	}
-	held := map[string]db.Ref{}
-	for _, r := range repository.Refs {
-		held[r.Name] = r
-	}
-	candidates := []string{ref}
-	if !strings.HasPrefix(ref, "refs/") {
-		candidates = []string{"refs/heads/" + ref, "refs/tags/" + ref}
-	}
-	var found []db.Ref
-	for _, name := range candidates {
-		if r, ok := held[name]; ok && r.Commit != "" {
-			found = append(found, r)
-		}
-	}
-	switch len(found) {
-	case 0:
-		return "", http.StatusNotFound, fmt.Errorf("%.200s names no branch, no tag and no version of the workflow", ref)
-	case 1:
-		return found[0].Commit, http.StatusOK, nil
-	}
-	return "", http.StatusBadRequest, fmt.Errorf("%.200s is both a branch and a tag of the workflow: name the one meant in full, refs/heads/%.200s or refs/tags/%.200s", ref, ref, ref)
+	return commit, http.StatusOK, nil
 }
 
-// defaultCommit is the commit a run naming none runs: the default branch's head, or while it is
-// unborn the latest version a tree push recorded, or ErrNoVersion where there is neither.
+// defaultCommit is the commit a run naming none runs, as db.NS.DefaultCommit finds it.
 func (s *Server) defaultCommit(ctx context.Context, over Target) (string, error) {
 	var commit string
 	err := s.pool.In(ctx, over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		record, err := ns.WorkflowRecord(ctx, over.Workflow)
-		if err != nil {
-			return err
-		}
-		if record.Head != "" {
-			commit = record.Head
-			return nil
-		}
-		latest, _, err := ns.TreeVersions(ctx, over.Workflow, "", 1)
-		if err != nil {
-			return err
-		}
-		if len(latest) == 0 {
-			return fmt.Errorf("%w: %s/%s has no version to run", db.ErrNoVersion, over.Namespace, over.Workflow)
-		}
-		commit = latest[0].Commit
-		return nil
+		var err error
+		commit, err = ns.DefaultCommit(ctx, over.Workflow)
+		return err
 	})
 	return commit, err
 }

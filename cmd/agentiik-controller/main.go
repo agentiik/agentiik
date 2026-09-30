@@ -376,6 +376,11 @@ func purger(pool *db.Pool, dir string, ctl *controller.Controller, term db.Term,
 // the same run, would end the term, and the program with it, over one run; a sweep reports such a
 // run and moves on, and a notification is only a shortcut to what a sweep finds. So both are
 // reported and left to the next sweep, and only the fence ends the term.
+// armEvery is how often the controller that leads arms the heads nobody armed. A push arms its own
+// head as it lands, so this is for the heads a release upgraded past and the rare arming a request
+// could not finish, and a minute is soon enough for either.
+const armEvery = time.Minute
+
 func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, verify func(context.Context), purges *purge.Purger, log *slog.Logger) error {
 	core, err := controller.NewCore(ctl, term, o)
 	if err != nil {
@@ -425,6 +430,36 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 			<-purged
 		}()
 	}
+
+	// The triggers every workflow's default branch declares, armed where nobody armed them: at the
+	// start of the term, and every minute after, for a head whose arming a request could not finish.
+	armed := make(chan struct{})
+	go func() {
+		defer close(armed)
+		tick := time.NewTicker(armEvery)
+		defer tick.Stop()
+		for {
+			if err := core.Arm(ctx, func(err error) { log.Warn("a workflow's triggers could not be armed", "error", err) }); err != nil {
+				if errors.Is(err, db.ErrFenced) {
+					cancel(err)
+					return
+				}
+				if ctx.Err() == nil {
+					log.Warn("the triggers could not be armed, and the next pass comes round", "error", err)
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	// As the export's: a term never ends with an arming still writing.
+	defer func() {
+		cancel(nil)
+		<-armed
+	}()
 
 	go func() {
 		done <- ctl.Watch(ctx, func(ctx context.Context, w controller.Wake) error {

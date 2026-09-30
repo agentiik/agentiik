@@ -191,7 +191,9 @@ func TestAWorkflowWithNoGroupWaitsForNobody(t *testing.T) {
 
 // "max_concurrent_tasks: Caps how much of the runner fleet one namespace can hold at once, so a
 // fan-out of ten thousand items cannot starve everyone else." A namespace at its ceiling slows
-// down rather than failing, and what was held back goes out when a slot frees.
+// down rather than failing: a run created while it holds every task it may waits in queued, "waiting
+// on a concurrency lock or on namespace quota", rather than reading running with nothing of it
+// running, and is let in when a slot frees.
 func TestANamespaceAtItsCeilingSlowsDown(t *testing.T) {
 	core, q, pool, super := deciding(t)
 	conn := dbtest.Superuser(t, super)
@@ -210,26 +212,42 @@ func TestANamespaceAtItsCeilingSlowsDown(t *testing.T) {
 		t.Fatalf("the first run published %d tasks", len(first))
 	}
 
-	// The second run starts, because a quota bounds what a namespace holds and not how many
-	// runs it has going, and then hands out nothing.
+	// The second run waits in queued while the first holds the one task finance may hold.
 	if err := core.Decide(t.Context(), second); err != nil {
 		t.Fatal(err)
 	}
-	if got := runState(t, core, second); got != agk.Running {
-		t.Errorf("the second run is %s, and a quota is about tasks rather than runs", got)
+	if got := runState(t, core, second); got != agk.Queued {
+		t.Errorf("the second run is %s while its namespace holds every task it may", got)
 	}
 	if got := q.taken(); len(got) != 0 {
 		t.Fatalf("a namespace holding its one allowed task published %+v", got)
 	}
 
-	// A run whose message never went stays actionable, which is what brings the controller
-	// back for it once a slot frees.
+	// The first run's next step takes the slot its first step frees, since the first run was let in
+	// and the second was not.
 	core.answer(t, succeeded(t, first[0], core.now()))
 	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
 		t.Fatal(err)
 	}
-	if got := q.taken(); len(got) != 1 {
-		t.Fatalf("once a slot freed the held back task went out %d times", len(got))
+	archive := q.taken()
+	if len(archive) != 1 || archive[0].Step != "archive" {
+		t.Fatalf("once normalize ended, %+v went out, want the first run's archive", archive)
+	}
+	if got := runState(t, core, second); got != agk.Queued {
+		t.Errorf("the second run is %s while the first still holds the slot", got)
+	}
+
+	// A run never decided stays actionable, which is what brings the controller back for it
+	// once the slot frees.
+	core.answer(t, succeeded(t, archive[0], core.now()))
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := runState(t, core, second); got != agk.Running {
+		t.Errorf("once the slot freed the waiting run is %s", got)
+	}
+	if got := q.taken(); len(got) != 1 || got[0].Run != second {
+		t.Fatalf("once the slot freed %+v went out, want the second run's first task", got)
 	}
 }
 
