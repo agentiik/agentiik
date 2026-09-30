@@ -91,6 +91,7 @@ const (
 	TLSCertFile                 = "AGK_TLS_CERT_FILE"
 	TLSKeyFile                  = "AGK_TLS_KEY_FILE"
 	ProxyURL                    = "AGK_PROXY_URL"
+	Console                     = "AGK_CONSOLE"
 	InitDir                     = "AGK_INIT_DIR"
 	InitHost                    = "AGK_INIT_HOST"
 	InitNamespace               = "AGK_INIT_NAMESPACE"
@@ -311,6 +312,12 @@ type API struct {
 
 	JoinRotation    time.Duration
 	RevocationGrace time.Duration
+
+	// Console is whether the API serves the web console at the root of the public URL, as it
+	// does unless AGK_CONSOLE is off: then every other route is still served, the sign-in page
+	// under /auth among them, for an installation serving the console's files elsewhere on the
+	// same origin, or none.
+	Console bool
 }
 
 // Controller is what agentiik-controller reads.
@@ -423,6 +430,7 @@ func ReadAPI(lookup Lookup) (API, error) {
 	// revoked runner was running when it was revoked has the whole of its time to report.
 	c.RevocationGrace = r.duration(RevocationGrace, r.taskCeiling(), "how long a revoked runner's results are still taken",
 		"revoking a runner never destroys work already done: a grace of no time refuses the results of what it is finishing")
+	c.Console = r.onOff(Console, "whether the API serves the web console at the root of the public URL")
 	return c, r.err()
 }
 
@@ -760,6 +768,24 @@ func (r *reader) duration(name string, fallback time.Duration, what, nothing str
 		return fallback
 	}
 	return d
+}
+
+// onOff is a switch that is on unless it says off, and says nothing else. what names the setting.
+//
+// Two words and no more, rather than whatever strconv.ParseBool takes: false, 0 and no read as off
+// in one program and as a refusal in the next, and a person writing disabled or OFF means off and
+// would be served what they turned off. A value it does not know is refused, since a start that
+// serves what somebody tried to turn off is worse than one that does not start.
+func (r *reader) onOff(name, what string) bool {
+	v, set := r.value(name)
+	switch {
+	case !set, v == "on":
+		return true
+	case v == "off":
+		return false
+	}
+	r.refuse(name, fmt.Sprintf("is %q, and it is %s, written on or off and nothing else", v, what))
+	return true
 }
 
 // taskCeiling is the longest a task no timeout bounds may run.

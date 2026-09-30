@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/console"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/secret"
@@ -34,6 +36,12 @@ type settings struct {
 	// and the wall clock where it is nil, which is what serve reads. A test sets it to hold the
 	// installation at an instant, a grant's expiry, which the wall clock never waits at.
 	now func() time.Time
+
+	// console is the web console's build the API serves at the root of the public URL: what this
+	// binary carries where AGK_CONSOLE leaves the console on, and nil where it is off or the build
+	// skipped the console's stage, and then no console is served. A test sets a build of its own,
+	// since the one this binary carries is whatever the machine running it last built.
+	console fs.FS
 }
 
 // readSettings reads the API's configuration, then the master key and the env prefixes, which
@@ -43,6 +51,9 @@ func readSettings(lookup config.Lookup) (settings, error) {
 	c, err := config.ReadAPI(lookup)
 	refused := []error{err}
 	s := settings{API: c}
+	if c.Console {
+		s.console = console.Files()
+	}
 	if c.MasterKey != "" {
 		master, err := secret.ParseMaster([]byte(c.MasterKey))
 		if err == nil {
@@ -153,7 +164,7 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 	defer stopWatching()
 	go watchCredential(watching, expiry(s.Bus), renewer(in.issuer, s.Bus.CredentialsFile, time.Now), log, time.Now, sleep)
 
-	log.Info("serving", "address", ln.Addr().String(), "tls", s.TLS.Served(), "public_url", s.PublicURL)
+	log.Info("serving", "address", ln.Addr().String(), "tls", s.TLS.Served(), "public_url", s.PublicURL, "console", consoleState(s))
 	select {
 	case err := <-stopped:
 		return fmt.Errorf("the listener stopped: %w", err)
@@ -167,6 +178,20 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 	}
 	<-stopped
 	return nil
+}
+
+// consoleState is what the start says of the console: served, off as AGK_CONSOLE asked, or absent
+// from a build that skipped its stage, which serves every route but the console, as the page says,
+// and says so once rather than leave somebody reading a 404 at the root to guess which.
+func consoleState(s settings) string {
+	switch {
+	case s.console != nil:
+		return "served"
+	case !s.Console:
+		return "off"
+	default:
+		return "not carried by this build"
+	}
 }
 
 // installation is what serve answers with: the router, over what it holds open.
@@ -386,6 +411,12 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	// password forms where the policy lets passwords in, now that the password routes are served.
 	if _, err := api.NewSignIn(rt, api.SignInOptions{Pool: pool, PublicURL: s.PublicURL, Sessions: principals, Passwords: true, Now: s.now}); err != nil {
 		return nil, err
+	}
+	// The web console, at every address outside the API's roots, where there is one to serve.
+	if s.console != nil {
+		if _, err := api.NewConsole(rt, api.ConsoleOptions{Files: s.console, PublicURL: s.PublicURL}); err != nil {
+			return nil, err
+		}
 	}
 	return rt, nil
 }

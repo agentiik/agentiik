@@ -2,6 +2,14 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### API
+
+- The web console is served at the root of the public URL from a build embedded in `agentiik-api` (package `console`), at every address outside `/api`, `/auth`, `/hooks`, `/mcp`, `/objects` and a repository's: a `GET` or a `HEAD` is answered the build's file it names, or else the console's page with its `<base href="/">` rewritten to the public URL's path, and any other method `404` as before. Every answer carries a Content-Security-Policy holding the console to its own origin, `nosniff`, `Referrer-Policy: no-referrer` and an ETag it is revalidated by at every load. A build that skipped the console's stage carries none and serves none, and the line the start logs says whether the console is `served`, `off` or `not carried by this build`.
+- `AGK_CONSOLE` is `on` or `off` and nothing else, `on` where unset: `off` serves no console and every other route, `/auth` among them, and any other value refuses the start naming the variable.
+- A route is registered under `/api`, `/auth`, `/hooks`, `/mcp`, `/objects` or a repository's path, or refused at registration (`api.Router`), so that the console never takes an address of the API's and a proxy sending the API those paths misses none.
+
 ## v0.5.0, 2026-09-30
 
 Triggers: a workflow starts with nobody present. What the default branch's head declares under `on` is armed as the branch moves; schedules fire from the controller that leads, in their zone, late or made up as `catch_up` says; webhooks prove their caller by a Standard Webhooks signature, a service account's token or a client certificate before a run starts, and answer with the run or with an output; an event published to a namespace with `POST /api/v1/{ns}/events` starts a run of each trigger hearing it, in that namespace or in another one it granted read; and a `workflow:` step calls another workflow and waits on the run it starts. Every run, whatever asked for it, is created by one path that binds its inputs, attributes it, charges it to its namespace's quotas and records it, and what fired it is frozen on it for a replay to see. A v0.4.0 installation upgrades with v0.5.0's `compose.yaml` and its own `.env`, and nothing else.
