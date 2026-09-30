@@ -6,6 +6,7 @@ import { connect } from "./api/client";
 import App from "./App.svelte";
 import { Place } from "./lib/place.svelte";
 import { Session } from "./lib/session.svelte";
+import { passkeysUnavailable } from "./lib/signin";
 import { apply, chosen } from "./lib/theme";
 
 // The console, drawn into the page the API served, against the API that served it.
@@ -17,5 +18,7 @@ if (target) {
   const place = new Place({ pathname: window.location.pathname, search: window.location.search, baseURI: document.baseURI }, window.history);
   window.addEventListener("popstate", () => place.moved(window.location.pathname, window.location.search));
   const api = connect(document.baseURI);
-  mount(App, { target, props: { api, session: new Session(api), place, version: __AGENTIIK_VERSION__ } });
+  const unavailable = passkeysUnavailable(window);
+  const passkeys = { unavailable, credentials: unavailable ? undefined : navigator.credentials };
+  mount(App, { target, props: { api, session: new Session(api), place, version: __AGENTIIK_VERSION__, passkeys } });
 }

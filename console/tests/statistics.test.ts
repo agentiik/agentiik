@@ -63,7 +63,7 @@ function open(path: string, search = "") {
   const asked: string[] = [];
   const api = connect("http://stand-in/", answering(scenario("alice"), asked));
   const place = new Place({ pathname: path, search, baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
-  render(App, { api, session: new Session(api), place, version: "v0.6.0" });
+  render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
   return { asked, place };
 }
 
