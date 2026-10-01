@@ -4,8 +4,8 @@
   "info": {
     "title": "Agentiik API",
     "version": "0.5.0",
-    "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces and their quotas, grants and API tokens; the workflow repositories; the runs listed and read; and the statistics the console's charts read.",
-    "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, and the runs listing, a run read whole and the statistics routes of v0.6.0, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
+    "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces and their quotas, grants and API tokens; the workflow repositories; the runs listed, read, followed, cancelled and replayed; and the statistics the console's charts read.",
+    "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, and the runs routes the console reads and acts with and the statistics routes of v0.6.0, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
   },
   "externalDocs": {
     "description": "The documentation, which decides what the API does: this document follows it.",
@@ -66,7 +66,7 @@
     },
     {
       "name": "runs",
-      "description": "Runs, listed across the namespaces the caller reads, and read one by one. From v0.6.0 in this document, served since v0.2.0."
+      "description": "Runs, listed across the namespaces the caller reads, read one by one with their steps' logs and envelopes, cancelled and replayed. From v0.6.0 in this document, served since v0.2.0."
     },
     {
       "name": "statistics",
@@ -5246,6 +5246,531 @@
           },
           "404": {
             "$ref": "#/components/responses/notFound"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/cancel": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runId"
+        }
+      ],
+      "post": {
+        "operationId": "cancelRun",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Ask a run to cancel",
+        "description": "Asks the controller to end the run: it cancels the pending tasks and sends SIGTERM to the running containers, then SIGKILL after their grace. The API writes the request and wakes the controller, and answers that it was asked, the same whether the run is going or has ended, since how it stands is what run:read guards and this route asks workflow:run on the run's workflow alone. Asking again is asking once. Takes no body. Audited, a request about a run that had ended included.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "202": {
+            "description": "The request was recorded. The Location header names the run, which GET reads under run:read.",
+            "headers": {
+              "Location": {
+                "description": "The run's address.",
+                "schema": {
+                  "type": "string",
+                  "description": "A path of the API.",
+                  "examples": [
+                    "/api/v1/finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+                  ]
+                },
+                "examples": {
+                  "the run": {
+                    "summary": "under its namespace",
+                    "value": "/api/v1/finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+                  }
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runAsked"
+                },
+                "examples": {
+                  "asked": {
+                    "summary": "the run asked",
+                    "value": {
+                      "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/replay": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runId"
+        }
+      ],
+      "post": {
+        "operationId": "replayRun",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Replay a run",
+        "description": "Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only or a step above never ended.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#memoisation-and-replay"
+        },
+        "requestBody": {
+          "required": false,
+          "description": "The step to replay from, or nothing for the start.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/replayRequest"
+              },
+              "examples": {
+                "from a step": {
+                  "summary": "reusing what normalize published",
+                  "value": {
+                    "step": "invoice"
+                  }
+                },
+                "from the start": {
+                  "summary": "reusing nothing",
+                  "value": {}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The replay was started. The Location header names the new run.",
+            "headers": {
+              "Location": {
+                "description": "The new run's address.",
+                "schema": {
+                  "type": "string",
+                  "description": "A path of the API.",
+                  "examples": [
+                    "/api/v1/finance/runs/01JMZ9A2B3C4D5E6F7G8H9J0K1"
+                  ]
+                },
+                "examples": {
+                  "the new run": {
+                    "summary": "under its namespace",
+                    "value": "/api/v1/finance/runs/01JMZ9A2B3C4D5E6F7G8H9J0K1"
+                  }
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/replayStarted"
+                },
+                "examples": {
+                  "from a step": {
+                    "summary": "replaying from invoice",
+                    "value": {
+                      "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+                      "state": "queued",
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "replay_of": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                      "replay_from": "invoice"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          },
+          "409": {
+            "description": "The run is not over, what its steps publish being undecided; or, from a step, the run is replayable from the start only, or a step above the one named never ended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "going": {
+                    "summary": "a run still running",
+                    "value": {
+                      "error": "run 01JMZ8V1P9C4XQ7K2N4D6F8H0A is running, and a replay is of a run that is over: what its steps publish is not decided yet"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The run's version has no step of that name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no such step": {
+                    "summary": "a step the version lacks",
+                    "value": {
+                      "error": "monthly-invoicing@a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f has no step invoicing to replay from"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/steps/{step}/logs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runId"
+        },
+        {
+          "$ref": "#/components/parameters/runStep"
+        }
+      ],
+      "get": {
+        "operationId": "followStepLog",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Follow a step's log",
+        "description": "The logs of the step's dispatches as server-sent events, history then live: each dispatch whole, one after the other in the order they were made, until the step's log is over. Each data line is one JSON object. dispatch begins a dispatch's log, with task_id, idempotency_key, attempt, shard and requeue; line is one line of it, with task_id, line, at and text, secrets masked before it was written; gap is lines that cannot be read back, with task_id, first_line, lines and reason; dispatch_end lets go of a dispatch, with task_id, lines, truncated and final; end says the step's log is over, with its verdict. A line, a gap and a dispatch carry an id a reconnect names in Last-Event-ID. A comment is sent every 15 seconds the stream is otherwise silent. Requires run:read on the run's workflow, asked again every 30 seconds while the stream is open.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#observability"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/lastEventId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Server-sent events, as the description of the route lists them.",
+                  "examples": [
+                    "event: dispatch\nid: 01JMZ8V1P9C4XQ7K2N4D6F8H0A.invoice.2.3/0/0\ndata: {\"task_id\":\"01JMZ8V1P9C4XQ7K2N4D6F8H0A.invoice.2.3\",\"idempotency_key\":\"01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8\",\"attempt\":2,\"shard\":{\"index\":3,\"of\":8},\"requeue\":0}\n\n"
+                  ]
+                },
+                "examples": {
+                  "a line": {
+                    "summary": "one line of a dispatch",
+                    "value": "event: line\nid: 01JMZ8V1P9C4XQ7K2N4D6F8H0A.invoice.2.3/0/1\ndata: {\"task_id\":\"01JMZ8V1P9C4XQ7K2N4D6F8H0A.invoice.2.3\",\"line\":1,\"at\":\"2026-10-01T05:42:31.657Z\",\"text\":\"ERR 422 for customer C-1043: VAT number not recognised\"}\n\n"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "description": "No such run, or not the caller's; no such step; or nothing of that name, each said as it is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "absent": {
+                    "summary": "a step the run lacks",
+                    "value": {
+                      "error": "the run has no step of that name"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The step's logs are past the retention its workflow declared, and were deleted with it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "expired": {
+                    "summary": "past the retention",
+                    "value": {
+                      "error": "the logs of that run are past the retention its workflow declared, and are deleted with it"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No object store is attached, and a log is read from nowhere else.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no store": {
+                    "summary": "no object store",
+                    "value": {
+                      "error": "this installation has no object store attached, and a log is read from nowhere else"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/steps/{step}/outputs/{port}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runId"
+        },
+        {
+          "$ref": "#/components/parameters/runStep"
+        },
+        {
+          "$ref": "#/components/parameters/runPort"
+        }
+      ],
+      "get": {
+        "operationId": "getStepOutput",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Read what a step published on a port",
+        "description": "The envelope the step published on the port: what a downstream step was handed, and what a workflow output is a view of. Envelope contents, so it requires run:read_data on the run's workflow; the run answers its digest to run:read.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "200": {
+            "description": "The envelope, read back from the object store and held to its digest before a byte of it is answered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "envelope.schema.json"
+                },
+                "examples": {
+                  "error port": {
+                    "summary": "what failed, on the error port",
+                    "value": {
+                      "meta": {
+                        "run_id": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                        "step": "invoice",
+                        "port": "error",
+                        "attempt": 2,
+                        "count": 1,
+                        "produced_at": "2026-10-01T05:42:32.418Z"
+                      },
+                      "items": [
+                        {
+                          "id": "01JMZ8V1PB2C3D4E5F6G7H8J9K",
+                          "data": {
+                            "customer_id": "C-1043",
+                            "status": 422,
+                            "message": "VAT number not recognised"
+                          },
+                          "files": []
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "description": "No such run, or not the caller's; no such step; or nothing of that name, each said as it is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "absent": {
+                    "summary": "nothing on that port",
+                    "value": {
+                      "error": "the step has published nothing on a port of that name: a step publishes every port once, when it ends"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The envelope existed and its bytes were purged with the run's retention: the run still shows its digest.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "purged": {
+                    "summary": "past the retention",
+                    "value": {
+                      "error": "the envelope of invoice on error was purged at 2026-10-31T05:42:55Z with the run's other envelopes, past the retention its workflow declared, and its digest is all that is kept"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/steps/{step}/inputs/{port}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runId"
+        },
+        {
+          "$ref": "#/components/parameters/runStep"
+        },
+        {
+          "$ref": "#/components/parameters/runPort"
+        }
+      ],
+      "get": {
+        "operationId": "getStepInput",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Read what a dispatch of a step was handed on a port",
+        "description": "The envelope one dispatch of the step was handed on the input port, what its container read under /agk/in: the attempt the query names or the last one dispatched, and the shard it names. It is what the task's grant named, not what the run would hand it now. Requires run:read_data on the run's workflow.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/dispatchAttempt"
+          },
+          {
+            "$ref": "#/components/parameters/dispatchShard"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The envelope, read back from the object store and held to its digest before a byte of it is answered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "envelope.schema.json"
+                },
+                "examples": {
+                  "error port": {
+                    "summary": "what failed, on the error port",
+                    "value": {
+                      "meta": {
+                        "run_id": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                        "step": "invoice",
+                        "port": "error",
+                        "attempt": 2,
+                        "count": 1,
+                        "produced_at": "2026-10-01T05:42:32.418Z"
+                      },
+                      "items": [
+                        {
+                          "id": "01JMZ8V1PB2C3D4E5F6G7H8J9K",
+                          "data": {
+                            "customer_id": "C-1043",
+                            "status": 422,
+                            "message": "VAT number not recognised"
+                          },
+                          "files": []
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "description": "No such run, or not the caller's; no such step; or nothing of that name, each said as it is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "absent": {
+                    "summary": "nothing on that port",
+                    "value": {
+                      "error": "no dispatch of the step was handed anything on that port at that attempt and shard: a step split into shards is asked about one of them, with shard, and a step is handed its inputs once it is dispatched"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The envelope existed and its bytes were purged with the run's retention: the run still shows its digest.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "purged": {
+                    "summary": "past the retention",
+                    "value": {
+                      "error": "the envelope of invoice on error was purged at 2026-10-31T05:42:55Z with the run's other envelopes, past the retention its workflow declared, and its digest is all that is kept"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/unavailable"
           }
         }
       }
@@ -13953,6 +14478,108 @@
             ]
           }
         }
+      },
+      "runAsked": {
+        "title": "Run asked",
+        "type": "object",
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false,
+        "description": "That a cancellation was asked of a run, and which: never how the run stands, which run:read guards and this route does not.",
+        "properties": {
+          "run": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "The run asked to cancel.",
+            "examples": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          }
+        ]
+      },
+      "replayRequest": {
+        "title": "Replay request",
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Where a replay starts: a step, reusing every step above it, or the start where no step is named.",
+        "properties": {
+          "step": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The step the replay runs from. The steps it reads from, directly or through others, are reused, their verdicts and envelopes taken from the run replayed. Left out, the replay runs from the start and reuses nothing.",
+            "examples": [
+              "invoice"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "step": "invoice"
+          },
+          {}
+        ]
+      },
+      "replayStarted": {
+        "title": "Replay started",
+        "type": "object",
+        "required": [
+          "run",
+          "state",
+          "commit",
+          "replay_of"
+        ],
+        "additionalProperties": false,
+        "description": "The run a replay started, a new run of the commit the one replayed pinned, over the inputs it was started with, attributed to whoever asked.",
+        "properties": {
+          "run": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "The new run.",
+            "examples": [
+              "01JMZ9A2B3C4D5E6F7G8H9J0K1"
+            ]
+          },
+          "state": {
+            "const": "queued",
+            "description": "Where it stands as it is written.",
+            "examples": [
+              "queued"
+            ]
+          },
+          "commit": {
+            "$ref": "wire.schema.json#/$defs/commit",
+            "description": "The commit it runs, the one the run replayed pinned.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          },
+          "replay_of": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "The run it replays.",
+            "examples": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+            ]
+          },
+          "replay_from": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The step it replays from. Absent for a replay from the start.",
+            "examples": [
+              "invoice"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+            "state": "queued",
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            "replay_of": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+            "replay_from": "invoice"
+          }
+        ]
       }
     },
     "parameters": {
@@ -14485,6 +15112,96 @@
           "a run": {
             "summary": "a failed run of monthly-invoicing",
             "value": "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          }
+        }
+      },
+      "runStep": {
+        "name": "step",
+        "in": "path",
+        "required": true,
+        "description": "A step of the run, by the name the workflow file gives it.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/identifier"
+        },
+        "examples": {
+          "a fan-out": {
+            "summary": "the step that failed",
+            "value": "invoice"
+          }
+        }
+      },
+      "runPort": {
+        "name": "port",
+        "in": "path",
+        "required": true,
+        "description": "A port of the step, by the name its brick declares.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/identifier"
+        },
+        "examples": {
+          "error": {
+            "summary": "the port a brick sends what failed to",
+            "value": "error"
+          }
+        }
+      },
+      "dispatchAttempt": {
+        "name": "attempt",
+        "in": "query",
+        "required": false,
+        "description": "Which attempt's inputs, counted from 1 as AGK_ATTEMPT is. The last attempt dispatched where left out.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The attempt.",
+          "examples": [
+            2
+          ]
+        },
+        "examples": {
+          "the second": {
+            "summary": "the retry",
+            "value": 2
+          }
+        }
+      },
+      "dispatchShard": {
+        "name": "shard",
+        "in": "query",
+        "required": false,
+        "description": "Which shard's inputs, by the index AGK_SHARD carries before its slash. A step split into shards is asked about one of them; one that was not fanned out has none.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The shard's index.",
+          "examples": [
+            3
+          ]
+        },
+        "examples": {
+          "the third": {
+            "summary": "shard 3 of 8",
+            "value": 3
+          }
+        }
+      },
+      "lastEventId": {
+        "name": "Last-Event-ID",
+        "in": "header",
+        "required": false,
+        "description": "The id of the last event a stream gave, <task_id>/<seq>/<line>, which a browser's EventSource sends by itself when it reconnects: the stream resumes after it, sending the dispatch_end it had sent last where it was cut between that and what follows.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "description": "An event's id.",
+          "examples": [
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A.invoice.2.3/0/12"
+          ]
+        },
+        "examples": {
+          "a line": {
+            "summary": "resuming after a line",
+            "value": "01JMZ8V1P9C4XQ7K2N4D6F8H0A.invoice.2.3/0/12"
           }
         }
       }

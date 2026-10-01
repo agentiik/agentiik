@@ -1,19 +1,26 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import type { API, Me } from "../api/client";
+  import EnvelopePane from "../components/EnvelopePane.svelte";
+  import Icon from "../components/Icon.svelte";
+  import LogPane from "../components/LogPane.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import Refused from "./Refused.svelte";
+  import { cancelRun, replayRun } from "../lib/actions";
   import { band } from "../lib/exit";
   import { between, clock, took } from "../lib/format";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { lastAttempt, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
+  import { sentence } from "../lib/signin";
 
   // The run inspector: one run, each step's verdict and shards on the left, and on the right the step
-  // chosen, its tasks, the exit code of the one chosen and what it means, and the envelopes its ports
-  // published and were handed, by digest, size and item count. What an envelope holds is envelope
-  // contents, which run:read_data guards, and a principal without it is shown no pane of it at all.
+  // chosen, its tasks, the exit code of the one chosen and what it means, the envelopes its ports
+  // published and were handed, by digest, size and item count, and the log of the task chosen. What
+  // an envelope holds is envelope contents, which run:read_data guards, and a principal without it
+  // is shown no pane of it at all. Cancelling the run and replaying it are workflow:run's, and a
+  // principal without it is shown neither.
   let { api, place, me, namespace, id }: { api: API; place: Place; me: Me; namespace: string; id: string } = $props();
 
   const reader = $derived(new RunReader(api, id));
@@ -60,14 +67,67 @@
   });
 
   const readsData = $derived(run ? holds(me, "run:read_data", run.namespace, run.workflow) : false);
+  const mayRun = $derived(run ? holds(me, "workflow:run", run.namespace, run.workflow) : false);
 
-  let side = $state<"output" | "input">("output");
-  const ports = $derived<Record<string, EnvelopeReference>>((side === "output" ? step?.ports : task?.inputs) ?? {});
+  // The step pane's tab and the port chosen in it, which the address keeps beside the step and the
+  // task: what one engineer sends another is the screen they are looking at.
+  type Tab = "output" | "input" | "logs";
+  const tab = $derived.by((): Tab => {
+    const named = place.query.get("pane");
+    return named === "input" || named === "logs" ? named : "output";
+  });
+  const ports = $derived<Record<string, EnvelopeReference>>((tab === "input" ? task?.inputs : step?.ports) ?? {});
+  const port = $derived.by(() => {
+    const named = place.query.get("port");
+    return named && named in ports ? named : Object.keys(ports)[0];
+  });
+
+  // What was last asked of the run, and why it was refused where it was. Cancelling asks once more
+  // before it is sent, since it stops the tasks in flight.
+  let confirming = $state(false);
+  let acting = $state(false);
+  let said = $state("");
+  let problem = $state("");
+
+  async function act(work: () => Promise<void>) {
+    if (acting) return;
+    acting = true;
+    problem = "";
+    said = "";
+    try {
+      await work();
+    } catch (e) {
+      problem = sentence(e instanceof Error ? e.message : String(e));
+    } finally {
+      acting = false;
+      confirming = false;
+    }
+  }
+
+  function cancel() {
+    return act(async () => {
+      if (!run) return;
+      await cancelRun(api, run.run);
+      said = "Cancelling was asked: the controller stops the tasks in flight, and the run ends cancelled.";
+      await reader.read();
+    });
+  }
+
+  function replay(from?: string) {
+    return act(async () => {
+      if (!run) return;
+      const started = await replayRun(api, run.run, from);
+      place.go({ kind: "namespace", namespace: run.namespace, view: "runs", run: started });
+    });
+  }
 
   function choose(query: Record<string, string>) {
     const q = new URLSearchParams(place.query);
     for (const [k, v] of Object.entries(query)) q.set(k, v);
-    if (query.step) q.delete("task");
+    if (query.step) {
+      q.delete("task");
+      q.delete("port");
+    }
     place.narrow(q);
   }
 
@@ -108,6 +168,29 @@
         </span>
         <a class="back" href={place.href(runs)} onclick={follow(place, runs)}>All runs of {namespace}</a>
       </div>
+      {#if mayRun}
+        <div class="actions">
+          {#if !reader.ended}
+            {#if confirming}
+              <span>Cancel this run? Its tasks in flight are stopped.</span>
+              <button class="control danger" disabled={acting} onclick={cancel}><Icon name="control-cancel" size={14} />Cancel run</button>
+              <button class="control" disabled={acting} onclick={() => (confirming = false)}>Keep it running</button>
+            {:else}
+              <button class="control" disabled={acting} onclick={() => (confirming = true)}><Icon name="control-cancel" size={14} />Cancel run</button>
+            {/if}
+          {:else}
+            {#if chosenStep && !run.replay_from_start_only}
+              <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
+            {/if}
+            <button class="control" disabled={acting} onclick={() => replay()}><Icon name="control-replay" size={14} />Replay from the start</button>
+            {#if run.replay_from_start_only}
+              <span class="muted">An input a step would restart from has been purged, so this run replays from its start only.</span>
+            {/if}
+          {/if}
+        </div>
+        {#if said}<p class="muted" role="status">{said}</p>{/if}
+        {#if problem}<p class="refused" role="alert">{problem}</p>{/if}
+      {/if}
       {#if run.reason}<p class="reason">{run.reason}</p>{/if}
       {#if run.replay_of}
         <p class="muted">Replays <span class="mono">{run.replay_of}</span>{#if run.replay_from}&nbsp;from <span class="mono">{run.replay_from}</span>{/if}.</p>
@@ -190,19 +273,32 @@
           </table>
 
           <div class="ports">
-            <div class="sides" role="tablist" aria-label="Envelopes">
-              <button role="tab" aria-selected={side === "output"} onclick={() => (side = "output")}>Output</button>
-              <button role="tab" aria-selected={side === "input"} onclick={() => (side = "input")}>Input</button>
+            <div class="sides" role="tablist" aria-label="What the step pane shows">
+              <button role="tab" aria-selected={tab === "output"} onclick={() => choose({ pane: "output" })}>Output</button>
+              <button role="tab" aria-selected={tab === "input"} onclick={() => choose({ pane: "input" })}>Input</button>
+              <button role="tab" aria-selected={tab === "logs"} onclick={() => choose({ pane: "logs" })}>Logs</button>
             </div>
-            {#if Object.keys(ports).length === 0}
-              <p class="muted">{side === "output" ? "The step has published nothing yet." : "The task chosen was handed nothing, or was never dispatched."}</p>
+            {#if tab === "logs"}
+              {#if task}
+                <LogPane {api} run={run.run} step={step.step} task={task.task} />
+              {:else}
+                <p class="muted">No task of this step has been created, so there is no log yet.</p>
+              {/if}
+            {:else if Object.keys(ports).length === 0}
+              <p class="muted">{tab === "output" ? "The step has published nothing yet." : "The task chosen was handed nothing, or was never dispatched."}</p>
             {:else}
               <table class="envelopes">
                 <thead><tr><th>Port</th><th class="number">Items</th><th class="number">Size</th><th>Digest</th></tr></thead>
                 <tbody>
-                  {#each Object.entries(ports) as [port, e] (port)}
-                    <tr>
-                      <td class="mono name port {port}">{port}</td>
+                  {#each Object.entries(ports) as [name, e] (name)}
+                    <tr class:chosen={readsData && name === port}>
+                      <td class="mono name port {name}">
+                        {#if readsData}
+                          <button class="link" aria-pressed={name === port} onclick={() => choose({ pane: tab, port: name })}>{name}</button>
+                        {:else}
+                          {name}
+                        {/if}
+                      </td>
                       <td class="number mono">{e.items}</td>
                       <td class="number mono">{bytes(e.size)}</td>
                       <td class="mono muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
@@ -210,8 +306,11 @@
                   {/each}
                 </tbody>
               </table>
+              {#if readsData && port}
+                <EnvelopePane {api} run={run.run} step={step.step} {port} side={tab} task={tab === "input" ? task : undefined} />
+              {/if}
             {/if}
-            {#if !readsData}
+            {#if !readsData && tab !== "logs"}
               <p class="faint">What the envelopes hold is not shown: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
             {/if}
           </div>
@@ -222,6 +321,23 @@
 {/if}
 
 <style>
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--unit) * 4);
+    margin-top: calc(var(--unit) * 6);
+  }
+
+  .control.danger {
+    border-color: var(--failed);
+    color: var(--failed);
+  }
+
+  .envelopes tr.chosen td {
+    background: var(--raised);
+  }
+
   .inspector {
     display: flex;
     flex-direction: column;
