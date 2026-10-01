@@ -95,6 +95,13 @@ const (
 	UserCreate     = "user.create"
 	UserDelete     = "user.delete"
 	EnrolmentIssue = "enrolment.issue"
+	// UserProfile is what a user says of themself changed by them, PATCH /api/v1/me, recorded with
+	// the names of the fields that changed and never what they hold: the log is kept for good, and
+	// what a person wrote about themself is theirs to take back. UserAvatar is a user's photo set
+	// by them, PUT /api/v1/me/avatar, with the size it was stored at, or removed, by them or by an
+	// administrator at DELETE /api/v1/users/{login}/avatar, with removed; never the photo.
+	UserProfile = "user.profile"
+	UserAvatar  = "user.avatar"
 	// GroupCreate and GroupDelete are a group created and removed, and GroupMemberAdd and
 	// GroupMemberRemove one member put in or taken out, since a member gains or loses what the
 	// group's grants give.

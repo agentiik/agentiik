@@ -52,3 +52,6 @@ var CheckTree = checkTree
 
 // ManifestsCarried is manifestsCarried, the manifests a push carries as version.Check reaches them.
 var ManifestsCarried = manifestsCarried
+
+// Reencode is what PUT /api/v1/me/avatar stores of a photo sent: a PNG, with its size in pixels.
+func Reencode(raw []byte) ([]byte, int, int, error) { return reencode(raw) }

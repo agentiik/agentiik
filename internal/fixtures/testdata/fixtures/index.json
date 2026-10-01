@@ -1126,6 +1126,10 @@
         {
           "file": "wire/valid/principal-user-login-255-characters.json",
           "covers": "a login of 255 characters, the most a namespace's name holds, since a login is also the name of its personal namespace"
+        },
+        {
+          "file": "wire/valid/principal-user-profile.json",
+          "covers": "a user who said who they are and set a photo: given and family names, a title, a location, an IANA time zone, a bio, and when the photo was last set, as GET /api/v1/me answers it once PATCH /api/v1/me and PUT /api/v1/me/avatar wrote them"
         }
       ],
       "invalid": [
@@ -1182,6 +1186,18 @@
           "rule": "a login is at most 255 characters, the most a directory or a bus subject token holds a name to, since it is also the name of its personal namespace",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-user-bio-two-lines.json",
+          "rule": "a bio is one line holding no control character, since it is printed at a terminal beside the name, where a line break forges a line of its own",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#api"
+        },
+        {
+          "file": "wire/invalid/principal-user-title-129-characters.json",
+          "rule": "a title is at most 128 characters, a line on a card beside the name",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#api"
         }
       ]
     },

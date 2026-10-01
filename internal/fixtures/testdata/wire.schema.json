@@ -3360,7 +3360,7 @@
     },
     "user": {
       "title": "User",
-      "description": "A local account: a login, a display name and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with.",
+      "description": "A local account: a login, a display name and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, and when their photo was last set, null where they hold none: set by the user alone, and answered wherever a user is, so that every client draws a person the same way.",
       "type": "object",
       "required": [
         "kind",
@@ -3422,6 +3422,82 @@
             "no_passkey"
           ]
         },
+        "given_name": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "The name the user is called by, set by the user at PATCH /api/v1/me, and the empty string where they have not said it. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.",
+          "examples": [
+            "Alice",
+            ""
+          ]
+        },
+        "family_name": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "The user's family name, set by the user, and the empty string where they have not said it. One line of at most 128 characters holding no control character.",
+          "examples": [
+            "Martin",
+            ""
+          ]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "What the user does, as they put it, set by the user, and the empty string where they have not said it: shown beside their name, so that whoever reads it in a sharing panel knows whom they are giving access to. One line of at most 128 characters holding no control character.",
+          "examples": [
+            "Technical lead",
+            ""
+          ]
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "Where the user works, as they put it, set by the user, and the empty string where they have not said it. Free text rather than a place a map knows, since it is read by people. One line of at most 128 characters holding no control character.",
+          "examples": [
+            "Lyon, France",
+            ""
+          ]
+        },
+        "timezone": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^([A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*)?$",
+          "description": "The time zone the user works in, an IANA name, set by the user, and the empty string where they have not said it: what a client turns an instant into the user's own hours with, so that a colleague reads when it is for them. The API refuses a name the IANA database does not hold, and Local, which is whatever zone the server is set to and names no place. At most 64 characters, twice the longest name the database holds.",
+          "examples": [
+            "Europe/Paris",
+            "America/Argentina/Buenos_Aires",
+            ""
+          ]
+        },
+        "bio": {
+          "type": "string",
+          "maxLength": 280,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "A line the user writes about themself, set by the user, and the empty string where they have not written one. At most 280 characters, a few sentences, since it is shown beside the name rather than read as a page, and one line holding no control character, as every field shown in a console and printed at a terminal is.",
+          "examples": [
+            "Writes the invoicing workflows, and reviews what touches payroll.",
+            ""
+          ]
+        },
+        "avatar_updated_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the user's photo was last set, and null where they hold none. The photo is read on its own, at GET /api/v1/me/avatar by the user and at GET /api/v1/users/{login}/avatar by an administrator, and a client adds this instant to its address, ?v=, so that a photo set again is fetched again rather than taken from a cache; where it is null, a client draws the user's initials. It changes only when the user sets a photo, and goes back to null when the photo is removed.",
+          "examples": [
+            "2026-09-28T10:15:00Z",
+            null
+          ]
+        },
         "created_at": {
           "$ref": "#/$defs/timestamp",
           "description": "When the account was created.",
@@ -3444,6 +3520,13 @@
           "display_name": "Alice Martin",
           "admin": false,
           "suspended": false,
+          "given_name": "Alice",
+          "family_name": "Martin",
+          "title": "Technical lead",
+          "location": "Lyon, France",
+          "timezone": "Europe/Paris",
+          "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+          "avatar_updated_at": "2026-09-28T10:15:00Z",
           "created_at": "2026-09-27T09:00:00Z"
         },
         {
@@ -3453,6 +3536,13 @@
           "admin": false,
           "suspended": true,
           "suspended_for": "no_passkey",
+          "given_name": "",
+          "family_name": "",
+          "title": "",
+          "location": "",
+          "timezone": "",
+          "bio": "",
+          "avatar_updated_at": null,
           "created_at": "2026-09-27T09:30:00Z",
           "last_sign_in_at": "2026-09-27T11:00:00Z"
         }

@@ -54,7 +54,8 @@ type Case struct {
 // URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
 // namespace it owns", which no permission names, and so are the service accounts, "of the namespaces
 // the caller owns", and GET /api/v1/me with the caller's notifications, and so are the caller's
-// credentials. Sharing takes grant:manage at its scope, and writing a grant an administrator too.
+// credentials, profile and photo; another user's photo is an administrator's to read, as the user
+// is. Sharing takes grant:manage at its scope, and writing a grant an administrator too.
 // The installation's authentication policy is read by whoever is signed in and a namespace's by
 // whoever reads its record, and "PUT is an administrator's" for both.
 var Cases = []Case{
@@ -76,7 +77,14 @@ var Cases = []Case{
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/auth/tokens", Own: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/auth/tokens/{id}", Own: true}, Makes: "token", Owned: true, Refusal: 404},
 	own("GET", "/api/v1/me"),
+	// What a user says of themself, and their photo: refused before its body is read to whoever has
+	// none, the bootstrap token, a service account and a narrowed token, and sent one it refuses by
+	// anybody else. Removing a photo nobody in the fixture holds changes nothing.
+	{Route: api.Route{Method: "PATCH", Pattern: "/api/v1/me", Own: true}, Refused: true},
 	own("DELETE", "/api/v1/me/notifications/{id}"),
+	own("GET", "/api/v1/me/avatar"),
+	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/me/avatar", Own: true}, Refused: true},
+	own("DELETE", "/api/v1/me/avatar"),
 	own("GET", "/api/v1/me/credentials"),
 	own("DELETE", "/api/v1/me/credentials/{id}"),
 	own("DELETE", "/api/v1/me/password"),
@@ -104,6 +112,8 @@ var Cases = []Case{
 	{Route: administer("DELETE", "/api/v1/users/{login}")},
 	{Route: administer("POST", "/api/v1/users/{login}/enrolment")},
 	{Route: administer("POST", "/api/v1/users/{login}/recovery")},
+	{Route: administer("GET", "/api/v1/users/{login}/avatar")},
+	{Route: administer("DELETE", "/api/v1/users/{login}/avatar")},
 	{Route: administer("GET", "/api/v1/groups")},
 	{Route: administer("POST", "/api/v1/groups"), Refused: true},
 	{Route: administer("GET", "/api/v1/groups/{group}")},
