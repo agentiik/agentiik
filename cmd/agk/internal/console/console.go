@@ -10,7 +10,6 @@ package console
 import (
 	"context"
 	"errors"
-	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -39,10 +38,6 @@ type Options struct {
 	// Every is how often what is shown is read again, so that a run going on is seen going: five
 	// seconds where it is not set, as the web console reads its runs and a run until it ends.
 	Every time.Duration
-
-	// Describe writes how a run stands, in agk status's words, which the run view shows until
-	// the inspector draws it.
-	Describe func(io.Writer, db.RunDetail, time.Time)
 
 	// Getenv reads the variables the screen is drawn by: NO_COLOR, COLORTERM and TERM for how
 	// many colours the terminal shows.
@@ -85,7 +80,7 @@ type Model struct {
 
 	width, height int
 
-	principal string
+	me principal
 
 	view     view
 	runs     []db.ListedRun
@@ -96,6 +91,12 @@ type Model struct {
 	run       *db.RunDetail
 	runRead   bool
 	runFailed string
+
+	// step and port are the inspector's choice: the step shown, and which of its ports.
+	step     string
+	port     int
+	payloads map[string]payloadRead
+	runners  map[string]runner
 
 	// unanswered is why the last read failed, said in the top line until a read succeeds.
 	unanswered string
@@ -141,8 +142,8 @@ func New(ctx context.Context, o Options) Model {
 // What a read brings back, each as one message.
 type (
 	meRead struct {
-		principal string
-		err       error
+		me  principal
+		err error
 	}
 	runsRead struct {
 		runs []db.ListedRun
@@ -173,11 +174,9 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) readMe() tea.Cmd {
 	return func() tea.Msg {
-		var me struct {
-			Principal string `json:"principal"`
-		}
+		var me principal
 		err := m.o.Read(m.ctx, "/api/v1/me", &me)
-		return meRead{principal: me.Principal, err: err}
+		return meRead{me: me, err: err}
 	}
 }
 
@@ -226,8 +225,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.settled = true
 	case meRead:
 		if msg.err == nil {
-			m.principal = msg.principal
+			m.me = msg.me
+			if m.me.Admin && m.view == runView && m.runners == nil {
+				return m, tea.Batch(m.readRunners(), m.readChosen())
+			}
+			return m, m.readChosen()
 		}
+	case runnersRead:
+		m.runners = msg.runners
+	case payloadRead:
+		if m.payloads == nil {
+			m.payloads = map[string]payloadRead{}
+		}
+		m.payloads[msg.key] = msg
 	case runsRead:
 		if msg.err != nil {
 			m.unanswered = said(msg.err)
@@ -249,10 +259,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			m.unanswered, m.runFailed, m.run, m.runRead = "", "", msg.run, true
+			m.step = stepOf(m.run, m.step)
 		}
+		var cmds []tea.Cmd
 		if m.view == runView && (m.run == nil || !m.run.State.Terminal()) {
-			return m, m.later()
+			cmds = append(cmds, m.later())
 		}
+		if m.view == runView && m.me.Admin && m.runners == nil {
+			cmds = append(cmds, m.readRunners())
+		}
+		cmds = append(cmds, m.readChosen())
+		return m, tea.Batch(cmds...)
 	case again:
 		if msg.view == m.view {
 			return m, m.readShown()
@@ -261,6 +278,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.press(msg.String())
 	}
 	return m, nil
+}
+
+// readChosen reads the envelope of the port chosen, once, where the caller may read payloads.
+func (m Model) readChosen() tea.Cmd {
+	if m.run == nil || !m.mayReadData() {
+		return nil
+	}
+	ports := portsOf(summaryOf(m.run, m.step))
+	if len(ports) == 0 {
+		return nil
+	}
+	port := ports[min(m.port, len(ports)-1)]
+	if _, ok := m.payloads[m.step+"/"+port]; ok {
+		return nil
+	}
+	return m.readPayload(string(m.run.Run), m.step, port)
+}
+
+// movedStep is the step before or after the one chosen, staying at either end.
+func movedStep(run *db.RunDetail, step string, by int) string {
+	for i, s := range run.Steps {
+		if string(s.Step) == step {
+			return string(run.Steps[min(len(run.Steps)-1, max(0, i+by))].Step)
+		}
+	}
+	return stepOf(run, "")
 }
 
 // press does what a key names in the view shown.
@@ -282,9 +325,29 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.view == runView {
-		if key == "esc" {
-			m.view, m.run, m.runRead, m.runFailed = runsView, nil, false, ""
+		switch key {
+		case "esc":
+			m.view, m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = runsView, nil, false, "", "", 0, nil
 			return m, m.readShown()
+		case "up", "k", "down", "j":
+			if m.run != nil {
+				by := 1
+				if key == "up" || key == "k" {
+					by = -1
+				}
+				m.step, m.port = movedStep(m.run, m.step, by), 0
+				return m, m.readChosen()
+			}
+		case "[", "]":
+			if m.run != nil {
+				n := len(portsOf(summaryOf(m.run, m.step)))
+				if key == "[" {
+					m.port = max(0, m.port-1)
+				} else {
+					m.port = min(max(0, n-1), m.port+1)
+				}
+				return m, m.readChosen()
+			}
 		}
 		return m, nil
 	}
