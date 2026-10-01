@@ -4674,6 +4674,251 @@
         }
       }
     },
+    "/api/v1/{ns}/workflows/{name}/runs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/workflow"
+        }
+      ],
+      "post": {
+        "operationId": "startRun",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Start a run of a workflow",
+        "description": "The manual trigger: a run of the commit the request names, or reaches through a ref, or of the default branch's head, or while it is unborn the latest version a tree push recorded, with the workflow inputs bound against that version's declaration as agk run --local binds them and recorded as bound. Attributed to the caller, trigger_kind manual. The run is pinned to its commit whatever the ref or the branch does next. Counted against the namespace's max_runs_per_hour before it is written. Requires workflow:run.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "requestBody": {
+          "required": true,
+          "description": "The commit or the ref, and the inputs; {} for the head with none.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/startRequest"
+              },
+              "examples": {
+                "the head": {
+                  "summary": "the default branch's head, no input",
+                  "value": {}
+                },
+                "a branch with inputs": {
+                  "summary": "a branch, resolved now, with one input",
+                  "value": {
+                    "ref": "main",
+                    "inputs": {
+                      "orders": [
+                        {
+                          "order": "ORD-0001",
+                          "amount": 120.5
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The run was written, queued. The Location header names it.",
+            "headers": {
+              "Location": {
+                "description": "The new run's address.",
+                "schema": {
+                  "type": "string",
+                  "description": "A path of the API.",
+                  "examples": [
+                    "/api/v1/finance/runs/01JMZ9A2B3C4D5E6F7G8H9J0K1"
+                  ]
+                },
+                "examples": {
+                  "the new run": {
+                    "summary": "under its namespace",
+                    "value": "/api/v1/finance/runs/01JMZ9A2B3C4D5E6F7G8H9J0K1"
+                  }
+                }
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runStarted"
+                },
+                "examples": {
+                  "started": {
+                    "summary": "a run of the head",
+                    "value": {
+                      "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+                      "state": "queued",
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A body that is not the object, no body at all, a commit and a ref together, a ref a branch and a tag both hold, or inputs that are not an object or hold more values than one envelope may carry items. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal of the workflow is a 404."
+          },
+          "404": {
+            "description": "No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no ref": {
+                    "summary": "a ref naming nothing",
+                    "value": {
+                      "error": "nightly names no branch, no tag and no version of the workflow"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The workflow is being moved to another namespace, and nothing starts in it until the move is done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "moving": {
+                    "summary": "a move under way",
+                    "value": {
+                      "error": "finance/monthly-invoicing is being moved to another namespace, and is frozen until the move is carried out: its pushes, runs, replays and changes are refused meanwhile, and it answers at its new place once it is done"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The inputs, with the defaults the workflow declares, weigh more than one envelope may, or the body is larger than that.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "too large": {
+                    "summary": "inputs past the envelope's weight",
+                    "value": {
+                      "error": "the inputs, with the defaults the workflow declares, are written in 9437184 bytes, and a run's inputs weigh at most 8388608, one envelope: a run's data belongs in an artifact"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An input the version's declaration refuses, answered with the input and the rule apart; or the version is a library's, which nothing runs; or its declaration is one a push now refuses, recorded before it did.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/inputRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/error"
+                    }
+                  ]
+                },
+                "examples": {
+                  "an input": {
+                    "summary": "a value its schema refuses",
+                    "value": {
+                      "error": "input orders: schema: /0/amount: got string, want number; run refused",
+                      "input": "orders",
+                      "rule": "schema"
+                    }
+                  },
+                  "a library": {
+                    "summary": "a fragment, which nothing runs",
+                    "value": {
+                      "error": "common at c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09 is a library: its root agentiik.yaml is written as a fragment, which other workflows include and nothing runs"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The namespace has created as many runs in the last 60 minutes as its max_runs_per_hour allows. No run exists, so a client coming back after Retry-After is not asking for a second one.",
+            "headers": {
+              "Retry-After": {
+                "description": "The whole seconds until one more run fits in the hour.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "examples": {
+                  "minutes": {
+                    "summary": "four minutes",
+                    "value": 240
+                  }
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "quota": {
+                    "summary": "max_runs_per_hour reached",
+                    "value": {
+                      "error": "namespace finance has created as many runs in the last 60 minutes as its max_runs_per_hour, 120, allows, and one more fits in 240 seconds"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no store": {
+                    "summary": "no object store",
+                    "value": {
+                      "error": "this installation has no object store attached, and an input's schema names a file of the version's tree, which is kept there"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/{ns}/workflows/{name}/tree/{ref}": {
       "parameters": [
         {
@@ -15604,6 +15849,158 @@
             ]
           }
         }
+      },
+      "startRequest": {
+        "title": "Start request",
+        "type": "object",
+        "additionalProperties": false,
+        "description": "What a run is asked for: the commit it runs, named or reached through a ref, or neither for the default branch's head, and the workflow inputs it is started with, bound against that version's declaration as agk run --local binds them. {} asks for the head with no input. A commit and a ref together are refused, since a run is of one commit.",
+        "properties": {
+          "commit": {
+            "$ref": "wire.schema.json#/$defs/commit",
+            "description": "A commit that is a version of the workflow.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A branch or a tag by its short name or in full, or a whole commit that is a version, resolved once, when the run is asked for: the run is pinned to the commit it names then, whatever the ref does next.",
+            "examples": [
+              "main",
+              "refs/tags/v2.1.0"
+            ]
+          },
+          "inputs": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "The workflow inputs by name, each held to its JSON Schema, a default filling one left out, and recorded as bound. At most as many values as one envelope may carry items, and as many bytes as one envelope may weigh: a run's data belongs in an artifact. null is read as none.",
+            "examples": [
+              {
+                "orders": [
+                  {
+                    "order": "ORD-0001",
+                    "amount": 120.5
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "examples": [
+          {},
+          {
+            "ref": "main",
+            "inputs": {
+              "orders": [
+                {
+                  "order": "ORD-0001",
+                  "amount": 120.5
+                }
+              ]
+            }
+          },
+          {
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+          }
+        ]
+      },
+      "runStarted": {
+        "title": "Run started",
+        "type": "object",
+        "required": [
+          "run",
+          "state",
+          "commit"
+        ],
+        "additionalProperties": false,
+        "description": "The run a request started, attributed to the caller as a manual run, written and not yet begun: what happens to it is the controller's.",
+        "properties": {
+          "run": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "The new run.",
+            "examples": [
+              "01JMZ9A2B3C4D5E6F7G8H9J0K1"
+            ]
+          },
+          "state": {
+            "const": "queued",
+            "description": "Where it stands as it is written.",
+            "examples": [
+              "queued"
+            ]
+          },
+          "commit": {
+            "$ref": "wire.schema.json#/$defs/commit",
+            "description": "The commit it is pinned to, which a caller naming a ref, or none, did not name.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+            "state": "queued",
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+          }
+        ]
+      },
+      "inputRefusal": {
+        "title": "Input refused",
+        "type": "object",
+        "required": [
+          "error",
+          "input",
+          "rule"
+        ],
+        "additionalProperties": false,
+        "description": "An input the request gets wrong: the sentence agk run --local prints for it, and the input and the rule apart, so that a form can point at its field without reading the sentence.",
+        "properties": {
+          "error": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Why, in a sentence.",
+            "examples": [
+              "input orders: schema: /0/amount: got string, want number; run refused"
+            ]
+          },
+          "input": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The input, by the name the request or the declaration gives it.",
+            "examples": [
+              "orders"
+            ]
+          },
+          "rule": {
+            "enum": [
+              "required",
+              "schema",
+              "undeclared"
+            ],
+            "description": "The key a person finds in the workflow file: required for an input left out with no default, schema for a value its JSON Schema refuses, undeclared for a name the workflow does not declare.",
+            "examples": [
+              "schema"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "error": "input orders: schema: /0/amount: got string, want number; run refused",
+            "input": "orders",
+            "rule": "schema"
+          },
+          {
+            "error": "input orders: required: no value supplied and the input declares no default; run refused",
+            "input": "orders",
+            "rule": "required"
+          }
+        ]
       }
     },
     "parameters": {

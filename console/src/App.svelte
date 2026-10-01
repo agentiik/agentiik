@@ -99,10 +99,10 @@
     <main class="screen">
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
         <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} />
-      {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
+      {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
         <!-- A workflow's page, the one view under workflows built so far: the API answers one the
              caller cannot read as one that does not exist, and the page says no more. -->
-        <Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} />
+        <Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} tab={route.tab} />
       {:else if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
         <Refused />
       {:else if route.kind === "namespace" && route.view === "runs" && route.run}

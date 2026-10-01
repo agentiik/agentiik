@@ -907,6 +907,31 @@ export interface paths {
         patch: operations["updateWorkflow"];
         trace?: never;
     };
+    "/api/v1/{ns}/workflows/{name}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a run of a workflow
+         * @description The manual trigger: a run of the commit the request names, or reaches through a ref, or of the default branch's head, or while it is unborn the latest version a tree push recorded, with the workflow inputs bound against that version's declaration as agk run --local binds them and recorded as bound. Attributed to the caller, trigger_kind manual. The run is pinned to its commit whatever the ref or the branch does next. Counted against the namespace's max_runs_per_hour before it is written. Requires workflow:run.
+         */
+        post: operations["startRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/workflows/{name}/tree/{ref}": {
         parameters: {
             query?: never;
@@ -7595,6 +7620,111 @@ export interface components {
             fetches_left?: number;
         };
         /**
+         * Start request
+         * @description What a run is asked for: the commit it runs, named or reached through a ref, or neither for the default branch's head, and the workflow inputs it is started with, bound against that version's declaration as agk run --local binds them. {} asks for the head with no input. A commit and a ref together are refused, since a run is of one commit.
+         * @example {}
+         * @example {
+         *       "ref": "main",
+         *       "inputs": {
+         *         "orders": [
+         *           {
+         *             "order": "ORD-0001",
+         *             "amount": 120.5
+         *           }
+         *         ]
+         *       }
+         *     }
+         * @example {
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+         *     }
+         */
+        startRequest: {
+            /**
+             * @description A commit that is a version of the workflow.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit?: components["schemas"]["commit"];
+            /**
+             * @description A branch or a tag by its short name or in full, or a whole commit that is a version, resolved once, when the run is asked for: the run is pinned to the commit it names then, whatever the ref does next.
+             * @example main
+             * @example refs/tags/v2.1.0
+             */
+            ref?: string;
+            /**
+             * @description The workflow inputs by name, each held to its JSON Schema, a default filling one left out, and recorded as bound. At most as many values as one envelope may carry items, and as many bytes as one envelope may weigh: a run's data belongs in an artifact. null is read as none.
+             * @example {
+             *       "orders": [
+             *         {
+             *           "order": "ORD-0001",
+             *           "amount": 120.5
+             *         }
+             *       ]
+             *     }
+             */
+            inputs?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * Run started
+         * @description The run a request started, attributed to the caller as a manual run, written and not yet begun: what happens to it is the controller's.
+         * @example {
+         *       "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+         *       "state": "queued",
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+         *     }
+         */
+        runStarted: {
+            /**
+             * @description The new run.
+             * @example 01JMZ9A2B3C4D5E6F7G8H9J0K1
+             */
+            run: components["schemas"]["ulid"];
+            /**
+             * @description Where it stands as it is written.
+             * @example queued
+             * @constant
+             */
+            state: "queued";
+            /**
+             * @description The commit it is pinned to, which a caller naming a ref, or none, did not name.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit: components["schemas"]["commit"];
+        };
+        /**
+         * Input refused
+         * @description An input the request gets wrong: the sentence agk run --local prints for it, and the input and the rule apart, so that a form can point at its field without reading the sentence.
+         * @example {
+         *       "error": "input orders: schema: /0/amount: got string, want number; run refused",
+         *       "input": "orders",
+         *       "rule": "schema"
+         *     }
+         * @example {
+         *       "error": "input orders: required: no value supplied and the input declares no default; run refused",
+         *       "input": "orders",
+         *       "rule": "required"
+         *     }
+         */
+        inputRefusal: {
+            /**
+             * @description Why, in a sentence.
+             * @example input orders: schema: /0/amount: got string, want number; run refused
+             */
+            error: string;
+            /**
+             * @description The input, by the name the request or the declaration gives it.
+             * @example orders
+             */
+            input: string;
+            /**
+             * @description The key a person finds in the workflow file: required for an input left out with no default, schema for a value its JSON Schema refuses, undeclared for a name the workflow does not declare.
+             * @example schema
+             * @enum {unknown}
+             */
+            rule: "required" | "schema" | "undeclared";
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -12292,6 +12422,100 @@ export interface operations {
             413: components["responses"]["tooLarge"];
             /** @description The target namespace does not exist, or the caller does not own it, as through any token narrowed by a scope, which owns none: the same answer; or default_branch names no branch of a repository that holds commits. */
             422: components["responses"]["unprocessable"];
+        };
+    };
+    startRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /** @description The commit or the ref, and the inputs; {} for the head with none. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["startRequest"];
+            };
+        };
+        responses: {
+            /** @description The run was written, queued. The Location header names it. */
+            202: {
+                headers: {
+                    /** @description The new run's address. */
+                    Location?: string;
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runStarted"];
+                };
+            };
+            /** @description A body that is not the object, no body at all, a commit and a ref together, a ref a branch and a tag both hold, or inputs that are not an object or hold more values than one envelope may carry items. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal of the workflow is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The workflow is being moved to another namespace, and nothing starts in it until the move is done. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The inputs, with the defaults the workflow declares, weigh more than one envelope may, or the body is larger than that. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description An input the version's declaration refuses, answered with the input and the rule apart; or the version is a library's, which nothing runs; or its declaration is one a push now refuses, recorded before it did. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["inputRefusal"] | components["schemas"]["error"];
+                };
+            };
+            /** @description The namespace has created as many runs in the last 60 minutes as its max_runs_per_hour allows. No run exists, so a client coming back after Retry-After is not asking for a second one. */
+            429: {
+                headers: {
+                    /** @description The whole seconds until one more run fits in the hour. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
         };
     };
     getWorkflowTree: {
