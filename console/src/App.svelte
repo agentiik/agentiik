@@ -11,6 +11,8 @@
   import type { Session } from "./lib/session.svelte";
   import Account from "./views/Account.svelte";
   import Fleet from "./views/Fleet.svelte";
+  import Groups from "./views/Groups.svelte";
+  import Namespaces from "./views/Namespaces.svelte";
   import PoolStatistics from "./views/PoolStatistics.svelte";
   import Refused from "./views/Refused.svelte";
   import Run from "./views/Run.svelte";
@@ -148,7 +150,11 @@
       {:else if route.kind === "account"}
         <Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />
       {:else if route.kind === "users" && session.me.admin}
-        <Users {api} me={session.me} />
+        <Users {api} {place} me={session.me} />
+      {:else if route.kind === "groups" && session.me.admin}
+        <Groups {api} {place} />
+      {:else if route.kind === "namespaces" && session.me.admin}
+        <Namespaces {api} {place} changed={() => session.read()} />
       {:else if route.kind === "runners" && route.tab === undefined && session.me.admin}
         <Fleet {api} {place} namespaces={session.namespaces} {version} />
       {:else if route.kind === "runners" && route.tab === "statistics" && session.me.admin}

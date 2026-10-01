@@ -1,0 +1,313 @@
+<script lang="ts">
+  import { refusal, type API } from "../api/client";
+  import type { components } from "../api/schema";
+  import AdminTabs from "../components/AdminTabs.svelte";
+  import Icon from "../components/Icon.svelte";
+  import Pane from "../components/Pane.svelte";
+  import { listOf, usersOf } from "../lib/credentials";
+  import type { Place } from "../lib/place.svelte";
+  import { sentence } from "../lib/signin";
+
+  // The installation's groups and who is in each, an administrator's alone. A group's members are
+  // logins and never a group, and a group holds what grants give it, so that membership changes
+  // without touching a grant: putting somebody in a group gives them what its grants give, from their
+  // next request, and the owners of each namespace where that widens access are told.
+  let { api, place }: { api: API; place: Place } = $props();
+
+  type Group = components["schemas"]["groupList"]["groups"][number];
+
+  let groups = $state<Group[] | null>(null);
+  let logins = $state<string[]>([]);
+  let unread = $state("");
+
+  async function reread() {
+    const { data, error, response } = await api.GET("/api/v1/groups");
+    if (data) {
+      groups = data.groups;
+      unread = "";
+    } else unread = refusal(response, error).message;
+  }
+
+  $effect(() => {
+    reread();
+    usersOf(api).then(
+      (u) => (logins = u.map((x) => x.login)),
+      () => (logins = []),
+    );
+  });
+
+  let working = $state(false);
+  let problem = $state("");
+  let said = $state("");
+
+  async function act(work: () => Promise<string>) {
+    if (working) return;
+    working = true;
+    problem = "";
+    said = "";
+    try {
+      said = await work();
+    } catch (e) {
+      problem = sentence(e instanceof Error ? e.message : String(e));
+    } finally {
+      working = false;
+    }
+  }
+
+  // The form that creates a group, with its first members.
+  let name = $state("");
+  let first = $state("");
+
+  function create(e: SubmitEvent) {
+    e.preventDefault();
+    return act(async () => {
+      const members = listOf(first);
+      const { data, error, response } = await api.POST("/api/v1/groups", { body: { name: name.trim(), ...(members.length ? { members } : {}) } });
+      if (!data) throw refusal(response, error);
+      name = "";
+      first = "";
+      await reread();
+      return `group:${data.name} is created${data.members.length ? `, with ${data.members.join(", ")} in it` : ""}. It holds no grant until one is written for it.`;
+    });
+  }
+
+  // What is typed into each group's field that adds a member.
+  let adding = $state<Record<string, string>>({});
+
+  function join(g: Group) {
+    const login = (adding[g.name] ?? "").trim();
+    if (!login) return;
+    return act(async () => {
+      const { data, error, response } = await api.PUT("/api/v1/groups/{group}/members/{login}", { params: { path: { group: g.name, login } } });
+      if (!data) throw refusal(response, error);
+      adding[g.name] = "";
+      await reread();
+      return `${login} is in group:${g.name}, and holds what its grants give from their next request.`;
+    });
+  }
+
+  function leave(g: Group, login: string) {
+    return act(async () => {
+      const { data, error, response } = await api.DELETE("/api/v1/groups/{group}/members/{login}", { params: { path: { group: g.name, login } } });
+      if (!data) throw refusal(response, error);
+      await reread();
+      return `${login} is out of group:${g.name}: what its grants gave them ends from their next request.`;
+    });
+  }
+
+  // asking is the group whose removal waits on a second click.
+  let asking = $state("");
+
+  function remove(g: Group) {
+    return act(async () => {
+      const answer = await api.DELETE("/api/v1/groups/{group}", { params: { path: { group: g.name } } });
+      if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
+      asking = "";
+      await reread();
+      return `group:${g.name} is removed, with its memberships and grants. Its members stay.`;
+    });
+  }
+</script>
+
+<AdminTabs {place} current="groups" />
+
+{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+{#if said}<p class="said" role="status">{said}</p>{/if}
+
+<datalist id="group-logins">
+  {#each logins as l (l)}<option value={l}></option>{/each}
+</datalist>
+
+<div class="columns">
+  <Pane title="Groups" aside={groups ? String(groups.length) : ""}>
+    {#if unread}
+      <p class="problem" role="alert">The groups could not be read: {unread}</p>
+    {:else if groups === null}
+      <p class="muted">Reading the groups.</p>
+    {:else}
+      <table>
+        <thead><tr><th>Group</th><th>Members</th><th>Add a member</th><th class="end"></th></tr></thead>
+        <tbody>
+          {#each groups as g (g.name)}
+            <tr>
+              <td class="mono nowrap">group:{g.name}</td>
+              <td>
+                {#each g.members as m (m)}
+                  <span class="chip mono">{m}<button class="unchip" aria-label="Take {m} out of group:{g.name}" disabled={working} onclick={() => leave(g, m)}><Icon name="control-remove" size={12} /></button></span>
+                {:else}
+                  <span class="muted">nobody</span>
+                {/each}
+              </td>
+              <td>
+                <form class="inline" onsubmit={(e) => { e.preventDefault(); join(g); }} aria-label="Add a member to group:{g.name}">
+                  <input class="mono" list="group-logins" placeholder="a login" bind:value={adding[g.name]} aria-label="Login to add to group:{g.name}" />
+                  <button class="control" disabled={working}>Add</button>
+                </form>
+              </td>
+              <td class="end">
+                {#if asking === g.name}
+                  <button class="control danger" disabled={working} onclick={() => remove(g)}>Remove group:{g.name}</button>
+                  <button class="control" onclick={() => (asking = "")}>Keep</button>
+                {:else}
+                  <button class="control" disabled={working} onclick={() => (asking = g.name)}>Remove</button>
+                {/if}
+              </td>
+            </tr>
+          {:else}
+            <tr><td colspan="4" class="muted">No group yet.</td></tr>
+          {/each}
+        </tbody>
+      </table>
+      <p class="foot muted">Putting somebody in a group gives them what its grants give, from their next request, and tells the owners of each namespace where that widens access. A group named as a namespace's owner is not removed until another owner is named.</p>
+    {/if}
+  </Pane>
+
+  <Pane title="Create a group">
+    <form onsubmit={create} aria-label="Create a group">
+      <label>
+        <span>Name</span>
+        <input class="mono" bind:value={name} placeholder="team-finance" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
+      </label>
+      <label>
+        <span>First members, by login</span>
+        <input class="mono" bind:value={first} placeholder="alice, bob" autocomplete="off" />
+      </label>
+      <p class="foot muted">A group is created holding no grant, so nobody gains anything by being put in it here. It is named <span class="mono">group:NAME</span> wherever a principal is written.</p>
+      <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create the group</button></p>
+    </form>
+  </Pane>
+</div>
+
+<style>
+  .problem {
+    margin: 0 0 calc(var(--unit) * 6);
+    color: var(--failed);
+  }
+
+  .said {
+    margin: 0 0 calc(var(--unit) * 6);
+  }
+
+  .columns {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
+    gap: calc(var(--unit) * 8);
+    align-items: start;
+  }
+
+  /* The form goes under the list where the two side by side would squeeze the list's columns. */
+  @media (max-width: 1499px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--type-control-size);
+  }
+
+  th {
+    padding: calc(var(--unit) * 2) calc(var(--unit) * 3);
+    color: var(--muted);
+    font-weight: 500;
+    text-align: left;
+  }
+
+  td {
+    padding: calc(var(--unit) * 3);
+    border-top: var(--border-hairline) solid var(--line);
+    vertical-align: middle;
+  }
+
+  .nowrap {
+    white-space: nowrap;
+  }
+
+  .end {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .end .control + .control {
+    margin-left: calc(var(--unit) * 2);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--unit) * 1);
+    margin: 1px calc(var(--unit) * 2) 1px 0;
+    padding: 1px calc(var(--unit) * 1) 1px calc(var(--unit) * 3);
+    border: var(--border-hairline) solid var(--lineStrong);
+    border-radius: var(--radius-control);
+    font-size: var(--type-identifier-size-min);
+    white-space: nowrap;
+  }
+
+  .unchip {
+    display: inline-flex;
+    padding: 1px;
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .unchip:hover {
+    color: var(--failed);
+  }
+
+  form {
+    display: grid;
+    gap: calc(var(--unit) * 5);
+  }
+
+  form.inline {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--unit) * 2);
+  }
+
+  form.inline input {
+    width: 9rem;
+  }
+
+  label {
+    display: grid;
+    gap: calc(var(--unit) * 2);
+    font-size: var(--type-control-size);
+  }
+
+  label > span:first-child {
+    color: var(--muted);
+  }
+
+  input {
+    padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
+    border: var(--border-hairline) solid var(--lineStrong);
+    border-radius: var(--radius-control);
+    background: var(--raised);
+    color: var(--text);
+    font-size: var(--type-control-size);
+  }
+
+  form p {
+    margin: 0;
+  }
+
+  .foot {
+    margin: calc(var(--unit) * 6) 0 0;
+    font-size: var(--type-control-size);
+  }
+
+  form .foot {
+    margin: 0;
+  }
+
+  .control.danger {
+    border-color: var(--failed);
+    color: var(--failed);
+  }
+</style>

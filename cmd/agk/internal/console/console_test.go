@@ -187,13 +187,13 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 			t.Errorf("the top line does not say %q: %s", w, lines[0])
 		}
 	}
-	if !strings.HasPrefix(lines[1], "Failed, 1 of the last 3") || !strings.HasPrefix(lines[2], "failed    01RUNBBBBBBBBBBBBBBBBBBBBB") {
+	if !strings.HasPrefix(lines[1], "Failed, 1 of the last 3") || !strings.HasPrefix(lines[2], "● failed    01RUNBBBBBBBBBBBBBBBBBBBBB") {
 		t.Errorf("the failed run is not lifted above the list:\n%s", s)
 	}
-	if !strings.HasPrefix(lines[4], "STATE     RUN") {
+	if !strings.HasPrefix(lines[4], "STATE       RUN") {
 		t.Errorf("the list has no header where it starts:\n%s", s)
 	}
-	for _, w := range []string{"running   01RUNAAAAAAAAAAAAAAAAAAAAA finance/monthly-invoicing", "1m 52s", "succeeded 01RUNCCCCCCCCCCCCCCCCCCCCC finance/nightly-export"} {
+	for _, w := range []string{"● running   01RUNAAAAAAAAAAAAAAAAAAAAA finance/monthly-invoicing", "1m 52s", "● succeeded 01RUNCCCCCCCCCCCCCCCCCCCCC finance/nightly-export"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("the runs view does not show %q:\n%s", w, s)
 		}
@@ -201,11 +201,12 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 	if m.selected != "01RUNAAAAAAAAAAAAAAAAAAAAA" {
 		t.Errorf("the runs view opens with %q selected, not the newest run", m.selected)
 	}
-	if last := lines[23]; last != "↑↓ Move   enter Open   q Quit   ? Every key" {
+	if last := strings.TrimRight(lines[23], " "); last != "↑↓ Move   enter Open   q Quit   ? Every key" {
 		t.Errorf("the key line is %q", last)
 	}
+	// Every line is as wide as the window, so that the ground is painted under all of it.
 	for i, l := range lines {
-		if w := len([]rune(l)); w > 120 {
+		if w := len([]rune(l)); w != 120 {
 			t.Errorf("line %d is %d columns wide in a window of 120: %q", i, w, l)
 		}
 	}
@@ -244,7 +245,7 @@ func TestTheKeysMoveOpenAndGoBack(t *testing.T) {
 	if in.asked[len(in.asked)-1] != "/api/v1/runs/01RUNBBBBBBBBBBBBBBBBBBBBB" {
 		t.Errorf("opening a run asked for %s", in.asked[len(in.asked)-1])
 	}
-	if !strings.HasSuffix(screen(m), "esc Runs   q Quit   ? Every key") {
+	if !strings.HasSuffix(strings.TrimRight(screen(m), " "), "esc Runs   q Quit   ? Every key") {
 		t.Errorf("the run view's key line is wrong:\n%s", screen(m))
 	}
 	m = press(t, m, esc)
@@ -315,11 +316,11 @@ func TestANarrowWindowCutsRatherThanWraps(t *testing.T) {
 	if !strings.Contains(s, "01RUNAAAAAA… ") || strings.Contains(s, "01RUNAAAAAAAAAAAAAAAAAAAAA") {
 		t.Errorf("a run's identifier at 80 columns is not cut to twelve:\n%s", s)
 	}
-	if !strings.Contains(s, "finance/a-workflow-whose-nam… ") || strings.Contains(s, "past-any-column") {
+	if !strings.Contains(s, "finance/a-workflow-whose-n… ") || strings.Contains(s, "past-any-column") {
 		t.Errorf("a long workflow is not cut:\n%s", s)
 	}
 	for i, l := range strings.Split(s, "\n") {
-		if w := len([]rune(l)); w > 80 {
+		if w := len([]rune(l)); w != 80 {
 			t.Errorf("line %d is %d columns wide in a window of 80: %q", i, w, l)
 		}
 	}

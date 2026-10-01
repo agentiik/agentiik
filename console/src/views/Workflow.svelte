@@ -14,6 +14,7 @@
   import Refused from "./Refused.svelte";
   import { clock, took } from "../lib/format";
   import { authOf, layout, triggers } from "../lib/graph";
+  import { moved, useKeys } from "../lib/keys.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { RunReader } from "../lib/run.svelte";
@@ -112,6 +113,27 @@
     for (const [k, v] of Object.entries(set)) q.set(k, v);
     place.narrow(q);
   }
+
+  // The steps in the order the graph draws them, row by row and left to right, which the keys move
+  // along as a reader's eye does.
+  const drawn = $derived(laid ? [...laid.nodes].sort((a, b) => a.layer - b.layer || a.x - b.x).map((n) => n.step) : []);
+
+  useKeys(() =>
+    drawn.length === 0
+      ? []
+      : [
+          {
+            keys: ["ArrowUp", "ArrowDown", "k", "j"],
+            brief: ["ArrowUp", "ArrowDown"],
+            effect: "Step",
+            does: (key) => {
+              const step = moved(drawn, selected, key);
+              if (step) narrow({ step });
+            },
+          },
+          { keys: ["Escape"], effect: `Runs of ${workflow}`, does: () => place.go(runsOf, false, new URLSearchParams({ workflow })) },
+        ],
+  );
 
   const runsOf = $derived({ kind: "namespace" as const, namespace, view: "runs" as const });
   const sharing = $derived({ kind: "namespace" as const, namespace, view: "sharing" as const });
