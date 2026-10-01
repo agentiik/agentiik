@@ -220,6 +220,13 @@ func (m Model) runHeader(now time.Time) [][]part {
 	if !r.StartedAt.IsZero() {
 		about = append(about, "started "+clock(r.StartedAt, now), "took "+lasted(r.RunSummary, now))
 	}
+	if r.ReplayOf != "" {
+		replays := "replays " + string(r.ReplayOf)
+		if r.ReplayFrom != "" {
+			replays += " from " + string(r.ReplayFrom)
+		}
+		about = append(about, replays)
+	}
 	lines = append(lines, []part{{muted, strings.Join(about, " · ")}})
 	for _, s := range r.Steps {
 		if s.Verdict != agk.VerdictFailed {
@@ -269,7 +276,13 @@ func (m Model) stepRow(s db.StepSummary, now time.Time, width int) []part {
 	case s.Attempts > 1:
 		count = fmt.Sprintf("attempt %d", s.Attempts)
 	}
-	name := cellOf(string(s.Step), max(8, width-11-8-22-3))
+	// The name is as wide as the run's longest, so that the durations line up, and is cut only
+	// where the verdict and the duration leave it less; the shards counted take what is left.
+	longest := 0
+	for _, other := range m.run.Steps {
+		longest = max(longest, len([]rune(string(other.Step))))
+	}
+	name := cellOf(string(s.Step), max(8, min(longest, width-12-8-1)))
 	return []part{
 		{verdictRole(s.Verdict), "●"}, {plain, " " + cellOf(s.Verdict.String(), 10) + " "}, {plain, name + " "},
 		{muted, padLeft(took(s.StartedAt, s.FinishedAt, now), 7) + " "}, {quiet, count},
@@ -400,6 +413,12 @@ func (m Model) runLines(t theme, height int) []string {
 	var lines []string
 	for _, h := range m.runHeader(now) {
 		lines = append(lines, t.line(false, m.width, within(h, m.width)...))
+	}
+	if m.acted != "" {
+		lines = append(lines, t.line(false, m.width, within([]part{{muted, m.acted}}, m.width)...))
+	}
+	if m.problem != "" {
+		lines = append(lines, t.line(false, m.width, within([]part{{failedText, m.problem}}, m.width)...))
 	}
 	lines = append(lines, t.line(false, m.width))
 	step := stepOf(m.run, m.step)

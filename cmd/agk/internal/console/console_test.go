@@ -64,6 +64,25 @@ type installation struct {
 	envelopes map[string]any
 	failing   error
 	asked     []string
+
+	// sent is what was sent, as method, path and body, and refusing why a send is refused.
+	sent     []string
+	refusing error
+}
+
+// replayRun is the run a replay starts.
+const replayRun = "01RUNREPLAYREPLAYREPLAYREP"
+
+func (in *installation) send(_ context.Context, method, path string, body, out any) error {
+	b, _ := json.Marshal(body)
+	in.sent = append(in.sent, method+" "+path+" "+string(b))
+	if in.refusing != nil {
+		return in.refusing
+	}
+	if strings.HasSuffix(path, "/replay") && out != nil {
+		return json.Unmarshal([]byte(`{"run":"`+replayRun+`","state":"queued","commit":"a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f","replay_of":"`+failedRun+`"}`), out)
+	}
+	return nil
 }
 
 func (in *installation) read(_ context.Context, path string, out any) error {
@@ -129,7 +148,7 @@ func someRuns() []db.ListedRun {
 // given and its first reads have come back.
 func opened(t *testing.T, in *installation, o Options, width, height int) Model {
 	t.Helper()
-	o.Read, o.Now = in.read, func() time.Time { return now }
+	o.Read, o.Send, o.Now = in.read, in.send, func() time.Time { return now }
 	if o.Installation == "" {
 		o.Installation = "agentiik.example.com"
 	}

@@ -49,6 +49,10 @@ func (m Model) screen() string {
 	for len(lines) < body {
 		lines = append(lines, t.line(false, m.width))
 	}
+	if m.asking != notAsking {
+		// The prompt sits above the keys that answer it, over the last line of the view.
+		lines[body-1] = t.line(false, m.width, within([]part{{strong, m.question()}}, m.width)...)
+	}
 	return strings.Join(append(append([]string{m.topLine(t)}, lines[:body]...), m.keyLine(t)), "\n")
 }
 
@@ -115,10 +119,21 @@ func (m Model) tabs() []part {
 func (m Model) keyLine(t theme) string {
 	var keys [][2]string
 	switch {
+	case m.asking == askingCancel:
+		keys = [][2]string{{"y", "Cancel run"}, {"any other key", "Keep it"}}
+	case m.asking == askingReplay:
+		keys = [][2]string{{"y", "Replay from " + stepOf(m.run, m.step)}, {"any other key", "Keep it"}}
 	case m.listing:
 		keys = [][2]string{{"esc", "Close"}, {"q", "Quit"}}
 	case m.view == runView:
-		keys = [][2]string{{"↑↓", "Step"}, {"[]", "Port"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
+		keys = [][2]string{{"↑↓", "Step"}, {"[]", "Port"}}
+		if m.mayCancel() {
+			keys = append(keys, [2]string{"c", "Cancel run"})
+		}
+		if m.mayReplay() {
+			keys = append(keys, [2]string{"p", "Replay from step"})
+		}
+		keys = append(keys, [2]string{"esc", "Runs"}, [2]string{"q", "Quit"}, [2]string{"?", "Every key"})
 	case m.view == runnersView:
 		keys = [][2]string{{"↑↓", "Move"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
 	default:
@@ -143,6 +158,12 @@ func (m Model) keysListed(t theme) []string {
 	switch m.view {
 	case runView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"esc", "Back to the runs"})
+		if m.mayCancel() {
+			rows = append(rows, [2]string{"c", "Cancel the run, once a prompt naming it is answered y"})
+		}
+		if m.mayReplay() {
+			rows = append(rows, [2]string{"p", "Replay the run from the step chosen, once a prompt naming both is answered y"})
+		}
 	case runnersView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runners"}, [2]string{"esc", "Back to the runs"})
 	default:

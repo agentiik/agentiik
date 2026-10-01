@@ -86,6 +86,10 @@ func TestTheInspectorLaysOutItsPanesByTheWindow(t *testing.T) {
 	if !lineWith(wide, "● succeeded  normalize", "image ") {
 		t.Errorf("at 160 columns the steps and the step are not side by side:\n%s", wide)
 	}
+	// At 120 columns, the narrowest side by side, a step's name is still whole.
+	if s := screen(inspecting(t, &installation{}, 120)); !lineWith(s, "● succeeded  normalize ", "image ") {
+		t.Errorf("at 120 columns a step's name is cut:\n%s", s)
+	}
 	narrow := screen(inspecting(t, &installation{}, 100))
 	if lineWith(narrow, "● succeeded  normalize", "image ") {
 		t.Errorf("at 100 columns the panes are still side by side:\n%s", narrow)
