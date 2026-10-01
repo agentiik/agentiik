@@ -59,7 +59,7 @@ func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, w
 	if !storable(namespace) || !storable(workflow) {
 		// No namespace or workflow is named with bytes PostgreSQL cannot hold, so the
 		// filter names nothing, and nothing is what it lists.
-		write(w, http.StatusOK, map[string]any{"runs": []db.RunSummary{}})
+		write(w, http.StatusOK, map[string]any{"runs": []db.ListedRun{}})
 		return
 	}
 
@@ -68,7 +68,7 @@ func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, w
 		return
 	}
 
-	var runs []db.RunSummary
+	var runs []db.ListedRun
 	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
 		var err error
 		runs, err = wide.Runs(ctx, readable, q)

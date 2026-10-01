@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -284,5 +285,58 @@ func TestThePurgeLowersNoInputAGrantNeverCounted(t *testing.T) {
 	}
 	if got := refsOf(t, pool, "finance", d); got != 1 || collectableNow(t, pool, "finance", d) {
 		t.Errorf("an object another run holds is counted %d times after purging a grant that never counted it", got)
+	}
+}
+
+// A task's parameters are what its latest grant was issued with, as resolved, a secret as the
+// reference it is; a task never dispatched has none.
+func TestARunListsTheParametersEachTaskWasDispatchedWith(t *testing.T) {
+	pool, super := opened(t)
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	if _, err := conn.Exec(t.Context(), `
+		insert into tasks (namespace, id, run_id, step, attempt, state)
+		values ('finance', '01M2T8AAAAAAAAAAAAAAAAAAAA', $1, 'render', 1, 'dispatched')`, financeRun); err != nil {
+		t.Fatal(err)
+	}
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	for _, params := range []map[string]any{
+		{"currency": "USD"},
+		{"currency": "EUR", "rows": 211, "vat_api_key": map[string]any{"secret": "vat-api"}},
+	} {
+		if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			_, err := w.IssueGrant(ctx, "finance", key, "01M2T8AAAAAAAAAAAAAAAAAAAA",
+				GrantScope{Run: financeRun, Step: "render", Params: params}, time.Now().UTC().Add(time.Hour))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// Two grants issued in one instant would leave which is the latest to chance.
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	var detail RunDetail
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		var err error
+		detail, err = ns.RunDetail(ctx, financeRun)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range detail.Tasks {
+		switch task.Task {
+		case key:
+			written, _ := json.Marshal(task.Params)
+			if string(written) != `{"currency":"EUR","rows":211,"vat_api_key":{"secret":"vat-api"}}` {
+				t.Errorf("the task lists its parameters as %s", written)
+			}
+		default:
+			if task.Params != nil {
+				t.Errorf("%s, never granted, lists parameters %v", task.Task, task.Params)
+			}
+		}
 	}
 }

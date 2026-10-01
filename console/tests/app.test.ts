@@ -46,3 +46,23 @@ describe("the console", () => {
     expect((await screen.findByRole("link", { name: "Enrol a passkey" })).getAttribute("href")).toBe("auth/enrol");
   });
 });
+
+describe("a run's steps and commit in the list", () => {
+  it("draws each run's steps as a strip, said in words, and its pinned commit", async () => {
+    open("/finance/runs");
+    const strip = await screen.findByRole("img", { name: /^Steps: normalize succeeded in 50s, invoice failed in 3m 07s, archive not reached$/ });
+    const segments = strip.querySelectorAll(".segment");
+    expect(segments).toHaveLength(3);
+    expect(Number((segments[1] as HTMLElement).style.flexGrow)).toBeGreaterThan(Number((segments[0] as HTMLElement).style.flexGrow));
+    expect(segments[2]!.classList.contains("unreached")).toBe(true);
+    const row = strip.closest("tr")!;
+    const commit = row.querySelector(".commit")!;
+    expect(commit.textContent).toHaveLength(7);
+    expect(commit.getAttribute("title")!.startsWith(commit.textContent!)).toBe(true);
+  });
+
+  it("says a run that reached no step yet has none", async () => {
+    open("/finance/runs");
+    expect(await screen.findByRole("img", { name: "No step has been reached" })).toBeTruthy();
+  });
+});
