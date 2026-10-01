@@ -56,7 +56,7 @@ func (m Model) screen() string {
 		// The prompt sits above the keys that answer it, over the last line of the view.
 		lines[body-1] = t.line(false, m.width, within([]part{{strong, m.question()}}, m.width)...)
 	}
-	return strings.Join(append(append([]string{m.topLine(t)}, lines[:body]...), m.keyLine(t)), "\n")
+	return m.withToasts(t, strings.Join(append(append([]string{m.topLine(t)}, lines[:body]...), m.keyLine(t)), "\n"))
 }
 
 // theme is how the screen is drawn now: the terminal's depth, on the ground its background asked
@@ -74,6 +74,9 @@ func (m Model) topLine(t theme) string {
 		where = "every namespace"
 	}
 	right := []part{{succeededText, "●"}, {plain, " live"}}
+	if n := len(m.me.Notifications); n > 0 {
+		right = append([]part{{muted, counting(n, "notification") + "  "}}, right...)
+	}
 	if m.unanswered != "" {
 		right = []part{{failedText, "not answering, asked again: " + m.unanswered}}
 	}
