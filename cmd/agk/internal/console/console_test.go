@@ -66,8 +66,9 @@ type installation struct {
 	failing   error
 	asked     []string
 
-	// graph is the resolved graph the workflow's route answers, as JSON.
-	graph string
+	// graph is the resolved graph the workflow's route answers, as JSON, and detail the whole of
+	// its answer where a test gives one; stats is what the statistics route answers.
+	graph, detail, stats string
 
 	// sent is what was sent, as method, path and body, and refusing why a send is refused.
 	sent     []string
@@ -125,8 +126,12 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 		answer = e
 	case strings.HasPrefix(path, "/api/v1/runs/"):
 		answer = in.run
+	case strings.Contains(path, "/workflows/") && in.detail != "":
+		answer = json.RawMessage(in.detail)
 	case strings.Contains(path, "/workflows/") && in.graph != "":
 		answer = map[string]any{"graph": json.RawMessage(in.graph)}
+	case strings.Contains(path, "/stats/runs?") && in.stats != "":
+		answer = json.RawMessage(in.stats)
 	default:
 		return fmt.Errorf("no route %s", path)
 	}

@@ -82,6 +82,7 @@ const (
 	runView
 	runnersView
 	graphView
+	workflowsView
 )
 
 // Model is the console's state, as Bubble Tea holds it between one message and the next.
@@ -147,6 +148,16 @@ type Model struct {
 	// first, which it opens on.
 	palette *palette
 	used    []string
+
+	// The workflows view's: the workflows the runs read name, the one chosen, and what was read of
+	// each beyond its row. graphOf is the workflow whose graph is shown with no run laid over it.
+	flows       []flowRow
+	flowsRead   bool
+	flowsFailed string
+	flow        string
+	flowDetails map[string]flowDetailRead
+	flowStatsOf map[string]flowStatsRead
+	graphOf     string
 
 	// The graph view's: the graph of the run's workflow, read for graphFor, or why it could not be;
 	// the view it was opened from, which esc goes back to; and whether it is written as a list.
@@ -256,6 +267,12 @@ func (m Model) readMe() tea.Cmd {
 func (m Model) readShown() tea.Cmd {
 	if m.view == runnersView {
 		return m.readFleet()
+	}
+	if m.view == workflowsView {
+		return m.readFlows()
+	}
+	if m.view == graphView && m.graphOf != "" {
+		return m.readWorkflowNamed(m.graphOf)
 	}
 	if m.view == runView || m.view == graphView {
 		run := m.selected
@@ -400,6 +417,35 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.readChosen())
 		return m, tea.Batch(cmds...)
+	case flowsRead:
+		if msg.shown != m.shown {
+			return m, nil
+		}
+		if msg.err != nil {
+			if m.flowsRead {
+				m.unanswered = said(msg.err)
+			} else {
+				m.flowsFailed = said(msg.err)
+			}
+		} else {
+			m.unanswered, m.flowsFailed, m.flowsRead, m.flows = "", "", true, flowRows(msg.runs)
+			if f, ok := m.chosenFlow(); ok {
+				m.flow = f.key()
+			}
+		}
+		if m.view == workflowsView {
+			return m, tea.Batch(append(m.readChosenFlow(), m.later())...)
+		}
+	case flowDetailRead:
+		if m.flowDetails == nil {
+			m.flowDetails = map[string]flowDetailRead{}
+		}
+		m.flowDetails[msg.key] = msg
+	case flowStatsRead:
+		if m.flowStatsOf == nil {
+			m.flowStatsOf = map[string]flowStatsRead{}
+		}
+		m.flowStatsOf[msg.key] = msg
 	case workflowRead:
 		if msg.key == m.graphFor {
 			if msg.err != nil {
@@ -515,10 +561,38 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 			return m.showing(runsView)
 		}
 		return m, nil
+	case "2":
+		if m.view != workflowsView {
+			return m.showing(workflowsView)
+		}
+		return m, nil
 	case "4":
 		// The runners are an administrator's alone, and the key is nobody else's either.
 		if m.me.Admin && m.view != runnersView {
 			return m.showing(runnersView)
+		}
+		return m, nil
+	}
+	if m.view == workflowsView {
+		switch key {
+		case "esc":
+			return m.showing(runsView)
+		case "up", "k", "down", "j":
+			if f, ok := m.chosenFlow(); ok {
+				i := slices.IndexFunc(m.flows, func(r flowRow) bool { return r.key() == f.key() })
+				if key == "up" || key == "k" {
+					i = max(0, i-1)
+				} else {
+					i = min(len(m.flows)-1, i+1)
+				}
+				m.flow = m.flows[i].key()
+				return m, tea.Batch(m.readChosenFlow()...)
+			}
+		case "enter", "g":
+			if f, ok := m.chosenFlow(); ok {
+				m.graphOf, m.graphFrom, m.step = f.key(), workflowsView, ""
+				return m.showing(graphView)
+			}
 		}
 		return m, nil
 	}
@@ -635,6 +709,12 @@ func (m Model) showing(v view) (tea.Model, tea.Cmd) {
 		m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
 		m.asking, m.acted, m.problem = notAsking, "", ""
 		m.recent, m.recentFor = nil, ""
+	}
+	if v != graphView {
+		m.graphOf = ""
+	}
+	if m.graphOf != "" && m.graphFor != m.graphOf {
+		m.graph, m.graphFor, m.graphFailed = nil, m.graphOf, ""
 	}
 	m.view = v
 	m.shown++

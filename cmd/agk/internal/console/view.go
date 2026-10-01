@@ -46,6 +46,8 @@ func (m Model) screen() string {
 		lines = m.runnersLines(t, body)
 	case m.view == graphView:
 		lines = m.graphLines(t, body)
+	case m.view == workflowsView:
+		lines = m.workflowsLines(t, body)
 	default:
 		lines = m.runsLines(t, body)
 	}
@@ -103,10 +105,10 @@ type tab struct {
 	view      view
 }
 
-// tabs are the views a digit turns to, the one shown in bold: the runs, and the runners to an
-// administrator. Workflows and sharing take 2 and 3 once the console draws them.
+// tabs are the views a digit turns to, the one shown in bold: the runs, the workflows, and the
+// runners to an administrator. Sharing takes 3 once the console draws it.
 func (m Model) tabs() []part {
-	tabs := []tab{{"1", "Runs", runsView}}
+	tabs := []tab{{"1", "Runs", runsView}, {"2", "Workflows", workflowsView}}
 	if m.me.Admin {
 		tabs = append(tabs, tab{"4", "Runners", runnersView})
 	}
@@ -151,11 +153,14 @@ func (m Model) keyLine(t theme) string {
 		if m.asList {
 			written = "Drawing"
 		}
-		back := "Run"
-		if m.graphFrom == runsView {
-			back = "Runs"
+		back := map[view]string{runsView: "Runs", runView: "Run", workflowsView: "Workflows"}[m.graphFrom]
+		keys = [][2]string{{"↑↓", "Step"}}
+		if m.run != nil {
+			keys = append(keys, [2]string{"enter", "Inspect"})
 		}
-		keys = [][2]string{{"↑↓", "Step"}, {"enter", "Inspect"}, {"g", written}, {"esc", back}, {"q", "Quit"}, {"?", "Every key"}}
+		keys = append(keys, [2]string{"g", written}, [2]string{"esc", back}, [2]string{"q", "Quit"}, [2]string{"?", "Every key"})
+	case m.view == workflowsView:
+		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Graph"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
 	default:
 		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"g", "Graph"}, {"/", "Filter"}}
 		if m.filter != "" {
@@ -175,7 +180,7 @@ func (m Model) keyLine(t theme) string {
 
 // keysListed is every key of the view, which ? opens over it.
 func (m Model) keysListed(t theme) []string {
-	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}, {":", "Open the command palette: commands, views, runs, workflows and namespaces"}, {"1", "The runs"}}
+	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}, {":", "Open the command palette: commands, views, runs, workflows and namespaces"}, {"1", "The runs"}, {"2", "The workflows"}}
 	if m.me.Admin {
 		rows = append(rows, [2]string{"4", "The runners and their pools"})
 	}
@@ -190,6 +195,8 @@ func (m Model) keysListed(t theme) []string {
 		}
 	case runnersView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runners"}, [2]string{"esc", "Back to the runs"})
+	case workflowsView:
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the workflows"}, [2]string{"enter, g", "The graph of the workflow chosen"}, [2]string{"esc", "Back to the runs"})
 	case graphView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps, in the order the graph runs them"}, [2]string{"enter", "Open the step chosen in the inspector"},
 			[2]string{"g", "Write the graph as a list, and draw it again"}, [2]string{"esc", "Back to the view the graph was opened from"})

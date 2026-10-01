@@ -61,7 +61,7 @@ func TestTheRunnersViewListsThePoolsAndTheirRunners(t *testing.T) {
 	}
 	s := screen(m)
 	lines := strings.Split(s, "\n")
-	if !strings.Contains(lines[0], "1 Runs   4 Runners") {
+	if !strings.Contains(lines[0], "1 Runs   2 Workflows   4 Runners") {
 		t.Errorf("the top line does not name the views a digit turns to: %s", lines[0])
 	}
 	for _, want := range []string{
