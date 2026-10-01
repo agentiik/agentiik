@@ -51,8 +51,8 @@ func (co *Core) reused(ctx context.Context, e db.Evaluation, g *graph.Graph) (ma
 	steps := map[agk.Step]graph.StepState{}
 	for _, name := range g.Upstream(e.ReplayFrom) {
 		ss, ok := state.Steps[name]
-		if !ok || !ss.Verdict.Terminal() {
-			return nil, fmt.Sprintf("step %s, above %s, did not end in the run it replays, %s", name, e.ReplayFrom, e.ReplayOf), nil
+		if !ok || !graph.Reusable(ss.Verdict, state.Run.State) {
+			return nil, fmt.Sprintf("step %s, above %s, did not finish in the run it replays, %s", name, e.ReplayFrom, e.ReplayOf), nil
 		}
 		steps[name] = graph.Reused(ss, e.Run)
 	}

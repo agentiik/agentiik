@@ -220,6 +220,7 @@ func (e *Evaluator) Next(now time.Time) (Plan, error) {
 	if deadline, ok := e.deadline(); ok && !now.Before(deadline) {
 		e.s.Run.State = agk.TimedOut
 		e.s.Run.FinishedAt = now
+		e.endSteps("the run reached its deadline before the step ended", now)
 		e.s.Seq++
 		return e.stopEverything(StopDeadline), nil
 	}
@@ -439,9 +440,28 @@ func (e *Evaluator) Cancel(now time.Time) {
 	if e.s.Run.State.Terminal() {
 		return
 	}
+	now = now.UTC()
 	e.s.Run.State = agk.Cancelled
-	e.s.Run.FinishedAt = now.UTC()
+	e.s.Run.FinishedAt = now
+	e.endSteps("the run was cancelled before the step ended", now)
 	e.s.Seq++
+}
+
+// endSteps ends every step under way as its run ends under it, cancelled or timed out: a
+// step is "cancelled with its run", and one left running in a run that has ended reads as
+// work still going to whoever reads the run, for as long as it is kept. A step nobody
+// reached stays pending, which is what a step is before it starts, and what a person
+// reading the run reads as not reached, in a run that never started as in one that did.
+//
+// The shards stay as they were. Those holding a runner are what the next Plan names to
+// stop, and a shard ended here would be one nobody stops; the controller writes the
+// endings of their rows in the transaction that ends the run.
+func (e *Evaluator) endSteps(reason string, now time.Time) {
+	for _, name := range e.g.Order() {
+		if e.s.Steps[name].Verdict == agk.VerdictRunning {
+			e.cancel(name, reason, now)
+		}
+	}
 }
 
 // Outputs are the envelopes the workflow's declared outputs name, which is what a
