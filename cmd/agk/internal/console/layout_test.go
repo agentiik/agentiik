@@ -67,7 +67,7 @@ func TestThePanesAreLaidOutFromTheWindow(t *testing.T) {
 	if run <= log {
 		t.Errorf("the run in focus has %d rows and the log %d", run, log)
 	}
-	stacked = press(t, stacked, tabKey)
+	stacked = press(t, stacked, tabKey, tabKey)
 	if run, log := heightOf(stacked, runPane), heightOf(stacked, logPane); log <= run {
 		t.Errorf("the log in focus has %d rows and the run %d", log, run)
 	}
@@ -111,8 +111,12 @@ func TestTabMovesTheFocusAndTheKeysFollowIt(t *testing.T) {
 		t.Errorf("enter in the runs leaves the focus on %v with %v open, having read %v", m.focus, m.run, in.asked[reads:])
 	}
 	m = press(t, m, tabKey)
+	if m.focus != portsPane || !strings.HasPrefix(lastLine(m), "tab Next pane   ↑↓ Port") {
+		t.Fatalf("tab from the steps goes to %v, the key line %q", m.focus, lastLine(m))
+	}
+	m = press(t, m, tabKey)
 	if m.focus != runsPane {
-		t.Errorf("tab with no log goes to %v, not back to the runs", m.focus)
+		t.Errorf("tab from the ports with no log goes to %v, not back to the runs", m.focus)
 	}
 }
 
@@ -128,7 +132,7 @@ func TestTheLogScrollsBack(t *testing.T) {
 	if s := screen(m); !strings.Contains(s, "line 060") {
 		t.Fatalf("the log does not end on its last line:\n%s", s)
 	}
-	m = press(t, m, tabKey, up, up, up)
+	m = press(t, m, tabKey, tabKey, up, up, up)
 	s := screen(m)
 	if m.focus != logPane || !strings.Contains(s, "3 lines back") || !strings.Contains(s, "line 057") || strings.Contains(s, "line 058") {
 		t.Errorf("↑ three times in the log shows:\n%s", s)

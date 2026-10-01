@@ -171,6 +171,8 @@ func (m Model) keyLine(t theme) string {
 			keys = append(keys, [2]string{"↑↓", "Move"}, [2]string{"enter", "Open"})
 		case logPane:
 			keys = append(keys, [2]string{"↑↓", "Scroll"})
+		case portsPane:
+			keys = append(keys, [2]string{"↑↓", "Port"})
 		default:
 			keys = append(keys, [2]string{"↑↓", "Step"}, [2]string{"[]", "Port"})
 		}
@@ -224,7 +226,8 @@ func (m Model) keysListed(t theme) []string {
 	}
 	switch m.view {
 	case runView:
-		rows = append(rows, [2]string{"tab", "Move the focus to the next pane: the runs, the run, then its log; shift+tab to the one before"},
+		rows = append(rows, [2]string{"tab", "Move the focus to the next pane: the runs, then in the run its steps, its ports and its log; shift+tab to the one before"},
+			[2]string{"↑ ↓ in the ports", "Move between the ports of the step chosen, as [ ] do"},
 			[2]string{"↑ ↓ in the runs", "Move the selection over the runs; enter opens the run selected beside them"},
 			[2]string{"↑ ↓ in the log", "Scroll the log back, and forward to its end"})
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"g", "The graph of the run's workflow, its state laid over it"}, [2]string{"esc", "Back to the runs"})
