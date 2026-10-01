@@ -254,7 +254,8 @@ jobs:
             --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" -cf - . \
             | gzip -n -9 > "$out/$name.tar.gz"
           (cd "$out" && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" && cat "$name.tar.gz.sha256")
-          tar -tzf "$out/$name.tar.gz" | head -n 5
+          # sed reads the whole list, where head would close the pipe early and fail tar under pipefail.
+          tar -tzf "$out/$name.tar.gz" | sed -n '1,5p'
 
       - uses: actions/upload-artifact@v4
         if: matrix.console
