@@ -8,6 +8,7 @@
   import StatePill from "../components/StatePill.svelte";
   import Refused from "./Refused.svelte";
   import { cancelRun, replayRun } from "../lib/actions";
+  import { tokens } from "../lib/envelope";
   import { address, fetchable, retention } from "../lib/artifacts";
   import { band } from "../lib/exit";
   import { between, clock, took } from "../lib/format";
@@ -78,6 +79,9 @@
     return named === "input" || named === "files" || named === "logs" ? named : "output";
   });
   const ports = $derived<Record<string, EnvelopeReference>>((tab === "input" ? task?.inputs : step?.ports) ?? {});
+  // Every port the step declares on the side shown, those nothing was handed or published on yet
+  // among them, then any the run holds an envelope for that the version did not name.
+  const portNames = $derived([...new Set([...((tab === "input" ? step?.input_ports : step?.output_ports) ?? []), ...Object.keys(ports)])]);
   const port = $derived.by(() => {
     const named = place.query.get("port");
     return named && named in ports ? named : Object.keys(ports)[0];
@@ -160,6 +164,13 @@
 
   function shortDigest(d: string): string {
     return d.replace(/^sha256:/, "").slice(0, 12);
+  }
+
+  // shortImage is an image by its repository and the first characters of its digest, which is
+  // what a person compares at a glance; the whole reference is the element's title.
+  function shortImage(ref: string): string {
+    const [repository, digest] = ref.split("@sha256:");
+    return digest ? `${repository}@${digest.slice(0, 12)}` : ref;
   }
 
   function bytes(n: number): string {
@@ -290,6 +301,27 @@
             </p>
           {/if}
 
+          <dl class="header">
+            {#if step.image}
+              <dt>Image</dt>
+              <dd class="mono" title={step.image}>{shortImage(step.image)}</dd>
+            {/if}
+            {#if task}
+              <dt>Task</dt>
+              <dd class="mono">attempt {task.attempt}{#if task.shard}&nbsp;· shard {task.shard.index} of {task.shard.of}{/if}</dd>
+              <dt>Runner</dt>
+              <dd class="mono">{task.runner ?? (task.memoised_from ? `none, a cache hit of ${task.memoised_from}` : task.called ? `none, it called ${task.called}` : "not held yet")}</dd>
+            {/if}
+          </dl>
+          {#if readsData && task?.params && Object.keys(task.params).length > 0}
+            <details class="params">
+              <summary>Parameters it was dispatched with</summary>
+              <pre class="json"><code>{#each tokens(task.params) as t, i (i)}<span class="t-{t.kind}">{t.text}</span>{/each}</code></pre>
+            </details>
+          {:else if task && !readsData && task.state !== "pending"}
+            <p class="faint">The parameters it was dispatched with are not shown: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+          {/if}
+
           <table class="tasks">
             <thead>
               <tr><th>Task</th><th>State</th><th>Runner</th><th class="number">Exit</th><th class="number">Took</th></tr>
@@ -355,24 +387,29 @@
               {:else}
                 <p class="muted">No task of this step has been created, so there is no log yet.</p>
               {/if}
-            {:else if Object.keys(ports).length === 0}
-              <p class="muted">{tab === "output" ? "The step has published nothing yet." : "The task chosen was handed nothing, or was never dispatched."}</p>
+            {:else if portNames.length === 0}
+              <p class="muted">{tab === "output" ? "The step declares no output port." : "The step declares no input port."}</p>
             {:else}
               <table class="envelopes">
                 <thead><tr><th>Port</th><th class="number">Items</th><th class="number">Size</th><th>Digest</th></tr></thead>
                 <tbody>
-                  {#each Object.entries(ports) as [name, e] (name)}
-                    <tr class:chosen={readsData && name === port}>
+                  {#each portNames as name (name)}
+                    {@const e = ports[name]}
+                    <tr class:chosen={readsData && e && name === port}>
                       <td class="mono name port {name}">
-                        {#if readsData}
+                        {#if readsData && e}
                           <button class="link" aria-pressed={name === port} onclick={() => choose({ pane: tab, port: name })}>{name}</button>
                         {:else}
                           {name}
                         {/if}
                       </td>
-                      <td class="number mono">{e.items}</td>
-                      <td class="number mono">{bytes(e.size)}</td>
-                      <td class="mono muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
+                      {#if e}
+                        <td class="number mono">{e.items}</td>
+                        <td class="number mono">{bytes(e.size)}</td>
+                        <td class="mono muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
+                      {:else}
+                        <td colspan="3" class="muted">{tab === "output" ? "published when the step ends" : task ? "not handed to the task chosen" : "handed once a task is dispatched"}</td>
+                      {/if}
                     </tr>
                   {/each}
                 </tbody>
@@ -578,6 +615,61 @@
 
   .end {
     text-align: right;
+  }
+
+  .header {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: calc(var(--unit) * 2) calc(var(--unit) * 6);
+    margin: 0 0 calc(var(--unit) * 6);
+    font-size: var(--type-identifier-size-min);
+  }
+
+  .header dt {
+    color: var(--faint);
+  }
+
+  .header dd {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .params {
+    margin: 0 0 calc(var(--unit) * 6);
+  }
+
+  .params summary {
+    color: var(--accent);
+    cursor: pointer;
+    font-size: var(--type-control-size);
+  }
+
+  .json {
+    max-height: 320px;
+    margin: calc(var(--unit) * 3) 0 0;
+    padding: calc(var(--unit) * 4) calc(var(--unit) * 5);
+    overflow: auto;
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-control);
+    background: var(--sunken);
+    font-family: var(--type-identifier-font);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .t-key {
+    color: var(--accent);
+  }
+
+  .t-string {
+    color: var(--waiting);
+  }
+
+  .t-number,
+  .t-literal {
+    color: var(--succeeded);
   }
 
   .exit {

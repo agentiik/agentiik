@@ -902,6 +902,53 @@ func TestAHeldFetchIsSpentOnlyByATransferThatCompleted(t *testing.T) {
 	}
 }
 
+// A listing answers each run with its steps in the order they started, those not started after them
+// by name, each with its verdict and its times, and none of another run's.
+func TestARunListingCarriesEachRunsSteps(t *testing.T) {
+	pool, super := opened(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	for _, stmt := range []string{
+		`update steps set state = 'succeeded', started_at = '2026-10-01T06:00:00Z', finished_at = '2026-10-01T06:01:00Z' where run_id = '` + financeRun + `' and step = 'render'`,
+		`update steps set state = 'running', started_at = '2026-10-01T05:59:00Z' where run_id = '` + financeRun + `' and step = 'archive'`,
+		`insert into steps (namespace, run_id, step) values ('finance', '` + financeRun + `', 'notify')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seeding: %s", err)
+		}
+	}
+	var listed []ListedRun
+	if err := pool.Installation(ctx, RunListing, func(ctx context.Context, w *Wide) error {
+		var err error
+		listed, err = w.Runs(ctx, []Workflow{{Namespace: "finance", Name: "monthly-invoicing"}, {Namespace: "team-ops", Name: "nightly"}}, RunQuery{Limit: 50})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	strips := map[agk.RunID][]StepStrip{}
+	for _, r := range listed {
+		strips[r.Run] = r.Steps
+	}
+	finance := strips[financeRun]
+	var order []string
+	for _, s := range finance {
+		order = append(order, string(s.Step)+":"+s.Verdict.String())
+	}
+	if strings.Join(order, " ") != "archive:running render:succeeded notify:pending" {
+		t.Errorf("the finance run lists its steps as %v", order)
+	}
+	if len(finance) == 3 && (!finance[1].FinishedAt.Equal(time.Date(2026, 10, 1, 6, 1, 0, 0, time.UTC)) || !finance[2].StartedAt.IsZero()) {
+		t.Errorf("the finance run's steps read %+v", finance)
+	}
+	if ops := strips[opsRun]; len(ops) != 1 || ops[0].Step != "archive" {
+		t.Errorf("the team-ops run lists %+v", ops)
+	}
+}
+
 // "The run detail keeps showing the artifact's name, size and digest with its collection
 // recorded": a live file with its expiry and the fetches left of its budget, and a retired one
 // with when it was retired, each by the URI an envelope names it with, and none of another run's.

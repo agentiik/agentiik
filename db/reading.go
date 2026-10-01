@@ -79,6 +79,23 @@ type RunSummary struct {
 	FinishedAt time.Time `json:"finished_at,omitzero"`
 }
 
+// ListedRun is a run as a listing answers it: its record, and its steps in the order they started,
+// each with its verdict and when it started and ended, which a listing draws as a strip whose
+// segments are as wide as the steps took, so that where a run failed and how long each part of it
+// lasted are read before its colours are.
+type ListedRun struct {
+	RunSummary
+	Steps []StepStrip `json:"steps"`
+}
+
+// StepStrip is one step of a listed run, as its strip draws it.
+type StepStrip struct {
+	Step       agk.Step    `json:"step"`
+	Verdict    agk.Verdict `json:"verdict"`
+	StartedAt  time.Time   `json:"started_at,omitzero"`
+	FinishedAt time.Time   `json:"finished_at,omitzero"`
+}
+
 // StepSummary is one step of a run, as a screen shows it.
 type StepSummary struct {
 	Step     agk.Step    `json:"step"`
@@ -91,6 +108,14 @@ type StepSummary struct {
 	// Ports are the envelope digests the step published, which is what the database keeps of
 	// them. Never the items.
 	Ports map[agk.Port]Envelope `json:"ports,omitempty"`
+
+	// Image, InputPorts and OutputPorts are what the version the run pinned declares of the step:
+	// the image it runs, by digest, and the ports it reads and publishes. The API reads them from
+	// that version's graph, which the database holds as the document it was built from rather than
+	// as a second copy that could disagree with it.
+	Image       string     `json:"image,omitempty"`
+	InputPorts  []agk.Port `json:"input_ports,omitempty"`
+	OutputPorts []agk.Port `json:"output_ports,omitempty"`
 }
 
 // TaskSummary is one task, which is one shard of one attempt.
@@ -120,6 +145,11 @@ type TaskSummary struct {
 	// Inputs are the envelopes the task was handed on its input ports, by digest as a step's
 	// ports are, from the grant it was dispatched with. A task never dispatched has none.
 	Inputs map[agk.Port]Envelope `json:"inputs,omitempty"`
+
+	// Params are the parameters it was dispatched with, resolved, from the same grant. An
+	// expression may carry envelope contents into them, so the API answers them under
+	// run:read_data alone, as it does a run's inputs.
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // RunDetail is a run and what became of every part of it.
@@ -388,16 +418,17 @@ func (n *NS) steps(ctx context.Context, run agk.RunID) ([]StepSummary, error) {
 }
 
 func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
-	// The inputs of the grant issued last, since every grant of one row names what the one
-	// dispatch it was prepared for was handed.
+	// The inputs and the parameters of the grant issued last, since every grant of one row names
+	// what the one dispatch it was prepared for was handed.
 	rows, err := n.tx.Query(ctx, `
 		select t.idempotency_key, t.step, t.state, t.attempt, t.shard_index, t.shard_of,
 		       t.runner, t.exit_code, t.started_at, t.finished_at, t.memoised_from, coalesce(t.called_run, ''),
-		       (select g.scope->'inputs' from task_grants g
-		        where g.namespace = t.namespace and g.task_id = t.id
-		        order by g.created_at desc limit 1),
+		       g.scope->'inputs', g.scope->'params',
 		       s.envelopes_purged_at
 		from tasks t join steps s on s.namespace = t.namespace and s.run_id = t.run_id and s.step = t.step
+		left join lateral (select scope from task_grants
+		                   where namespace = t.namespace and task_id = t.id
+		                   order by created_at desc limit 1) g on true
 		where t.namespace = $1 and t.run_id = $2
 		order by t.step, t.attempt, t.shard_index nulls first, t.requeue`,
 		n.namespace, string(run))
@@ -413,13 +444,18 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		var index, of *int
 		var runner, memoised *string
 		var started, finished, purged *time.Time
-		var handed []byte
+		var handed, params []byte
 		if err := rows.Scan(&t.Task, &t.Step, &state, &t.Attempt, &index, &of,
-			&runner, &t.ExitCode, &started, &finished, &memoised, &t.Called, &handed, &purged); err != nil {
+			&runner, &t.ExitCode, &started, &finished, &memoised, &t.Called, &handed, &params, &purged); err != nil {
 			return nil, err
 		}
 		if t.Inputs, err = inputsHanded(handed, purged); err != nil {
 			return nil, fmt.Errorf("db: the inputs of task %s could not be read: %w", t.Task, err)
+		}
+		if len(params) > 0 && string(params) != "null" {
+			if err := asWritten(params, &t.Params); err != nil {
+				return nil, fmt.Errorf("db: the parameters of task %s could not be read: %w", t.Task, err)
+			}
 		}
 		if err := t.State.UnmarshalText([]byte(state)); err != nil {
 			return nil, err
@@ -520,12 +556,12 @@ func (w *Wide) Workflows(ctx context.Context, namespace, name string) ([]Workflo
 // authorisation decision, and a missing one fails closed. There is no listing of one namespace's
 // runs that skips the question, because "a deny wins at any scope" and a deny on one workflow is
 // only in the answer where that workflow is in the question.
-func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]RunSummary, error) {
+func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]ListedRun, error) {
 	if err := q.check(); err != nil {
 		return nil, err
 	}
 	if len(among) == 0 {
-		return []RunSummary{}, nil
+		return []ListedRun{}, nil
 	}
 	namespaces := make([]string, len(among))
 	names := make([]string, len(among))
@@ -545,7 +581,61 @@ func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]RunSum
 	if err != nil {
 		return nil, fmt.Errorf("db: the runs could not be read: %w", err)
 	}
-	return summaries(rows)
+	listed, err := summaries(rows)
+	if err != nil {
+		return nil, err
+	}
+	return w.strips(ctx, listed)
+}
+
+// strips reads the steps of the runs a page lists, in one question for the page: each run's steps
+// in the order they started, those not started after them by name, since a listing reads no graph
+// to order them by.
+func (w *Wide) strips(ctx context.Context, listed []RunSummary) ([]ListedRun, error) {
+	out := make([]ListedRun, len(listed))
+	at := make(map[string]int, len(listed))
+	namespaces := make([]string, len(listed))
+	runs := make([]string, len(listed))
+	for i, r := range listed {
+		out[i] = ListedRun{RunSummary: r, Steps: []StepStrip{}}
+		at[r.Namespace+"/"+string(r.Run)] = i
+		namespaces[i], runs[i] = r.Namespace, string(r.Run)
+	}
+	if len(listed) == 0 {
+		return out, nil
+	}
+	rows, err := w.tx.Query(ctx, `
+		select namespace, run_id::text, step, state, started_at, finished_at
+		from steps
+		where (namespace, run_id::text) in (select * from unnest($1::text[], $2::text[]))
+		order by namespace, run_id, started_at nulls last, step`, namespaces, runs)
+	if err != nil {
+		return nil, fmt.Errorf("db: the steps of the runs listed could not be read: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var namespace, run, verdict string
+		var s StepStrip
+		var started, finished *time.Time
+		if err := rows.Scan(&namespace, &run, &s.Step, &verdict, &started, &finished); err != nil {
+			return nil, fmt.Errorf("db: a step of the runs listed could not be read: %w", err)
+		}
+		if err := s.Verdict.UnmarshalText([]byte(verdict)); err != nil {
+			return nil, err
+		}
+		if started != nil {
+			s.StartedAt = started.UTC()
+		}
+		if finished != nil {
+			s.FinishedAt = finished.UTC()
+		}
+		i, ok := at[namespace+"/"+run]
+		if !ok {
+			continue
+		}
+		out[i].Steps = append(out[i].Steps, s)
+	}
+	return out, rows.Err()
 }
 
 // ErrNoOutput is no output of that name recorded on the run: the workflow declares none, or the
