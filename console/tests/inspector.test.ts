@@ -105,10 +105,10 @@ describe("the log of the task chosen", () => {
     expect(await screen.findByText("posting the invoice with token ****")).toBeTruthy();
     expect(screen.queryByText("shard one, which is not chosen")).toBeNull();
     expect(screen.getByText(/Lines 2 to 4 were written and cannot be read back: the chunk holding them is gone from the store/)).toBeTruthy();
-    expect(screen.getByText(/The runner cut this log at its caps/)).toBeTruthy();
+    expect(screen.getByText(/This log was cut short: it reached the size limit/)).toBeTruthy();
 
     stream.send("end", { verdict: "failed" });
-    expect(await screen.findByText("The step's log is over: failed.")).toBeTruthy();
+    expect(await screen.findByText("The step has finished: failed.")).toBeTruthy();
     expect(stream.closed).toBe(true);
   });
 
@@ -121,7 +121,8 @@ describe("the log of the task chosen", () => {
     const stream = opened[0]!;
     stream.readyState = 2;
     stream.onerror?.call(stream, new Event("error"));
-    expect(await screen.findByText("the step's logs went with the run's retention")).toBeTruthy();
+    expect(await screen.findByText("Could not follow the log.")).toBeTruthy();
+    expect(screen.getByText(/The step's logs went with the run's retention\./)).toBeTruthy();
   });
 });
 
@@ -155,7 +156,7 @@ describe("an envelope", () => {
 
   it("is never asked for by a principal without run:read_data", async () => {
     const { asked } = open(`/finance/runs/${failed}?step=invoice&port=error`, withPermissions(["workflow:read", "run:read"]));
-    expect(await screen.findByText(/What the envelopes hold is not shown/)).toBeTruthy();
+    expect(await screen.findByText(/The data passed between steps is hidden/)).toBeTruthy();
     expect(asked.some((a) => a.key.includes("/outputs/") || a.key.includes("/inputs/"))).toBe(false);
   });
 });
@@ -170,7 +171,7 @@ describe("acting on a run", () => {
     expect(asked.some((a) => a.key.endsWith("/cancel"))).toBe(false);
     expect(screen.getByText("Cancel this run? Its tasks in flight are stopped.")).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
-    expect(await screen.findByText(/Cancelling was asked/)).toBeTruthy();
+    expect(await screen.findByText(/Cancel requested/)).toBeTruthy();
     expect(asked.filter((a) => a.key === `POST /api/v1/runs/${failed}/cancel`)).toHaveLength(1);
   });
 
@@ -191,7 +192,7 @@ describe("acting on a run", () => {
     const { asked } = open(`/finance/runs/${failed}`, s);
     await fireEvent.click(await screen.findByRole("button", { name: "Replay from the start" }));
     expect(screen.queryByRole("button", { name: "Replay from invoice" })).toBeNull();
-    expect(screen.getByText(/replays from its start only/)).toBeTruthy();
+    expect(screen.getByText(/can only be replayed from the beginning/)).toBeTruthy();
     await waitFor(() => expect(asked.find((a) => a.key.endsWith("/replay"))?.body).toEqual({}));
   });
 
@@ -259,7 +260,7 @@ describe("the files of a step and the outputs of a run", () => {
     const clicked = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     open(`/finance/runs/${failed}?step=invoice&pane=files`);
     await fireEvent.click(await screen.findByRole("button", { name: /Download/ }));
-    expect(await screen.findByText(/This file existed and is finished/)).toBeTruthy();
+    expect(await screen.findByText(/This file is no longer available/)).toBeTruthy();
     expect(clicked).not.toHaveBeenCalled();
   });
 
@@ -274,7 +275,7 @@ describe("the files of a step and the outputs of a run", () => {
     open(`/finance/runs/${failed}?step=invoice&pane=files`, withPermissions(["workflow:read", "run:read"]));
     expect(await screen.findByText("request.json")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
-    expect(screen.getByText(/The files are listed and not fetched/)).toBeTruthy();
+    expect(screen.getByText(/You can see the list of files but not download them/)).toBeTruthy();
   });
 
   it("opens a workflow output's envelope through the run's outputs route", async () => {
@@ -297,8 +298,8 @@ describe("the files of a step and the outputs of a run", () => {
     const live = { status: "live", expires_at: "2026-10-07T05:42:55Z", fetches_left: 1 } as Artifact;
     expect(retention(live, Date.parse("2026-01-01T00:00:00Z"))).toMatch(/^until .*, 1 fetch left$/);
     expect(await fetchable(async () => Object.defineProperty(new Response(null, { status: 200 }), "type", { value: "opaqueredirect" }), "x")).toBe("");
-    expect(await fetchable(async () => new Response(null, { status: 409 }), "x")).toMatch(/being served/);
-    expect(await fetchable(async () => new Response(null, { status: 404 }), "x")).toBe("No such file, or not yours.");
+    expect(await fetchable(async () => new Response(null, { status: 409 }), "x")).toMatch(/in progress for someone else/);
+    expect(await fetchable(async () => new Response(null, { status: 404 }), "x")).toBe("This file does not exist, or you do not have access to it.");
   });
 });
 
@@ -315,7 +316,7 @@ describe("the step header and its ports", () => {
 
   it("shows no parameters to a principal without run:read_data, whatever it is answered", async () => {
     open(`/finance/runs/${failed}?step=invoice`, withPermissions(["workflow:read", "run:read"]));
-    expect(await screen.findByText(/The parameters it was dispatched with are not shown/)).toBeTruthy();
+    expect(await screen.findByText(/Parameters are hidden/)).toBeTruthy();
     expect(screen.queryByText("Parameters it was dispatched with")).toBeNull();
   });
 

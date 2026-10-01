@@ -137,7 +137,7 @@ describe("the inspector's keys", () => {
     expect(screen.queryByText(/Its tasks in flight are stopped/)).toBeNull();
     await press("c");
     await press("y");
-    expect(await screen.findByText(/Cancelling was asked/)).toBeTruthy();
+    expect(await screen.findByText(/Cancel requested/)).toBeTruthy();
     expect(asked.filter((a) => a === `POST /api/v1/runs/${failed}/cancel`)).toHaveLength(1);
   });
 

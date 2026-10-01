@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Me } from "../api/client";
   import type { components } from "../api/schema";
@@ -36,7 +38,7 @@
 
   let detail = $state<Detail | null>(null);
   let missing = $state(false);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
   let text = $state<string | null>(null);
   let history = $state<Entry[]>([]);
   let next = $state<string | undefined>(undefined);
@@ -46,7 +48,7 @@
     const { data, error, response } = await api.GET("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: namespace, name: workflow } } });
     if (!data) {
       if (response.status === 404) missing = true;
-      else refused = refusal(response, error).message;
+      else refused = explain("load the workflow", refusal(response, error));
       return;
     }
     detail = data;
@@ -201,14 +203,14 @@
 {#if missing}
   <Refused />
 {:else if refused}
-  <Pane title={workflow}><p class="refused" role="alert">The workflow could not be read: {refused}</p></Pane>
+  <Pane title={workflow}><Problem explained={refused} onretry={read} /></Pane>
 {:else if detail}
 
   <section class="about" aria-label="What starts it">
     {#if detail.version}
       <span class="muted">Head of <span class="term">{detail.repository.default_branch}</span>, pushed by <span class="term">{detail.version.author}</span> <time datetime={detail.version.created_at} title={detail.version.created_at}>{clock(detail.version.created_at, now)}</time>{detail.repository.protected ? "; the branch is protected" : ""}.</span>
     {:else}
-      <span class="muted">No version yet: the repository holds nothing a run could run.</span>
+      <span class="muted">No version yet: nothing has been pushed that a run could use.</span>
     {/if}
     {#if graph}
       <ul class="triggers">
@@ -222,7 +224,7 @@
           <li><Icon name="trigger-event" size={14} /><span class="term">{t.type}</span>{#if t.source}<span class="muted">from <span class="term">{t.source}</span></span>{/if}{#if t.namespace}<span class="muted">in <span class="term">{t.namespace}</span></span>{/if}{#if t.filter}<span class="muted" title={t.filter}>filtered</span>{/if}</li>
         {/each}
         {#if !on.schedule.length && !on.webhook.length && !on.event.length}
-          <li class="muted">No schedule, webhook or event starts it: it runs when asked.</li>
+          <li class="muted">Nothing starts it automatically (no schedule, webhook or event): it runs only when someone starts it.</li>
         {/if}
         {#if graph.concurrency}
           <li><span class="muted">concurrency</span><span class="term">{graph.concurrency.group}</span><span class="muted">{graph.concurrency.cancel_in_progress ? "an arriving run cancels the one going" : "a run waits for the one going"}</span></li>
@@ -234,7 +236,7 @@
   </section>
 
   {#if showHistory}
-    <Pane title="History" aside="the first-parent history of {detail.repository.default_branch}">
+    <Pane title="History" aside="the commits of {detail.repository.default_branch}, newest first">
       <table class="history">
         <thead><tr><th>Commit</th><th>Subject</th><th>Author</th><th>When</th><th>Version</th></tr></thead>
         <tbody>
@@ -257,7 +259,7 @@
 
   {#if running && graph && detail.version}
     <div class="runform">
-      <Pane title="Run {workflow}" aside="manual, as {me.principal}">
+      <Pane title="Run {workflow}" aside="started by you, {me.principal}">
         {#key runRef}
           <RunForm {api} {place} {namespace} {workflow} {graph} commit={detail.version.commit} ref={runRef} onclose={() => (running = false)} />
         {/key}
@@ -267,13 +269,13 @@
 
   {#if tab === "files" && detail.repository.head === null}
     <Pane title="Files" aside="an empty repository">
-      <p class="muted">Nothing has been pushed yet: <span class="term">{detail.repository.default_branch}</span> is born by the first push. Clone the repository, commit <span class="term">agentiik.yaml</span> and push it, with git or with <span class="term">agk push</span>.</p>
+      <p class="muted">Nothing has been pushed yet. To start, clone the repository, add an <span class="term">agentiik.yaml</span>, commit it and push it, with git or with <span class="term">agk push</span>. The first push creates the branch <span class="term">{detail.repository.default_branch}</span>.</p>
       <pre class="clone term">git clone {detail.repository.clone_url}</pre>
     </Pane>
   {:else if tab === "files"}
     <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runAt} />
   {:else if tab === "mcp" && graph}
-    <Pane title="MCP" aside="what a client of this workflow sees">
+    <Pane title="MCP" aside="the tools an AI client sees for this workflow">
       <McpPanel {graph} {namespace} {workflow} />
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
@@ -301,7 +303,7 @@
         {#if pane === "file"}
           {#if text !== null}
             <FileView {text} {found} {selected} onselect={(step) => narrow({ step })} />
-            {#if selected && !found.has(selected)}<p class="faint">{selected} is not written in this file: it comes from a file this one includes.</p>{/if}
+            {#if selected && !found.has(selected)}<p class="faint">{selected} is defined in another file that this one includes, not here.</p>{/if}
           {:else}
             <p class="muted">The file could not be read.</p>
           {/if}
@@ -311,7 +313,7 @@
       </Pane>
     </div>
   {:else}
-    <Pane title="Graph"><p class="muted">This workflow has no version to draw, or its version is a library, which no run runs.</p></Pane>
+    <Pane title="Graph"><p class="muted">There is nothing to draw: this workflow has no version yet, or its version is a library, which is never run on its own.</p></Pane>
   {/if}
 {/if}
 
@@ -461,9 +463,6 @@
     margin-bottom: calc(var(--unit) * 6);
   }
 
-  .refused {
-    color: var(--failed);
-  }
 
   .clone {
     margin: calc(var(--unit) * 5) 0 0;

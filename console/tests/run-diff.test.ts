@@ -106,6 +106,6 @@ describe("the page of two runs", () => {
 
   it("answers as the API does for a run that is not there", async () => {
     open(`/finance/runs/${failed}/against/01JMZ0000000000000000000000`);
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
   });
 });

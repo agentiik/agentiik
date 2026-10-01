@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, Told, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { Refusal, type API, type Me } from "../api/client";
   import Icon from "../components/Icon.svelte";
   import PageHeader from "../components/PageHeader.svelte";
@@ -53,19 +55,19 @@
   // What any act on the screen is doing, said, and what the API refused, said as it said it.
   let working = $state(false);
   let said = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
-  async function act(work: () => Promise<void>) {
+  async function act(failed: string, work: () => Promise<void>) {
     if (working) {
       return;
     }
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -74,19 +76,20 @@
   // The sign-in methods, and the policy that rules them.
   let credentials = $state<Credential[] | null>(null);
   let policy = $state<Policy | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
+  let untokened = $state<Explained | null>(null);
 
   async function reread() {
     try {
       credentials = await credentialsOf(api);
-      unread = "";
+      unread = null;
     } catch (e) {
       // A credential removed ends the sessions it opened, this one among them where it did.
       if (e instanceof Refusal && e.status === 401) {
         await changed();
         return;
       }
-      unread = sentence(e instanceof Error ? e.message : String(e));
+      unread = explain("load your passkeys and passwords", e);
     }
   }
 
@@ -105,20 +108,20 @@
   let code = $state("");
 
   function remove(c: Credential) {
-    return act(async () => {
+    return act("remove the credential", async () => {
       await removeCredential(api, c.id);
       asking = "";
-      said = c.type === "password" ? "The password is removed, with the one-time code generator beside it where there was one." : `${described(c)} is removed.`;
+      said = c.type === "password" ? "The password is removed, and so is your one-time code generator if you had one." : `${described(c)} is removed.`;
       await reread();
     });
   }
 
   function removeTheGenerator(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("remove the one-time code generator", async () => {
       await removeGenerator(api, code.trim());
       code = "";
-      said = "The one-time code generator is removed. The password stays.";
+      said = "The one-time code generator is removed. Your password still works, without a code.";
       await reread();
     });
   }
@@ -132,9 +135,9 @@
 
   function add(event?: SubmitEvent) {
     event?.preventDefault();
-    return act(async () => {
+    return act("add the passkey", async () => {
       if (!passkeys.credentials) {
-        throw new Error(passkeys.unavailable);
+        throw new Told(passkeys.unavailable);
       }
       said = "Waiting for your authenticator.";
       try {
@@ -154,9 +157,9 @@
   }
 
   function signInAgainWithPasskey() {
-    return act(async () => {
+    return act("sign in again with your passkey", async () => {
       if (!passkeys.credentials) {
-        throw new Error(passkeys.unavailable);
+        throw new Told(passkeys.unavailable);
       }
       said = "Waiting for your passkey.";
       await signInWithPasskey(api, passkeys.credentials);
@@ -168,7 +171,7 @@
 
   function signInAgainWithPassword(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("sign in again with your password", async () => {
       await signInWithPassword(api, me.user?.login ?? me.principal, password, totp.trim());
       password = "";
       totp = "";
@@ -199,9 +202,9 @@
   async function retokens() {
     try {
       tokens = await tokensOf(api);
-      unread = "";
+      untokened = null;
     } catch (e) {
-      unread = sentence(e instanceof Error ? e.message : String(e));
+      untokened = explain("load your tokens", e);
     }
   }
 
@@ -226,7 +229,7 @@
 
   function mintOne(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("create the token", async () => {
       const ask: TokenRequest = { expires_at: expiringIn(days, new Date()) };
       if (whose !== "") {
         ask.principal = whose;
@@ -262,10 +265,10 @@
   }
 
   function revokeOne(t: Token) {
-    return act(async () => {
+    return act("revoke the token", async () => {
       await revoke(api, t.id);
       revoking = "";
-      said = `The token ${t.device_label ? `“${t.device_label}”` : t.id} is revoked from its next request.`;
+      said = `The token ${t.device_label ? `“${t.device_label}”` : t.id} is revoked: it stops working from its next use.`;
       await retokens();
     });
   }
@@ -289,7 +292,7 @@
   { label: "Service accounts", icon: "control-groups", to: routes.accounts, current: shown === "service-accounts" },
 ]} />
 
-{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 {#if shown === "profile"}
@@ -301,11 +304,11 @@
     <Pane title="Sign-in methods" aside={credentials ? String(credentials.length) : ""}>
       {#if policy}<p class="muted lead">{policyLine(policy)}</p>{/if}
       {#if unread}
-        <p class="problem" role="alert">{unread}</p>
+        <Problem explained={unread} onretry={reread} />
       {:else if credentials === null}
         <p class="muted">Reading what you sign in with.</p>
       {:else if credentials.length === 0}
-        <p class="muted">You hold no credential: a service account signs in with tokens alone.</p>
+        <p class="muted">No passkey or password: a service account signs in with tokens only.</p>
       {:else}
         <table>
           <thead><tr><th>Credential</th><th>Kind</th><th>Enrolled</th><th>Last used</th><th class="end"></th></tr></thead>
@@ -367,7 +370,7 @@
           </div>
         {/if}
       {/if}
-      <p class="foot muted">A password and a one-time code generator are set on the <a href="auth/enrol">sign-in page</a>.</p>
+      <p class="foot muted">To set a password or a one-time code generator, go to the <a href="auth/enrol">sign-in page</a>.</p>
     </Pane>
   </div>
 {:else}
@@ -383,12 +386,12 @@
           </p>
         </div>
       {/if}
-      {#if unread}
-        <p class="problem" role="alert">{unread}</p>
+      {#if untokened}
+        <Problem explained={untokened} onretry={retokens} />
       {:else if tokens === null}
         <p class="muted">Reading your tokens.</p>
       {:else if tokens.length === 0}
-        <p class="muted">No token is accepted for you or your service accounts.</p>
+        <p class="muted">You and your service accounts have no token.</p>
       {:else}
         <table>
           <thead><tr><th>Token</th><th>Principal</th><th>Narrowed to</th><th>Created</th><th>Expires</th><th>Last used</th><th class="end"></th></tr></thead>
@@ -444,7 +447,7 @@
         <label for="token-within">Namespaces and workflows it reaches, everywhere its principal does where none is written</label>
         <input id="token-within" class="term" placeholder="finance, finance/monthly-invoicing" bind:value={within} />
         <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Mint the token</button></p>
-        <p class="foot muted">A token can only narrow what its principal holds, and none lasts more than a year.</p>
+        <p class="foot muted">A token can do at most what its owner can do, and lasts a year at most.</p>
       </form>
     </Pane>
   </div>
@@ -459,13 +462,7 @@
     align-items: start;
   }
 
-  .problem {
-    color: var(--failed);
-  }
 
-  .problem {
-    margin: 0 0 calc(var(--unit) * 6);
-  }
 
   .lead {
     margin: 0 0 calc(var(--unit) * 5);

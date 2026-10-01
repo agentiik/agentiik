@@ -72,7 +72,7 @@ describe("the visual editor", () => {
   it("refuses an edit the language would refuse, saying why, and leaves the file as it was", async () => {
     open("?edit=1&step=normalize");
     await fireEvent.click(await screen.findByRole("button", { name: "Remove normalize" }));
-    expect(await screen.findByText("invoice, archive need normalize: take those edges away first.")).toBeTruthy();
+    expect(await screen.findByText("invoice, archive take input from normalize. Remove those edges first.")).toBeTruthy();
     expect(screen.getByText("No change")).toBeTruthy();
   });
 

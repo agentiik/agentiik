@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { refusal, type API, type Me } from "../api/client";
   import AdminTabs from "../components/AdminTabs.svelte";
   import Avatar from "../components/Avatar.svelte";
@@ -25,9 +27,9 @@
 
   const now = Date.now();
   let users = $state<User[] | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
   let working = $state(false);
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
   // What was issued last, for whom, shown until it is put away.
   let issued = $state<{ login: string; what: "recovery" | "enrolment"; link: string; code?: string; expires_at: string } | null>(null);
@@ -37,9 +39,9 @@
     return usersOf(api).then(
       (u) => {
         users = u;
-        unread = "";
+        unread = null;
       },
-      (e: unknown) => (unread = sentence(e instanceof Error ? e.message : String(e))),
+      (e: unknown) => (unread = explain("load the users", e)),
     );
   }
 
@@ -47,24 +49,24 @@
     reread();
   });
 
-  async function act(work: () => Promise<void>) {
+  async function act(failed: string, work: () => Promise<void>) {
     if (working) {
       return;
     }
     working = true;
-    problem = "";
+    problem = null;
     removed = "";
     try {
       await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
   }
 
   function recover(u: User) {
-    return act(async () => {
+    return act("create a recovery link", async () => {
       const r = await recoveryFor(api, u.login);
       issued = { login: u.login, what: "recovery", link: r.link, code: r.code, expires_at: r.expires_at };
       copied = false;
@@ -72,7 +74,7 @@
   }
 
   function enrol(u: User) {
-    return act(async () => {
+    return act("create an enrolment link", async () => {
       const r = await enrolmentFor(api, u.login);
       issued = { login: u.login, what: "enrolment", link: r.link, expires_at: r.expires_at };
       copied = false;
@@ -87,7 +89,7 @@
 
   function add(e: SubmitEvent) {
     e.preventDefault();
-    return act(async () => {
+    return act("add the user", async () => {
       const body = { login: login.trim(), ...(displayName.trim() ? { display_name: displayName.trim() } : {}), ...(admin ? { admin: true } : {}) };
       const { data, error, response } = await api.POST("/api/v1/users", { body });
       if (!data) throw refusal(response, error);
@@ -104,7 +106,7 @@
   // unphoto removes a photo that should not be shown: an administrator's one say over a profile,
   // which its user otherwise writes alone.
   function unphoto(u: User) {
-    return act(async () => {
+    return act("remove the photo", async () => {
       const answer = await api.DELETE("/api/v1/users/{login}/avatar", { params: { path: { login: u.login } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       await reread();
@@ -116,7 +118,7 @@
   let removed = $state("");
 
   function remove(u: User) {
-    return act(async () => {
+    return act("remove the user", async () => {
       const answer = await api.DELETE("/api/v1/users/{login}", { params: { path: { login: u.login } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       asking = "";
@@ -138,11 +140,11 @@
 
 <AdminTabs {place} current="users">
   {#snippet actions()}
-    <button class="control primary" onclick={() => ((adding = true), (problem = ""))}><Icon name="control-add" size={14} />Add a user</button>
+    <button class="control primary" onclick={() => ((adding = true), (problem = null))}><Icon name="control-add" size={14} />Add a user</button>
   {/snippet}
 </AdminTabs>
 
-{#if problem && !adding}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem && !adding}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if removed}{#key removed}<Notice ondismiss={() => (removed = "")}><span class="term">{removed}</span> is removed, with their credentials, tokens, sessions, memberships and grants.</Notice>{/key}{/if}
 
 <Dialog title={issued ? `${issued.what === "recovery" ? "Recovery code" : "Enrolment link"} for ${issued.login}` : ""} open={issued !== null} onclose={() => (issued = null)}>
@@ -152,7 +154,7 @@
         Shown this once and good until <time class="term" datetime={issued.expires_at}>{clock(issued.expires_at, now)}</time>. Hand it over yourself: it is never sent by mail.
       </p>
       <p class="value code">{issued.link}</p>
-      {#if issued.code}<p class="muted">Or the code alone, typed on the enrolment page: <span class="code">{issued.code}</span></p>{/if}
+      {#if issued.code}<p class="muted">Or give them this code to type on the enrolment page: <span class="code">{issued.code}</span></p>{/if}
       <p class="buttons">
         <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy the link"}</button>
         <button class="control primary" onclick={() => (issued = null)}>Done</button>
@@ -163,7 +165,7 @@
 
 <Pane title="Users" aside={users ? String(users.length) : ""}>
   {#if unread}
-    <p class="problem" role="alert">{unread}</p>
+    <Problem explained={unread} onretry={reread} />
   {:else if users === null}
     <p class="muted">Reading the users.</p>
   {:else}
@@ -181,7 +183,7 @@
             <td class="term muted nowrap">{#if u.last_sign_in_at}<time datetime={u.last_sign_in_at} title={u.last_sign_in_at}>{clock(u.last_sign_in_at, now)}</time>{:else}never{/if}</td>
             <td class="end">
               {#if u.login === own}
-                <span class="faint">Another administrator issues yours</span>
+                <span class="faint">Another administrator has to do this for you</span>
               {:else}
                 {#if asking === u.login}
                   <button class="control danger" disabled={working} onclick={() => remove(u)}>Remove {u.login}</button>
@@ -200,12 +202,12 @@
         {/each}
       </tbody>
     </table>
-    <p class="foot muted">An enrolment link enrols a first credential. A recovery code replaces lost ones, revokes the code the user held open, and is recorded with both your identities; it is never issued for your own account, since a session taken from you would otherwise give it a way in nobody vouched for.</p>
+    <p class="foot muted">An enrolment link lets a user set up their first passkey or password. A recovery code lets them replace lost ones; it cancels any earlier code and is recorded under both your names. You cannot issue one for your own account: someone who took over your session could otherwise use it to get in.</p>
   {/if}
 </Pane>
 
 <Dialog title="Add a user" bind:open={adding}>
-  {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={add} aria-label="Add a user">
     <label>
       <span>Login</span>
@@ -216,16 +218,12 @@
       <input bind:value={displayName} placeholder="Dana Okafor" maxlength="256" autocomplete="off" />
     </label>
     <label class="check"><input type="checkbox" bind:checked={admin} />An administrator of the installation</label>
-    <p class="foot muted">The user is created with no credential, and its personal namespace with it. Their enrolment link is shown once, here: hand it over yourself, and they enrol what signs them in.</p>
+    <p class="foot muted">The user is created with their personal namespace, and nothing to sign in with yet. Their enrolment link is shown once, here: send it to them, and they use it to set up how they sign in.</p>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add the user</button></p>
   </form>
 </Dialog>
 
 <style>
-  .problem {
-    margin: 0 0 calc(var(--unit) * 6);
-    color: var(--failed);
-  }
 
   form {
     display: grid;

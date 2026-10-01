@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Problem from "./Problem.svelte";
   import type { API } from "../api/client";
   import { LogTail } from "../lib/logs.svelte";
 
@@ -22,19 +23,19 @@
   });
 
   const dispatches = $derived(tail.of(task));
-  const live = $derived(tail.verdict === null && tail.refused === "");
+  const live = $derived(tail.verdict === null && tail.refused === null);
 </script>
 
 <section class="log" aria-label="Log of the task chosen">
   <p class="state muted">
     {#if tail.refused}
-      <span class="problem" role="alert">{tail.refused}</span>
+      <Problem explained={tail.refused} />
     {:else if tail.reconnecting}
-      The stream was cut; the browser is reconnecting, and resumes after the last line it was given.
+      The connection was lost. Reconnecting: the log will continue from the last line received.
     {:else if live}
-      <span class="dot" aria-hidden="true"></span> Following the log as it is written.
+      <span class="dot" aria-hidden="true"></span> Showing new lines as they are written.
     {:else}
-      The step's log is over: {tail.verdict}.
+      The step has finished: {tail.verdict}.
     {/if}
   </p>
 
@@ -56,16 +57,16 @@
       <p class="gap">Lines {g.first} to {g.first + g.lines - 1} were written and cannot be read back: {g.reason}.</p>
     {/each}
     {#if d.over?.truncated}
-      <p class="muted">The runner cut this log at its caps, log_max_bytes or log_max_lines.</p>
+      <p class="muted">This log was cut short: it reached the size limit, log_max_bytes or log_max_lines.</p>
     {/if}
     {#if d.over && !d.over.final}
-      <p class="muted">The dispatch was still running when the stream let go of it.</p>
+      <p class="muted">The attempt was still running when the log stopped being sent.</p>
     {/if}
   {:else}
     {#if !live && !tail.refused}
-      <p class="muted">The task chosen has no log: it was never dispatched.</p>
+      <p class="muted">This task has no log: it never started.</p>
     {:else if !tail.refused}
-      <p class="muted">Waiting for the task chosen to be dispatched.</p>
+      <p class="muted">Waiting for this task to start.</p>
     {/if}
   {/each}
 </section>
@@ -91,9 +92,6 @@
     background: var(--running);
   }
 
-  .problem {
-    color: var(--failed);
-  }
 
   h4 {
     margin: calc(var(--unit) * 2) 0 0;

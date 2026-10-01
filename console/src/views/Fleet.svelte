@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Namespace } from "../api/client";
@@ -20,14 +22,14 @@
 
   let pools = $state<Pool[] | null>(null);
   let runners = $state<Runner[] | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
   let now = $state(Date.now());
 
   async function read() {
     const [p, r] = await Promise.all([api.GET("/api/v1/runner-pools"), api.GET("/api/v1/runners")]);
     if (p.data) pools = p.data.runner_pools.map((x) => x.pool);
     if (r.data) runners = r.data.runners;
-    refused = !p.data ? refusal(p.response, p.error).message : !r.data ? refusal(r.response, r.error).message : "";
+    refused = !p.data ? explain("load the runner pools", refusal(p.response, p.error)) : !r.data ? explain("load the runners", refusal(r.response, r.error)) : null;
     now = Date.now();
   }
 
@@ -86,7 +88,7 @@
 ]} />
 
 {#if refused}
-  <p class="refused" role="alert">The runners could not be read: {refused}</p>
+  <Problem explained={refused} onretry={read} />
 {/if}
 
 <!-- The runners' pane is drawn once the pools above it are read, so that it is not pushed down. -->
@@ -106,7 +108,7 @@
             <tr class:chosen={chosen === p.name}>
               <td><button class="name term" aria-pressed={chosen === p.name} onclick={() => choose(p.name)}>{p.name}</button></td>
               <td class="nowrap">{#each p.labels as l (l)}<span class="chip term">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
-              <td>{#if p.namespaces.length}{@render names(p.namespaces)}{:else}<span class="muted">every namespace</span>{/if}</td>
+              <td>{#if p.namespaces.length}{@render names(p.namespaces)}{:else}<span class="muted">all namespaces</span>{/if}</td>
               <td class="term nowrap">{ceilings(p)}</td>
               <td class="term">{p.containment}</td>
               <td class="nowrap">{of(p.name).length ? counted(of(p.name), now) : "none"}</td>
@@ -119,7 +121,7 @@
         </tbody>
       </table>
     </div>
-    <p class="muted note">A namespace reaches a pool where both agree: the pool accepts it, and its allowed_runner_pools lists the pool or lists nothing. Takes at once adds up the concurrency of the runners ready now.</p>
+    <p class="muted note">A namespace can use a pool when both allow it: the pool accepts the namespace, and the namespace's allowed_runner_pools lists the pool or is empty. "Takes at once" is the number of tasks the pool's ready runners can run together right now.</p>
   {/if}
 </Pane>
 
@@ -147,7 +149,7 @@
                   <span class="nowrap"><StatePill state={c} />{#if c !== r.reported_state && r.reported_state && r.state !== "revoked"}<span class="muted said">says {r.reported_state}</span>{/if}</span>
                   {#if r.revoked_by && r.revoked_at}
                     <span class="order">revoked by <span class="term">{r.revoked_by}</span>, <time datetime={r.revoked_at} title={r.revoked_at}>{clock(r.revoked_at, now)}</time>{#if r.drain_reason}: {r.drain_reason}{/if}</span>
-                    {#if r.results_accepted_until}<span class="order muted">its results taken until <time datetime={r.results_accepted_until} title={r.results_accepted_until}>{clock(r.results_accepted_until, now)}</time></span>{/if}
+                    {#if r.results_accepted_until}<span class="order muted">results accepted until <time datetime={r.results_accepted_until} title={r.results_accepted_until}>{clock(r.results_accepted_until, now)}</time></span>{/if}
                   {:else if r.drained_by && r.drained_at}
                     <span class="order">drained by <span class="term">{r.drained_by}</span>, <time datetime={r.drained_at} title={r.drained_at}>{clock(r.drained_at, now)}</time>{#if r.drain_reason}: {r.drain_reason}{/if}</span>
                   {/if}
@@ -165,7 +167,7 @@
           </tbody>
         </table>
       </div>
-      <p class="muted note">A runner is its identifier, pool and labels here, never the host it runs on: GET /api/v1/runners names none. A runner silent for 30 s, three heartbeats missed, has had its tasks declared lost.</p>
+      <p class="muted note">A runner is shown by its identifier, pool and labels, never by the machine it runs on. When a runner has been silent for 30 seconds (three missed heartbeats), its tasks are marked lost.</p>
     {/if}
   </Pane>
 </div>
@@ -173,9 +175,6 @@
 
 <style>
 
-  .refused {
-    color: var(--failed);
-  }
 
   .below {
     margin-top: calc(var(--unit) * 12);

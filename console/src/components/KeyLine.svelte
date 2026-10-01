@@ -39,7 +39,7 @@
         {/each}
       </tbody>
     </table>
-    <p class="faint">A key does nothing while a field is typed into. Every one stands beside a button or a link that does the same.</p>
+    <p class="faint">Keys do nothing while you type in a field. Each key does the same as a button or link on the page.</p>
   </div>
 {/if}
 

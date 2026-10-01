@@ -136,6 +136,6 @@ describe("a workflow's page", () => {
 
   it("answers as the API does for a workflow that is not there, or in a namespace not the caller's", async () => {
     open("/finance/workflows/nothing");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
   });
 });

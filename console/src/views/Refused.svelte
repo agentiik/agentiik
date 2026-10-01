@@ -9,7 +9,8 @@
 
 <div class="refused">
   <Pane title="Not found">
-    <p>No such thing, or not yours.</p>
+    <p>This page does not exist, or you do not have access to it.</p>
+    <p class="muted">Check the address. If someone sent you here, ask an owner of the namespace to share it with you.</p>
   </Pane>
 </div>
 
@@ -22,5 +23,9 @@
   p {
     margin: 0;
     font-size: var(--type-navigation-size);
+  }
+
+  p + p {
+    margin-top: calc(var(--unit) * 4);
   }
 </style>

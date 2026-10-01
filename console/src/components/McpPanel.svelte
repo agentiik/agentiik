@@ -61,10 +61,10 @@
       {/if}
     </section>
   {:else}
-    <p class="muted">The block lists no tool, so the endpoint serves an empty list.</p>
+    <p class="muted">The mcp block lists no tool, so AI clients see none.</p>
   {/each}
 {:else}
-  <p class="muted">This version declares no mcp block, so the endpoint answers 404, as a route the installation does not serve.</p>
+  <p class="muted">This version has no mcp block, so this workflow offers no tools to AI clients: its MCP address answers 404.</p>
 {/if}
 
 <style>

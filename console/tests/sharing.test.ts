@@ -139,9 +139,9 @@ describe("the sharing panel", () => {
     const lines = await screen.findByRole("list", { name: "Effective permissions of bruno on alice" });
     const secret = within(lines).getByText("secret:write").closest("li")!;
     expect(secret.classList.contains("taken")).toBe(true);
-    expect(secret.textContent).toContain("denied: deny secret:write at alice, over editor at alice");
+    expect(secret.textContent).toContain("denied by deny secret:write at alice, although given by editor at alice");
     // Whether bruno is in team-finance is an administrator's to read.
-    expect(screen.getByText(/Who is in a group is an administrator's to read/)).toBeTruthy();
+    expect(screen.getByText(/Only administrators can see who is in a group/)).toBeTruthy();
   });
 
   it("reads anybody's groups for an administrator, and counts them", async () => {
@@ -153,7 +153,7 @@ describe("the sharing panel", () => {
     await fireEvent.change(screen.getByRole("combobox", { name: "Whom to resolve" }), { target: { value: "bruno" } });
     const lines = await screen.findByRole("list", { name: "Effective permissions of bruno on alice" });
     expect(within(lines).getByText("workflow:read").closest("li")!.textContent).toContain("through group:team-finance");
-    expect(screen.queryByText(/Who is in a group is an administrator's to read/)).toBeNull();
+    expect(screen.queryByText(/Only administrators can see who is in a group/)).toBeNull();
   });
 
   it("grants a role with an expiry from the one control, and reads the grants again", async () => {
@@ -232,7 +232,7 @@ describe("the sharing panel", () => {
     const operator = within(pane).getAllByRole("row").find((r) => r.querySelector("td")?.textContent === "operator")!;
     expect([...operator.querySelectorAll("td.mark")].map((c) => c.textContent)).toEqual(["no", "yes", "no", "no", "no", "no", "no"]);
     expect(operator.querySelector("td.lack")!.textContent).toBe("no");
-    expect(within(pane).getByText(/runs a workflow and follows its runs/)).toBeTruthy();
+    expect(within(pane).getByText(/can start a workflow and follow its runs/)).toBeTruthy();
   });
 
   it("says what sharing never exposes", async () => {
@@ -275,11 +275,11 @@ describe("the sharing panel", () => {
     render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
     const form = await screen.findByRole("form", { name: "Default branch of alice/report" });
     expect((within(form).getByRole("textbox") as HTMLInputElement).value).toBe("main");
-    const write = within(form).getByRole("button", { name: "Write it" }) as HTMLButtonElement;
+    const write = within(form).getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(write.disabled).toBe(true);
     await fireEvent.click(within(form).getByRole("checkbox"));
     await fireEvent.submit(form);
-    expect(await screen.findByText(/main is the default branch, protected: pushing to it takes grant:manage/)).toBeTruthy();
+    expect(await screen.findByText(/main is the default branch, and it is protected: only people with grant:manage can push to it/)).toBeTruthy();
     expect(asked).toEqual([{ key: "/api/v1/alice/workflows/report", body: { protected: true } }]);
   });
 
@@ -290,7 +290,7 @@ describe("the sharing panel", () => {
     const form = await screen.findByRole("form", { name: "Default branch of alice/report" });
     await fireEvent.input(within(form).getByRole("textbox"), { target: { value: "release" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText("The repository holds no branch release.")).toBeTruthy();
+    expect(await screen.findByText(/^The repository holds no branch release\. Correct it, then try again\.$/)).toBeTruthy();
   });
 
   it("is offered nowhere the caller holds no grant:manage, and answered as what does not exist", async () => {
@@ -298,6 +298,6 @@ describe("the sharing panel", () => {
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
     expect(screen.queryByRole("link", { name: "Sharing" })).toBeNull();
     open("/finance/sharing");
-    await waitFor(() => expect(screen.getAllByText("No such thing, or not yours.").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("This page does not exist, or you do not have access to it.").length).toBeGreaterThan(0));
   });
 });

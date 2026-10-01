@@ -1,4 +1,5 @@
 import { refusal, type API } from "../api/client";
+import { explain, type Explained } from "./problem";
 import type { components } from "../api/schema";
 
 // A namespace's runs as the runs view lists them, from GET /api/v1/runs: newest first, narrowed by a
@@ -66,7 +67,7 @@ export class RunList {
   reading = $state(false);
   // exhausted is whether the last page read held fewer runs than asked for, so that no more is kept.
   exhausted = $state(false);
-  refused = $state("");
+  refused = $state<Explained | null>(null);
   // settled is whether a first read has answered, so that what counts the runs is drawn once there is
   // something to count, rather than saying none and then moving down under the rows as they come.
   settled = $state(false);
@@ -99,10 +100,10 @@ export class RunList {
   async #page(limit: number, until?: string): Promise<Run[] | undefined> {
     const { data, error, response } = await this.#api.GET("/api/v1/runs", { params: { query: this.#query(limit, until) } });
     if (!data) {
-      this.refused = refusal(response, error).message;
+      this.refused = explain("load the runs", refusal(response, error));
       return undefined;
     }
-    this.refused = "";
+    this.refused = null;
     return data.runs;
   }
 

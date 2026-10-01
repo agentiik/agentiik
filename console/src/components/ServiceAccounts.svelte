@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "./Problem.svelte";
   import { refusal, type API, type Me } from "../api/client";
   import type { ServiceAccount } from "../lib/credentials";
   import { clock } from "../lib/format";
@@ -15,7 +17,7 @@
   let { api, me }: { api: API; me: Me } = $props();
 
   let accounts = $state<ServiceAccount[] | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
 
   // Every one, the built-in NS/agentiik of each namespace among them, which the tokens' list leaves
   // out since none is minted for it.
@@ -23,8 +25,8 @@
     const { data, error, response } = await api.GET("/api/v1/service-accounts");
     if (data) {
       accounts = data.service_accounts;
-      unread = "";
-    } else unread = refusal(response, error).message;
+      unread = null;
+    } else unread = explain("load the service accounts", refusal(response, error));
   }
 
   $effect(() => {
@@ -37,20 +39,20 @@
   const owned = $derived(Object.entries(me.permissions).filter(([scope, held]) => !scope.includes("/") && held.includes("grant:manage")).map(([scope]) => scope).sort());
 
   let working = $state(false);
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let said = $state("");
 
-  async function act(work: () => Promise<string>) {
+  async function act(failed: string, work: () => Promise<string>) {
     if (working) return;
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       const done = await work();
       await reread();
       said = done;
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -64,7 +66,7 @@
 
   function create(e: SubmitEvent) {
     e.preventDefault();
-    return act(async () => {
+    return act("create the service account", async () => {
       const { data, error, response } = await api.POST("/api/v1/service-accounts", { body: { namespace, name: name.trim() } });
       if (!data) throw refusal(response, error);
       name = "";
@@ -77,7 +79,7 @@
   const id = (a: ServiceAccount) => `${a.namespace}/${a.name}`;
 
   function remove(a: ServiceAccount) {
-    return act(async () => {
+    return act("remove the service account", async () => {
       const answer = await api.DELETE("/api/v1/service-accounts/{ns}/{name}", { params: { path: { ns: a.namespace, name: a.name } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       asking = "";
@@ -88,13 +90,13 @@
   const now = Date.now();
 </script>
 
-{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <div class="columns">
   <Pane title="Service accounts" aside={accounts ? String(accounts.length) : ""}>
     {#if unread}
-      <p class="problem" role="alert">The service accounts could not be read: {unread}</p>
+      <Problem explained={unread} onretry={reread} />
     {:else if accounts === null}
       <p class="muted">Reading the service accounts.</p>
     {:else}
@@ -123,7 +125,7 @@
           {/each}
         </tbody>
       </table>
-      <p class="foot muted">Their tokens are minted under API tokens, for one of them rather than for you.</p>
+      <p class="foot muted">To create a token for one of them, go to API tokens and choose the service account.</p>
     {/if}
   </Pane>
 
@@ -140,20 +142,16 @@
           <span>Name</span>
           <input class="term" bind:value={name} placeholder="deploy-bot" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
         </label>
-        <p class="foot muted">It is written <span class="term">{namespace || "NS"}/{name.trim() || "NAME"}</span> wherever a principal is written, and is given nothing until a grant names it.</p>
+        <p class="foot muted">Its full name is <span class="term">{namespace || "NS"}/{name.trim() || "NAME"}</span>. It can do nothing until you share something with it.</p>
         <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create it</button></p>
       </form>
     {:else}
-      <p class="muted">A service account is created in a namespace you own, and you own none.</p>
+      <p class="muted">You can create a service account only in a namespace you own, and you own none.</p>
     {/if}
   </Pane>
 </div>
 
 <style>
-  .problem {
-    margin: 0 0 calc(var(--unit) * 6);
-    color: var(--failed);
-  }
 
   .columns {
     display: grid;

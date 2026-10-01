@@ -7,8 +7,10 @@
 <script lang="ts">
   import { Refusal, type API } from "../api/client";
   import Pane from "../components/Pane.svelte";
+  import Problem from "../components/Problem.svelte";
+  import { Told, type Explained } from "../lib/problem";
   import type { Session } from "../lib/session.svelte";
-  import { PasswordsForbidden, sentence, signInWithPasskey, signInWithPassword } from "../lib/signin";
+  import { explainSignIn, PasswordsForbidden, sentence, signInWithPasskey, signInWithPassword } from "../lib/signin";
 
   // Signing in, where the API knows no session: with a passkey, the intended way, and with a password
   // as the fallback an installation may forbid. What the policy allows is read only once signed in,
@@ -18,7 +20,7 @@
 
   let working = $state(false);
   let status = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let forbidden = $state(false);
   let unavailable = $state("");
 
@@ -31,12 +33,12 @@
   let password = $state("");
   let totp = $state("");
 
-  async function run(work: () => Promise<void>) {
+  async function run(how: "passkey" | "password", work: () => Promise<void>) {
     if (working) {
       return;
     }
     working = true;
-    problem = "";
+    problem = null;
     try {
       await work();
     } catch (e) {
@@ -44,16 +46,16 @@
       if (e instanceof PasswordsForbidden) {
         forbidden = true;
       }
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explainSignIn(how, e);
     } finally {
       working = false;
     }
   }
 
   function withPasskey() {
-    return run(async () => {
+    return run("passkey", async () => {
       if (!passkeys.credentials) {
-        throw new Error(passkeys.unavailable);
+        throw new Told(passkeys.unavailable);
       }
       status = "Waiting for your passkey.";
       try {
@@ -76,12 +78,12 @@
 
   function withPassword(event: SubmitEvent) {
     event.preventDefault();
-    return run(async () => {
+    return run("password", async () => {
       status = "Signing in.";
       const answer = await signInWithPassword(api, login.trim(), password, totp.trim());
       password = "";
       totp = "";
-      status = answer.session === "enrolment" ? "Signed in to enrol a passkey, and nothing else until one is." : `Signed in as ${answer.login}.`;
+      status = answer.session === "enrolment" ? "Signed in, but only to set up a passkey: you can do nothing else until you have one." : `Signed in as ${answer.login}.`;
       await session.read();
     });
   }
@@ -95,7 +97,7 @@
     {#if offline}
       <p class="note">{offline}</p>
     {:else}
-      <p>Sign in with a passkey you enrolled, on this device or on a phone nearby.</p>
+      <p>Sign in with a passkey you set up, on this device or on a phone nearby.</p>
       <p><button class="control primary" disabled={working} onclick={withPasskey}>Sign in with a passkey</button></p>
     {/if}
 
@@ -107,7 +109,7 @@
           <input id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required bind:value={login} />
           <label for="secret">Password</label>
           <input id="secret" name="password" type="password" autocomplete="current-password" required bind:value={password} />
-          <label for="totp">One-time code <span class="muted">only if your account has one</span></label>
+          <label for="totp">One-time code <span class="muted">only if you set one up</span></label>
           <input id="totp" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" bind:value={totp} />
           <p><button class="control" type="submit" disabled={working}>Sign in with a password</button></p>
         </form>
@@ -115,9 +117,9 @@
     {/if}
 
     <p class="status" role="status" aria-live="polite">{status}</p>
-    {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+    {#if problem}<Problem explained={problem} />{/if}
 
-    <p class="foot muted"><a href="auth/enrol">Enrol a passkey</a> from an enrolment link or with a recovery code.</p>
+    <p class="foot muted">New here, or lost your passkey? <a href="auth/enrol">Set up a passkey</a> with the enrolment link or recovery code you were given.</p>
   </Pane>
 </main>
 
@@ -141,9 +143,6 @@
     display: none;
   }
 
-  .problem {
-    color: var(--failed);
-  }
 
   details {
     margin: 0 0 calc(var(--unit) * 6);

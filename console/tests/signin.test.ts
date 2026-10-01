@@ -68,7 +68,7 @@ describe("signing in from the console", () => {
     const asked = open(signedOut({ "POST /api/v1/auth/login": { status: 401, body: { error: "the login, the password or the code does not match" } } }));
     await fireEvent.click(await screen.findByText("Use a password instead"));
     await fillPassword("alice", "wrong");
-    expect(await screen.findByText("The login, the password or the code does not match.")).toBeTruthy();
+    expect(await screen.findByText(/The login, the password or the one-time code is wrong/)).toBeTruthy();
     expect(asked.find((a) => a.key === "POST /api/v1/auth/login")?.body).toEqual({ login: "alice", password: "wrong" });
     expect(screen.getByLabelText("Login").closest("details")?.open).toBe(true);
     expect((screen.getByLabelText("Login") as HTMLInputElement).value).toBe("alice");
@@ -77,7 +77,7 @@ describe("signing in from the console", () => {
   it("withdraws the password form where the policy forbids passwords, never calling it a wrong password", async () => {
     open(signedOut({ "POST /api/v1/auth/login": { status: 403, body: { error: "passwords are forbidden on this installation", setting: "password" } } }));
     await fillPassword("alice", "correct horse battery staple");
-    expect(await screen.findByText("Passwords are forbidden on this installation.")).toBeTruthy();
+    expect(await screen.findByText(/does not allow your account to sign in with a password/)).toBeTruthy();
     expect(screen.queryByLabelText("Password")).toBeNull();
     expect(screen.getByRole("button", { name: "Sign in with a passkey" })).toBeTruthy();
   });
@@ -87,7 +87,7 @@ describe("signing in from the console", () => {
       "POST /api/v1/auth/login": { "Retry-After": "90" },
     });
     await fillPassword("alice", "guess");
-    expect(await screen.findByText("Too many sign-ins, retry after the time Retry-After gives. Try again in 2 minutes.")).toBeTruthy();
+    expect(await screen.findByText(/Try again in 2 minutes\. You can also sign in with a passkey\./)).toBeTruthy();
   });
 
   it("signs in with a passkey, handing the browser the options and the API the browser's answer", async () => {
@@ -122,7 +122,7 @@ describe("signing in from the console", () => {
     } as unknown as CredentialsContainer;
     const asked = open(signedOut({ "POST /api/v1/auth/passkey/options": { status: 200, body: { ceremony: "assertion", options: { challenge: "AAAA" } } } }), { unavailable: "", credentials });
     await fireEvent.click(await screen.findByRole("button", { name: "Sign in with a passkey" }));
-    expect(await screen.findByText("The passkey ceremony was cancelled, or it timed out. Try again when you are ready.")).toBeTruthy();
+    expect(await screen.findByText("The passkey request was cancelled, or it timed out. Try again when you are ready.")).toBeTruthy();
     expect(asked.some((a) => a.key === "POST /api/v1/auth/passkey/verify")).toBe(false);
   });
 
@@ -137,7 +137,7 @@ describe("signing in from the console", () => {
 
   it("offers the password where the browser runs no passkey ceremony, and says why", async () => {
     open(signedOut(), { unavailable: passkeysUnavailable({ isSecureContext: false, navigator: {} }) });
-    expect(await screen.findByText(/This browser offers no passkeys on this page/)).toBeTruthy();
+    expect(await screen.findByText(/Passkeys cannot be used on this page/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Sign in with a passkey" })).toBeNull();
     expect(screen.getByLabelText("Password")).toBeTruthy();
   });
@@ -154,12 +154,12 @@ describe("signing in from the console", () => {
     const place = new Place({ pathname: "/", baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
     render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
     await fillPassword("bob-martin", "correct horse battery staple");
-    expect(await screen.findByText("This session may enrol a passkey, and nothing else until one is.")).toBeTruthy();
+    expect(await screen.findByText("You are signed in, but only to set up a passkey: this installation asks for one before you can do anything else.")).toBeTruthy();
   });
 
   it("links to the enrolment page, where a link's code is read", async () => {
     open(signedOut());
-    expect((await screen.findByRole("link", { name: "Enrol a passkey" })).getAttribute("href")).toBe("auth/enrol");
+    expect((await screen.findByRole("link", { name: "Set up a passkey" })).getAttribute("href")).toBe("auth/enrol");
   });
 });
 

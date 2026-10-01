@@ -57,7 +57,7 @@
   {/key}
 {:else}
   <Pane title="Sharing" aside={namespace}>
-    <p class="muted">Choose a workflow above whose grants you may share.</p>
+    <p class="muted">Choose a workflow above to see and change who has access to it.</p>
   </Pane>
 {/if}
 

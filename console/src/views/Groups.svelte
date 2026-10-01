@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { refusal, type API } from "../api/client";
   import type { components } from "../api/schema";
   import AdminTabs from "../components/AdminTabs.svelte";
@@ -20,14 +22,14 @@
 
   let groups = $state<Group[] | null>(null);
   let logins = $state<string[]>([]);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
 
   async function reread() {
     const { data, error, response } = await api.GET("/api/v1/groups");
     if (data) {
       groups = data.groups;
-      unread = "";
-    } else unread = refusal(response, error).message;
+      unread = null;
+    } else unread = explain("load the groups", refusal(response, error));
   }
 
   $effect(() => {
@@ -39,18 +41,18 @@
   });
 
   let working = $state(false);
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let said = $state("");
 
-  async function act(work: () => Promise<string>) {
+  async function act(failed: string, work: () => Promise<string>) {
     if (working) return;
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       said = await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -63,7 +65,7 @@
 
   function create(e: SubmitEvent) {
     e.preventDefault();
-    return act(async () => {
+    return act("create the group", async () => {
       const members = listOf(first);
       const { data, error, response } = await api.POST("/api/v1/groups", { body: { name: name.trim(), ...(members.length ? { members } : {}) } });
       if (!data) throw refusal(response, error);
@@ -81,7 +83,7 @@
   function join(g: Group) {
     const login = (adding[g.name] ?? "").trim();
     if (!login) return;
-    return act(async () => {
+    return act("add the member", async () => {
       const { data, error, response } = await api.PUT("/api/v1/groups/{group}/members/{login}", { params: { path: { group: g.name, login } } });
       if (!data) throw refusal(response, error);
       adding[g.name] = "";
@@ -91,7 +93,7 @@
   }
 
   function leave(g: Group, login: string) {
-    return act(async () => {
+    return act("remove the member", async () => {
       const { data, error, response } = await api.DELETE("/api/v1/groups/{group}/members/{login}", { params: { path: { group: g.name, login } } });
       if (!data) throw refusal(response, error);
       await reread();
@@ -103,7 +105,7 @@
   let asking = $state("");
 
   function remove(g: Group) {
-    return act(async () => {
+    return act("remove the group", async () => {
       const answer = await api.DELETE("/api/v1/groups/{group}", { params: { path: { group: g.name } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       asking = "";
@@ -115,11 +117,11 @@
 
 <AdminTabs {place} current="groups">
   {#snippet actions()}
-    <button class="control primary" onclick={() => ((creating = true), (problem = ""))}><Icon name="control-add" size={14} />New group</button>
+    <button class="control primary" onclick={() => ((creating = true), (problem = null))}><Icon name="control-add" size={14} />New group</button>
   {/snippet}
 </AdminTabs>
 
-{#if problem && !creating}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem && !creating}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <datalist id="group-logins">
@@ -128,7 +130,7 @@
 
 <Pane title="Groups" aside={groups ? String(groups.length) : ""}>
   {#if unread}
-    <p class="problem" role="alert">The groups could not be read: {unread}</p>
+    <Problem explained={unread} onretry={reread} />
   {:else if groups === null}
     <p class="muted">Reading the groups.</p>
   {:else}
@@ -165,12 +167,12 @@
         {/each}
       </tbody>
     </table>
-    <p class="foot muted">Putting somebody in a group gives them what its grants give, from their next request, and tells the owners of each namespace where that widens access. A group named as a namespace's owner is not removed until another owner is named.</p>
+    <p class="foot muted">Adding someone to a group gives them everything the group has been granted, from their next action, and the owners of each namespace where this widens access are told. A group that owns a namespace cannot be removed until that namespace has another owner.</p>
   {/if}
 </Pane>
 
 <Dialog title="New group" bind:open={creating}>
-  {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={create} aria-label="Create a group">
     <label>
       <span>Name</span>
@@ -180,16 +182,12 @@
       <span>First members, by login</span>
       <input class="term" bind:value={first} placeholder="alice, bob" autocomplete="off" />
     </label>
-    <p class="foot muted">A group is created holding no grant, so nobody gains anything by being put in it here. It is named <span class="term">group:NAME</span> wherever a principal is written.</p>
+    <p class="foot muted">A new group has no access to anything yet, so adding people to it gives them nothing until something is shared with it. Its full name is <span class="term">group:NAME</span>.</p>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create the group</button></p>
   </form>
 </Dialog>
 
 <style>
-  .problem {
-    margin: 0 0 calc(var(--unit) * 6);
-    color: var(--failed);
-  }
 
   table {
     width: 100%;

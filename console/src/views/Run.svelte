@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, refused as refusedHere, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import type { API, Me } from "../api/client";
@@ -102,14 +104,14 @@
 
   // Fetching a file asks the route first, which spends nothing, so that one gone since the run was
   // read is said to be finished rather than opening the API's refusal in place of the console.
-  let unfetched = $state("");
+  let unfetched = $state<Explained | null>(null);
 
   async function fetchFile(uri: string, name: string) {
-    unfetched = "";
+    unfetched = null;
     const url = new URL(address(uri), document.baseURI).href;
     const why = await fetchable(globalThis.fetch.bind(globalThis), url);
     if (why) {
-      unfetched = why;
+      unfetched = refusedHere(`download ${name}`, why);
       return;
     }
     const link = document.createElement("a");
@@ -123,17 +125,17 @@
   let confirming = $state(false);
   let acting = $state(false);
   let said = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
-  async function act(work: () => Promise<void>) {
+  async function act(failed: string, work: () => Promise<void>) {
     if (acting) return;
     acting = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       acting = false;
       confirming = false;
@@ -141,16 +143,16 @@
   }
 
   function cancel() {
-    return act(async () => {
+    return act("cancel the run", async () => {
       if (!run) return;
       await cancelRun(api, run.run);
-      said = "Cancelling was asked: the controller stops the tasks in flight, and the run ends cancelled.";
+      said = "Cancel requested: the running tasks are being stopped, and the run will end as cancelled.";
       await reader.read();
     });
   }
 
   function replay(from?: string) {
-    return act(async () => {
+    return act("replay the run", async () => {
       if (!run) return;
       const started = await replayRun(api, run.run, from);
       place.go({ kind: "namespace", namespace: run.namespace, view: "runs", run: started });
@@ -245,7 +247,7 @@
 {#if reader.missing || (run && !here)}
   <Refused />
 {:else if reader.refused}
-  <Pane title="Run"><p class="refused" role="alert">The run could not be read: {reader.refused}</p></Pane>
+  <Pane title="Run"><Problem explained={reader.refused} onretry={() => reader.read()} /></Pane>
 {:else if run}
   <div class="inspector">
     <Pane title="Run">
@@ -277,14 +279,14 @@
             {/if}
             <button class="control" disabled={acting} onclick={() => replay()}><Icon name="control-replay" size={14} />Replay from the start</button>
             {#if run.replay_from_start_only}
-              <span class="muted">An input a step would restart from has been purged, so this run replays from its start only.</span>
+              <span class="muted">Some saved step data has been deleted, so this run can only be replayed from the beginning.</span>
             {/if}
           {/if}
           <!-- Reading a run against another needs nothing but run:read, which reading this one took. -->
           {#if reader.ended}<CompareWith {api} {place} {run} />{/if}
         </div>
         {#if said}<p class="muted" role="status">{said}</p>{/if}
-        {#if problem}<p class="refused" role="alert">{problem}</p>{/if}
+        {#if problem}<Problem explained={problem} />{/if}
       {/if}
       {#if run.reason}<p class="reason">{run.reason}</p>{/if}
       {#if run.replay_of}
@@ -376,7 +378,7 @@
               <pre class="json"><code>{#each tokens(task.params) as t, i (i)}<span class="t-{t.kind}">{t.text}</span>{/each}</code></pre>
             </details>
           {:else if task && !readsData && task.state !== "pending"}
-            <p class="faint">The parameters it was dispatched with are not shown: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+            <p class="faint">Parameters are hidden: viewing them needs run:read_data on {run.namespace}/{run.workflow}.</p>
           {/if}
 
           <table class="tasks">
@@ -433,16 +435,16 @@
                     {/each}
                   </tbody>
                 </table>
-                {#if unfetched}<p class="refused" role="alert">{unfetched}</p>{/if}
+                {#if unfetched}<Problem explained={unfetched} />{/if}
                 {#if !readsData}
-                  <p class="faint">The files are listed and not fetched: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+                  <p class="faint">You can see the list of files but not download them: that needs run:read_data on {run.namespace}/{run.workflow}.</p>
                 {/if}
               {/if}
             {:else if tab === "logs"}
               {#if task}
                 <LogPane {api} run={run.run} step={step.step} task={task.task} />
               {:else}
-                <p class="muted">No task of this step has been created, so there is no log yet.</p>
+                <p class="muted">This step has not started, so there is no log yet.</p>
               {/if}
             {:else if portNames.length === 0}
               <p class="muted">{tab === "output" ? "The step declares no output port." : "The step declares no input port."}</p>
@@ -476,7 +478,7 @@
               {/if}
             {/if}
             {#if !readsData && (tab === "output" || tab === "input")}
-              <p class="faint">What the envelopes hold is not shown: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+              <p class="faint">The data passed between steps is hidden: viewing it needs run:read_data on {run.namespace}/{run.workflow}.</p>
             {/if}
           </div>
         </Pane>

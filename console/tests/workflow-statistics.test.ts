@@ -200,6 +200,6 @@ describe("a workflow's statistics page", () => {
     expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", tab: "statistics" });
 
     open("/payroll/workflows/monthly-invoicing/statistics");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
   });
 });

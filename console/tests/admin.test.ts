@@ -150,7 +150,7 @@ describe("the namespaces, for an administrator", () => {
     await fireEvent.input(within(form).getByRole("textbox", { name: /Tasks at once/ }), { target: { value: "30" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: /Longest run/ }), { target: { value: "24h" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/The quotas of finance are written: 30 tasks at once/)).toBeTruthy();
+    expect(await screen.findByText(/The quotas of finance are saved: 30 tasks at once/)).toBeTruthy();
     expect(sent(asked, "PUT /api/v1/namespaces/finance/quotas")).toEqual([{ max_concurrent_tasks: 30, max_retention_days: 180, max_run_duration: "24h", allowed_runner_pools: ["default", "dmz"] }]);
   });
 
@@ -195,7 +195,7 @@ describe("the namespaces, for an administrator", () => {
     cleanup();
 
     open("/groups", scenario("alice"));
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
   });
 });
 

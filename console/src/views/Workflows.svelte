@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, refused as refusedHere, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Me } from "../api/client";
@@ -19,12 +21,12 @@
 
   type Known = { workflow: string; run: string; state: string; created_at: string };
   let known = $state<Known[] | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
 
   async function read() {
     const { data, error, response } = await api.GET("/api/v1/runs", { params: { query: { namespace, limit: 200 } } });
     if (!data) {
-      refused = refusal(response, error).message;
+      refused = explain("load the workflows", refusal(response, error));
       return;
     }
     const seen = new Map<string, Known>();
@@ -43,17 +45,17 @@
   let branch = $state("main");
   let protect = $state(false);
   let sending = $state(false);
-  let said = $state("");
+  let said = $state<Explained | null>(null);
 
   async function create(e: SubmitEvent) {
     e.preventDefault();
     sending = true;
-    said = "";
+    said = null;
     const body = { name: name.trim(), ...(branch.trim() && branch.trim() !== "main" ? { default_branch: branch.trim() } : {}), ...(protect ? { protected: true } : {}) };
     const { data, error, response } = await api.POST("/api/v1/{ns}/workflows", { params: { path: { ns: namespace } }, body });
     sending = false;
     if (!data) {
-      said = response.status === 409 ? `A workflow named ${body.name} is already in ${namespace}, or one deleted under that name is still being purged.` : refusal(response, error).message;
+      said = response.status === 409 ? refusedHere(`create ${body.name}`, `A workflow named ${body.name} already exists in ${namespace}, or one of that name was deleted and is still being removed. Choose another name.`) : explain(`create ${body.name}`, refusal(response, error));
       return;
     }
     place.go({ kind: "namespace", namespace, view: "workflows", workflow: data.name, tab: "files" });
@@ -64,13 +66,13 @@
 
 <PageHeader title="Workflows" icon="control-workflows" count={known?.length} {place}>
   {#snippet actions()}
-    {#if mayCreate}<button class="control primary" onclick={() => ((creating = true), (said = ""))}><Icon name="control-add" size={14} />New workflow</button>{/if}
+    {#if mayCreate}<button class="control primary" onclick={() => ((creating = true), (said = null))}><Icon name="control-add" size={14} />New workflow</button>{/if}
   {/snippet}
 </PageHeader>
 
 <Pane title="Named by the last 200 runs">
   {#if refused}
-    <p class="refused" role="alert">The runs could not be read: {refused}</p>
+    <Problem explained={refused} onretry={read} />
   {:else if !known}
     <p class="muted" role="status">Reading the runs of {namespace}.</p>
   {:else}
@@ -96,12 +98,12 @@
 {#if mayCreate}
   <Dialog title="New workflow in {namespace}" bind:open={creating}>
     <form onsubmit={create} aria-label="New workflow">
-      <label for="new-name"><span>Name</span><span class="muted">what agentiik.yaml's metadata.name will write</span></label>
+      <label for="new-name"><span>Name</span><span class="muted">also the name agentiik.yaml gives it, in metadata.name</span></label>
       <input id="new-name" class="term" bind:value={name} required autocomplete="off" />
-      <label for="new-branch"><span>Default branch</span><span class="muted">the one a run naming no ref runs, born by the first push</span></label>
+      <label for="new-branch"><span>Default branch</span><span class="muted">the branch a run uses unless told otherwise; it is created by your first push</span></label>
       <input id="new-branch" class="term" bind:value={branch} autocomplete="off" />
-      <label class="check"><input type="checkbox" bind:checked={protect} /><span>Protect it: a push to it then takes <span class="term">grant:manage</span>, where <span class="term">workflow:write</span> is enough otherwise</span></label>
-      {#if said}<p class="refused" role="alert">{said}</p>{/if}
+      <label class="check"><input type="checkbox" bind:checked={protect} /><span>Protect it: only people with <span class="term">grant:manage</span> can then push to it, rather than anyone with <span class="term">workflow:write</span></span></label>
+      {#if said}<Problem explained={said} />{/if}
       <button class="control primary" type="submit" disabled={sending || !name.trim()}>Create {name.trim() || "the workflow"}</button>
     </form>
   </Dialog>
@@ -165,7 +167,4 @@
     margin-top: calc(var(--unit) * 4);
   }
 
-  .refused {
-    color: var(--failed);
-  }
 </style>

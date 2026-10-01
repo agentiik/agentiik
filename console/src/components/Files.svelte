@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, refused as refusedHere, type Explained } from "../lib/problem";
+  import Failure from "./Problem.svelte";
   import { untrack } from "svelte";
   import { refusal, type API } from "../api/client";
   import type { components } from "../api/schema";
@@ -34,7 +36,7 @@
   type Listing = { commit: string; entries: Entry[] };
   let listing = $state<Listing | null>(null);
   let other = $state<Listing | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
   let typed = $state("");
   let comparing = $state("");
   let opened = $state<Set<string>>(new Set());
@@ -54,11 +56,11 @@
   // tree reads the listing a ref names, saying a ref that names nothing as the API answers it: a 404
   // is no branch, tag or version of that name, whatever the caller may read, since the workflow
   // itself was read to draw this page.
-  async function tree(name: string): Promise<Listing | string> {
+  async function tree(name: string): Promise<Listing | Explained> {
     const { data, error, response } = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: name } } });
     if (data && typeof data === "object" && "entries" in data) return { commit: data.commit, entries: data.entries };
-    if (response.status === 404) return `No branch, tag or version of ${workflow} is named ${name}.`;
-    return refusal(response, error).message;
+    if (response.status === 404) return refusedHere(`open ${name}`, `${workflow} has no branch, tag or version named ${name}. Check the name, or choose one from the list.`);
+    return explain(`load the files at ${name}`, refusal(response, error));
   }
 
   // Each read is numbered, and an answer to one that has been asked again since is left: a ref
@@ -69,14 +71,14 @@
     const a = against;
     untrack(async () => {
       const n = ++asked;
-      refused = "";
+      refused = null;
       listing = null;
       other = null;
       typed = r;
       comparing = a;
       const read = await tree(r);
       if (n !== asked) return;
-      if (typeof read === "string") {
+      if ("what" in read) {
         refused = read;
         return;
       }
@@ -84,7 +86,7 @@
       if (a) {
         const b = await tree(a);
         if (n !== asked) return;
-        if (typeof b === "string") refused = b;
+        if ("what" in b) refused = b;
         else other = b;
       }
     });
@@ -245,13 +247,13 @@
 </div>
 
 {#if refused}
-  <p class="refused" role="alert">{refused}</p>
+  <Failure explained={refused} />
 {:else if !listing}
   <p class="muted" role="status">Reading the tree at <span class="term">{ref}</span>.</p>
 {:else if against && other}
   <div class="columns">
     <section class="list" aria-label="What differs">
-      <p class="muted head">{changed.length === 0 ? "The two trees are the same." : `${changed.length} file${changed.length === 1 ? "" : "s"} differ from ${named(against)} to ${named(ref)}`}</p>
+      <p class="muted head">{changed.length === 0 ? "Both versions have the same files." : `${changed.length} file${changed.length === 1 ? "" : "s"} differ from ${named(against)} to ${named(ref)}`}</p>
       <ul>
         {#each changed as c (c.path)}
           <li>
@@ -275,7 +277,7 @@
               {/each}
             </ol>
           {:else}
-            <p class="muted">The bytes are the same; only the mode changed.</p>
+            <p class="muted">The content is the same; only the file's permissions (its mode) changed.</p>
           {/each}
         {:else}
           <p class="muted">Not drawn: {sides.before && "not" in sides.before ? sides.before.not : sides.after && "not" in sides.after ? sides.after.not : ""}.</p>

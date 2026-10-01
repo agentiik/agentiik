@@ -63,7 +63,7 @@ describe("the manual run form", () => {
     await fireEvent.blur(orders);
     expect(await screen.findByText('at /0/amount: Instance type "string" is invalid. Expected "number".')).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Start the run" }));
-    expect(await screen.findByText("Some inputs are refused by their schema: nothing was sent.")).toBeTruthy();
+    expect(await screen.findByText(/Some inputs do not match what the workflow expects, as said under each\. Nothing was sent\./)).toBeTruthy();
     expect(sent).toEqual([]);
 
     await fireEvent.input(orders, { target: { value: '[{"order": "ORD-0001", "amount": 12}]' } });
@@ -91,7 +91,7 @@ describe("the manual run form", () => {
     await fireEvent.input(await screen.findByLabelText(/^orders/), { target: { value: '[{"order": "ORD-0001", "amount": 1}]' } });
     await fireEvent.click(screen.getByRole("button", { name: "Start the run" }));
     expect(await screen.findByText("input orders: schema: /0/order: does not match pattern; run refused")).toBeTruthy();
-    expect(screen.getByText("The API refused orders.")).toBeTruthy();
+    expect(screen.getByText(/The server refused the input orders, as said under it\./)).toBeTruthy();
   });
 
   it("is offered only to a caller holding workflow:run", async () => {

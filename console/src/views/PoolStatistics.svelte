@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import { refusal, type API } from "../api/client";
@@ -24,14 +26,14 @@
   const range = $derived(ranged.range);
 
   let pools = $state<PoolsSeries | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
 
   async function read(r: Range) {
-    refused = "";
+    refused = null;
     const { from, to } = query(r);
     const { data, error, response } = await api.GET("/api/v1/stats/pools", { params: { query: { from, to } } });
     if (data && typeof data !== "string") pools = data;
-    else refused = refusal(response, error).message;
+    else refused = explain("load the statistics", refusal(response, error));
   }
 
   $effect(() => {
@@ -47,7 +49,7 @@
       parseAs: "blob",
     });
     if (!data) {
-      refused = refusal(response, error).message;
+      refused = explain("load the statistics", refusal(response, error));
       return;
     }
     const link = document.createElement("a");
@@ -116,7 +118,7 @@
 <RangeBar {ranged} bucket={pools?.bucket} comparable={false} />
 
 {#if refused}
-  <p class="refused" role="alert">The series could not be read: {refused}</p>
+  <Problem explained={refused} onretry={() => read(range)} />
 {/if}
 
 {#if pools}
@@ -190,9 +192,6 @@
 
 <style>
 
-  .refused {
-    color: var(--failed);
-  }
 
   .grid {
     display: grid;

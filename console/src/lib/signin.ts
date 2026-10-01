@@ -1,5 +1,6 @@
 import { Refusal, refusal, type API } from "../api/client";
 import type { components } from "../api/schema";
+import { explain, Told, type Explained } from "./problem";
 
 // The credential as openapi.json types it: an object whose members WebAuthn defines, which the
 // document leaves to that specification rather than repeating it.
@@ -18,7 +19,7 @@ type CredentialJSON = components["schemas"]["passkeyVerifyRequest"]["credential"
 // trusts, or on localhost.
 export function passkeysUnavailable(w: { isSecureContext: boolean; PublicKeyCredential?: unknown; navigator: { credentials?: unknown } }): string {
   if (!w.isSecureContext || !w.PublicKeyCredential || !w.navigator.credentials) {
-    return "This browser offers no passkeys on this page. It runs a passkey ceremony only on a page served over https with a certificate it trusts, never one clicked past a warning.";
+    return "Passkeys cannot be used on this page: a browser offers them only on a page served over https with a certificate it trusts (not one you clicked past a warning). Sign in with a password, or ask your administrator to serve this installation over https.";
   }
   return "";
 }
@@ -29,17 +30,46 @@ export function ceremonyProblem(e: unknown): string {
   switch (name) {
     case "NotAllowedError":
     case "AbortError":
-      return "The passkey ceremony was cancelled, or it timed out. Try again when you are ready.";
+      return "The passkey request was cancelled, or it timed out. Try again when you are ready.";
     case "SecurityError":
-      return "The browser refused to run a passkey ceremony on this page. It runs one only on a page served over https with a certificate it trusts, never one clicked past a warning, at the address the installation is known by.";
+      return "The browser refused to use a passkey on this page. It does so only on a page served over https with a certificate it trusts (not one you clicked past a warning), at the address the installation is set up with.";
   }
-  return `The passkey ceremony failed: ${e instanceof Error ? e.message : String(e)}`;
+  return `The browser could not use the passkey. It said: ${e instanceof Error ? e.message : String(e)}`;
 }
 
 // A sign-in the API refused because the policy that applies to the account forbids passwords, which
 // it says by naming the setting rather than by failing the password: the form is then withdrawn, and
 // never answered as a wrong password.
 export class PasswordsForbidden extends Refusal {}
+
+// Too many password sign-ins, with how long Retry-After asks to wait, where it says.
+export class TooManyAttempts extends Refusal {
+  constructor(
+    message: string,
+    readonly after: number | null,
+  ) {
+    super(429, message);
+  }
+}
+
+// A passkey ceremony the browser ended, told by ceremonyProblem.
+export class CeremonyFailed extends Told {}
+
+// explainSignIn tells why a sign-in failed. A 401 here is a sign-in that did not match, never a
+// session that ended, which explain would take it for; and a ceremony the browser ended is the
+// browser's to say.
+export function explainSignIn(how: "passkey" | "password", e: unknown): Explained {
+  const failed = how === "passkey" ? "sign in with your passkey" : "sign in with a password";
+  const told = explain(failed, e);
+  if (e instanceof PasswordsForbidden) return { ...told, why: "This installation does not allow your account to sign in with a password.", next: "Sign in with a passkey instead.", transient: false };
+  if (e instanceof TooManyAttempts) return { ...told, why: "Too many password sign-ins were tried for this account, or from this address, in the last 15 minutes.", next: (wait(e.after).trim() || "Try again later.") + " You can also sign in with a passkey.", transient: false };
+  if (e instanceof Refusal && e.status === 401) {
+    return how === "passkey"
+      ? { ...told, why: "This passkey is not registered on this installation, its account cannot sign in, or the sign-in took too long.", next: "Start the sign-in again, or use another passkey.", transient: false }
+      : { ...told, why: "The login, the password or the one-time code is wrong, or this account cannot sign in.", next: "Check them and try again. The code is needed only if you set up a one-time code generator.", transient: false };
+  }
+  return told;
+}
 
 // signInWithPasskey runs a sign-in ceremony and answers the login it signed in.
 export async function signInWithPasskey(api: API, credentials: CredentialsContainer): Promise<string> {
@@ -51,10 +81,10 @@ export async function signInWithPasskey(api: API, credentials: CredentialsContai
   try {
     credential = await credentials.get({ publicKey: requestOptions(started.data.options as unknown as RequestOptionsJSON) });
   } catch (e) {
-    throw new Error(ceremonyProblem(e));
+    throw new CeremonyFailed(ceremonyProblem(e));
   }
   if (!credential || credential.type !== "public-key") {
-    throw new Error("The browser answered the ceremony with no passkey.");
+    throw new CeremonyFailed("The browser gave back no passkey. Try again, or choose another passkey.");
   }
   const verified = await api.POST("/api/v1/auth/passkey/verify", {
     body: { ceremony: "assertion", credential: credentialJSON(credential as PublicKeyCredential) as CredentialJSON },
@@ -82,7 +112,7 @@ export async function signInWithPassword(api: API, login: string, password: stri
   }
   if (response.status === 429) {
     const after = Number.parseInt(response.headers.get("Retry-After") ?? "", 10);
-    throw new Refusal(429, `${sentence(refused.message)}${wait(Number.isFinite(after) ? after : null)}`);
+    throw new TooManyAttempts(refused.message, Number.isFinite(after) ? after : null);
   }
   throw refused;
 }
@@ -91,7 +121,7 @@ export async function signInWithPassword(api: API, login: string, password: stri
 // as a Relying Party, said for a person, or the refusal as the API gave it.
 function unavailableOr(r: Refusal): Refusal {
   if (r.status === 409) {
-    return new Refusal(409, "Passkeys are unavailable on this installation: it is addressed by an IP address, and a browser runs a passkey ceremony only for a name. Sign in with a password, or ask its administrator to address it by one.");
+    return new Refusal(409, "Passkeys are unavailable on this installation: it is reached by an IP address, and browsers offer passkeys only for a domain name. Sign in with a password, or ask your administrator to give it a domain name.");
   }
   return r;
 }

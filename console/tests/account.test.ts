@@ -145,7 +145,7 @@ describe("what you sign in with", () => {
     const input = await screen.findByLabelText("A code the generator shows now");
     await fireEvent.input(input, { target: { value: "492039" } });
     await fireEvent.submit(input.closest("form")!);
-    expect(await screen.findByText("The one-time code generator is removed. The password stays.")).toBeTruthy();
+    expect(await screen.findByText("The one-time code generator is removed. Your password still works, without a code.")).toBeTruthy();
     expect(asked.find((a) => a.key === "DELETE /api/v1/me/totp")?.body).toEqual({ totp: "492039" });
   });
 
@@ -220,7 +220,7 @@ describe("API tokens", () => {
     await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
     await fireEvent.click(within(row).getByRole("button", { name: "Revoke it" }));
-    expect(await screen.findByText(/is revoked from its next request/)).toBeTruthy();
+    expect(await screen.findByText(/is revoked: it stops working from its next use/)).toBeTruthy();
     expect(asked.filter((a) => a.key === "DELETE /api/v1/auth/tokens/01M2AD1R3T5W7Y9A1C3E5G7J9N")).toHaveLength(1);
   });
 
@@ -289,7 +289,7 @@ describe("the users, for an administrator", () => {
     );
     const own = (await screen.findByText("Alice Martin", { selector: "td" })).closest("tr")!;
     expect(within(own).queryByRole("button")).toBeNull();
-    expect(within(own).getByText("Another administrator issues yours")).toBeTruthy();
+    expect(within(own).getByText("Another administrator has to do this for you")).toBeTruthy();
     const bruno = screen.getByText("Bruno Petit").closest("tr")!;
     expect(within(bruno).getByText("suspended, holding no passkey the policy accepts")).toBeTruthy();
     expect(within(bruno).queryByRole("button", { name: "Enrolment link" })).toBeNull();
@@ -308,7 +308,7 @@ describe("the users, for an administrator", () => {
 
   it("is no screen for somebody who is not an administrator", async () => {
     const { asked } = open("/users", alice(users));
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
     expect(asked.some((a) => a.key === "GET /api/v1/users")).toBe(false);
   });
 });

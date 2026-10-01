@@ -4,6 +4,7 @@
   import { addStep, connect, disconnect, edgesWritten, removeStep, setFanOut, setMaxParallel, setMerge, type Merge } from "../lib/editor/edits";
   import { includedPaths, resolve } from "../lib/editor/resolve";
   import { layout, type Graph } from "../lib/graph";
+  import { refused, type Explained } from "../lib/problem";
   import { lineDiff } from "../lib/tree";
   import { check, type Problem } from "../lib/workflow-check";
   import { Refused, YamlTree } from "../lib/yaml-tree";
@@ -46,7 +47,7 @@
   let earlier = $state<string[]>([]);
   // good is the last file that read whole, which the graph is drawn from while the text does not.
   let good = $state(untrack(() => new YamlTree(entry)));
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let said = $state("");
 
   // The files the entry point includes, read at the version edited, before anything is resolved.
@@ -95,10 +96,10 @@
       earlier = [...earlier, tree.text];
       tree = next;
       if (next.problems.length === 0) good = next;
-      problem = "";
+      problem = null;
       if (done) said = done;
     } catch (e) {
-      problem = e instanceof Refused ? sentenceOf(e.message) : String(e);
+      problem = refused("make this change", e instanceof Refused ? sentenceOf(e.message) : String(e));
     }
   }
 
@@ -178,7 +179,7 @@
       await navigator.clipboard.writeText(tree.text);
       said = "agentiik.yaml is copied.";
     } catch {
-      problem = "The browser would not copy the file: download it instead.";
+      problem = refused("copy agentiik.yaml", "The browser did not allow it. Download the file instead.");
     }
   }
 
@@ -191,7 +192,7 @@
   });
 </script>
 
-{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <div class="bar" role="toolbar" aria-label="The editor">
@@ -205,7 +206,7 @@
     <button class="control" onclick={onclose}>Stop editing</button>
   </span>
 </div>
-<p class="faint commit">The console does not commit yet: commit the file downloaded from a clone, <span class="term">git clone {cloneURL}</span>, where the push is checked as any is.</p>
+<p class="faint commit">Saving from the console is not available yet. Download the file, put it in a clone of the repository (<span class="term">git clone {cloneURL}</span>), then commit and push it as usual.</p>
 
 <div class="columns">
   <Pane title="Graph" aside={reading ? "reading what it includes" : resolved.problems.length ? `${resolved.problems.length} said below` : "as the file resolves"} focused>
@@ -218,16 +219,16 @@
   <div class="side">
     <Pane title={step ?? "Step"} aside={step ? (here ? "written in agentiik.yaml" : "written in a file it includes") : "choose one in the graph"}>
       {#if !step}
-        <p class="muted">Choose a step in the graph to connect it, change how it merges and fans out, or remove it.</p>
+        <p class="muted">Choose a step in the graph to connect it to another, change how it runs, or remove it.</p>
       {:else if !here}
-        <p class="muted">{step} is written in a file agentiik.yaml includes, and is edited there: the editor writes agentiik.yaml alone.</p>
+        <p class="muted">{step} is defined in another file that agentiik.yaml includes. Edit it in that file: this editor only changes agentiik.yaml.</p>
       {:else}
         <h3 class="sub">Its edges</h3>
         <ul class="edges">
           {#each edges as e, i (i)}
             <li><span class="term">{e.step}.{e.port}</span><span class="faint">onto</span><span class="term">{e.as}</span><button class="control" aria-label="Take the edge from {e.step}.{e.port} away" onclick={() => edit((t) => disconnect(t, step!, i))}>Take away</button></li>
           {:else}
-            <li class="muted">None: it starts with the run.</li>
+            <li class="muted">None: it starts as soon as the run starts.</li>
           {/each}
         </ul>
         <form class="row" onsubmit={wire} aria-label="Connect a port to {step}">

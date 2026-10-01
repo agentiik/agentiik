@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Namespace } from "../api/client";
   import type { components } from "../api/schema";
@@ -25,18 +27,18 @@
 
   let runs = $state<RunsSeries | null>(null);
   let quotas = $state<QuotasSeries | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
 
   async function read(which: "runs" | "quotas", r: Range) {
-    refused = "";
+    refused = null;
     if (which === "runs") {
       const { data, error, response } = await api.GET("/api/v1/{ns}/stats/runs", { params: { path: { ns: namespace }, query: query(r) } });
       if (data && typeof data !== "string") runs = data;
-      else refused = refusal(response, error).message;
+      else refused = explain("load the statistics", refusal(response, error));
     } else {
       const { data, error, response } = await api.GET("/api/v1/{ns}/stats/quotas", { params: { path: { ns: namespace }, query: query(r) } });
       if (data && typeof data !== "string") quotas = data;
-      else refused = refusal(response, error).message;
+      else refused = explain("load the statistics", refusal(response, error));
     }
   }
 
@@ -73,7 +75,7 @@
       parseAs: "blob",
     });
     if (!data) {
-      refused = refusal(response, error).message;
+      refused = explain("load the statistics", refusal(response, error));
       return;
     }
     const link = document.createElement("a");
@@ -169,7 +171,7 @@
 <RangeBar {ranged} bucket={series?.bucket} />
 
 {#if refused}
-  <p class="refused" role="alert">The series could not be read: {refused}</p>
+  <Problem explained={refused} onretry={() => read(tab, range)} />
 {/if}
 
 {#if tab === "runs" && runSeries}
@@ -263,7 +265,7 @@
             <dd class="term">{Array.isArray(value) ? value.join(", ") : name.includes("bytes") ? bytes(Number(value)) : String(value)}</dd>
           {/each}
         </dl>
-        <p class="faint">The quotas are an administrator's to change, with PUT /api/v1/namespaces/{namespace}/quotas.</p>
+        <p class="faint">Only an administrator can change these quotas.</p>
       </Pane>
     </div>
   {/key}
@@ -271,9 +273,6 @@
 
 <style>
 
-  .refused {
-    color: var(--failed);
-  }
 
   .grid {
     display: grid;

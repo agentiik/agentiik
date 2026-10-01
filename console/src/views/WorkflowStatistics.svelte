@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
   import { refusal, type API } from "../api/client";
   import Chart, { type Series } from "../components/Chart.svelte";
@@ -31,10 +33,10 @@
   let steps = $state<StepsSeries | null>(null);
   let hours = $state<StepsSeries | null>(null);
   let ports = $state<PortsSeries | null>(null);
-  let refusedWith = $state("");
+  let refusedWith = $state<Explained | null>(null);
 
   async function read(r: Range) {
-    refusedWith = "";
+    refusedWith = null;
     const path = { ns: namespace };
     const q = { ...query(r), workflow };
     const [a, b, c, d] = await Promise.all([
@@ -45,7 +47,7 @@
     ]);
     for (const answer of [a, b, c, d]) {
       if (!answer.data || typeof answer.data === "string") {
-        refusedWith = refusal(answer.response, answer.error).message;
+        refusedWith = explain("load the statistics", refusal(answer.response, answer.error));
         return;
       }
     }
@@ -94,7 +96,7 @@
       parseAs: "blob",
     });
     if (!data) {
-      refusedWith = refusal(response, error).message;
+      refusedWith = explain("load the statistics", refusal(response, error));
       return;
     }
     const link = document.createElement("a");
@@ -182,7 +184,7 @@
 </RangeBar>
 
 {#if refusedWith}
-  <p class="refused" role="alert">The series could not be read: {refusedWith}</p>
+  <Problem explained={refusedWith} onretry={() => read(range)} />
 {/if}
 
 {#if runs && drawn}

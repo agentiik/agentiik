@@ -94,7 +94,7 @@ describe("the caller's profile in the console", () => {
 
     const gif = new File([new Uint8Array([71, 73, 70])], "me.gif", { type: "image/gif" });
     await fireEvent.change(picker, { target: { files: [gif] } });
-    expect(await screen.findByText("A photo is a PNG or a JPEG.")).toBeTruthy();
+    expect(await screen.findByText("A photo must be a PNG or a JPEG file.")).toBeTruthy();
     expect(asked.some((a) => a.key === "PUT /api/v1/me/avatar")).toBe(false);
 
     const png = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "me.png", { type: "image/png" });

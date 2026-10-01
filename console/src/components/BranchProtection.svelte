@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "./Problem.svelte";
   import { refusal, type API } from "../api/client";
   import type { components } from "../api/schema";
-  import { sentence } from "../lib/signin";
   import Pane from "./Pane.svelte";
 
   // A workflow's default branch and its protection, on the workflow's sharing panel: both are
@@ -15,7 +16,7 @@
   type Repository = components["schemas"]["workflowDetail"]["repository"];
 
   let repository = $state<Repository | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
 
   async function read() {
     const { data, error, response } = await api.GET("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: namespace, name: workflow } } });
@@ -23,8 +24,8 @@
       repository = data.repository;
       branch = data.repository.default_branch;
       guarded = data.repository.protected;
-      unread = "";
-    } else unread = refusal(response, error).message;
+      unread = null;
+    } else unread = explain("load the workflow", refusal(response, error));
   }
 
   $effect(() => {
@@ -34,7 +35,7 @@
   let branch = $state("");
   let guarded = $state(false);
   let working = $state(false);
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let said = $state("");
 
   const changed = $derived(repository !== null && (branch.trim() !== repository.default_branch || guarded !== repository.protected));
@@ -48,7 +49,7 @@
     if (branch.trim() !== repository.default_branch) body.default_branch = branch.trim();
     if (guarded !== repository.protected) body.protected = guarded;
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     api
       .PATCH("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: namespace, name: workflow } }, body })
@@ -57,29 +58,29 @@
         repository = data;
         branch = data.default_branch;
         guarded = data.protected;
-        said = `${data.default_branch} is the default branch${data.protected ? ", protected: pushing to it takes grant:manage" : ", unprotected: workflow:write pushes to it"}.`;
+        said = `Saved. ${data.default_branch} is the default branch${data.protected ? ", and it is protected: only people with grant:manage can push to it" : ", and it is not protected: anyone with workflow:write can push to it"}.`;
       })
-      .catch((e: unknown) => (problem = sentence(e instanceof Error ? e.message : String(e))))
+      .catch((e: unknown) => (problem = explain("save the default branch", e)))
       .finally(() => (working = false));
   }
 </script>
 
 <Pane title="Default branch" aside={`${namespace}/${workflow}`}>
   {#if unread}
-    <p class="problem" role="alert">The workflow could not be read: {unread}</p>
+    <Problem explained={unread} onretry={read} />
   {:else if repository === null}
     <p class="muted">Reading the workflow.</p>
   {:else}
     <form onsubmit={write} aria-label="Default branch of {namespace}/{workflow}">
       <label>
-        <span>The branch a run naming no ref runs</span>
+        <span>The branch a run uses when it is not given a ref</span>
         <input class="term" bind:value={branch} required autocomplete="off" spellcheck="false" />
       </label>
-      <label class="check"><input type="checkbox" bind:checked={guarded} />Protected: pushing to it takes <span class="term">grant:manage</span>, as a forced push and a deletion always do</label>
-      {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+      <label class="check"><input type="checkbox" bind:checked={guarded} />Protected: only people with <span class="term">grant:manage</span> can push to it. Force-pushing or deleting it always needs <span class="term">grant:manage</span>, protected or not.</label>
+      {#if problem}<Problem explained={problem} />{/if}
       {#if said}<p class="said" role="status">{said}</p>{/if}
-      <p class="note muted">Another branch is pushed to with <span class="term">workflow:write</span>, so that a change reaches the default branch through whoever may share the workflow. The protection moves with the branch named, and the branch it leaves is unprotected.</p>
-      <p><button class="control primary" disabled={working || !changed}>Write it</button></p>
+      <p class="note muted">People with <span class="term">workflow:write</span> push to another branch, and a change reaches the default branch only through someone who can share the workflow. If you change the default branch, the protection moves to the new one and the old one is no longer protected.</p>
+      <p><button class="control primary" disabled={working || !changed}>Save</button></p>
     </form>
   {/if}
 </Pane>
@@ -121,9 +122,5 @@
 
   .note {
     font-size: var(--type-control-size);
-  }
-
-  .problem {
-    color: var(--failed);
   }
 </style>

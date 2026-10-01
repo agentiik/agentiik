@@ -57,16 +57,16 @@ describe("the run inspector", () => {
     const me = s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> };
     me.permissions["finance/monthly-invoicing"] = ["workflow:read", "run:read"];
     open(`/finance/runs/${failed}`, s);
-    expect(await screen.findByText(/What the envelopes hold is not shown/)).toBeTruthy();
+    expect(await screen.findByText(/The data passed between steps is hidden/)).toBeTruthy();
   });
 
   it("answers a run read under another namespace's address as one that does not exist", async () => {
     open(`/team-ops/runs/${failed}`);
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
   });
 
   it("answers a run the API does not give as one that does not exist", async () => {
     open("/finance/runs/01JMZ8ZZZZZZZZZZZZZZZZZZZZ");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
   });
 });
