@@ -76,6 +76,7 @@ describe("a profile", () => {
 describe("the caller's profile in the console", () => {
   it("opens from the account, and writes what was changed alone", async () => {
     const { asked, place } = open("/");
+    await fireEvent.click(await screen.findByRole("button", { name: "You, alice" }));
     await fireEvent.click(await screen.findByRole("link", { name: "Your account" }));
     expect(place.route).toEqual({ kind: "account", tab: "profile" });
     const form = await screen.findByRole("form", { name: "Your profile" });
@@ -83,7 +84,7 @@ describe("the caller's profile in the console", () => {
     await fireEvent.input(within(form).getByRole("textbox", { name: "Family name" }), { target: { value: "Martin" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: /^Title/ }), { target: { value: "Technical lead " } });
     await fireEvent.submit(form);
-    expect(await screen.findByText("Your profile is saved.")).toBeTruthy();
+    expect(await screen.findByText("Saved.")).toBeTruthy();
     expect(asked.filter((a) => a.key === "PATCH /api/v1/me").map((a) => a.body)).toEqual([{ family_name: "Martin", title: "Technical lead" }]);
     expect(asked.filter((a) => a.key === "GET /api/v1/me").length).toBeGreaterThan(1);
   });
@@ -94,18 +95,18 @@ describe("the caller's profile in the console", () => {
 
     const gif = new File([new Uint8Array([71, 73, 70])], "me.gif", { type: "image/gif" });
     await fireEvent.change(picker, { target: { files: [gif] } });
-    expect(await screen.findByText("A photo is a PNG or a JPEG.")).toBeTruthy();
+    expect(await screen.findByText("A photo must be a PNG or a JPEG file.")).toBeTruthy();
     expect(asked.some((a) => a.key === "PUT /api/v1/me/avatar")).toBe(false);
 
     const png = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "me.png", { type: "image/png" });
     await fireEvent.change(picker, { target: { files: [png] } });
-    expect(await screen.findByText(/Your photo is set/)).toBeTruthy();
+    expect(await screen.findByText("Photo updated.")).toBeTruthy();
     const put = asked.find((a) => a.key === "PUT /api/v1/me/avatar")!;
     expect(put.type).toBe("image/png");
     expect(put.bytes).toBe(8);
 
     await fireEvent.click(await screen.findByRole("button", { name: "Remove it" }));
-    expect(await screen.findByText(/Your photo is removed/)).toBeTruthy();
+    expect(await screen.findByText("Photo removed.")).toBeTruthy();
     await waitFor(() => expect(screen.getByRole("button", { name: "Choose a photo" })).toBeTruthy());
   });
 
@@ -116,7 +117,7 @@ describe("the caller's profile in the console", () => {
     me.principal = "finance/deployer";
     me.service_account = { kind: "service_account", namespace: "finance", name: "deployer", created_at: "2026-09-28T08:00:00Z" };
     open("/me/profile", { "GET /api/v1/me": { status: 200, body: me } });
-    expect(await screen.findByText(/A service account has no profile/)).toBeTruthy();
+    expect(await screen.findByText("Service accounts have no profile.")).toBeTruthy();
     expect(screen.queryByRole("form", { name: "Your profile" })).toBeNull();
   });
 });

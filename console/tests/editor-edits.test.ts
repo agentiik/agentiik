@@ -50,13 +50,13 @@ describe("an edit of the graph", () => {
       }
       return "nothing refused";
     };
-    expect(refusal(() => connect(tree, g, { step: "normalize", port: "nothing" }, { step: "archive", as: "x" }))).toBe("normalize publishes no port nothing");
-    expect(refusal(() => connect(tree, g, { step: "archive", port: "ok" }, { step: "normalize", as: "x" }))).toMatch(/would make a cycle/);
-    expect(refusal(() => connect(tree, g, { step: "invoice", port: "out" }, { step: "archive", as: "invoices" }))).toBe("archive has that edge already");
-    expect(refusal(() => connect(tree, g, { step: "invoice", port: "out" }, { step: "archive", as: "two words" }))).toMatch(/not a name the language takes/);
-    expect(refusal(() => removeStep(tree, g, "normalize"))).toBe("invoice, archive need normalize: take those edges away first");
-    expect(refusal(() => removeStep(tree, g, "archive"))).toBe("The workflow's invoices is read from archive");
-    expect(refusal(() => addStep(tree, g, "invoice", "x", ["ok"]))).toBe("The workflow has a step named invoice already");
+    expect(refusal(() => connect(tree, g, { step: "normalize", port: "nothing" }, { step: "archive", as: "x" }))).toBe("normalize has no output port named nothing");
+    expect(refusal(() => connect(tree, g, { step: "archive", port: "ok" }, { step: "normalize", as: "x" }))).toMatch(/would make a loop/);
+    expect(refusal(() => connect(tree, g, { step: "invoice", port: "out" }, { step: "archive", as: "invoices" }))).toBe("archive already has that edge");
+    expect(refusal(() => connect(tree, g, { step: "invoice", port: "out" }, { step: "archive", as: "two words" }))).toMatch(/cannot be used: a name may hold only letters/);
+    expect(refusal(() => removeStep(tree, g, "normalize"))).toBe("invoice, archive take input from normalize. Remove those edges first");
+    expect(refusal(() => removeStep(tree, g, "archive"))).toBe("The workflow's output invoices comes from archive. Change the outputs block in the text first");
+    expect(refusal(() => addStep(tree, g, "invoice", "x", ["ok"]))).toBe("There is already a step named invoice. Choose another name");
   });
 
   it("takes an edge away, and needs with its last edge", () => {

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Namespace } from "../api/client";
   import type { components } from "../api/schema";
@@ -25,18 +27,18 @@
 
   let runs = $state<RunsSeries | null>(null);
   let quotas = $state<QuotasSeries | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
 
   async function read(which: "runs" | "quotas", r: Range) {
-    refused = "";
+    refused = null;
     if (which === "runs") {
       const { data, error, response } = await api.GET("/api/v1/{ns}/stats/runs", { params: { path: { ns: namespace }, query: query(r) } });
       if (data && typeof data !== "string") runs = data;
-      else refused = refusal(response, error).message;
+      else refused = explain("load the statistics", refusal(response, error));
     } else {
       const { data, error, response } = await api.GET("/api/v1/{ns}/stats/quotas", { params: { path: { ns: namespace }, query: query(r) } });
       if (data && typeof data !== "string") quotas = data;
-      else refused = refusal(response, error).message;
+      else refused = explain("load the statistics", refusal(response, error));
     }
   }
 
@@ -73,7 +75,7 @@
       parseAs: "blob",
     });
     if (!data) {
-      refused = refusal(response, error).message;
+      refused = explain("load the statistics", refusal(response, error));
       return;
     }
     const link = document.createElement("a");
@@ -169,13 +171,13 @@
 <RangeBar {ranged} bucket={series?.bucket} />
 
 {#if refused}
-  <p class="refused" role="alert">The series could not be read: {refused}</p>
+  <Problem explained={refused} onretry={() => read(tab, range)} />
 {/if}
 
 {#if tab === "runs" && runSeries}
   {#key runSeries}
     <div class="grid">
-      <Pane title="Runs by state" aside="{runSeries.total} runs created over the range">
+      <Pane title="Runs by state" aside="{runSeries.total} runs">
         <Chart
           title="Runs created in each bucket, by where they stand"
           since={runSeries.since}
@@ -188,9 +190,9 @@
           onpick={(i) => buckets[i] && open(buckets[i])}
         />
       </Pane>
-      <Pane title="Retries by exit code" aside="attempts over the range">
+      <Pane title="Retries by exit code">
         {#if runSeries.retries.length === 0}
-          <p class="muted">No attempt was retried over the range.</p>
+          <p class="muted">No retries</p>
         {:else}
           {@const most = runSeries.retries[0]![1]}
           <ul class="codes">
@@ -204,10 +206,10 @@
           </ul>
         {/if}
       </Pane>
-      <Pane title="Duration" aside="p50, p95 and p99 of the runs that ended">
+      <Pane title="Duration">
         <Chart title="How long the runs took" since={runSeries.since} width={width(runs?.bucket)} series={runSeries.duration} format={ms} onzoom={zoom} onback={back} onpick={(i) => buckets[i] && open(buckets[i])} />
       </Pane>
-      <Pane title="Queue wait" aside="from when a task could be handed out to its dispatch">
+      <Pane title="Queue wait">
         <Chart title="How long the tasks waited for a runner" since={runSeries.since} width={width(runs?.bucket)} series={runSeries.wait} format={ms} onzoom={zoom} onback={back} onpick={(i) => buckets[i] && open(buckets[i])} />
       </Pane>
     </div>
@@ -216,7 +218,7 @@
   {#key quotaSeries}
     <div class="grid quotas">
       <div class="charts">
-        <Pane title="Runs created and refused" aside="against max_runs_per_hour">
+        <Pane title="Runs created and refused">
           <Chart
             title="Runs created in each bucket, and those refused for the quota"
             since={quotaSeries.since}
@@ -230,7 +232,7 @@
             onpick={(i) => buckets[i] && open(buckets[i])}
           />
         </Pane>
-        <Pane title="Tasks in flight" aside="the most at once in each bucket, against max_concurrent_tasks">
+        <Pane title="Tasks running">
           <Chart
             title="Tasks handed out and not yet ended, at most"
             since={quotaSeries.since}
@@ -242,7 +244,7 @@
             onback={back}
           />
         </Pane>
-        <Pane title="Artifact bytes" aside="held at each bucket's end, against max_artifact_bytes">
+        <Pane title="Artifact bytes">
           <Chart
             title="Artifact bytes the quota counts"
             since={quotaSeries.since}
@@ -256,14 +258,13 @@
           <Chart title="Artifact bytes written in each bucket" since={quotaSeries.since} width={width(quotas?.bucket)} series={quotaSeries.added} format={bytes} height={140} onzoom={zoom} onback={back} />
         </Pane>
       </div>
-      <Pane title="Quotas" aside="now">
+      <Pane title="Quotas">
         <dl class="limits">
           {#each Object.entries(limits ?? {}) as [name, value] (name)}
             <dt class="term">{name}</dt>
             <dd class="term">{Array.isArray(value) ? value.join(", ") : name.includes("bytes") ? bytes(Number(value)) : String(value)}</dd>
           {/each}
         </dl>
-        <p class="faint">The quotas are an administrator's to change, with PUT /api/v1/namespaces/{namespace}/quotas.</p>
       </Pane>
     </div>
   {/key}
@@ -271,9 +272,6 @@
 
 <style>
 
-  .refused {
-    color: var(--failed);
-  }
 
   .grid {
     display: grid;

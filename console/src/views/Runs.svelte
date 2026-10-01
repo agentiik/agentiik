@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
   import type { API, Me, Namespace } from "../api/client";
   import Icon from "../components/Icon.svelte";
@@ -176,7 +177,7 @@
   {/if}
 
   {#if list.refused}
-    <p class="refused" role="alert">The runs could not be read: {list.refused}</p>
+    <Problem explained={list.refused} onretry={() => list.read()} />
   {/if}
 
   <div class="scroll">
@@ -214,7 +215,7 @@
         </tr>
       {:else}
         {#if !list.reading && !list.refused}
-          <tr><td class="empty" colspan="9">No run {filters.state ? `in ${filters.state} ` : ""}{filters.workflow ? `of ${filters.workflow} ` : ""}was created in this span.</td></tr>
+          <tr><td class="empty" colspan="9">No runs</td></tr>
         {/if}
       {/each}
     </tbody>
@@ -403,9 +404,6 @@
     font-size: var(--type-identifier-size-max);
   }
 
-  .refused {
-    color: var(--failed);
-  }
 
   /* The table alone scrolls where the window is narrower than its columns, the filters above it
      and the count under it staying put. */

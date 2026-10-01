@@ -1,12 +1,15 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import type { Explained } from "../lib/problem";
   import Icon from "./Icon.svelte";
 
   // What an act just did, or why the API refused it, said at the foot of the screen over what is there
   // rather than above it, where it would push the page down as it came and pull it up as it went. What
   // was done goes by itself after a while; a refusal stays until it is put away, since it may need
   // reading twice.
-  let { kind = "said", children, ondismiss }: { kind?: "said" | "problem"; children: Snippet; ondismiss?: () => void } = $props();
+  // A failure is given as explained, what failed first, why and what to do after it, and the server's
+  // own answer in small type.
+  let { kind = "said", children, explained, ondismiss }: { kind?: "said" | "problem"; children?: Snippet; explained?: Explained | null; ondismiss?: () => void } = $props();
 
   let shown = $state(true);
 
@@ -25,7 +28,15 @@
 {#if shown}
   <div class="notice {kind}">
     <span class="icon"><Icon name={kind === "problem" ? "state-failed" : "state-succeeded"} size={16} /></span>
-    <p role={kind === "problem" ? "alert" : "status"}>{@render children()}</p>
+    {#if explained}
+      <div class="told" role="alert">
+        <p class="what">{explained.what}</p>
+        <p>{explained.next ? `${explained.why} ${explained.next}` : explained.why}</p>
+        {#if explained.detail}<p class="detail">{explained.detail}</p>{/if}
+      </div>
+    {:else}
+      <p role={kind === "problem" ? "alert" : "status"}>{@render children?.()}</p>
+    {/if}
     <button class="dismiss" aria-label="Put away" onclick={dismiss}><Icon name="control-close" size={14} /></button>
   </div>
 {/if}
@@ -34,7 +45,7 @@
   .notice {
     position: fixed;
     right: calc(var(--padding-page) + 8px);
-    bottom: calc(var(--bar-keyLine) + 16px);
+    bottom: calc(var(--padding-page) + 8px);
     z-index: 40;
     display: flex;
     align-items: flex-start;
@@ -66,6 +77,22 @@
   p {
     flex: 1;
     margin: 0;
+  }
+
+  .told {
+    display: grid;
+    flex: 1;
+    gap: calc(var(--unit) * 2);
+  }
+
+  .what {
+    font-weight: 600;
+  }
+
+  .detail {
+    color: var(--faint);
+    font-size: var(--type-identifier-size-min);
+    overflow-wrap: anywhere;
   }
 
   .dismiss {

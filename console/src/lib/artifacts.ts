@@ -35,20 +35,20 @@ export async function fetchable(fetcher: typeof fetch, url: string): Promise<str
   try {
     answer = await fetcher(url, { method: "HEAD", redirect: "manual", credentials: "same-origin" });
   } catch (e) {
-    return `The file could not be asked about: ${e instanceof Error ? e.message : String(e)}`;
+    return `Agentiik did not answer when asked about the file. Check your connection, then try again. (The browser said: ${e instanceof Error ? e.message : String(e)})`;
   }
   if (answer.type === "opaqueredirect" || answer.ok || (answer.status >= 300 && answer.status < 400)) {
     return "";
   }
   switch (answer.status) {
     case 410:
-      return "This file existed and is finished: its retain ran out, or its fetches were spent.";
+      return "This file has expired.";
     case 409:
-      return "Every fetch this file has left is being served to somebody else right now. Ask again once a transfer ends.";
+      return "Download limit reached. Try again shortly.";
     case 404:
-      return "No such file, or not yours.";
+      return "File not found.";
     case 503:
-      return "This installation has no object store attached to serve the file from.";
+      return "File storage is not configured.";
   }
-  return `The file could not be fetched: ${answer.status} ${answer.statusText}`.trim();
+  return `The server refused to serve the file (it answered ${answer.status}${answer.statusText ? ` ${answer.statusText}` : ""}).`;
 }

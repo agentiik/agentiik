@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, refused, type Explained } from "../lib/problem";
+  import Problem from "./Problem.svelte";
   import { untrack } from "svelte";
   import type { API, Me } from "../api/client";
   import { changed, longest, localTime, photoBytes, photoOf, photoTypes, profileOf, removePhoto, save, setPhoto, zones, type Field, type Profile } from "../lib/profile";
@@ -21,17 +23,17 @@
 
   let working = $state(false);
   let said = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
-  async function act(work: () => Promise<string>) {
+  async function act(failed: string, work: () => Promise<string>) {
     if (working) return;
     working = true;
     said = "";
-    problem = "";
+    problem = null;
     try {
       said = await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -40,11 +42,11 @@
   function submit(e: SubmitEvent) {
     e.preventDefault();
     if (!dirty) return;
-    return act(async () => {
+    return act("save your profile", async () => {
       const answer = await save(api, edits);
       if (answer.user) form = profileOf(answer.user);
       await reread();
-      return "Your profile is saved.";
+      return "Saved.";
     });
   }
 
@@ -75,39 +77,39 @@
     input.value = "";
     if (!file) return;
     if (!photoTypes.includes(file.type)) {
-      problem = "A photo is a PNG or a JPEG.";
+      problem = refused("set your photo", "A photo must be a PNG or a JPEG file.");
       return;
     }
     if (file.size > photoBytes) {
-      problem = "A photo is 1 MiB at most.";
+      problem = refused("set your photo", "A photo must be 1 MiB or smaller.");
       return;
     }
-    return act(async () => {
+    return act("set your photo", async () => {
       await setPhoto(api, file);
       await reread();
-      return "Your photo is set. It is shown to you and to the installation's administrators.";
+      return "Photo updated.";
     });
   }
 
   function remove() {
-    return act(async () => {
+    return act("remove your photo", async () => {
       await removePhoto(api);
       await reread();
-      return "Your photo is removed: your initial stands in for it.";
+      return "Photo removed.";
     });
   }
 </script>
 
-{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 {#if !user}
   <Pane title="Profile">
-    <p class="muted">A service account has no profile: it is named by its namespace and its name, which are all a grant reads.</p>
+    <p class="muted">Service accounts have no profile.</p>
   </Pane>
 {:else}
   <div class="columns">
-    <Pane title="Profile" aside="shown to the people you work with">
+    <Pane title="Profile">
       <form onsubmit={submit} aria-label="Your profile">
         <div class="pair">
           {#each ["given_name", "family_name"] as const as f (f)}
@@ -141,10 +143,10 @@
         <Avatar name={user.display_name} src={photo} size={120} />
         <div class="acts">
           <input bind:this={picker} class="unseen" type="file" accept={photoTypes.join(",")} onchange={chosen} aria-label="A photo, a PNG or a JPEG" />
-          <button class="control" disabled={working} onclick={() => picker?.click()}><Icon name="control-edit" size={14} />{photo ? "Change the photo" : "Choose a photo"}</button>
+          <button class="control" disabled={working} onclick={() => picker?.click()}><Icon name="control-edit" size={14} />Choose a photo</button>
           {#if photo}<button class="control" disabled={working} onclick={remove}><Icon name="control-remove" size={14} />Remove it</button>{/if}
         </div>
-        <p class="faint">A PNG or a JPEG of 1 MiB at most, kept as its pixels alone, at 512 by 512 at most. Shown to you and to the installation's administrators.</p>
+        <p class="faint">Max 1 MiB and 2048 × 2048 px</p>
       </div>
     </Pane>
   </div>

@@ -3,8 +3,8 @@ import { scenarioNamed, serve } from "../serve.js";
 import { measure, type Finding } from "./measure";
 
 // Every screen the recorded scenarios reach, drawn in Chromium under the console's own policy at the
-// widths its layout changes at, a wide window, the last width with the sidebar folded, the last with
-// it shown as a drawer and a phone, in both themes, and measured: nothing runs off the page, every
+// widths its layout changes at, a large screen, a wide window, the last width with the sidebar
+// folded, the last with it shown as a drawer and a phone, in both themes, and measured: nothing runs off the page, every
 // control is one height and a row of them one band, what is centred in a row is centred on one line
 // and text side by side on one baseline, each pane's content starts under its title, and every box
 // starts on a whole pixel. A finding names the rule, the element and what was measured.
@@ -39,7 +39,7 @@ const screens: Record<string, string[]> = {
   dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/me"],
 };
 
-const widths = [1440, 1099, 759, 390];
+const widths = [2560, 1440, 1099, 759, 390];
 const themes = ["light", "dark"] as const;
 
 for (const [who, paths] of Object.entries(screens)) {

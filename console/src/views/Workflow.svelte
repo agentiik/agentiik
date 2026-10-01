@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Me } from "../api/client";
   import type { components } from "../api/schema";
@@ -36,7 +38,7 @@
 
   let detail = $state<Detail | null>(null);
   let missing = $state(false);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
   let text = $state<string | null>(null);
   let history = $state<Entry[]>([]);
   let next = $state<string | undefined>(undefined);
@@ -46,7 +48,7 @@
     const { data, error, response } = await api.GET("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: namespace, name: workflow } } });
     if (!data) {
       if (response.status === 404) missing = true;
-      else refused = refusal(response, error).message;
+      else refused = explain("load the workflow", refusal(response, error));
       return;
     }
     detail = data;
@@ -201,14 +203,14 @@
 {#if missing}
   <Refused />
 {:else if refused}
-  <Pane title={workflow}><p class="refused" role="alert">The workflow could not be read: {refused}</p></Pane>
+  <Pane title={workflow}><Problem explained={refused} onretry={read} /></Pane>
 {:else if detail}
 
   <section class="about" aria-label="What starts it">
     {#if detail.version}
-      <span class="muted">Head of <span class="term">{detail.repository.default_branch}</span>, pushed by <span class="term">{detail.version.author}</span> <time datetime={detail.version.created_at} title={detail.version.created_at}>{clock(detail.version.created_at, now)}</time>{detail.repository.protected ? "; the branch is protected" : ""}.</span>
+      <span class="muted"><span class="term">{detail.repository.default_branch}</span>{detail.repository.protected ? " (protected)" : ""} · <span class="term">{detail.version.author}</span> · <time datetime={detail.version.created_at} title={detail.version.created_at}>{clock(detail.version.created_at, now)}</time></span>
     {:else}
-      <span class="muted">No version yet: the repository holds nothing a run could run.</span>
+      <span class="muted">Nothing pushed yet</span>
     {/if}
     {#if graph}
       <ul class="triggers">
@@ -222,10 +224,10 @@
           <li><Icon name="trigger-event" size={14} /><span class="term">{t.type}</span>{#if t.source}<span class="muted">from <span class="term">{t.source}</span></span>{/if}{#if t.namespace}<span class="muted">in <span class="term">{t.namespace}</span></span>{/if}{#if t.filter}<span class="muted" title={t.filter}>filtered</span>{/if}</li>
         {/each}
         {#if !on.schedule.length && !on.webhook.length && !on.event.length}
-          <li class="muted">No schedule, webhook or event starts it: it runs when asked.</li>
+          <li class="muted">Manual only</li>
         {/if}
         {#if graph.concurrency}
-          <li><span class="muted">concurrency</span><span class="term">{graph.concurrency.group}</span><span class="muted">{graph.concurrency.cancel_in_progress ? "an arriving run cancels the one going" : "a run waits for the one going"}</span></li>
+          <li><span class="muted">concurrency</span><span class="term">{graph.concurrency.group}</span>{#if graph.concurrency.cancel_in_progress}<span class="muted">cancel_in_progress</span>{/if}</li>
         {/if}
         {#if graph.timeout}<li><span class="muted">timeout</span><span class="term">{graph.timeout}</span></li>{/if}
         {#if graph.retain}<li><span class="muted">retain</span><span class="term">{graph.retain}</span></li>{/if}
@@ -234,7 +236,7 @@
   </section>
 
   {#if showHistory}
-    <Pane title="History" aside="the first-parent history of {detail.repository.default_branch}">
+    <Pane title="History" aside={detail.repository.default_branch}>
       <table class="history">
         <thead><tr><th>Commit</th><th>Subject</th><th>Author</th><th>When</th><th>Version</th></tr></thead>
         <tbody>
@@ -257,7 +259,7 @@
 
   {#if running && graph && detail.version}
     <div class="runform">
-      <Pane title="Run {workflow}" aside="manual, as {me.principal}">
+      <Pane title="Run {workflow}">
         {#key runRef}
           <RunForm {api} {place} {namespace} {workflow} {graph} commit={detail.version.commit} ref={runRef} onclose={() => (running = false)} />
         {/key}
@@ -266,14 +268,14 @@
   {/if}
 
   {#if tab === "files" && detail.repository.head === null}
-    <Pane title="Files" aside="an empty repository">
-      <p class="muted">Nothing has been pushed yet: <span class="term">{detail.repository.default_branch}</span> is born by the first push. Clone the repository, commit <span class="term">agentiik.yaml</span> and push it, with git or with <span class="term">agk push</span>.</p>
+    <Pane title="Files">
+      <p class="muted">Empty repository</p>
       <pre class="clone term">git clone {detail.repository.clone_url}</pre>
     </Pane>
   {:else if tab === "files"}
     <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runAt} />
   {:else if tab === "mcp" && graph}
-    <Pane title="MCP" aside="what a client of this workflow sees">
+    <Pane title="MCP">
       <McpPanel {graph} {namespace} {workflow} />
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
@@ -281,14 +283,14 @@
       <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} bind:selected={editSelected} onclose={() => narrow({ edit: null })} />
     {/await}
   {:else if graph && laid}
-    <div class="columns">
-      <Pane title="Graph" aside={run ? "its last run" : "no run yet"} focused>
+    <div class="columns fills">
+      <Pane title="Graph" aside={run ? "last run" : ""} focused>
         <!-- The run's line holds its height before the run is read, so that the canvas under it stays put. -->
         <div class="run">
           {#if run && runRoute}
             <StatePill state={run.state} live={!reader?.ended} />
             <a class="code" href={place.href(runRoute)} onclick={follow(place, runRoute)}>{run.run}</a>
-            <span class="muted info"><span class="term">{run.trigger_kind}</span> · by <span class="term">{run.triggered_by}</span>{#if run.started_at} · started <time class="term" datetime={run.started_at}>{clock(run.started_at, now)}</time> · <span class="term">{took(Math.max(0, (run.finished_at ? Date.parse(run.finished_at) : Date.now()) - Date.parse(run.started_at)))}</span>{/if}{#if run.commit !== detail.version?.commit}, of an older version, <span class="code">{run.commit.slice(0, 7)}</span>, drawn on this one{/if}</span>
+            <span class="muted info"><span class="term">{run.trigger_kind}</span> · by <span class="term">{run.triggered_by}</span>{#if run.started_at} · started <time class="term" datetime={run.started_at}>{clock(run.started_at, now)}</time> · <span class="term">{took(Math.max(0, (run.finished_at ? Date.parse(run.finished_at) : Date.now()) - Date.parse(run.started_at)))}</span>{/if}{#if run.commit !== detail.version?.commit} · older version <span class="code">{run.commit.slice(0, 7)}</span>{/if}</span>
           {/if}
         </div>
         <GraphCanvas {graph} {laid} {run} {selected} onselect={(step) => narrow({ step })} />
@@ -301,7 +303,7 @@
         {#if pane === "file"}
           {#if text !== null}
             <FileView {text} {found} {selected} onselect={(step) => narrow({ step })} />
-            {#if selected && !found.has(selected)}<p class="faint">{selected} is not written in this file: it comes from a file this one includes.</p>{/if}
+            {#if selected && !found.has(selected)}<p class="faint">{selected} is in an included file.</p>{/if}
           {:else}
             <p class="muted">The file could not be read.</p>
           {/if}
@@ -311,7 +313,7 @@
       </Pane>
     </div>
   {:else}
-    <Pane title="Graph"><p class="muted">This workflow has no version to draw, or its version is a library, which no run runs.</p></Pane>
+    <Pane title="Graph"><p class="muted">No graph</p></Pane>
   {/if}
 {/if}
 
@@ -461,9 +463,6 @@
     margin-bottom: calc(var(--unit) * 6);
   }
 
-  .refused {
-    color: var(--failed);
-  }
 
   .clone {
     margin: calc(var(--unit) * 5) 0 0;
@@ -477,6 +476,36 @@
   @media (max-width: 1099px) {
     .columns {
       grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* From 1100px the graph and the step take the height the window has left, however large, and what
+     either holds beyond it scrolls inside its pane; a window too short for 560px of them scrolls. */
+  @media (min-width: 1100px) {
+    .columns {
+      flex: 1 0 auto;
+      min-height: 560px;
+    }
+
+    .columns > :global(.pane) > :global(.body) {
+      flex: 1 1 0px;
+    }
+
+    .columns :global(.canvas) {
+      flex: 1 1 0px;
+    }
+
+    .columns :global(.canvas > .scroll) {
+      flex: 1 1 0px;
+      max-height: none;
+    }
+
+
+    /* The screen is then a column, whose margins add rather than fold into one another: the room
+       under what starts it is its own margin alone, as it is where the screen is not a column. */
+    .about + .columns,
+    .about + .runform {
+      margin-top: 0;
     }
   }
 </style>

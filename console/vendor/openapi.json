@@ -7742,6 +7742,129 @@
         }
       }
     },
+    "/api/v1/stats/activity": {
+      "get": {
+        "operationId": "getActivityStatistics",
+        "tags": [
+          "statistics"
+        ],
+        "summary": "Read what the installation is doing",
+        "description": "Every namespace together, per bucket: the runs created by the state each is in now, and the most tasks in flight at once. Under now, as the request is answered: the runs queued, running and waiting, the tasks in flight, the slots the runners ready and heard from in the last 30 s offer, and those runners against the runners not revoked. Counts only, naming no run, workflow or namespace, so that an administrator who reads no namespace's runs sees how busy the installation is and not what it runs. Administrator only. Served at this path alone, so that a namespace named stats made before v0.3.0 reserved the word keeps every route it has.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#console-statistics"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/statsFrom"
+          },
+          {
+            "$ref": "#/components/parameters/statsTo"
+          },
+          {
+            "$ref": "#/components/parameters/statsBucket"
+          },
+          {
+            "$ref": "#/components/parameters/statsCompare"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The series, and what is running now.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/statsActivity"
+                },
+                "examples": {
+                  "two minutes": {
+                    "summary": "the last two minutes of a busy installation",
+                    "value": {
+                      "from": "2026-10-01T10:41:00Z",
+                      "to": "2026-10-01T10:43:00Z",
+                      "bucket": "1m",
+                      "buckets": [
+                        {
+                          "since": "2026-10-01T10:41:00Z",
+                          "until": "2026-10-01T10:41:59.999999999Z",
+                          "runs": {
+                            "queued": 0,
+                            "running": 0,
+                            "waiting": 0,
+                            "succeeded": 7,
+                            "failed": 1,
+                            "cancelled": 0,
+                            "timed_out": 0
+                          },
+                          "tasks_in_flight_max": 14
+                        },
+                        {
+                          "since": "2026-10-01T10:42:00Z",
+                          "until": "2026-10-01T10:42:59.999999999Z",
+                          "runs": {
+                            "queued": 1,
+                            "running": 3,
+                            "waiting": 1,
+                            "succeeded": 2,
+                            "failed": 0,
+                            "cancelled": 0,
+                            "timed_out": 0
+                          },
+                          "tasks_in_flight_max": 19
+                        }
+                      ],
+                      "now": {
+                        "at": "2026-10-01T10:42:31Z",
+                        "runs": {
+                          "queued": 1,
+                          "running": 3,
+                          "waiting": 1
+                        },
+                        "tasks_in_flight": 17,
+                        "slots": 24,
+                        "runners_ready": 3,
+                        "runners": 4
+                      }
+                    }
+                  }
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "description": "The buckets to Accept: text/csv, RFC 4180 with a header row, one row a bucket and a column a figure, the runs a column a state. What is running now is not in the CSV, which is a table of buckets.",
+                  "examples": [
+                    "since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,tasks_in_flight_max\r\n2026-10-01T10:41:00Z,2026-10-01T10:41:59.999999999Z,0,0,0,7,1,0,0,14\r\n2026-10-01T10:42:00Z,2026-10-01T10:42:59.999999999Z,1,3,1,2,0,0,0,19\r\n"
+                  ]
+                },
+                "examples": {
+                  "two minutes": {
+                    "summary": "two buckets",
+                    "value": "since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,tasks_in_flight_max\r\n2026-10-01T10:41:00Z,2026-10-01T10:41:59.999999999Z,0,0,0,7,1,0,0,14\r\n2026-10-01T10:42:00Z,2026-10-01T10:42:59.999999999Z,1,3,1,2,0,0,0,19\r\n"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The query is refused: from or to not in RFC 3339, from not before to, a bucket or a compare the route does not know, or a range that would take more than 1,000 buckets. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A caller who is not an administrator, or a session that may only enrol."
+          }
+        }
+      }
+    },
     "/api/v1/stats/pools": {
       "get": {
         "operationId": "getPoolStatistics",
@@ -8734,11 +8857,13 @@
               "run",
               "notifications",
               "runners",
+              "activity",
               "all"
             ],
-            "description": "What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; or anything, where a change may have been missed.",
+            "description": "What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; to an administrator, a run anywhere, named nowhere, which GET /api/v1/stats/activity counts; or anything, where a change may have been missed.",
             "examples": [
               "run",
+              "activity",
               "all"
             ]
           },
@@ -15578,6 +15703,415 @@
                 "artifact_bytes_added": 0
               }
             ]
+          }
+        ]
+      },
+      "statsActivityBucket": {
+        "title": "A bucket of the installation's activity",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "since",
+          "until",
+          "runs",
+          "tasks_in_flight_max"
+        ],
+        "description": "What every namespace together did in one bucket, in counts alone.",
+        "properties": {
+          "since": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "Where the bucket starts, included: the since GET /api/v1/runs takes.",
+            "examples": [
+              "2026-10-01T10:41:00Z"
+            ]
+          },
+          "until": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "The last instant of the bucket, included, a nanosecond before the next one starts: the until GET /api/v1/runs takes.",
+            "examples": [
+              "2026-10-01T10:41:59.999999999Z"
+            ]
+          },
+          "runs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "queued",
+              "running",
+              "waiting",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "timed_out"
+            ],
+            "description": "The runs created in the bucket in every namespace, by state: a run that has ended under its final state, one still going under where it is now. A namespace's runs count within its retention, as in every series.",
+            "properties": {
+              "queued": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in queued.",
+                "examples": [
+                  0
+                ]
+              },
+              "running": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in running.",
+                "examples": [
+                  1
+                ]
+              },
+              "waiting": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in waiting.",
+                "examples": [
+                  0
+                ]
+              },
+              "succeeded": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in succeeded.",
+                "examples": [
+                  7
+                ]
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in failed.",
+                "examples": [
+                  1
+                ]
+              },
+              "cancelled": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in cancelled.",
+                "examples": [
+                  0
+                ]
+              },
+              "timed_out": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in timed_out.",
+                "examples": [
+                  0
+                ]
+              }
+            },
+            "examples": [
+              {
+                "queued": 0,
+                "running": 1,
+                "waiting": 0,
+                "succeeded": 7,
+                "failed": 1,
+                "cancelled": 0,
+                "timed_out": 0
+              }
+            ]
+          },
+          "tasks_in_flight_max": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The most tasks handed out, or on their way to a runner, and not yet ended at once in the bucket, in every namespace together: one ending as another is handed out is not two at once, and one still running is in flight until now.",
+            "examples": [
+              14
+            ]
+          }
+        },
+        "examples": [
+          {
+            "since": "2026-10-01T10:41:00Z",
+            "until": "2026-10-01T10:41:59.999999999Z",
+            "runs": {
+              "queued": 0,
+              "running": 0,
+              "waiting": 0,
+              "succeeded": 7,
+              "failed": 1,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "tasks_in_flight_max": 14
+          },
+          {
+            "since": "2026-10-01T10:42:00Z",
+            "until": "2026-10-01T10:42:59.999999999Z",
+            "runs": {
+              "queued": 1,
+              "running": 3,
+              "waiting": 1,
+              "succeeded": 2,
+              "failed": 0,
+              "cancelled": 0,
+              "timed_out": 0
+            },
+            "tasks_in_flight_max": 19
+          }
+        ]
+      },
+      "statsActivityNow": {
+        "title": "What the installation is doing now",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "at",
+          "runs",
+          "tasks_in_flight",
+          "slots",
+          "runners_ready",
+          "runners"
+        ],
+        "description": "What every namespace together is doing as the request is answered.",
+        "properties": {
+          "at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When it was read.",
+            "examples": [
+              "2026-10-01T10:42:31Z"
+            ]
+          },
+          "runs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "queued",
+              "running",
+              "waiting"
+            ],
+            "description": "The runs not ended, in every namespace, by state, whenever they were created.",
+            "properties": {
+              "queued": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in queued.",
+                "examples": [
+                  1
+                ]
+              },
+              "running": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in running.",
+                "examples": [
+                  3
+                ]
+              },
+              "waiting": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The runs in waiting.",
+                "examples": [
+                  1
+                ]
+              }
+            },
+            "examples": [
+              {
+                "queued": 1,
+                "running": 3,
+                "waiting": 1
+              }
+            ]
+          },
+          "tasks_in_flight": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The tasks handed out, or on their way to a runner, and not yet ended.",
+            "examples": [
+              17
+            ]
+          },
+          "slots": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The tasks the runners counted in runners_ready offer to run at once together: what tasks_in_flight is set against.",
+            "examples": [
+              24
+            ]
+          },
+          "runners_ready": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The runners that may be handed work: ready, reporting themselves ready, and heard from within 30 s, after which a runner's tasks are declared lost.",
+            "examples": [
+              3
+            ]
+          },
+          "runners": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The runners not revoked, ready or not.",
+            "examples": [
+              4
+            ]
+          }
+        },
+        "examples": [
+          {
+            "at": "2026-10-01T10:42:31Z",
+            "runs": {
+              "queued": 1,
+              "running": 3,
+              "waiting": 1
+            },
+            "tasks_in_flight": 17,
+            "slots": 24,
+            "runners_ready": 3,
+            "runners": 4
+          }
+        ]
+      },
+      "statsActivity": {
+        "title": "The installation's activity",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to",
+          "bucket",
+          "buckets",
+          "now"
+        ],
+        "description": "What every namespace together did, bucket by bucket, and what it is doing now, in counts that name no run, workflow or namespace. Administrator only. compare=previous is not taken.",
+        "properties": {
+          "from": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "The start of the range, included, as the request gave it or as it was taken.",
+            "examples": [
+              "2026-10-01T10:41:00Z"
+            ]
+          },
+          "to": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "The end of the range, excluded.",
+            "examples": [
+              "2026-10-01T10:43:00Z"
+            ]
+          },
+          "bucket": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "15m",
+              "1h",
+              "1d"
+            ],
+            "description": "How long a bucket is, as asked or as the range chose.",
+            "examples": [
+              "1m"
+            ]
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/statsActivityBucket"
+            },
+            "description": "Every bucket of the range, oldest first, those counting nothing included.",
+            "examples": [
+              [
+                {
+                  "since": "2026-10-01T10:41:00Z",
+                  "until": "2026-10-01T10:41:59.999999999Z",
+                  "runs": {
+                    "queued": 0,
+                    "running": 0,
+                    "waiting": 0,
+                    "succeeded": 7,
+                    "failed": 1,
+                    "cancelled": 0,
+                    "timed_out": 0
+                  },
+                  "tasks_in_flight_max": 14
+                },
+                {
+                  "since": "2026-10-01T10:42:00Z",
+                  "until": "2026-10-01T10:42:59.999999999Z",
+                  "runs": {
+                    "queued": 1,
+                    "running": 3,
+                    "waiting": 1,
+                    "succeeded": 2,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "timed_out": 0
+                  },
+                  "tasks_in_flight_max": 19
+                }
+              ]
+            ]
+          },
+          "now": {
+            "$ref": "#/components/schemas/statsActivityNow",
+            "description": "What the installation is doing as the request is answered.",
+            "examples": [
+              {
+                "at": "2026-10-01T10:42:31Z",
+                "runs": {
+                  "queued": 1,
+                  "running": 3,
+                  "waiting": 1
+                },
+                "tasks_in_flight": 17,
+                "slots": 24,
+                "runners_ready": 3,
+                "runners": 4
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "from": "2026-10-01T10:41:00Z",
+            "to": "2026-10-01T10:43:00Z",
+            "bucket": "1m",
+            "buckets": [
+              {
+                "since": "2026-10-01T10:41:00Z",
+                "until": "2026-10-01T10:41:59.999999999Z",
+                "runs": {
+                  "queued": 0,
+                  "running": 0,
+                  "waiting": 0,
+                  "succeeded": 7,
+                  "failed": 1,
+                  "cancelled": 0,
+                  "timed_out": 0
+                },
+                "tasks_in_flight_max": 14
+              },
+              {
+                "since": "2026-10-01T10:42:00Z",
+                "until": "2026-10-01T10:42:59.999999999Z",
+                "runs": {
+                  "queued": 1,
+                  "running": 3,
+                  "waiting": 1,
+                  "succeeded": 2,
+                  "failed": 0,
+                  "cancelled": 0,
+                  "timed_out": 0
+                },
+                "tasks_in_flight_max": 19
+              }
+            ],
+            "now": {
+              "at": "2026-10-01T10:42:31Z",
+              "runs": {
+                "queued": 1,
+                "running": 3,
+                "waiting": 1
+              },
+              "tasks_in_flight": 17,
+              "slots": 24,
+              "runners_ready": 3,
+              "runners": 4
+            }
           }
         ]
       },

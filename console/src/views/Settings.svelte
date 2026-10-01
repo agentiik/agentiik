@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import type { Place } from "../lib/place.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import { refusal, type API, type Me } from "../api/client";
@@ -24,13 +26,13 @@
   const writes = $derived(holds(me, "secret:write", namespace));
 
   let secrets = $state<Declaration[] | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
 
   async function read() {
-    unread = "";
+    unread = null;
     const { data, error, response } = await api.GET("/api/v1/{ns}/secrets", { params: { path: { ns: namespace } } });
     if (data) secrets = data.secrets;
-    else unread = refusal(response, error).message;
+    else unread = explain("load the secrets", refusal(response, error));
   }
 
   $effect(() => {
@@ -39,17 +41,17 @@
 
   let working = $state(false);
   let said = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
-  async function act(work: () => Promise<void>) {
+  async function act(failed: string, work: () => Promise<void>) {
     if (working) return;
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -58,7 +60,7 @@
   // write declares a secret, or changes where it is kept, and for the built-in store writes its value.
   // The form is emptied as soon as the API has taken the value, so that it is held nowhere after.
   function write(name: string, body: { provider: Store; path?: string; value?: string; encoding?: "utf-8" | "base64" }, done: string) {
-    return act(async () => {
+    return act("save the secret", async () => {
       const { data, error, response } = await api.PUT("/api/v1/{ns}/secrets/{name}", { params: { path: { ns: namespace, name } }, body });
       if (!data) throw refusal(response, error);
       reset();
@@ -94,11 +96,7 @@
       store === "builtin"
         ? { provider: store, ...(value ? { value, ...(base64 ? { encoding: "base64" as const } : {}) } : {}) }
         : { provider: store, path: path.trim() };
-    const done = rotating
-      ? `The value of ${n} is written. It is shown nowhere, and a run started from now reads it.`
-      : store === "builtin" && value
-        ? `${n} is declared and its value written. It is shown nowhere.`
-        : `${n} is declared, kept in ${store}.`;
+    const done = rotating ? `${n} updated.` : `${n} saved.`;
     return write(n, body, done);
   }
 
@@ -113,10 +111,10 @@
   let asking = $state("");
 
   function remove(d: Declaration) {
-    return act(async () => {
+    return act("remove the secret", async () => {
       const answer = await api.DELETE("/api/v1/{ns}/secrets/{name}", { params: { path: { ns: namespace, name: d.name } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
-      said = `${d.name} is removed${d.provider === "builtin" ? ", its value with it" : ""}: a run naming it is refused from now on.`;
+      said = `${d.name} removed.`;
       asking = "";
       await read();
     });
@@ -131,21 +129,21 @@
 <PageHeader title="Settings" icon="control-settings" {place}>
   {#snippet actions()}
     {#if reads && writes}
-      <button class="control primary" onclick={() => { reset(); store = "builtin"; problem = ""; declaring = true; }}><Icon name="control-add" size={14} />New secret</button>
+      <button class="control primary" onclick={() => { reset(); store = "builtin"; problem = null; declaring = true; }}><Icon name="control-add" size={14} />New secret</button>
     {/if}
   {/snippet}
 </PageHeader>
 
-{#if problem && !writing}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem && !writing}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <Pane title="Secrets" aside={secrets ? `${secrets.length} in ${namespace}` : namespace}>
   {#if !reads}
-    <p class="muted">The secrets a namespace declares are shown to whoever reads its workflows, workflow:read at namespace scope, which you do not hold in {namespace}.</p>
+    <p class="muted">Hidden (needs <span class="term">workflow:read</span>)</p>
   {:else if unread}
-    <p class="problem" role="alert">The secrets could not be read: {unread}</p>
+    <Problem explained={unread} onretry={read} />
   {:else if secrets === null}
-    <p class="muted">Reading the secrets.</p>
+    <p class="muted">Loading</p>
   {:else}
     <table>
       <thead><tr><th>Name</th><th>Kept in</th><th>Given to a step at</th><th>Declared</th><th class="end"></th></tr></thead>
@@ -155,7 +153,7 @@
             <td class="term">{d.name}</td>
             <td>
               <span class="term">{d.provider}</span>
-              {#if d.path}<span class="term muted path">{d.path}</span>{:else if d.provider === "builtin"}<span class="muted path">under {namespace} and its name</span>{/if}
+              {#if d.path}<span class="term muted path">{d.path}</span>{:else if d.provider === "builtin"}<span class="muted path">stored by Agentiik</span>{/if}
             </td>
             <td class="term muted">{d.mount}</td>
             <td class="muted nowrap"><span class="term">{d.declared_by}</span> <time class="term" datetime={d.declared_at} title={d.declared_at}>{d.declared_at.slice(0, 10)}</time></td>
@@ -163,8 +161,8 @@
               {#if writes}
                 {#if asking === d.name}
                   <span class="confirm">
-                    <button class="control danger" disabled={working} onclick={() => remove(d)}>Remove it</button>
-                    <button class="control" onclick={() => (asking = "")}>Keep it</button>
+                    <button class="control" onclick={() => (asking = "")}>Keep</button>
+                    <button class="control danger" disabled={working} onclick={() => remove(d)}><Icon name="control-remove" size={14} />Remove</button>
                   </span>
                 {:else}
                   {#if d.provider === "builtin"}<button class="control" onclick={() => rotate(d)}><Icon name="control-replay" size={14} />Rotate</button>{/if}
@@ -183,7 +181,7 @@
 
 {#if reads && writes}
   <Dialog title={rotating ? `Rotate ${rotating}` : "Declare a secret"} open={writing} onclose={() => ((declaring = false), (rotating = ""))}>
-    {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+    {#if problem}<Problem explained={problem} />{/if}
     <form onsubmit={declare} aria-label={rotating ? `Rotate ${rotating}` : "Declare a secret"}>
       {#if !rotating}
         <label>
@@ -207,14 +205,11 @@
           <span>Value</span>
           <textarea class="term" bind:value rows="3" spellcheck="false" autocomplete="off" required={rotating !== ""}></textarea>
         </label>
-        <label class="check"><input type="checkbox" bind:checked={base64} />Written as base64, for a value that is not text</label>
+        <label class="check"><input type="checkbox" bind:checked={base64} />Base64</label>
       {/if}
-      <p class="muted note">
-        {#if store === "builtin"}A value is written once and shown nowhere, here or in any answer; rotating it is writing it again.{#if !rotating}{" "}Left empty, the declaration is written and a value kept before is kept.{/if}{:else}The API reads the variable from its own environment, under the prefix this installation gives {namespace}, and only where it gives one.{/if}
-      </p>
       <span class="buttons">
-        <button class="control primary" disabled={working}>{rotating ? "Write the value" : "Declare it"}</button>
-        {#if rotating}<button class="control" type="button" onclick={() => (rotating = "")}>Keep the value it has</button>{/if}
+        <button class="control primary" disabled={working}>Save</button>
+        {#if rotating}<button class="control" type="button" onclick={() => (rotating = "")}>Cancel</button>{/if}
       </span>
     </form>
   </Dialog>
@@ -223,13 +218,7 @@
 <style>
 
 
-  .problem {
-    color: var(--failed);
-  }
 
-  .problem {
-    margin: 0 0 calc(var(--unit) * 6);
-  }
 
   table {
     width: 100%;
@@ -312,11 +301,6 @@
     border-radius: var(--radius-control);
     background: var(--raised);
     color: var(--text);
-    font-size: var(--type-control-size);
-  }
-
-  .note {
-    margin: 0;
     font-size: var(--type-control-size);
   }
 

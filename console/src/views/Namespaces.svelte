@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { refusal, type API, type Namespace } from "../api/client";
   import AdminTabs from "../components/AdminTabs.svelte";
   import Dialog from "../components/Dialog.svelte";
@@ -18,14 +20,14 @@
 
   let namespaces = $state<Namespace[] | null>(null);
   let pools = $state<Pool[]>([]);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
 
   async function reread() {
     const { data, error, response } = await api.GET("/api/v1/namespaces");
     if (data) {
       namespaces = data.namespaces;
-      unread = "";
-    } else unread = refusal(response, error).message;
+      unread = null;
+    } else unread = explain("load the namespaces", refusal(response, error));
   }
 
   $effect(() => {
@@ -34,13 +36,13 @@
   });
 
   let working = $state(false);
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let said = $state("");
 
-  async function act(work: () => Promise<string>) {
+  async function act(failed: string, work: () => Promise<string>) {
     if (working) return;
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       // Said once the namespaces are read again, so that what it says is what the page shows.
@@ -49,7 +51,7 @@
       await changed();
       said = done;
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -90,10 +92,10 @@
     }
     wrong = null;
     const ns = record.name;
-    return act(async () => {
+    return act("save the quotas", async () => {
       const { data, error, response } = await api.PUT("/api/v1/namespaces/{ns}/quotas", { params: { path: { ns } }, body: read.body });
       if (!data) throw refusal(response, error);
-      return `The quotas of ${ns} are written: ${summary(data)}.`;
+      return "Quotas saved.";
     });
   }
 
@@ -104,13 +106,13 @@
 
   function create(e: SubmitEvent) {
     e.preventDefault();
-    return act(async () => {
+    return act("create the namespace", async () => {
       const { data, error, response } = await api.POST("/api/v1/namespaces", { body: { name: name.trim(), kind: "shared", owner: owner.trim() } });
       if (!data) throw refusal(response, error);
       creating = false;
       name = "";
       owner = "";
-      return `${data.name} is created, owned by ${data.owner}, who holds the owner role on it from now.`;
+      return `${data.name} created.`;
     });
   }
 
@@ -118,12 +120,12 @@
   let asking = $state("");
 
   function remove(n: Namespace) {
-    return act(async () => {
+    return act("remove the namespace", async () => {
       const answer = await api.DELETE("/api/v1/namespaces/{ns}", { params: { path: { ns: n.name } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       asking = "";
       if (chosen === n.name) choose(undefined);
-      return `${n.name} is removed, with its grants and its authentication policy.`;
+      return `${n.name} removed.`;
     });
   }
 
@@ -140,18 +142,18 @@
 
 <AdminTabs {place} current="namespaces">
   {#snippet actions()}
-    <button class="control primary" onclick={() => ((creating = true), (problem = ""))}><Icon name="control-add" size={14} />New namespace</button>
+    <button class="control primary" onclick={() => ((creating = true), (problem = null))}><Icon name="control-add" size={14} />New namespace</button>
   {/snippet}
 </AdminTabs>
 
-{#if problem && !creating}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem && !creating}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <Pane title="Namespaces" aside={namespaces ? String(namespaces.length) : ""}>
   {#if unread}
-    <p class="problem" role="alert">The namespaces could not be read: {unread}</p>
+    <Problem explained={unread} onretry={reread} />
   {:else if namespaces === null}
-    <p class="muted">Reading the namespaces.</p>
+    <p class="muted">Loading</p>
   {:else}
     <table>
       <thead><tr><th>Namespace</th><th>Kind</th><th>Owner</th><th>Quotas</th><th class="end"></th></tr></thead>
@@ -165,8 +167,8 @@
             <td class="end">
               {#if n.kind === "shared"}
                 {#if asking === n.name}
-                  <button class="control danger" disabled={working} onclick={() => remove(n)}>Remove {n.name}</button>
                   <button class="control" onclick={() => (asking = "")}>Keep</button>
+                  <button class="control danger" disabled={working} onclick={() => remove(n)}>Remove</button>
                 {:else}
                   <button class="control" disabled={working} onclick={() => (asking = n.name)}>Remove</button>
                 {/if}
@@ -176,7 +178,6 @@
         {/each}
       </tbody>
     </table>
-    <p class="foot muted">Choose a namespace to write its quotas. A personal namespace goes with its user. A shared one is removed only once it holds nothing, no workflow, run, secret, stored object or service account, and the API says what it still holds.</p>
   {/if}
 </Pane>
 
@@ -211,9 +212,8 @@
             {#if !accepts(p, record.name)}<span class="muted">does not accept {record.name}</span>{/if}
           </label>
         {:else}
-          <p class="muted">No pool can be read.</p>
+          <p class="muted">No pools</p>
         {/each}
-        <p class="note muted">None ticked is no list: every pool that accepts {record.name}. A pool ticked that does not accept it takes none of its work all the same.</p>
       </fieldset>
       {#if wrong}<p class="problem" role="alert">{label[wrong.field]}: {wrong.problem}.</p>{/if}
       <p class="buttons">
@@ -225,7 +225,7 @@
 </Dialog>
 
 <Dialog title="New namespace" bind:open={creating}>
-  {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={create} aria-label="Create a namespace">
     <label>
       <span>Name</span>
@@ -235,7 +235,6 @@
       <span>Owner, a login or group:NAME</span>
       <input class="term" bind:value={owner} placeholder="group:finance-leads" required autocomplete="off" />
     </label>
-    <p class="note muted">The owner is given the owner role on it as it is created, so that they can share it and act in it from the start. Its quotas are the defaults until written.</p>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create the namespace</button></p>
   </form>
 </Dialog>
@@ -357,15 +356,6 @@
 
   form p {
     margin: 0;
-  }
-
-  .note,
-  .foot {
-    font-size: var(--type-control-size);
-  }
-
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
   }
 
   .buttons {

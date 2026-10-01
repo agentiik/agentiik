@@ -135,7 +135,9 @@
     display: flex;
     gap: calc(var(--unit) * 2);
     margin-top: calc(var(--unit) * 6);
-    overflow-x: auto;
+    /* Along their line alone: a strip that scrolls one way and not the other would scroll a pixel
+       up and down under the wheel. */
+    overflow: auto hidden;
     scrollbar-width: none;
   }
 
@@ -148,7 +150,6 @@
     align-items: center;
     gap: calc(var(--unit) * 3);
     height: 40px;
-    margin-bottom: -1px;
     padding: 0 calc(var(--unit) * 5);
     border: none;
     border-bottom: 2px solid transparent;

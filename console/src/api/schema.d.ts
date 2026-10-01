@@ -1352,6 +1352,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stats/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read what the installation is doing
+         * @description Every namespace together, per bucket: the runs created by the state each is in now, and the most tasks in flight at once. Under now, as the request is answered: the runs queued, running and waiting, the tasks in flight, the slots the runners ready and heard from in the last 30 s offer, and those runners against the runners not revoked. Counts only, naming no run, workflow or namespace, so that an administrator who reads no namespace's runs sees how busy the installation is and not what it runs. Administrator only. Served at this path alone, so that a namespace named stats made before v0.3.0 reserved the word keeps every route it has.
+         */
+        get: operations["getActivityStatistics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stats/pools": {
         parameters: {
             query?: never;
@@ -1584,12 +1604,13 @@ export interface components {
          */
         liveChange: {
             /**
-             * @description What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; or anything, where a change may have been missed.
+             * @description What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; to an administrator, a run anywhere, named nowhere, which GET /api/v1/stats/activity counts; or anything, where a change may have been missed.
              * @example run
+             * @example activity
              * @example all
              * @enum {string}
              */
-            kind: "run" | "notifications" | "runners" | "all";
+            kind: "run" | "notifications" | "runners" | "activity" | "all";
             /**
              * @description The namespace of the run, for a run alone.
              * @example finance
@@ -6773,6 +6794,291 @@ export interface components {
                  */
                 buckets: components["schemas"]["statsQuotaBucket"][];
             };
+        };
+        /**
+         * A bucket of the installation's activity
+         * @description What every namespace together did in one bucket, in counts alone.
+         * @example {
+         *       "since": "2026-10-01T10:41:00Z",
+         *       "until": "2026-10-01T10:41:59.999999999Z",
+         *       "runs": {
+         *         "queued": 0,
+         *         "running": 0,
+         *         "waiting": 0,
+         *         "succeeded": 7,
+         *         "failed": 1,
+         *         "cancelled": 0,
+         *         "timed_out": 0
+         *       },
+         *       "tasks_in_flight_max": 14
+         *     }
+         * @example {
+         *       "since": "2026-10-01T10:42:00Z",
+         *       "until": "2026-10-01T10:42:59.999999999Z",
+         *       "runs": {
+         *         "queued": 1,
+         *         "running": 3,
+         *         "waiting": 1,
+         *         "succeeded": 2,
+         *         "failed": 0,
+         *         "cancelled": 0,
+         *         "timed_out": 0
+         *       },
+         *       "tasks_in_flight_max": 19
+         *     }
+         */
+        statsActivityBucket: {
+            /**
+             * @description Where the bucket starts, included: the since GET /api/v1/runs takes.
+             * @example 2026-10-01T10:41:00Z
+             */
+            since: components["schemas"]["timestamp"];
+            /**
+             * @description The last instant of the bucket, included, a nanosecond before the next one starts: the until GET /api/v1/runs takes.
+             * @example 2026-10-01T10:41:59.999999999Z
+             */
+            until: components["schemas"]["timestamp"];
+            /**
+             * @description The runs created in the bucket in every namespace, by state: a run that has ended under its final state, one still going under where it is now. A namespace's runs count within its retention, as in every series.
+             * @example {
+             *       "queued": 0,
+             *       "running": 1,
+             *       "waiting": 0,
+             *       "succeeded": 7,
+             *       "failed": 1,
+             *       "cancelled": 0,
+             *       "timed_out": 0
+             *     }
+             */
+            runs: {
+                /**
+                 * @description The runs in queued.
+                 * @example 0
+                 */
+                queued: number;
+                /**
+                 * @description The runs in running.
+                 * @example 1
+                 */
+                running: number;
+                /**
+                 * @description The runs in waiting.
+                 * @example 0
+                 */
+                waiting: number;
+                /**
+                 * @description The runs in succeeded.
+                 * @example 7
+                 */
+                succeeded: number;
+                /**
+                 * @description The runs in failed.
+                 * @example 1
+                 */
+                failed: number;
+                /**
+                 * @description The runs in cancelled.
+                 * @example 0
+                 */
+                cancelled: number;
+                /**
+                 * @description The runs in timed_out.
+                 * @example 0
+                 */
+                timed_out: number;
+            };
+            /**
+             * @description The most tasks handed out, or on their way to a runner, and not yet ended at once in the bucket, in every namespace together: one ending as another is handed out is not two at once, and one still running is in flight until now.
+             * @example 14
+             */
+            tasks_in_flight_max: number;
+        };
+        /**
+         * What the installation is doing now
+         * @description What every namespace together is doing as the request is answered.
+         * @example {
+         *       "at": "2026-10-01T10:42:31Z",
+         *       "runs": {
+         *         "queued": 1,
+         *         "running": 3,
+         *         "waiting": 1
+         *       },
+         *       "tasks_in_flight": 17,
+         *       "slots": 24,
+         *       "runners_ready": 3,
+         *       "runners": 4
+         *     }
+         */
+        statsActivityNow: {
+            /**
+             * @description When it was read.
+             * @example 2026-10-01T10:42:31Z
+             */
+            at: components["schemas"]["timestamp"];
+            /**
+             * @description The runs not ended, in every namespace, by state, whenever they were created.
+             * @example {
+             *       "queued": 1,
+             *       "running": 3,
+             *       "waiting": 1
+             *     }
+             */
+            runs: {
+                /**
+                 * @description The runs in queued.
+                 * @example 1
+                 */
+                queued: number;
+                /**
+                 * @description The runs in running.
+                 * @example 3
+                 */
+                running: number;
+                /**
+                 * @description The runs in waiting.
+                 * @example 1
+                 */
+                waiting: number;
+            };
+            /**
+             * @description The tasks handed out, or on their way to a runner, and not yet ended.
+             * @example 17
+             */
+            tasks_in_flight: number;
+            /**
+             * @description The tasks the runners counted in runners_ready offer to run at once together: what tasks_in_flight is set against.
+             * @example 24
+             */
+            slots: number;
+            /**
+             * @description The runners that may be handed work: ready, reporting themselves ready, and heard from within 30 s, after which a runner's tasks are declared lost.
+             * @example 3
+             */
+            runners_ready: number;
+            /**
+             * @description The runners not revoked, ready or not.
+             * @example 4
+             */
+            runners: number;
+        };
+        /**
+         * The installation's activity
+         * @description What every namespace together did, bucket by bucket, and what it is doing now, in counts that name no run, workflow or namespace. Administrator only. compare=previous is not taken.
+         * @example {
+         *       "from": "2026-10-01T10:41:00Z",
+         *       "to": "2026-10-01T10:43:00Z",
+         *       "bucket": "1m",
+         *       "buckets": [
+         *         {
+         *           "since": "2026-10-01T10:41:00Z",
+         *           "until": "2026-10-01T10:41:59.999999999Z",
+         *           "runs": {
+         *             "queued": 0,
+         *             "running": 0,
+         *             "waiting": 0,
+         *             "succeeded": 7,
+         *             "failed": 1,
+         *             "cancelled": 0,
+         *             "timed_out": 0
+         *           },
+         *           "tasks_in_flight_max": 14
+         *         },
+         *         {
+         *           "since": "2026-10-01T10:42:00Z",
+         *           "until": "2026-10-01T10:42:59.999999999Z",
+         *           "runs": {
+         *             "queued": 1,
+         *             "running": 3,
+         *             "waiting": 1,
+         *             "succeeded": 2,
+         *             "failed": 0,
+         *             "cancelled": 0,
+         *             "timed_out": 0
+         *           },
+         *           "tasks_in_flight_max": 19
+         *         }
+         *       ],
+         *       "now": {
+         *         "at": "2026-10-01T10:42:31Z",
+         *         "runs": {
+         *           "queued": 1,
+         *           "running": 3,
+         *           "waiting": 1
+         *         },
+         *         "tasks_in_flight": 17,
+         *         "slots": 24,
+         *         "runners_ready": 3,
+         *         "runners": 4
+         *       }
+         *     }
+         */
+        statsActivity: {
+            /**
+             * @description The start of the range, included, as the request gave it or as it was taken.
+             * @example 2026-10-01T10:41:00Z
+             */
+            from: components["schemas"]["timestamp"];
+            /**
+             * @description The end of the range, excluded.
+             * @example 2026-10-01T10:43:00Z
+             */
+            to: components["schemas"]["timestamp"];
+            /**
+             * @description How long a bucket is, as asked or as the range chose.
+             * @example 1m
+             * @enum {string}
+             */
+            bucket: "1m" | "15m" | "1h" | "1d";
+            /**
+             * @description Every bucket of the range, oldest first, those counting nothing included.
+             * @example [
+             *       {
+             *         "since": "2026-10-01T10:41:00Z",
+             *         "until": "2026-10-01T10:41:59.999999999Z",
+             *         "runs": {
+             *           "queued": 0,
+             *           "running": 0,
+             *           "waiting": 0,
+             *           "succeeded": 7,
+             *           "failed": 1,
+             *           "cancelled": 0,
+             *           "timed_out": 0
+             *         },
+             *         "tasks_in_flight_max": 14
+             *       },
+             *       {
+             *         "since": "2026-10-01T10:42:00Z",
+             *         "until": "2026-10-01T10:42:59.999999999Z",
+             *         "runs": {
+             *           "queued": 1,
+             *           "running": 3,
+             *           "waiting": 1,
+             *           "succeeded": 2,
+             *           "failed": 0,
+             *           "cancelled": 0,
+             *           "timed_out": 0
+             *         },
+             *         "tasks_in_flight_max": 19
+             *       }
+             *     ]
+             */
+            buckets: components["schemas"]["statsActivityBucket"][];
+            /**
+             * @description What the installation is doing as the request is answered.
+             * @example {
+             *       "at": "2026-10-01T10:42:31Z",
+             *       "runs": {
+             *         "queued": 1,
+             *         "running": 3,
+             *         "waiting": 1
+             *       },
+             *       "tasks_in_flight": 17,
+             *       "slots": 24,
+             *       "runners_ready": 3,
+             *       "runners": 4
+             *     }
+             */
+            now: components["schemas"]["statsActivityNow"];
         };
         /**
          * A bucket of slots
@@ -14830,6 +15136,42 @@ export interface operations {
             403: components["responses"]["forbidden"];
             /** @description No such namespace, or one the caller holds nothing in and does not administer. */
             404: components["responses"]["notFound"];
+        };
+    };
+    getActivityStatistics: {
+        parameters: {
+            query?: {
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                from?: components["parameters"]["statsFrom"];
+                /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
+                to?: components["parameters"]["statsTo"];
+                /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
+                bucket?: components["parameters"]["statsBucket"];
+                /** @description previous adds the span just before the range, in as many buckets of the same length, under previous, so that a chart draws it behind point for point and a figure shows its change. The only value. */
+                compare?: components["parameters"]["statsCompare"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The series, and what is running now. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["statsActivity"];
+                    "text/csv": string;
+                };
+            };
+            /** @description The query is refused: from or to not in RFC 3339, from not before to, a bucket or a compare the route does not know, or a range that would take more than 1,000 buckets. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A caller who is not an administrator, or a session that may only enrol. */
+            403: components["responses"]["forbidden"];
         };
     };
     getPoolStatistics: {

@@ -21,14 +21,17 @@
 
   let zoom = $state(1);
   let holder: HTMLDivElement | undefined = $state();
+  let box: HTMLDivElement | undefined = $state();
 
   const margin = 32;
   const states = ["succeeded", "running", "pending", "failed", "skipped"];
 
+  // fit is the zoom at which the whole graph is seen in its box, as wide or as tall as the box lets it.
   function fit() {
-    if (!holder) return;
-    const w = holder.clientWidth - margin * 2;
-    zoom = Math.max(0.3, Math.min(1.5, Math.round((w / laid.width) * 20) / 20));
+    if (!holder || !box) return;
+    const w = (holder.clientWidth - margin * 2) / laid.width;
+    const h = (box.clientHeight - margin * 2) / laid.height;
+    zoom = Math.max(0.3, Math.min(1.5, Math.floor(Math.min(w, h) * 20) / 20));
   }
 
   const stepOf = (name: string) => run?.steps.find((s) => s.step === name);
@@ -55,7 +58,7 @@
 </script>
 
 <div class="canvas" bind:this={holder}>
-  <div class="scroll">
+  <div class="scroll" bind:this={box}>
     <div class="plane" style:width="{(laid.width + margin * 2) * zoom}px" style:height="{(laid.height + margin * 2) * zoom}px">
       <div class="scaled" style:transform="scale({zoom})" style:width="{laid.width + margin * 2}px" style:height="{laid.height + margin * 2}px">
         <svg class="edges" width={laid.width + margin * 2} height={laid.height + margin * 2} aria-hidden="true">

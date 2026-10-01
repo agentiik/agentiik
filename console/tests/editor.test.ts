@@ -71,8 +71,8 @@ describe("the visual editor", () => {
 
   it("refuses an edit the language would refuse, saying why, and leaves the file as it was", async () => {
     open("?edit=1&step=normalize");
-    await fireEvent.click(await screen.findByRole("button", { name: "Remove normalize" }));
-    expect(await screen.findByText("invoice, archive need normalize: take those edges away first.")).toBeTruthy();
+    await fireEvent.click(await screen.findByRole("button", { name: "Remove the step" }));
+    expect(await screen.findByText("invoice, archive take input from normalize. Remove those edges first.")).toBeTruthy();
     expect(screen.getByText("No change")).toBeTruthy();
   });
 
@@ -85,7 +85,7 @@ describe("the visual editor", () => {
     expect(screen.getByRole("button", { name: /^Step archive/ })).toBeTruthy();
     await fireEvent.input(area, { target: { value: before.replace("  archive:\n", "  archived:\n").replace("step: archive,", "step: archived,") } });
     expect(await screen.findByRole("button", { name: /^Step archived/ })).toBeTruthy();
-    expect(screen.getByText("valid against workflow.schema.json")).toBeTruthy();
+    expect(screen.getByText("valid")).toBeTruthy();
   });
 
   it("is not offered to a reader who may not write the workflow, nor open from the address", async () => {

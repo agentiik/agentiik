@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -28,23 +28,24 @@ describe("the console", () => {
     open("/finance/runs");
     expect(await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Runs" }).getAttribute("aria-current")).toBe("page");
+    await fireEvent.click(screen.getByRole("button", { name: "You, alice" }));
     expect(screen.getByText("agentiik v0.6.0")).toBeTruthy();
   });
 
   it("answers a namespace the caller holds nothing in as one that does not exist", async () => {
     const { asked } = open("/payroll/runs");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
     expect(asked.some((a) => a.includes("namespace=payroll"))).toBe(false);
   });
 
   it("asks to sign in where the API knows no session", async () => {
     open("/finance/runs", { "GET /api/v1/me": { status: 401, body: { error: "sign in first" } } });
-    expect(await screen.findByText("This browser is not signed in to this installation.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Sign in with a passkey" })).toBeTruthy();
   });
 
   it("sends a session that may only enrol to the enrolment page", async () => {
     open("/finance/runs", { "GET /api/v1/me": { status: 403, body: { error: "enrol a passkey first" } } });
-    expect((await screen.findByRole("link", { name: "Enrol a passkey" })).getAttribute("href")).toBe("auth/enrol");
+    expect((await screen.findByRole("link", { name: "Set up a passkey" })).getAttribute("href")).toBe("auth/enrol");
   });
 });
 
@@ -73,7 +74,7 @@ describe("refusing as the API does", () => {
   // addresses are compared on what the console says of them and not on what they spell.
   async function refusedAt(path: string, s: Scenario, named: string[]): Promise<string> {
     open(path, s);
-    await screen.findByText("No such thing, or not yours.");
+    await screen.findByText("This page does not exist, or is not shared with you.");
     const drawn = document.body.innerHTML.replaceAll(/\s+/g, " ");
     document.body.innerHTML = "";
     return named.reduce((html, n) => html.replaceAll(n, "?"), drawn);

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "./Problem.svelte";
   import type { API } from "../api/client";
   import { filesOf, readEnvelope, readOutput, shown, tokens, type Envelope, type Side } from "../lib/envelope";
   import { bytes } from "../lib/stats";
@@ -23,21 +25,21 @@
   const batch = 20;
 
   let envelope = $state<Envelope | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
   let drawn = $state(batch);
   let copied = $state(false);
 
   $effect(() => {
     const asked = { run, step, port, side, attempt: task?.attempt, shard: task?.shard?.index, output };
     envelope = null;
-    refused = "";
+    refused = null;
     drawn = batch;
     (asked.output ? readOutput(api, asked.run, asked.output) : readEnvelope(api, asked.run, asked.step, asked.port, asked.side, task)).then(
       (e) => {
         envelope = e;
       },
       (e: unknown) => {
-        refused = e instanceof Error ? e.message : String(e);
+        refused = explain(asked.output ? `load the output ${asked.output}` : `load what the port ${asked.port} held`, e);
       },
     );
   });
@@ -65,24 +67,24 @@
 
 <section class="envelope" aria-label={output ? `The envelope of the output ${output}` : `The envelope on ${port}`}>
   {#if refused}
-    <p class="problem" role="alert">{refused}</p>
+    <Problem explained={refused} />
   {:else if !envelope || !view}
-    <p class="muted">Reading the envelope.</p>
+    <p class="muted">Loading</p>
   {:else}
     <div class="head">
       <span class="term name">{output ?? port}</span>
       <span class="muted">{envelope.meta.count} {envelope.meta.count === 1 ? "item" : "items"} · produced <time class="term" datetime={envelope.meta.produced_at}>{envelope.meta.produced_at}</time></span>
       <span class="spacer"></span>
-      <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy"}</button>
+      <button class="control" onclick={copy}><Icon name={copied ? "state-succeeded" : "control-copy"} size={14} />Copy</button>
       <button class="control" onclick={download}><Icon name="control-download" size={14} />Download</button>
     </div>
     {#if envelope.items.length === 0}
-      <p class="muted">An empty envelope: the port was declared and nothing was written to it, or the step's condition was false.</p>
+      <p class="muted">Empty</p>
     {:else}
       <pre class="json"><code>{#each coloured as t, i (i)}<span class="t-{t.kind}">{t.text}</span>{/each}</code></pre>
       {#if drawn < envelope.items.length}
         <p>
-          <button class="control" onclick={() => (drawn += batch)}>Show {Math.min(batch, envelope.items.length - drawn)} more items</button>
+          <button class="control" onclick={() => (drawn += batch)}>Show more items</button>
           <span class="muted">{drawn} of {envelope.items.length} drawn</span>
         </p>
       {/if}

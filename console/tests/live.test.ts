@@ -8,6 +8,8 @@ import { Session } from "../src/lib/session.svelte";
 import { opened, sockets } from "./live";
 import { answering, scenario } from "./scenario";
 
+vi.mock("uplot", () => import("./plot"));
+
 function open(path: string, who: "alice" | "dana" = "alice") {
   const asked: string[] = [];
   const api = connect("http://stand-in/", answering(scenario(who), asked));
@@ -71,17 +73,17 @@ describe("the live connection", () => {
 describe("the console, live", () => {
   it("says it is live once the connection opens, and not live while it is not", async () => {
     open("/finance/runs");
-    const word = await screen.findByText("not live");
+    const word = await screen.findByText("reconnecting");
     expect(word.closest("[role=status]")).toBeTruthy();
     opened();
     expect(await screen.findByText("live")).toBeTruthy();
     sockets.at(-1)!.end(1006);
-    expect(await screen.findByText("not live")).toBeTruthy();
+    expect(await screen.findByText("reconnecting")).toBeTruthy();
   });
 
   it("reads the runs again when one of the namespace's changes, and not for another namespace's", async () => {
     const asked = open("/finance/runs");
-    await screen.findByText("not live");
+    await screen.findByText("reconnecting");
     await waitFor(() => expect(count(asked, "GET /api/v1/runs")).toBe(1));
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/runs")).toBe(2));
@@ -94,16 +96,30 @@ describe("the console, live", () => {
 
   it("reads who it is signed in as again when the caller's notifications change", async () => {
     const asked = open("/finance/runs");
-    await screen.findByText("not live");
+    await screen.findByText("reconnecting");
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/me")).toBe(2));
     s.say({ kind: "notifications" });
     await waitFor(() => expect(count(asked, "GET /api/v1/me")).toBe(3));
   });
 
+  it("reads the installation's activity again on an administrator's home when a run changes anywhere, at most every two seconds", async () => {
+    const asked = open("/", "dana");
+    await screen.findByText("reconnecting");
+    await waitFor(() => expect(count(asked, "GET /api/v1/stats/activity")).toBe(1));
+    const s = opened();
+    // Opening reads everything again, two seconds after the first read at the soonest.
+    await waitFor(() => expect(count(asked, "GET /api/v1/stats/activity")).toBe(2), { timeout: 4000 });
+    s.say({ kind: "activity" });
+    s.say({ kind: "activity" });
+    await waitFor(() => expect(count(asked, "GET /api/v1/stats/activity")).toBe(3), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(count(asked, "GET /api/v1/stats/activity")).toBe(3);
+  }, 15000);
+
   it("reads the runners again when one changes, to an administrator", async () => {
     const asked = open("/runners", "dana");
-    await screen.findByText("not live");
+    await screen.findByText("reconnecting");
     await waitFor(() => expect(count(asked, "GET /api/v1/runners")).toBe(1));
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/runners")).toBe(2));

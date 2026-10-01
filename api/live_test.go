@@ -130,8 +130,9 @@ func asBearer(who string) http.Header { return http.Header{"Authorization": {"Be
 // "A WebSocket telling its caller, as it happens, what changed among what it may read ... a run
 // created, or moved on, or one of whose steps did, sent where the caller holds run:read on that
 // workflow; notifications for a notification told to the caller or dismissed; runners, to an
-// administrator, for a runner or a pool changed ... What changed within a quarter of a second is
-// sent once."
+// administrator, for a runner or a pool changed; activity, to an administrator, for a run created,
+// or moved on, or one of whose steps did, in any namespace, naming none ... What changed within a
+// quarter of a second is sent once."
 func TestTheLiveConnectionTellsEachCallerWhatChangedAmongWhatItReads(t *testing.T) {
 	auth := granted{
 		"alice": {{api.RunRead, api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}}},
@@ -165,7 +166,7 @@ func TestTheLiveConnectionTellsEachCallerWhatChangedAmongWhatItReads(t *testing.
 		return len(alice.toldOf(m)) >= 3
 	})
 	bob.awaits(t, "bob's run", func(m []map[string]string, _ error) bool { return len(bob.toldOf(m)) >= 1 })
-	dana.awaits(t, "dana's runners", func(m []map[string]string, _ error) bool { return len(dana.toldOf(m)) >= 1 })
+	dana.awaits(t, "dana's runners and activity", func(m []map[string]string, _ error) bool { return len(distinct(dana.toldOf(m))) >= 2 })
 	// Whatever else would have come has had time to.
 	time.Sleep(time.Second)
 
@@ -175,9 +176,25 @@ func TestTheLiveConnectionTellsEachCallerWhatChangedAmongWhatItReads(t *testing.
 	if got := bob.told(); !sameMessages(got, []map[string]string{{"kind": "run", "namespace": "team-ops", "workflow": "monthly-invoicing", "run": s.teamOps}}) {
 		t.Errorf("bob, reading team-ops, was told %v", got)
 	}
-	if got := dana.told(); !sameMessages(got, []map[string]string{{"kind": "runners"}}) {
+	// The runs changed over more than one quarter of a second may be told as activity more than
+	// once; what matters is that dana is told it, naming nothing, and never a run.
+	if got := distinct(dana.told()); !sameMessages(got, []map[string]string{{"kind": "runners"}, {"kind": "activity"}}) {
 		t.Errorf("dana, an administrator reading no run, was told %v", got)
 	}
+}
+
+// distinct is messages each once.
+func distinct(messages []map[string]string) []map[string]string {
+	seen := map[string]bool{}
+	var out []map[string]string
+	for _, m := range messages {
+		j, _ := json.Marshal(m)
+		if !seen[string(j)] {
+			seen[string(j)] = true
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // toldOf is told over messages already held under the reader's lock.
