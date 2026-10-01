@@ -34,7 +34,7 @@
     },
     {
       "name": "me",
-      "description": "The caller: who it is, what it may do, its own credentials, its password and the TOTP generator beside it, and what the installation tells it."
+      "description": "The caller: who it is, what it may do, what it says of itself and its photo, its own credentials, its password and the TOTP generator beside it, and what the installation tells it."
     },
     {
       "name": "tokens",
@@ -42,7 +42,7 @@
     },
     {
       "name": "users",
-      "description": "Local accounts, the links that enrol their first credential, and the recovery codes that replace a lost one."
+      "description": "Local accounts and their photos, which an administrator reads and removes; the links that enrol their first credential, and the recovery codes that replace a lost one."
     },
     {
       "name": "groups",
@@ -2188,7 +2188,7 @@
           "me"
         ],
         "summary": "Who the caller is",
-        "description": "The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; and break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.",
+        "description": "The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, a user's carrying what they say of themself and when their photo was last set, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; and break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#administrators"
@@ -2213,6 +2213,13 @@
                         "display_name": "Alice Martin",
                         "admin": true,
                         "suspended": false,
+                        "given_name": "Alice",
+                        "family_name": "Martin",
+                        "title": "Technical lead",
+                        "location": "Lyon, France",
+                        "timezone": "Europe/Paris",
+                        "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+                        "avatar_updated_at": "2026-09-28T10:15:00Z",
                         "created_at": "2026-09-27T08:50:00Z"
                       },
                       "groups": [
@@ -2283,6 +2290,13 @@
                         "display_name": "Bob Martin",
                         "admin": true,
                         "suspended": false,
+                        "given_name": "",
+                        "family_name": "",
+                        "title": "",
+                        "location": "",
+                        "timezone": "",
+                        "bio": "",
+                        "avatar_updated_at": null,
                         "created_at": "2026-09-27T09:20:00Z",
                         "last_sign_in_at": "2026-09-27T16:45:00Z"
                       },
@@ -2343,6 +2357,123 @@
             "description": "A session that may only enrol, which registers passkeys and sets its password, and nothing else."
           }
         }
+      },
+      "patch": {
+        "operationId": "updateMe",
+        "tags": [
+          "me"
+        ],
+        "summary": "Change what the caller says of themself",
+        "description": "Changes the caller's display name and profile as the body names them: given_name, family_name, title, location, timezone and bio, each set to what the body holds, the empty string clearing it, and each the body leaves out kept. The display name is never cleared, since a user always has one. Set by the user alone, and by no administrator: a profile is what a person tells the people they work with about themself, and one somebody else could rewrite would put words in their mouth. The bootstrap token and a service account have no profile, and are refused saying so; a token narrowed by a scope keeps only the permissions it names, and saying who its holder is to everybody who reads their name is none of them. Each field is one line holding no control character, since it is shown in a console and printed at a terminal: at most 128 characters, the display name 256 and the bio 280. timezone is a name of the IANA database, which a client turns an instant into the user's own hours with; Local, the server's own zone, names no place and is refused. The user's row is held while the change is merged into it, so that two changes at once each keep what the other wrote. Answers who the caller is, as GET /api/v1/me does. Audited as user.profile with the names of the fields that changed and never what they hold, since the log is kept for good and what a person wrote about themself is theirs to take back; unchanged where none did.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#principals"
+        },
+        "requestBody": {
+          "description": "What changes.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/profileUpdate"
+              },
+              "examples": {
+                "profile": {
+                  "summary": "a profile written",
+                  "value": {
+                    "given_name": "Alice",
+                    "family_name": "Martin",
+                    "title": "Technical lead",
+                    "location": "Lyon, France",
+                    "timezone": "Europe/Paris",
+                    "bio": "Writes the invoicing workflows, and reviews what touches payroll."
+                  }
+                },
+                "cleared": {
+                  "summary": "two fields cleared, the rest kept",
+                  "value": {
+                    "bio": "",
+                    "location": ""
+                  }
+                },
+                "display name": {
+                  "summary": "the display name alone",
+                  "value": {
+                    "display_name": "Alice Martin"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written: who the caller is, as GET /api/v1/me answers it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/me"
+                },
+                "examples": {
+                  "written": {
+                    "summary": "alice once her profile is written",
+                    "value": {
+                      "principal": "alice",
+                      "admin": false,
+                      "user": {
+                        "kind": "user",
+                        "login": "alice",
+                        "display_name": "Alice Martin",
+                        "admin": false,
+                        "suspended": false,
+                        "given_name": "Alice",
+                        "family_name": "Martin",
+                        "title": "Technical lead",
+                        "location": "Lyon, France",
+                        "timezone": "Europe/Paris",
+                        "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+                        "avatar_updated_at": "2026-09-28T10:15:00Z",
+                        "created_at": "2026-09-27T08:50:00Z"
+                      },
+                      "groups": [
+                        "group:team-finance"
+                      ],
+                      "permissions": {
+                        "alice": [
+                          "workflow:read",
+                          "workflow:run",
+                          "workflow:write",
+                          "workflow:delete",
+                          "run:read",
+                          "run:read_data",
+                          "secret:use",
+                          "secret:write",
+                          "grant:manage"
+                        ]
+                      },
+                      "notifications": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The body is refused: empty, naming nothing to change, a field the route does not read, a field null, written twice or not a string, a field past its length or holding a line break or another control character, an empty display name, or a time zone the IANA database does not hold, named, or Local. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised",
+            "description": "No credential, or one that opens nothing, a user removed since their credential was read among them."
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The bootstrap token or a service account, which have no profile or photo, or a token narrowed by a scope, which changes neither, each refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          }
+        }
       }
     },
     "/api/v1/me/notifications/{id}": {
@@ -2380,6 +2511,243 @@
           "404": {
             "$ref": "#/components/responses/notFound",
             "description": "No notification of the caller's by that identifier: dismissed already, past its 90 days, or never the caller's; and any through a token narrowed by a scope, or the bootstrap token, which are told nothing."
+          }
+        }
+      }
+    },
+    "/api/v1/me/avatar": {
+      "get": {
+        "operationId": "getMyAvatar",
+        "tags": [
+          "me"
+        ],
+        "summary": "Read the caller's photo",
+        "description": "The caller's photo, the PNG PUT /api/v1/me/avatar stored, at most 512 by 512 pixels. Kept a day by the browser that asked and by no shared cache, since a photo is shown to its owner and to administrators alone; a client asks for it with v, the user's avatar_updated_at, so that a photo set again is asked for at another address, and revalidates past the day by its tag. nosniff, so that a browser shows it as the PNG it is declared as. A token narrowed by a scope reads its holder's, as it reads who they are. The bootstrap token and a service account hold none.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#principals"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/avatarVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The photo.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/privateDay"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/avatarTag"
+              },
+              "X-Content-Type-Options": {
+                "$ref": "#/components/headers/noSniff"
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "image/png"
+                },
+                "examples": {
+                  "photo": {
+                    "summary": "a PNG of at most 512 by 512 pixels",
+                    "value": "PNG\r\n\u001a\n..."
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The photo is the one the If-None-Match tag names: the client's copy is still the photo.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/avatarTag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session that may only enrol."
+          },
+          "404": {
+            "description": "The caller holds no photo: one never set or removed, and always for the bootstrap token and a service account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "none": {
+                    "summary": "no photo",
+                    "value": {
+                      "error": "you hold no photo"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "setMyAvatar",
+        "tags": [
+          "me"
+        ],
+        "summary": "Set the caller's photo",
+        "description": "Sets the caller's photo in place of any before it: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it, which a photo shown to colleagues would hand them. The Content-Type says the body is one of the two and the bytes say which, since a browser names a file's type by its extension. Set by the user alone, as the profile is: the bootstrap token, a service account and a token narrowed by a scope are refused saying so. avatar_updated_at says when it was set, which a client adds to the photo's address. Audited as user.avatar with the size it was stored at, and never the photo.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#principals"
+        },
+        "requestBody": {
+          "description": "The photo, a PNG or a JPEG of at most 1 MiB and 2048 by 2048 pixels.",
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "contentMediaType": "image/png"
+              },
+              "examples": {
+                "png": {
+                  "summary": "a PNG",
+                  "value": "PNG\r\n\u001a\n..."
+                }
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "contentMediaType": "image/jpeg"
+              },
+              "examples": {
+                "jpeg": {
+                  "summary": "a JPEG, its Exif among it",
+                  "value": "ÿØÿá...Exif..."
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Stored, as GET /api/v1/me/avatar answers it from now on."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "An empty body. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised",
+            "description": "No credential, or one that opens nothing, a user removed since their credential was read among them."
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The bootstrap token or a service account, which have no profile or photo, or a token narrowed by a scope, which changes neither, each refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up."
+          },
+          "413": {
+            "description": "A photo past 1 MiB, refused before it is decoded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "too large": {
+                    "summary": "past a mebibyte",
+                    "value": {
+                      "error": "a photo is at most 1048576 bytes, a mebibyte, and this one is more: send it smaller, since it is stored at 512 by 512 pixels at most"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A Content-Type other than image/png and image/jpeg, refused before the body is read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "type": {
+                    "summary": "a photo sent as something else",
+                    "value": {
+                      "error": "a photo is sent as image/png or image/jpeg, and this request's Content-Type is \"image/gif\""
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not a PNG or a JPEG that can be read, or its header announces more than 2048 pixels a side, saying how many.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "too many pixels": {
+                    "summary": "past 2048 by 2048",
+                    "value": {
+                      "error": "the photo is 4096 by 3072 pixels, and one is at most 2048 by 2048: it is stored at 512 by 512 at most, and a larger one takes more to decode than it gives"
+                    }
+                  },
+                  "unreadable": {
+                    "summary": "not a photo",
+                    "value": {
+                      "error": "the body is not a PNG or a JPEG that can be read, and a photo is one of the two"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeMyAvatar",
+        "tags": [
+          "me"
+        ],
+        "summary": "Remove the caller's photo",
+        "description": "Removes the caller's photo, which a client draws as their initials from then on, avatar_updated_at null. Removing none is the same answer, so that a client that lost the first answer asks again with nothing to sort out. Set and removed by the user alone: the bootstrap token, a service account and a token narrowed by a scope are refused saying so. Audited as user.avatar with removed, and as unchanged where there was none. No body is read, and one sent is refused.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#principals"
+        },
+        "responses": {
+          "204": {
+            "description": "Removed, or there was none."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised",
+            "description": "No credential, or one that opens nothing, a user removed since their credential was read among them."
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The bootstrap token or a service account, which have no profile or photo, or a token narrowed by a scope, which changes neither, each refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
           }
         }
       }
@@ -2840,7 +3208,7 @@
           "users"
         ],
         "summary": "List users",
-        "description": "Every user of the installation, by login, with whether each is an administrator, whether it is suspended and, where the policy suspended it, why, and when each was created and last signed in; never a credential. Administrator only.",
+        "description": "Every user of the installation, by login, with whether each is an administrator, whether it is suspended and, where the policy suspended it, why, when each was created and last signed in, and what each says of themself and when their photo was last set; never a credential, and never a photo. Administrator only.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#principals"
@@ -2864,6 +3232,13 @@
                           "display_name": "Alice Martin",
                           "admin": true,
                           "suspended": false,
+                          "given_name": "",
+                          "family_name": "",
+                          "title": "",
+                          "location": "",
+                          "timezone": "",
+                          "bio": "",
+                          "avatar_updated_at": null,
                           "created_at": "2026-09-27T08:50:00Z"
                         },
                         {
@@ -2872,6 +3247,13 @@
                           "display_name": "Bob Martin",
                           "admin": false,
                           "suspended": false,
+                          "given_name": "",
+                          "family_name": "",
+                          "title": "",
+                          "location": "",
+                          "timezone": "",
+                          "bio": "",
+                          "avatar_updated_at": null,
                           "created_at": "2026-09-27T09:20:00Z"
                         }
                       ]
@@ -2888,6 +3270,13 @@
                           "admin": false,
                           "suspended": true,
                           "suspended_for": "no_passkey",
+                          "given_name": "",
+                          "family_name": "",
+                          "title": "",
+                          "location": "",
+                          "timezone": "",
+                          "bio": "",
+                          "avatar_updated_at": null,
                           "created_at": "2026-09-27T09:30:00Z",
                           "last_sign_in_at": "2026-09-27T11:00:00Z"
                         }
@@ -2979,6 +3368,13 @@
                         "display_name": "Alice Martin",
                         "admin": true,
                         "suspended": false,
+                        "given_name": "",
+                        "family_name": "",
+                        "title": "",
+                        "location": "",
+                        "timezone": "",
+                        "bio": "",
+                        "avatar_updated_at": null,
                         "created_at": "2026-09-27T08:50:00Z"
                       },
                       "enrolment": {
@@ -3013,6 +3409,13 @@
                         "display_name": "Alice Martin",
                         "admin": true,
                         "suspended": false,
+                        "given_name": "",
+                        "family_name": "",
+                        "title": "",
+                        "location": "",
+                        "timezone": "",
+                        "bio": "",
+                        "avatar_updated_at": null,
                         "created_at": "2026-09-27T08:50:00Z"
                       },
                       "enrolment": {
@@ -3030,6 +3433,13 @@
                         "display_name": "carol",
                         "admin": false,
                         "suspended": false,
+                        "given_name": "",
+                        "family_name": "",
+                        "title": "",
+                        "location": "",
+                        "timezone": "",
+                        "bio": "",
+                        "avatar_updated_at": null,
                         "created_at": "2026-09-27T10:05:00Z"
                       },
                       "enrolment": {
@@ -3075,7 +3485,7 @@
           "users"
         ],
         "summary": "Read a user",
-        "description": "One user: login, display name, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in; never a credential. Administrator only. What the Terraform provider refreshes and imports a user with.",
+        "description": "One user: login, display name, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#principals"
@@ -3097,6 +3507,13 @@
                       "display_name": "Bob Martin",
                       "admin": false,
                       "suspended": false,
+                      "given_name": "Bob",
+                      "family_name": "Martin",
+                      "title": "Platform engineer",
+                      "location": "",
+                      "timezone": "Europe/Paris",
+                      "bio": "",
+                      "avatar_updated_at": "2026-09-28T08:40:00Z",
                       "created_at": "2026-09-27T09:20:00Z",
                       "last_sign_in_at": "2026-09-27T12:30:00Z"
                     }
@@ -3110,6 +3527,13 @@
                       "admin": false,
                       "suspended": true,
                       "suspended_for": "no_passkey",
+                      "given_name": "",
+                      "family_name": "",
+                      "title": "",
+                      "location": "",
+                      "timezone": "",
+                      "bio": "",
+                      "avatar_updated_at": null,
                       "created_at": "2026-09-27T09:30:00Z",
                       "last_sign_in_at": "2026-09-27T11:00:00Z"
                     }
@@ -3168,6 +3592,146 @@
           "409": {
             "$ref": "#/components/responses/conflict",
             "description": "Another namespace's record names the user as owner, the error naming it; their personal namespace holds something, saying what; or they are the last administrator who can sign in."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{login}/avatar": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/login"
+        }
+      ],
+      "get": {
+        "operationId": "getUserAvatar",
+        "tags": [
+          "users"
+        ],
+        "summary": "Read a user's photo",
+        "description": "A user's photo, read by an administrator as the user's record is, with what GET /api/v1/me/avatar answers it with. Administrator only, as every route about a user: which users an installation has is not something another user may ask it, and a photo read by login would answer that, a picture or a 404, for every login somebody tried. No user, a login no user can have and a user holding no photo are one 404.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#principals"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/avatarVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The photo.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/privateDay"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/avatarTag"
+              },
+              "X-Content-Type-Options": {
+                "$ref": "#/components/headers/noSniff"
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "image/png"
+                },
+                "examples": {
+                  "photo": {
+                    "summary": "a PNG of at most 512 by 512 pixels",
+                    "value": "PNG\r\n\u001a\n..."
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The photo is the one the If-None-Match tag names: the client's copy is still the photo.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/avatarTag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "404": {
+            "description": "No user by that login, a login no user can have, or a user holding no photo: one answer for the three.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "none": {
+                    "summary": "no user, or no photo",
+                    "value": {
+                      "error": "no user by that login, or they hold no photo"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeUserAvatar",
+        "tags": [
+          "users"
+        ],
+        "summary": "Remove a user's photo",
+        "description": "Removes a user's photo, one that should not be shown to the people they work with; they may set another, and nothing else of them changes. Administrator only, and the bootstrap token's until the first administrator has signed in, as every route about a user. No user, a login no user can have and a user holding no photo are one 404, as the photo is read. Audited as user.avatar, by the administrator, with removed. No body is read, and one sent is refused.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#principals"
+        },
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
+          },
+          "404": {
+            "description": "No user by that login, a login no user can have, or a user holding no photo: one answer for the three.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "none": {
+                    "summary": "no user, or no photo",
+                    "value": {
+                      "error": "no user by that login, or they hold no photo"
+                    }
+                  }
+                }
+              }
+            }
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
@@ -4923,6 +5487,97 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/workflows/{name}/refs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/workflow"
+        }
+      ],
+      "get": {
+        "operationId": "listWorkflowRefs",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List a workflow's branches and tags",
+        "description": "The branches and tags the workflow's repository holds, for the console's ref switcher, which could otherwise offer only the default branch and the versions of its history: git's advertisement lists them, and git's routes take an API token and never a session. Each ref is named in full, in git's order, byte by byte, with the commit it points at, an annotated tag peeled to its commit, and null for the default branch while it is unborn; whether it is protected; and who last moved it and when, absent while it is unborn. Every commit a ref points at is a version, which the tree route reads at it. Listed whole and not paged, since the advertisement lists every ref to whoever may clone, which is whoever may read. Requires workflow:read.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "200": {
+            "description": "Every branch and tag of the repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/refs"
+                },
+                "examples": {
+                  "held": {
+                    "summary": "the default branch, a branch holding a slash and a tag",
+                    "value": {
+                      "refs": [
+                        {
+                          "name": "refs/heads/feature/vat-rounding",
+                          "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                          "protected": false,
+                          "moved_by": "chloe",
+                          "moved_at": "2026-09-30T15:02:00Z"
+                        },
+                        {
+                          "name": "refs/heads/main",
+                          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                          "protected": true,
+                          "moved_by": "alice",
+                          "moved_at": "2026-09-28T10:12:00Z"
+                        },
+                        {
+                          "name": "refs/tags/v2.1.0",
+                          "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                          "protected": false,
+                          "moved_by": "bob",
+                          "moved_at": "2026-09-20T16:40:00Z"
+                        }
+                      ]
+                    }
+                  },
+                  "unborn": {
+                    "summary": "a repository nothing was pushed to yet",
+                    "value": {
+                      "refs": [
+                        {
+                          "name": "refs/heads/main",
+                          "commit": null,
+                          "protected": true
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such workflow, or one the caller cannot read: the same answer."
           }
         }
       }
@@ -9487,6 +10142,13 @@
                 "display_name": "Alice Martin",
                 "admin": true,
                 "suspended": false,
+                "given_name": "Alice",
+                "family_name": "Martin",
+                "title": "Technical lead",
+                "location": "Lyon, France",
+                "timezone": "Europe/Paris",
+                "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+                "avatar_updated_at": "2026-09-28T10:15:00Z",
                 "created_at": "2026-09-27T08:50:00Z"
               }
             ]
@@ -9617,6 +10279,13 @@
               "display_name": "Alice Martin",
               "admin": true,
               "suspended": false,
+              "given_name": "Alice",
+              "family_name": "Martin",
+              "title": "Technical lead",
+              "location": "Lyon, France",
+              "timezone": "Europe/Paris",
+              "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+              "avatar_updated_at": "2026-09-28T10:15:00Z",
               "created_at": "2026-09-27T08:50:00Z"
             },
             "groups": [
@@ -10188,6 +10857,13 @@
                 "display_name": "Alice Martin",
                 "admin": true,
                 "suspended": false,
+                "given_name": "",
+                "family_name": "",
+                "title": "",
+                "location": "",
+                "timezone": "",
+                "bio": "",
+                "avatar_updated_at": null,
                 "created_at": "2026-09-27T08:50:00Z"
               }
             ]
@@ -10211,6 +10887,13 @@
               "display_name": "Alice Martin",
               "admin": true,
               "suspended": false,
+              "given_name": "",
+              "family_name": "",
+              "title": "",
+              "location": "",
+              "timezone": "",
+              "bio": "",
+              "avatar_updated_at": null,
               "created_at": "2026-09-27T08:50:00Z"
             },
             "enrolment": {
@@ -10285,6 +10968,13 @@
                   "display_name": "Alice Martin",
                   "admin": true,
                   "suspended": false,
+                  "given_name": "",
+                  "family_name": "",
+                  "title": "",
+                  "location": "",
+                  "timezone": "",
+                  "bio": "",
+                  "avatar_updated_at": null,
                   "created_at": "2026-09-27T08:50:00Z"
                 },
                 {
@@ -10293,6 +10983,13 @@
                   "display_name": "Bob Martin",
                   "admin": false,
                   "suspended": false,
+                  "given_name": "",
+                  "family_name": "",
+                  "title": "",
+                  "location": "",
+                  "timezone": "",
+                  "bio": "",
+                  "avatar_updated_at": null,
                   "created_at": "2026-09-27T09:20:00Z"
                 }
               ]
@@ -10308,6 +11005,13 @@
                 "display_name": "Alice Martin",
                 "admin": true,
                 "suspended": false,
+                "given_name": "",
+                "family_name": "",
+                "title": "",
+                "location": "",
+                "timezone": "",
+                "bio": "",
+                "avatar_updated_at": null,
                 "created_at": "2026-09-27T08:50:00Z"
               },
               {
@@ -10316,6 +11020,13 @@
                 "display_name": "Bob Martin",
                 "admin": false,
                 "suspended": false,
+                "given_name": "",
+                "family_name": "",
+                "title": "",
+                "location": "",
+                "timezone": "",
+                "bio": "",
+                "avatar_updated_at": null,
                 "created_at": "2026-09-27T09:20:00Z"
               }
             ]
@@ -11759,6 +12470,93 @@
             "mode": "0755",
             "size": 1532,
             "sha256": "a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a"
+          }
+        ]
+      },
+      "refs": {
+        "title": "Refs",
+        "type": "object",
+        "required": [
+          "refs"
+        ],
+        "additionalProperties": false,
+        "description": "A workflow repository's branches and tags, as GET /api/v1/{ns}/workflows/{name}/refs answers them.",
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/ref"
+            },
+            "minItems": 1,
+            "description": "Every branch and tag, in git's order, byte by byte. Never empty, since the default branch is held from the repository's creation, without a commit until something is pushed to it.",
+            "examples": [
+              [
+                {
+                  "name": "refs/heads/feature/vat-rounding",
+                  "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                  "protected": false,
+                  "moved_by": "chloe",
+                  "moved_at": "2026-09-30T15:02:00Z"
+                },
+                {
+                  "name": "refs/heads/main",
+                  "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                  "protected": true,
+                  "moved_by": "alice",
+                  "moved_at": "2026-09-28T10:12:00Z"
+                },
+                {
+                  "name": "refs/tags/v2.1.0",
+                  "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                  "protected": false,
+                  "moved_by": "bob",
+                  "moved_at": "2026-09-20T16:40:00Z"
+                }
+              ],
+              [
+                {
+                  "name": "refs/heads/main",
+                  "commit": null,
+                  "protected": true
+                }
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "refs": [
+              {
+                "name": "refs/heads/feature/vat-rounding",
+                "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                "protected": false,
+                "moved_by": "chloe",
+                "moved_at": "2026-09-30T15:02:00Z"
+              },
+              {
+                "name": "refs/heads/main",
+                "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                "protected": true,
+                "moved_by": "alice",
+                "moved_at": "2026-09-28T10:12:00Z"
+              },
+              {
+                "name": "refs/tags/v2.1.0",
+                "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                "protected": false,
+                "moved_by": "bob",
+                "moved_at": "2026-09-20T16:40:00Z"
+              }
+            ]
+          },
+          {
+            "refs": [
+              {
+                "name": "refs/heads/main",
+                "commit": null,
+                "protected": true
+              }
+            ]
           }
         ]
       },
@@ -17223,6 +18021,85 @@
             ]
           }
         ]
+      },
+      "profileUpdate": {
+        "title": "Profile change",
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": false,
+        "description": "What changes of the caller's display name and profile, and nothing else: a field left out keeps what is recorded, and the empty string clears a field, the display name excepted, which a user always has. Null is refused rather than read as either, since a client could have meant both.",
+        "properties": {
+          "display_name": {
+            "$ref": "wire.schema.json#/$defs/user/properties/display_name",
+            "description": "The name people read in the console and in the sharing panel, never cleared.",
+            "examples": [
+              "Alice Martin"
+            ]
+          },
+          "given_name": {
+            "$ref": "wire.schema.json#/$defs/user/properties/given_name",
+            "description": "The name the user is called by; the empty string clears it.",
+            "examples": [
+              "Alice",
+              ""
+            ]
+          },
+          "family_name": {
+            "$ref": "wire.schema.json#/$defs/user/properties/family_name",
+            "description": "The user's family name; the empty string clears it.",
+            "examples": [
+              "Martin",
+              ""
+            ]
+          },
+          "title": {
+            "$ref": "wire.schema.json#/$defs/user/properties/title",
+            "description": "What the user does, as they put it; the empty string clears it.",
+            "examples": [
+              "Technical lead",
+              ""
+            ]
+          },
+          "location": {
+            "$ref": "wire.schema.json#/$defs/user/properties/location",
+            "description": "Where the user works, as they put it; the empty string clears it.",
+            "examples": [
+              "Lyon, France",
+              ""
+            ]
+          },
+          "timezone": {
+            "$ref": "wire.schema.json#/$defs/user/properties/timezone",
+            "description": "The time zone the user works in, a name the IANA database holds, Local refused; the empty string clears it.",
+            "examples": [
+              "Europe/Paris",
+              ""
+            ]
+          },
+          "bio": {
+            "$ref": "wire.schema.json#/$defs/user/properties/bio",
+            "description": "A line the user writes about themself, 280 characters at most; the empty string clears it.",
+            "examples": [
+              "Writes the invoicing workflows, and reviews what touches payroll.",
+              ""
+            ]
+          }
+        },
+        "examples": [
+          {
+            "given_name": "Alice",
+            "family_name": "Martin",
+            "title": "Technical lead",
+            "timezone": "Europe/Paris"
+          },
+          {
+            "bio": "",
+            "location": ""
+          },
+          {
+            "display_name": "Alice Martin"
+          }
+        ]
       }
     },
     "parameters": {
@@ -17895,6 +18772,21 @@
             "value": "stripe-key"
           }
         }
+      },
+      "avatarVersion": {
+        "name": "v",
+        "in": "query",
+        "required": false,
+        "description": "Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "set": {
+            "summary": "the instant the photo was set",
+            "value": "2026-09-28T10:15:00Z"
+          }
+        }
       }
     },
     "headers": {
@@ -18034,6 +18926,43 @@
           "moved": {
             "summary": "moved to ops",
             "value": "/api/v1/ops/workflows/monthly-invoicing"
+          }
+        }
+      },
+      "privateDay": {
+        "description": "private, max-age=86400: the photo is kept a day by the browser that asked and by no shared cache, since it is shown to its owner and to administrators alone. A client asks for it at an address that changes with avatar_updated_at, so that keeping it a day never shows a photo set since.",
+        "schema": {
+          "const": "private, max-age=86400"
+        },
+        "examples": {
+          "a day": {
+            "summary": "kept a day, privately",
+            "value": "private, max-age=86400"
+          }
+        }
+      },
+      "noSniff": {
+        "description": "nosniff, so that a browser takes the body for the type it is declared as, and never for anything its bytes might be taken for.",
+        "schema": {
+          "const": "nosniff"
+        },
+        "examples": {
+          "nosniff": {
+            "summary": "the declared type alone",
+            "value": "nosniff"
+          }
+        }
+      },
+      "avatarTag": {
+        "description": "The photo's tag, the instant it was set in microseconds since the epoch, in quotes, which a client keeping the photo past its day sends in If-None-Match and is answered 304 for while the photo is the same.",
+        "schema": {
+          "type": "string",
+          "pattern": "^\"[0-9]+\"$"
+        },
+        "examples": {
+          "tag": {
+            "summary": "a photo's tag",
+            "value": "\"1790590500000000\""
           }
         }
       }
