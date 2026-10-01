@@ -70,13 +70,19 @@ const (
 	// RunnerDrain and RunnerRevoke are POST /api/v1/runners/{runner}/drain and /revoke.
 	RunnerDrain  = "runner.drain"
 	RunnerRevoke = "runner.revoke"
-	// NamespaceCreate, NamespaceDelete and NamespaceUpdate are the namespace changes, made by an
-	// administrator through /api/v1/namespaces or on the server by agentiik-api namespace: a
-	// namespace created, one removed, and its quotas set. A user's empty personal namespace removed
-	// with them is a NamespaceDelete too.
+	// NamespaceCreate, NamespaceDelete and NamespaceUpdate are the namespace changes made through
+	// /api/v1/namespaces or on the server by agentiik-api namespace: a namespace created, by any user
+	// or an administrator, one removed, by its owner or an administrator, and its quotas set, by an
+	// administrator. A user's empty personal namespace removed with them is a NamespaceDelete too.
+	// NamespaceRename is a namespace renamed, PATCH /api/v1/namespaces/{ns}, recorded on the
+	// installation with the new name as its target and from and to, since the namespace's own entries
+	// keep the name they were recorded under. NamespaceAvatar is its picture set, with the size it was
+	// stored at, or removed, with removed; never the picture.
 	NamespaceCreate = "namespace.create"
 	NamespaceDelete = "namespace.delete"
 	NamespaceUpdate = "namespace.update"
+	NamespaceRename = "namespace.rename"
+	NamespaceAvatar = "namespace.avatar"
 	// GrantCreate is a grant or a deny written, at POST /api/v1/{ns}/grants or on one workflow,
 	// recorded in its namespace with whom, where and what. The first written is a namespace's
 	// owner's, which its creation writes. GrantDelete is one revoked, recorded as it was. Either,

@@ -21,7 +21,9 @@ import (
 )
 
 // A user's photo: PUT, GET and DELETE /api/v1/me/avatar, the caller's own, and GET and DELETE
-// /api/v1/users/{login}/avatar, an administrator's.
+// /api/v1/users/{login}/avatar, an administrator's. A namespace's picture, at
+// /api/v1/namespaces/{ns}/avatar, is "held to a user's photo's rules", and is read, encoded and
+// served by the same code: see NamespaceAPI.
 //
 // A photo is shown to its owner and to administrators alone. Which users an installation has is not
 // something another user may ask it, as GET /api/v1/users is an administrator's, and a photo read by
@@ -77,13 +79,6 @@ func (s *UserAPI) avatar(w http.ResponseWriter, r *http.Request, _ Principal, _ 
 }
 
 // serveAvatar answers login's photo, or absent with 404 where there is none.
-//
-// Cached a day, privately, since the photo is its owner's and an administrator's to read and no
-// shared cache may hand it to anybody else: the console asks for it with ?v= and the user's
-// avatar_updated_at, so that a photo set again is asked for at another address. Its tag is that
-// instant, which a client keeping the photo past the day revalidates with and is answered 304 while
-// it is the same. nosniff, so that a browser shows it as the PNG it is declared as and never as
-// anything its bytes might be taken for.
 func serveAvatar(w http.ResponseWriter, r *http.Request, pool *db.Pool, login, absent string) {
 	var picture []byte
 	var at time.Time
@@ -100,6 +95,18 @@ func serveAvatar(w http.ResponseWriter, r *http.Request, pool *db.Pool, login, a
 		fail(w, http.StatusInternalServerError, "the photo could not be read")
 		return
 	}
+	servePicture(w, r, picture, at)
+}
+
+// servePicture answers a picture as it is stored, a user's photo or a namespace's picture, set at at.
+//
+// Cached a day, privately, since the picture is for those who may read its record and no shared
+// cache may hand it to anybody else: the console asks for it with ?v= and the record's
+// avatar_updated_at, so that a picture set again is asked for at another address. Its tag is that
+// instant, which a client keeping the picture past the day revalidates with and is answered 304
+// while it is the same. nosniff, so that a browser shows it as the PNG it is declared as and never as
+// anything its bytes might be taken for.
+func servePicture(w http.ResponseWriter, r *http.Request, picture []byte, at time.Time) {
 	h := w.Header()
 	h.Set("Content-Type", "image/png")
 	h.Set("Cache-Control", "private, max-age=86400")
@@ -108,42 +115,21 @@ func serveAvatar(w http.ResponseWriter, r *http.Request, pool *db.Pool, login, a
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(picture))
 }
 
-// setAvatar is PUT /api/v1/me/avatar: the caller's photo, a PNG or a JPEG as the body, stored as
-// reencode makes it in place of any before it, and recorded as user.avatar with the size it was
-// stored at.
-//
-// The Content-Type is judged before a byte is read, and only says the body is one of the two: the
-// bytes say which, since a browser names a file's type by its extension, and they are decoded and
-// encoded again whatever they claim.
+// setAvatar is PUT /api/v1/me/avatar: the caller's photo, a PNG or a JPEG as the body, read as
+// pictureSent reads a picture and stored as reencode makes it in place of any before it, and recorded
+// as user.avatar with the size it was stored at.
 func (m *MeAPI) setAvatar(w http.ResponseWriter, r *http.Request, caller Caller) {
 	login, ok := userWriting(w, caller)
 	if !ok {
 		return
 	}
-	if media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || (media != "image/png" && media != "image/jpeg") {
-		fail(w, http.StatusUnsupportedMediaType, fmt.Sprintf("a photo is sent as image/png or image/jpeg, and this request's Content-Type is %.64q", r.Header.Get("Content-Type")))
-		return
-	}
-	raw, err := slurp(r, avatarMaxBytes)
-	switch {
-	case errors.As(err, new(*tooLarge)):
-		fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("a photo is at most %d bytes, a mebibyte, and this one is more: send it smaller, since it is stored at %d by %d pixels at most", avatarMaxBytes, avatarSide, avatarSide))
-		return
-	case err != nil:
-		fail(w, statusOf(err), err.Error())
-		return
-	case len(raw) == 0:
-		fail(w, http.StatusBadRequest, "the request body is empty, and this route reads a photo, a PNG or a JPEG")
-		return
-	}
-	stored, width, height, err := reencode(raw)
-	if err != nil {
-		fail(w, http.StatusUnprocessableEntity, err.Error())
+	stored, width, height, ok := pictureSent(w, r, "photo")
+	if !ok {
 		return
 	}
 	// To the microsecond the database keeps, so that the instant answered is the one stored.
 	at := m.now().Truncate(time.Microsecond)
-	err = m.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+	err := m.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		err := wide.SetAvatar(ctx, login, stored, at)
 		if errors.Is(err, db.ErrNoPrincipal) {
 			return errGone
@@ -247,17 +233,49 @@ func (s *UserAPI) removeAvatar(w http.ResponseWriter, r *http.Request, who Princ
 	}
 }
 
-// reencode reads a photo sent, a PNG or a JPEG, and answers it encoded again as a PNG of at most
+// pictureSent reads the picture a request sends, a user's photo or a namespace's picture, which noun
+// names in what it refuses, and answers it as reencode stores it, with its size in pixels; or answers
+// the request with why it was refused, and false.
+//
+// The Content-Type is judged before a byte is read, and only says the body is one of the two: the
+// bytes say which, since a browser names a file's type by its extension, and they are decoded and
+// encoded again whatever they claim.
+func pictureSent(w http.ResponseWriter, r *http.Request, noun string) ([]byte, int, int, bool) {
+	if media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || (media != "image/png" && media != "image/jpeg") {
+		fail(w, http.StatusUnsupportedMediaType, fmt.Sprintf("a %s is sent as image/png or image/jpeg, and this request's Content-Type is %.64q", noun, r.Header.Get("Content-Type")))
+		return nil, 0, 0, false
+	}
+	raw, err := slurp(r, avatarMaxBytes)
+	switch {
+	case errors.As(err, new(*tooLarge)):
+		fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("a %s is at most %d bytes, a mebibyte, and this one is more: send it smaller, since it is stored at %d by %d pixels at most", noun, avatarMaxBytes, avatarSide, avatarSide))
+		return nil, 0, 0, false
+	case err != nil:
+		fail(w, statusOf(err), err.Error())
+		return nil, 0, 0, false
+	case len(raw) == 0:
+		fail(w, http.StatusBadRequest, fmt.Sprintf("the request body is empty, and this route reads a %s, a PNG or a JPEG", noun))
+		return nil, 0, 0, false
+	}
+	stored, width, height, err := reencode(raw, noun)
+	if err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return nil, 0, 0, false
+	}
+	return stored, width, height, true
+}
+
+// reencode reads a picture sent, a PNG or a JPEG, and answers it encoded again as a PNG of at most
 // avatarSide by avatarSide, keeping its aspect, upright, with its size in pixels. It refuses, saying
-// why, a body that is neither, and one whose header announces more than avatarMaxSide pixels a side,
-// which is refused before it is decoded.
-func reencode(raw []byte) (encoded []byte, width, height int, err error) {
+// why in the words of noun, photo or picture, a body that is neither, and one whose header announces
+// more than avatarMaxSide pixels a side, which is refused before it is decoded.
+func reencode(raw []byte, noun string) (encoded []byte, width, height int, err error) {
 	config, format, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil || (format != "png" && format != "jpeg") {
-		return nil, 0, 0, errors.New("the body is not a PNG or a JPEG that can be read, and a photo is one of the two")
+		return nil, 0, 0, fmt.Errorf("the body is not a PNG or a JPEG that can be read, and a %s is one of the two", noun)
 	}
 	if config.Width < 1 || config.Height < 1 || config.Width > avatarMaxSide || config.Height > avatarMaxSide {
-		return nil, 0, 0, fmt.Errorf("the photo is %d by %d pixels, and one is at most %d by %d: it is stored at %d by %d at most, and a larger one takes more to decode than it gives", config.Width, config.Height, avatarMaxSide, avatarMaxSide, avatarSide, avatarSide)
+		return nil, 0, 0, fmt.Errorf("the %s is %d by %d pixels, and one is at most %d by %d: it is stored at %d by %d at most, and a larger one takes more to decode than it gives", noun, config.Width, config.Height, avatarMaxSide, avatarMaxSide, avatarSide, avatarSide)
 	}
 	var decoded image.Image
 	orientation := 1
@@ -268,16 +286,16 @@ func reencode(raw []byte) (encoded []byte, width, height int, err error) {
 		orientation = exifOrientation(raw)
 	}
 	if err != nil {
-		return nil, 0, 0, errors.New("the body is not a PNG or a JPEG that can be read whole, and a photo is one of the two")
+		return nil, 0, 0, fmt.Errorf("the body is not a PNG or a JPEG that can be read whole, and a %s is one of the two", noun)
 	}
 	pixels := image.NewRGBA(image.Rect(0, 0, decoded.Bounds().Dx(), decoded.Bounds().Dy()))
 	draw.Draw(pixels, pixels.Bounds(), decoded, decoded.Bounds().Min, draw.Src)
 	upright := orient(shrink(pixels, avatarSide), orientation)
 	var out bytes.Buffer
-	// Compressed as far as PNG goes, since a photo is encoded once and read at every page that
+	// Compressed as far as PNG goes, since a picture is encoded once and read at every page that
 	// shows it.
 	if err := (&png.Encoder{CompressionLevel: png.BestCompression}).Encode(&out, upright); err != nil {
-		return nil, 0, 0, fmt.Errorf("the photo could not be encoded again: %w", err)
+		return nil, 0, 0, fmt.Errorf("the %s could not be encoded again: %w", noun, err)
 	}
 	return out.Bytes(), upright.Bounds().Dx(), upright.Bounds().Dy(), nil
 }

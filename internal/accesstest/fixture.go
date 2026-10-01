@@ -286,8 +286,8 @@ func Build(t testing.TB, in Installation) *Fixture {
 	f.Bob.holding = "bob"
 
 	// The two namespaces, finance owned by carol and hr by bob, and team-finance, alice in it.
-	f.must(t, "POST", "/api/v1/namespaces", f.Carol, api.NamespaceRecord{Name: Finance, Owner: "carol"}, http.StatusCreated)
-	f.must(t, "POST", "/api/v1/namespaces", f.Carol, api.NamespaceRecord{Name: HR, Owner: "bob"}, http.StatusCreated)
+	f.must(t, "POST", "/api/v1/namespaces", f.Carol, api.NamespaceCreate{Name: Finance, Owner: "carol"}, http.StatusCreated)
+	f.must(t, "POST", "/api/v1/namespaces", f.Carol, api.NamespaceCreate{Name: HR, Owner: "bob"}, http.StatusCreated)
 	f.must(t, "POST", "/api/v1/groups", f.Carol, api.NewGroup{Name: TeamFinance, Members: []string{"alice"}}, http.StatusCreated)
 
 	// finance/nightly-sync, and a token of it, minted by carol, who owns finance.

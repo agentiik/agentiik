@@ -69,6 +69,10 @@ type HookCredential struct {
 
 	WrittenBy string
 	WrittenAt time.Time
+
+	// Storage is the storage name of the namespace, which a secret is sealed under (NS.Storage),
+	// read beside it by HookCredential.
+	Storage string
 }
 
 // ErrNoHookCredential is a webhook no credential was written for.
@@ -86,6 +90,9 @@ func (n *NS) HookCredential(ctx context.Context, workflow, path, method string) 
 	}
 	if err != nil {
 		return HookCredential{}, fmt.Errorf("db: the credential of the webhook %s %s of %s could not be read: %w", method, path, workflow, err)
+	}
+	if c.Storage, err = n.Storage(ctx); err != nil {
+		return HookCredential{}, err
 	}
 	return c, nil
 }

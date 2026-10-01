@@ -243,7 +243,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	}
 
 	state := ev.State()
-	doc, err := Elide(ctx, state, e.Namespace, co.objects)
+	doc, err := Elide(ctx, state, storageOf(e), co.objects)
 	if err != nil {
 		return err
 	}

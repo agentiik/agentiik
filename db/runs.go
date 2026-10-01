@@ -369,10 +369,15 @@ func minted(run agk.RunID) bool {
 // Evaluation is a run as the controller picks it up.
 type Evaluation struct {
 	Namespace string
-	Run       agk.RunID
-	Workflow  string
-	Commit    string
-	State     agk.RunState
+
+	// Storage is the namespace's storage name, which every object of it is kept under, its
+	// envelopes among them (NS.Storage).
+	Storage string
+
+	Run      agk.RunID
+	Workflow string
+	Commit   string
+	State    agk.RunState
 
 	// Document is the evaluator's state with the envelopes lifted out, and is empty for a
 	// run nothing has decided yet.
@@ -443,11 +448,12 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 		        cancel_requested_at, xmin::text, created_at,
 		        coalesce((select n.max_run_duration from namespaces n where n.name = runs.namespace), ''),
 		        coalesce(triggered_by, ''), coalesce(replay_of, ''), coalesce(replay_from, ''), trigger_context,
-		        coalesce(caller_run, ''), depth
+		        coalesce(caller_run, ''), depth,
+		        coalesce((select n.storage from namespaces n where n.name = runs.namespace), namespace)
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
 			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt, &e.MaxRunDuration,
-			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom, &context, &e.CallerRun, &e.Depth)
+			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom, &context, &e.CallerRun, &e.Depth, &e.Storage)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}

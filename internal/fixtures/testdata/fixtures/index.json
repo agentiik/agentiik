@@ -1462,6 +1462,10 @@
         {
           "file": "wire/valid/namespace-record-tightened.json",
           "covers": "a namespace requiring device-bound passkeys, and one more of them, of everyone holding a grant in it"
+        },
+        {
+          "file": "wire/valid/namespace-record-renamed.json",
+          "covers": "a namespace renamed twice, listing the names it left in the order it left them, the first a word reserved since it was created before v0.3.0, which a former name may be, and a picture set"
         }
       ],
       "invalid": [
@@ -1518,6 +1522,18 @@
           "rule": "a namespace's name is at most 255 characters, the most a directory or a bus subject token holds a name to",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/namespace-record-former-name-twice.json",
+          "rule": "a namespace holds each name it left once, and lists it once",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#renaming-a-namespace"
+        },
+        {
+          "file": "wire/invalid/namespace-record-former-name-is-its-name.json",
+          "rule": "a rename back to a former name takes it out of the list, since it is the namespace's name again, a rule between two values of one record that the API holds",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#renaming-a-namespace"
         }
       ]
     },

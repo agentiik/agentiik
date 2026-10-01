@@ -161,8 +161,14 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 		return Written{}, err
 	}
 
+	// Kept under the namespace's storage name, the name it was created with, which a rename leaves
+	// as it was, so that the key written is the one every object of the namespace is under.
+	storage, err := storageOf(ctx, tx, namespace)
+	if err != nil {
+		return Written{}, err
+	}
 	stored := "sha256:" + r.Digest
-	out := Written{Key: artifact.Key(namespace, r.Digest), Fetches: r.Fetches}
+	out := Written{Key: artifact.Key(storage, r.Digest), Fetches: r.Fetches}
 
 	// The object first, because the reference has a foreign key onto it, and counted up
 	// before the reference is written rather than after: a count that is momentarily too
@@ -283,7 +289,11 @@ func (n *NS) Resolve(ctx context.Context, u agk.URI) (Resolved, error) {
 	}
 
 	out.Digest = trimAlgorithm(stored)
-	out.Key = artifact.Key(n.namespace, out.Digest)
+	storage, err := n.Storage(ctx)
+	if err != nil {
+		return Resolved{URI: u}, err
+	}
+	out.Key = artifact.Key(storage, out.Digest)
 	if retired != nil {
 		out.RetiredAt = *retired
 	}

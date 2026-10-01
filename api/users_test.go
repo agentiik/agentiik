@@ -412,7 +412,7 @@ func TestALoginIsHeldToTheNamespaceGrammarAndItsNameSpace(t *testing.T) {
 		{`{"login":"stats","display_name":"Stats"}`, 400, "login: stats is reserved: it is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools"},
 		{`{"login":"operator","display_name":"Operator"}`, 400, "login: operator is reserved"},
 		{`{"login":"installation","display_name":"Installation"}`, 400, "login: installation is reserved"},
-		{`{"login":"finance","display_name":"Finance"}`, 409, "finance is already a namespace"},
+		{`{"login":"finance","display_name":"Finance"}`, 409, "finance is a namespace's name"},
 		{`{"login":"alice","display_name":"Alice"}`, 200, ""},
 		{`{"login":"dan","display_name":""}`, 400, "a user has a display name"},
 		{`{"login":"dan","display_name":"   \t"}`, 400, "control character"},

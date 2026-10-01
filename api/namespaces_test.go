@@ -18,8 +18,10 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// /api/v1/namespaces against a real PostgreSQL, behind the real Principals: an administrator
-// creates, bounds and removes a namespace, and whoever holds a grant in one reads it.
+// /api/v1/namespaces against a real PostgreSQL, behind the real Principals: any user creates a
+// namespace they own, an administrator one for another owner and bounds it, its owner or an
+// administrator renames it, gives it a picture and removes it, and whoever holds a grant in one
+// reads it.
 
 // namespaces is somePrincipals serving the namespace routes, with a pool dmz besides default, and a
 // token for carol, who administers the installation, alice, who edits finance through team-finance,
@@ -130,7 +132,7 @@ func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("creating a namespace answered %d: %s", w.Code, w.Body)
 	}
-	want := `{"name":"team-ops","kind":"shared","owner":"group:team-finance","quotas":{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_retention_days":90,"max_run_duration":"24h","allowed_runner_pools":["default","dmz"]}}`
+	want := `{"name":"team-ops","kind":"shared","owner":"group:team-finance","quotas":{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_retention_days":90,"max_run_duration":"24h","allowed_runner_pools":["default","dmz"]},"former_names":[],"avatar_updated_at":null}`
 	if strings.TrimSpace(w.Body.String()) != want {
 		t.Errorf("the namespace was answered as\n%s\nwant\n%s", w.Body, want)
 	}
@@ -172,28 +174,85 @@ func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 	}
 
 	// A namespace created with nothing but a name and an owner holds the two quotas that always
-	// hold a value, at their defaults.
+	// hold a value, at their defaults; and one an administrator creates naming no owner is theirs.
 	w = in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"sandbox","owner":"bob"}`)
-	if w.Code != http.StatusCreated || strings.TrimSpace(w.Body.String()) != `{"name":"sandbox","kind":"shared","owner":"bob","quotas":{"max_concurrent_tasks":20,"max_retention_days":90}}` {
+	if w.Code != http.StatusCreated || strings.TrimSpace(w.Body.String()) != `{"name":"sandbox","kind":"shared","owner":"bob","quotas":{"max_concurrent_tasks":20,"max_retention_days":90},"former_names":[],"avatar_updated_at":null}` {
 		t.Errorf("a namespace with no quotas was answered %d %s", w.Code, w.Body)
+	}
+	w = in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"carols"}`)
+	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"owner":"carol"`) {
+		t.Errorf("an administrator's namespace naming no owner was answered %d %s", w.Code, w.Body)
 	}
 }
 
-// Creating, removing and bounding a namespace are an administrator's: anybody else is refused with
-// 403 before the namespace is looked up, and nothing is written or recorded. A token narrowed to a
-// namespace carries no administrator's power, and the bootstrap token does until it has ended.
+// Any user creates a shared namespace, and owns it: the owner role is theirs from the act that
+// creates it, granted by themself, and the namespace takes the installation's defaults. Naming
+// another owner, or any quota, is an administrator's, refused with 403 before anything is written;
+// so is a namespace asked for by a service account or through a token narrowed by a scope, since a
+// namespace is a person's.
+func TestAUserCreatesANamespaceTheyOwn(t *testing.T) {
+	in := someNamespaces(t)
+	w := in.ask(t, "POST", "/api/v1/namespaces", in.alice, `{"name":"alice-lab"}`)
+	if want := `{"name":"alice-lab","kind":"shared","owner":"alice","quotas":{"max_concurrent_tasks":20,"max_retention_days":90},"former_names":[],"avatar_updated_at":null}`; w.Code != http.StatusCreated || strings.TrimSpace(w.Body.String()) != want {
+		t.Fatalf("a user creating a namespace was answered %d %s, want %s", w.Code, w.Body, want)
+	}
+	valid(t, "/$defs/namespaceRecord", w.Body.Bytes())
+	var role string
+	in.query(t, &role, `select role || ' ' || granted_by from grants where namespace = 'alice-lab' and principal = 'alice'`)
+	if role != "owner alice" {
+		t.Errorf("the creator's grant reads %q, want the owner role granted by alice herself", role)
+	}
+	if !in.holds(t, "alice", api.GrantManage, api.Target{Namespace: "alice-lab"}) {
+		t.Error("the user who created the namespace does not hold grant:manage in it")
+	}
+	if w := in.ask(t, "POST", "/api/v1/namespaces", in.alice, `{"name":"alice-notes","owner":"alice"}`); w.Code != http.StatusCreated {
+		t.Errorf("a user naming themself as the owner was answered %d %s", w.Code, w.Body)
+	}
+
+	nightly := in.token(t, "finance/nightly", nil, nil, in.now.Add(time.Hour))
+	narrowed := in.token(t, "alice", nil, []string{"finance"}, in.now.Add(time.Hour))
+	carolNarrowed := in.token(t, "carol", nil, []string{"finance"}, in.now.Add(time.Hour))
+	for _, c := range []struct {
+		token, body, says string
+	}{
+		{in.alice, `{"name":"team-ops","owner":"bob"}`, "naming another owner"},
+		{in.alice, `{"name":"team-ops","owner":"group:team-finance"}`, "naming another owner"},
+		{in.alice, `{"name":"team-ops","quotas":{"max_runs_per_hour":5}}`, "quotas are an administrator's"},
+		{nightly, `{"name":"team-ops"}`, "a service account creates no namespace"},
+		{narrowed, `{"name":"team-ops"}`, "narrowed by a scope creates no namespace"},
+		{carolNarrowed, `{"name":"team-ops","owner":"bob"}`, "narrowed by a scope creates no namespace"},
+	} {
+		if w := in.ask(t, "POST", "/api/v1/namespaces", c.token, c.body); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), c.says) {
+			t.Errorf("%s answered %d %s, want 403 saying %q", c.body, w.Code, w.Body, c.says)
+		}
+	}
+	if n := in.count(t, `select count(*) from namespaces where name = 'team-ops'`); n != 0 {
+		t.Error("a refused creation left a namespace behind")
+	}
+}
+
+// Bounding a namespace, creating one for another owner, and removing, renaming or picturing one
+// a caller does not own are an administrator's: anybody else is refused, with 403 at the
+// installation's routes and the 404 of a namespace's own where the route is the owner's, and nothing
+// is written or recorded. A token narrowed to a namespace carries no administrator's power, and the
+// bootstrap token does until it has ended.
 func TestOnlyAnAdministratorChangesANamespace(t *testing.T) {
 	in := someNamespaces(t)
 	narrowed := in.token(t, "carol", nil, []string{"finance"}, in.now.Add(time.Hour))
 	for _, token := range []string{in.alice, narrowed} {
-		for _, c := range []struct{ method, path, body string }{
-			{"POST", "/api/v1/namespaces", `{"name":"team-ops","owner":"alice"}`},
-			{"DELETE", "/api/v1/namespaces/finance", ""},
-			{"DELETE", "/api/v1/namespaces/nowhere", ""},
-			{"PUT", "/api/v1/namespaces/finance/quotas", `{"max_runs_per_hour":1}`},
+		for _, c := range []struct {
+			method, path, body string
+			want               int
+		}{
+			{"POST", "/api/v1/namespaces", `{"name":"team-ops","owner":"bob"}`, http.StatusForbidden},
+			{"DELETE", "/api/v1/namespaces/finance", "", http.StatusNotFound},
+			{"DELETE", "/api/v1/namespaces/nowhere", "", http.StatusNotFound},
+			{"PATCH", "/api/v1/namespaces/finance", `{"name":"accounting"}`, http.StatusNotFound},
+			{"DELETE", "/api/v1/namespaces/finance/avatar", "", http.StatusNotFound},
+			{"PUT", "/api/v1/namespaces/finance/quotas", `{"max_runs_per_hour":1}`, http.StatusForbidden},
 		} {
-			if w := in.ask(t, c.method, c.path, token, c.body); w.Code != http.StatusForbidden {
-				t.Errorf("%s %s by somebody who does not administer answered %d: %s", c.method, c.path, w.Code, w.Body)
+			if w := in.ask(t, c.method, c.path, token, c.body); w.Code != c.want {
+				t.Errorf("%s %s by somebody who does not administer answered %d, want %d: %s", c.method, c.path, w.Code, c.want, w.Body)
 			}
 		}
 	}
@@ -235,7 +294,6 @@ func TestANamespaceIsRefusedWhatTheWireAndTheInstallationRefuse(t *testing.T) {
 		{`{"name":"team-ops","owner":"group:nowhere"}`, http.StatusUnprocessableEntity, "names no user or group"},
 		{`{"name":"team-ops","owner":"finance/nightly"}`, http.StatusUnprocessableEntity, "names no user or group"},
 		{`{"name":"team-ops","owner":"alice","quotas":{"allowed_runner_pools":["dmz","gpu"]}}`, http.StatusUnprocessableEntity, "names gpu, which is no runner pool"},
-		{`{"name":"team-ops"}`, http.StatusBadRequest, "names no owner"},
 		{`{"name":"team-ops","owner":"operator"}`, http.StatusBadRequest, "the owner: operator"},
 		{`{"owner":"alice"}`, http.StatusBadRequest, "a namespace has a name"},
 		{`{"name":"runs","owner":"alice"}`, http.StatusBadRequest, "routes on"},
@@ -273,9 +331,9 @@ func TestANamespaceIsRefusedWhatTheWireAndTheInstallationRefuse(t *testing.T) {
 }
 
 // A namespace v0.2 created under stats, which v0.3.0 reserved for GET /api/v1/stats/pools, keeps
-// its name, since nothing renames a namespace: it is read, bounded and removed as any other, and
-// only a new namespace of that name is refused, naming the route that needs the word and the
-// release that serves it.
+// its name until its owner renames it: it is read, bounded and removed as any other, and only a new
+// namespace of that name, or a rename to it, is refused, naming the route that needs the word and
+// the release that serves it.
 func TestANamespaceCreatedBeforeItsWordWasReservedIsServed(t *testing.T) {
 	in := someNamespaces(t)
 	w := in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"stats","owner":"alice"}`)
@@ -356,7 +414,7 @@ func TestANamespaceIsReadByWhoeverHoldsAGrantInIt(t *testing.T) {
 
 	// A namespace v0.2 made names no owner, and reads so.
 	w := in.ask(t, "GET", "/api/v1/namespaces/finance", in.carol, "")
-	if strings.TrimSpace(w.Body.String()) != `{"name":"finance","kind":"shared","quotas":{"max_concurrent_tasks":20,"max_retention_days":90}}` {
+	if strings.TrimSpace(w.Body.String()) != `{"name":"finance","kind":"shared","quotas":{"max_concurrent_tasks":20,"max_retention_days":90},"former_names":[],"avatar_updated_at":null}` {
 		t.Errorf("a namespace with no owner reads %s", w.Body)
 	}
 	valid(t, "/$defs/quotas", in.ask(t, "GET", "/api/v1/namespaces/finance/quotas", in.alice, "").Body.Bytes())
@@ -450,7 +508,7 @@ func TestANamespaceIsRemovedOnlyWhenItHoldsNothing(t *testing.T) {
 		{"/api/v1/namespaces/finance", http.StatusConflict, "namespace finance holds 2 workflows"},
 		{"/api/v1/namespaces/dave-personal", http.StatusConflict, "personal namespace"},
 		{"/api/v1/namespaces/nowhere", http.StatusNotFound, "no namespace"},
-		{"/api/v1/namespaces/%ff", http.StatusNotFound, "no namespace"},
+		{"/api/v1/namespaces/%ff", http.StatusNotFound, "no such thing"},
 	} {
 		if w := in.ask(t, "DELETE", c.path, in.carol, ""); w.Code != c.want || !strings.Contains(w.Body.String(), c.says) {
 			t.Errorf("DELETE %s answered %d %s, want %d saying %q", c.path, w.Code, w.Body, c.want, c.says)

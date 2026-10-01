@@ -15,8 +15,9 @@ import (
 	"github.com/agentiik/agentiik/api"
 )
 
-// agk namespace: an installation's namespaces through /api/v1/namespaces, as an administrator
-// creates, bounds and removes them, and as whoever holds a grant in one reads it.
+// agk namespace: an installation's namespaces through /api/v1/namespaces, as any user creates one
+// they own, its owner renames and removes it, an administrator creates one for another owner and
+// bounds it, and whoever holds a grant in one reads it.
 //
 // Every verb names the namespace it is about as its one word, as agk status names its run, and
 // reaches the installation as every other verb does, through --server or AGENTIIK_SERVER and the
@@ -96,10 +97,11 @@ func (q *quotaFlags) given() (api.Quotas, bool, error) {
 	return out, set, err
 }
 
-// namespaceCreate is agk namespace create: a shared namespace, its owner and its quotas.
+// namespaceCreate is agk namespace create: a shared namespace, owned by whoever creates it, or by
+// the owner an administrator names, with the quotas an administrator sets.
 func namespaceCreate(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk namespace create", "agk namespace create <name> --owner <user or group:NAME> [--max-... <quota>] [--server <url>] [-o json]")
-	owner := fs.String("owner", "", "Who owns it: a login, or group:NAME. Required: the owner holds the owner role on it and is told when an administrator widens their own access in it.")
+	fs := flags(e, "agk namespace create", "agk namespace create <name> [--owner <user or group:NAME>] [--max-... <quota>] [--server <url>] [-o json]")
+	owner := fs.String("owner", "", "Who owns it: a login, or group:NAME, who holds the owner role on it and is told when an administrator widens their own access in it. Left out, you own it; naming another is an administrator's, as the quotas are.")
 	quotas := withQuotas(fs)
 	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
@@ -107,16 +109,12 @@ func namespaceCreate(ctx context.Context, e Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if *owner == "" {
-		fmt.Fprintln(e.Err, "--owner is required: a namespace is created with an owner, a login or group:NAME, who holds the owner role on it")
-		return exitUsage
-	}
 	q, set, err := quotas.given()
 	if err != nil {
 		fmt.Fprintln(e.Err, err)
 		return exitUsage
 	}
-	ask := api.NamespaceRecord{Name: name, Owner: *owner}
+	ask := api.NamespaceCreate{Name: name, Owner: *owner}
 	if set {
 		ask.Quotas = &q
 	}
@@ -196,6 +194,35 @@ func namespaceShow(ctx context.Context, e Env, args []string) int {
 		return namespaceRefused(e, name, false, err)
 	}
 	return answered(e, raw, *output, "")
+}
+
+// namespaceRename is agk namespace rename: a namespace given another name, by its owner or an
+// administrator, the name it leaves kept as a former name that every address still reaches.
+func namespaceRename(ctx context.Context, e Env, args []string) int {
+	fs := flags(e, "agk namespace rename", "agk namespace rename <name> <new name> [--server <url>] [-o json]")
+	server := fs.String("server", "", "The installation. "+serverDefault)
+	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
+	named, code, ok := positional(fs, args)
+	if !ok {
+		return code
+	}
+	if len(named) != 2 {
+		fmt.Fprintln(e.Err, "agk namespace rename names the namespace and its new name, in that order")
+		return exitUsage
+	}
+	if !namespaceFormat(e, *output) {
+		return exitUsage
+	}
+	name, to := named[0], named[1]
+	at, ok := reach(e, *server)
+	if !ok {
+		return exitUsage
+	}
+	var raw json.RawMessage
+	if err := at.sendJSON(ctx, http.MethodPatch, "/api/v1/namespaces/"+url.PathEscape(name), api.NamespaceUpdate{Name: &to}, http.StatusOK, &raw); err != nil {
+		return namespaceRefused(e, name, true, err)
+	}
+	return answered(e, raw, *output, "renamed namespace "+name+": ")
 }
 
 // namespaceDelete is agk namespace delete: a namespace that holds nothing but its built-in
@@ -387,6 +414,9 @@ func answered(e Env, raw json.RawMessage, output, did string) int {
 		return exitNoOutcome
 	}
 	fmt.Fprintf(e.Out, "%s%s: %s, %s\n", did, n.Name, n.Kind, ownedBy(n))
+	if len(n.FormerNames) > 0 {
+		fmt.Fprintf(e.Out, "  %-20s  %s\n", "former names", strings.Join(n.FormerNames, ", "))
+	}
 	if n.Quotas != nil {
 		describeQuotas(e.Out, *n.Quotas)
 	}
@@ -459,7 +489,7 @@ func namespaceRefused(e Env, name string, change bool, err error) int {
 	case status == http.StatusUnauthorized:
 		said = credentialRefused(e.presentsKept()) + ": " + said
 	case status == http.StatusForbidden && change:
-		said = "creating, bounding and removing a namespace are an administrator's, through a token with no scope: " + said
+		said = "naming another owner and bounding a namespace are an administrator's, through a token with no scope: " + said
 	case status == http.StatusNotFound && name != "":
 		said = fmt.Sprintf("no namespace %s, or not yours", name)
 	case change && passing(err) && !errors.Is(err, errUnreachable):

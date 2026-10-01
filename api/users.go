@@ -367,7 +367,7 @@ func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Princip
 	}
 	switch {
 	case errors.Is(err, db.ErrNameTaken):
-		fail(w, http.StatusConflict, fmt.Sprintf("%s is already a namespace, and logins and namespaces share one name space, since a user's personal namespace is named after their login", ask.Login))
+		fail(w, http.StatusConflict, fmt.Sprintf("%s is a namespace's name, or one a namespace held before it was renamed, and logins and namespaces share one name space, since a user's personal namespace is named after their login", ask.Login))
 	case errors.Is(err, errOtherwise):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user created with another display name or admin: a user is asked for again as they were created, or with neither, for a fresh link while they have not enrolled", ask.Login))
 	case errors.Is(err, db.ErrEnrolled):

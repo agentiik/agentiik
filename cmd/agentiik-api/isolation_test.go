@@ -167,7 +167,7 @@ func someTenants(t *testing.T) *tenants {
 	}
 
 	// finance, owned by alice, and hr, owned by mallory, so that she is somebody holding something.
-	for _, ns := range []api.NamespaceRecord{{Name: "finance", Owner: "alice"}, {Name: "hr", Owner: "mallory"}} {
+	for _, ns := range []api.NamespaceCreate{{Name: "finance", Owner: "alice"}, {Name: "hr", Owner: "mallory"}} {
 		x.must("POST", "/api/v1/namespaces", asker{bearer: theToken}, ns, http.StatusCreated)
 	}
 
