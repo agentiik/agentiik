@@ -5,7 +5,9 @@
   import FileView from "../components/FileView.svelte";
   import GraphCanvas from "../components/GraphCanvas.svelte";
   import Icon from "../components/Icon.svelte";
+  import McpPanel from "../components/McpPanel.svelte";
   import Pane from "../components/Pane.svelte";
+  import RunForm from "../components/RunForm.svelte";
   import StatePill from "../components/StatePill.svelte";
   import StepDetail from "../components/StepDetail.svelte";
   import Refused from "./Refused.svelte";
@@ -21,7 +23,8 @@
   // it, with the state of a run laid over it: the one the address names, or the workflow's latest,
   // read again while it runs. Beside the graph, the step chosen as it resolved, or the file it was
   // written in, each selecting the other.
-  let { api, place, me, namespace, workflow }: { api: API; place: Place; me: Me; namespace: string; workflow: string } = $props();
+  // tab is the page's: its graph where it names none, or the tools it publishes.
+  let { api, place, me, namespace, workflow, tab }: { api: API; place: Place; me: Me; namespace: string; workflow: string; tab?: string } = $props();
 
   type Detail = components["schemas"]["workflowDetail"];
   type Entry = components["schemas"]["historyEntry"];
@@ -90,6 +93,9 @@
   });
   const pane = $derived(place.query.get("pane") === "file" ? "file" : "step");
   let showHistory = $state(false);
+  // Starting a run is workflow:run's, which the button is left out without.
+  const mayRun = $derived(holds(me, "workflow:run", namespace, workflow));
+  let running = $state(false);
 
   function narrow(set: Record<string, string>) {
     const q = new URLSearchParams(place.query);
@@ -111,6 +117,8 @@
     };
   }
   const statistics = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "statistics" });
+  const graphTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow });
+  const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
   const runRoute = $derived(run ? { kind: "namespace" as const, namespace, view: "runs" as const, run: run.run } : undefined);
   const now = Date.now();
 </script>
@@ -122,15 +130,29 @@
 {:else if detail}
   <nav class="sub" aria-label="{namespace}/{workflow}">
     <span class="mono where">{namespace} / {workflow}</span>
-    <span class="tab" aria-current="page">Graph</span>
+    {#if tab === "mcp"}
+      <a class="tab" href={place.href(graphTab)} onclick={follow(place, graphTab)}>Graph</a>
+    {:else}
+      <span class="tab" aria-current="page">Graph</span>
+    {/if}
     <a class="tab" href={place.href(runsOf) + `?workflow=${encodeURIComponent(workflow)}`} onclick={narrowed(runsOf)}>Runs</a>
     <a class="tab" href={place.href(statistics)} onclick={follow(place, statistics)}>Statistics</a>
+    {#if graph?.mcp}
+      {#if tab === "mcp"}
+        <span class="tab" aria-current="page">MCP</span>
+      {:else}
+        <a class="tab" href={place.href(mcpTab)} onclick={follow(place, mcpTab)}>MCP</a>
+      {/if}
+    {/if}
     {#if shares}<a class="tab" href={place.href(sharing) + `?workflow=${encodeURIComponent(workflow)}`} onclick={narrowed(sharing)}>Sharing</a>{/if}
     <span class="right">
       {#if detail.version}
         <span class="version mono" title={detail.version.commit}>{detail.repository.default_branch} · {detail.version.commit.slice(0, 7)}</span>
       {/if}
       <button class="control" aria-pressed={showHistory} onclick={() => (showHistory = !showHistory)}><Icon name="control-history" size={14} />History</button>
+      {#if mayRun && graph && detail.version}
+        <button class="control primary" aria-pressed={running} onclick={() => (running = !running)}><Icon name="control-run" size={14} />Run</button>
+      {/if}
     </span>
   </nav>
 
@@ -185,7 +207,19 @@
     </Pane>
   {/if}
 
-  {#if graph && laid}
+  {#if running && graph && detail.version}
+    <div class="runform">
+      <Pane title="Run {workflow}" aside="manual, as {me.principal}">
+        <RunForm {api} {place} {namespace} {workflow} {graph} commit={detail.version.commit} onclose={() => (running = false)} />
+      </Pane>
+    </div>
+  {/if}
+
+  {#if tab === "mcp" && graph}
+    <Pane title="MCP" aside="what a client of this workflow sees">
+      <McpPanel {graph} {namespace} {workflow} />
+    </Pane>
+  {:else if graph && laid}
     <div class="columns">
       <Pane title="Graph" aside={run ? `run ${run.run}` : "no run yet"} focused>
         {#if run && runRoute}
@@ -315,6 +349,11 @@
 
   .more {
     margin-top: calc(var(--unit) * 5);
+  }
+
+  .runform {
+    max-width: 760px;
+    margin-top: calc(var(--unit) * 8);
   }
 
   .columns {
