@@ -2,6 +2,7 @@
   import { Refusal, type API, type Me } from "../api/client";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
+  import ServiceAccounts from "../components/ServiceAccounts.svelte";
   import {
     addPasskey,
     credentialsOf,
@@ -43,7 +44,7 @@
     changed,
   }: { api: API; place: Place; me: Me; tab: string | undefined; passkeys: Passkeys; changed: () => Promise<void> } = $props();
 
-  const shown = $derived(tab === "tokens" ? "tokens" : "credentials");
+  const shown = $derived(tab === "tokens" || tab === "service-accounts" ? tab : "credentials");
   const now = Date.now();
 
   // What any act on the screen is doing, said, and what the API refused, said as it said it.
@@ -270,19 +271,26 @@
     kept = on ? [...kept, p] : kept.filter((x) => x !== p);
   }
 
-  const routes = { credentials: { kind: "account" as const }, tokens: { kind: "account" as const, tab: "tokens" } };
+  const routes = {
+    credentials: { kind: "account" as const },
+    tokens: { kind: "account" as const, tab: "tokens" },
+    accounts: { kind: "account" as const, tab: "service-accounts" },
+  };
 </script>
 
 <nav class="sub" aria-label="Your account">
   <span class="mono where">{me.principal}</span>
   <a class="tab" aria-current={shown === "credentials" ? "page" : undefined} href={place.href(routes.credentials)} onclick={follow(place, routes.credentials)}>Sign-in methods</a>
   <a class="tab" aria-current={shown === "tokens" ? "page" : undefined} href={place.href(routes.tokens)} onclick={follow(place, routes.tokens)}>API tokens</a>
+  <a class="tab" aria-current={shown === "service-accounts" ? "page" : undefined} href={place.href(routes.accounts)} onclick={follow(place, routes.accounts)}>Service accounts</a>
 </nav>
 
 {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
 {#if said}<p class="said" role="status">{said}</p>{/if}
 
-{#if shown === "credentials"}
+{#if shown === "service-accounts"}
+  <ServiceAccounts {api} {me} />
+{:else if shown === "credentials"}
   <div class="columns">
     <Pane title="Sign-in methods" aside={credentials ? String(credentials.length) : ""}>
       {#if policy}<p class="muted lead">{policyLine(policy)}</p>{/if}
