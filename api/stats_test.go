@@ -24,11 +24,13 @@ type seriesAnswer struct {
 	Bucket    string         `json:"bucket"`
 	Workflow  string         `json:"workflow,omitempty"`
 	Buckets   []seriesBucket `json:"buckets"`
+	Overall   seriesBucket   `json:"overall"`
 	Histogram *[]seriesBin   `json:"histogram,omitempty"`
 	Previous  *struct {
 		From      string         `json:"from"`
 		To        string         `json:"to"`
 		Buckets   []seriesBucket `json:"buckets"`
+		Overall   seriesBucket   `json:"overall"`
 		Histogram *[]seriesBin   `json:"histogram,omitempty"`
 	} `json:"previous,omitempty"`
 }
@@ -243,7 +245,8 @@ func TestASeriesCountsOnlyTheRunsItsCallerCanRead(t *testing.T) {
 // wait a skew reads below zero counted as none; and the attempts retried, each under the exit code
 // of its last dispatch, a lost one under none, the most frequent first. The histogram lays the
 // durations of the runs that ended in bins from the shortest to the longest, and the span before
-// is counted in the same buckets.
+// is counted in the same buckets. The range taken as one bucket has its percentiles taken over every
+// run and task of the range, which those of its buckets do not combine into.
 func TestASeriesCountsWhatTheRunsCameTo(t *testing.T) {
 	s, from := laidOut(t)
 	h := s.servedTo(t, granted{"alice": {{api.RunRead, api.Target{Namespace: "finance"}}}})
@@ -273,6 +276,16 @@ func TestASeriesCountsWhatTheRunsCameTo(t *testing.T) {
 	}
 	bins := []seriesBin{{From: 10000, Until: 20001, Runs: 1}, {From: 20001, Until: 30000, Runs: 1}}
 	want.Histogram = &bins
+	// The waits of the hour are 1, 2 and 3 seconds, none, 4 seconds and one read below zero, so
+	// none: a median of 1.5 seconds, where the buckets' are 1.5 and 2.
+	want.Overall = seriesBucket{
+		Since:     stamp(0),
+		Until:     stamp(time.Hour - time.Nanosecond),
+		Runs:      runsIn(map[string]int{"succeeded": 1, "failed": 1, "running": 1}),
+		Duration:  &seriesPercents{P50: 20000, P95: 29000, P99: 29800},
+		QueueWait: &seriesPercents{P50: 1500, P95: 3750, P99: 3950},
+		Retries:   []seriesRetry{{ExitCode: code(108), Attempts: 2}, {ExitCode: code(1), Attempts: 1}, {ExitCode: nil, Attempts: 1}},
+	}
 
 	path := fmt.Sprintf("/api/v1/finance/stats/runs?from=%s&to=%s&bucket=15m&histogram=4", stamp(0), stamp(time.Hour))
 	if got := series(t, h, "alice", path); !reflect.DeepEqual(got, want) {
@@ -285,14 +298,14 @@ func TestASeriesCountsWhatTheRunsCameTo(t *testing.T) {
 	// that ended lays out in one bin, and none in none.
 	path = fmt.Sprintf("/api/v1/finance/stats/runs?from=%s&to=%s&bucket=15m&compare=previous&histogram=12", stamp(15*time.Minute), stamp(30*time.Minute))
 	got := series(t, h, "alice", path)
-	if got.From != stamp(15*time.Minute) || got.To != stamp(30*time.Minute) || !reflect.DeepEqual(got.Buckets, []seriesBucket{second}) {
+	if got.From != stamp(15*time.Minute) || got.To != stamp(30*time.Minute) || !reflect.DeepEqual(got.Buckets, []seriesBucket{second}) || !reflect.DeepEqual(got.Overall, second) {
 		t.Errorf("%s answered %+v, want the second quarter alone", path, got)
 	}
 	if got.Histogram == nil || len(*got.Histogram) != 0 {
 		t.Errorf("%s answered the histogram %v, where no run of the quarter ended", path, got.Histogram)
 	}
 	if p := got.Previous; p == nil || p.From != stamp(0) || p.To != stamp(15*time.Minute) || !reflect.DeepEqual(p.Buckets, []seriesBucket{first}) ||
-		p.Histogram == nil || !reflect.DeepEqual(*p.Histogram, bins) {
+		!reflect.DeepEqual(p.Overall, first) || p.Histogram == nil || !reflect.DeepEqual(*p.Histogram, bins) {
 		t.Errorf("%s answered the span before as %+v, want the first quarter", path, p)
 	}
 
@@ -303,8 +316,9 @@ func TestASeriesCountsWhatTheRunsCameTo(t *testing.T) {
 	}
 }
 
-// The same numbers to Accept: text/csv, a row a bucket and the span before after the range, a figure
-// the JSON leaves out an empty field and retried the attempts retried whatever their exit code.
+// The same numbers to Accept: text/csv, a row a bucket and the span before after the range, then each
+// span as one bucket, a figure the JSON leaves out an empty field and retried the attempts retried
+// whatever their exit code.
 func TestASeriesIsAnsweredInCSVToWhoeverAsks(t *testing.T) {
 	s, from := laidOut(t)
 	h := s.servedTo(t, granted{"alice": {{api.RunRead, api.Target{Namespace: "finance"}}}})
@@ -317,7 +331,9 @@ func TestASeriesIsAnsweredInCSVToWhoeverAsks(t *testing.T) {
 	}
 	want := "period,since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,duration_p50_ms,duration_p95_ms,duration_p99_ms,queue_wait_p50_ms,queue_wait_p95_ms,queue_wait_p99_ms,retried\r\n" +
 		"current," + stamp(15*time.Minute) + "," + stamp(30*time.Minute-time.Nanosecond) + ",0,1,0,0,0,0,0,,,,2000,3800,3960,1\r\n" +
-		"previous," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",0,0,0,1,1,0,0,20000,29000,29800,1500,2850,2970,3\r\n"
+		"previous," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",0,0,0,1,1,0,0,20000,29000,29800,1500,2850,2970,3\r\n" +
+		"overall," + stamp(15*time.Minute) + "," + stamp(30*time.Minute-time.Nanosecond) + ",0,1,0,0,0,0,0,,,,2000,3800,3960,1\r\n" +
+		"previous_overall," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",0,0,0,1,1,0,0,20000,29000,29800,1500,2850,2970,3\r\n"
 	if got := w.Body.String(); got != want {
 		t.Errorf("%s answered\n%q\nwant\n%q", path, got, want)
 	}

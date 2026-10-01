@@ -17,13 +17,35 @@ export function scenario(name: string): Scenario {
   return structuredClone(s);
 }
 
+// recordedFor is what a scenario holds for a request: the answer recorded for its whole query, or
+// else for a part of it, the one naming the most of the request's parameters, or else for its path,
+// so that a scenario can tell apart two requests to one route by the parameter that matters,
+// by=hour, while the range a test asks for moves with the clock.
+export function recordedFor<T>(s: Record<string, T>, method: string, path: string, search: string): T | undefined {
+  const key = `${method} ${path}`;
+  const exact = s[`${key}${search}`];
+  if (exact !== undefined) return exact;
+  const asked = new URLSearchParams(search);
+  let best: T | undefined;
+  let named = 0;
+  for (const [recorded, value] of Object.entries(s)) {
+    if (!recorded.startsWith(`${key}?`)) continue;
+    const wants = [...new URLSearchParams(recorded.slice(key.length + 1))];
+    if (wants.length > named && wants.every(([k, v]) => asked.getAll(k).includes(v))) {
+      best = value;
+      named = wants.length;
+    }
+  }
+  return best ?? s[key];
+}
+
 export function answering(s: Scenario, asked: string[] = []): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     const key = `${request.method} ${url.pathname}`;
     asked.push(`${key}${url.search}`);
-    const recorded = s[`${key}${url.search}`] ?? s[key] ?? { status: 404, body: { error: "no such thing, or not yours" } };
+    const recorded = recordedFor(s, request.method, url.pathname, url.search) ?? { status: 404, body: { error: "no such thing, or not yours" } };
     if (recorded.text !== undefined) {
       return new Response(recorded.text, { status: recorded.status, headers: { "Content-Type": "application/octet-stream" } });
     }

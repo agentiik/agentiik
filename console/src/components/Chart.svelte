@@ -77,12 +77,17 @@
     return since.map((s) => Date.parse(s) / 1000 + width / 2);
   }
 
-  // What each series draws: its values, or for a stack, the sum of it and every series under it.
+  // What each series draws: its values, or for a stack, the sum of it and every series under it. A
+  // dashed series, the span before, is drawn behind the stack and not on it.
   function drawn(): (number | null)[][] {
     if (!stacked) return series.map((s) => s.values);
     const sums: (number | null)[][] = [];
     let under: number[] = since.map(() => 0);
     for (const s of series) {
+      if (s.dashed) {
+        sums.push(s.values);
+        continue;
+      }
       under = under.map((u, i) => u + (s.values[i] ?? 0));
       sums.push([...under]);
     }

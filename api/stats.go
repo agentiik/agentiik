@@ -172,13 +172,13 @@ func (s *Server) runStatistics(w http.ResponseWriter, r *http.Request, who Princ
 	var out statsRuns
 	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		out.Buckets, out.Histogram, err = runSeries(ctx, wide, among, rng.Buckets, bins)
+		out.Buckets, out.Overall, out.Histogram, err = runSeries(ctx, wide, among, rng.Buckets, bins)
 		if err != nil || !rng.Previous {
 			return err
 		}
 		from, to, b := rng.before()
 		out.Previous = &statsRunsBefore{From: stamp(from), To: stamp(to)}
-		out.Previous.Buckets, out.Previous.Histogram, err = runSeries(ctx, wide, among, b, bins)
+		out.Previous.Buckets, out.Previous.Overall, out.Previous.Histogram, err = runSeries(ctx, wide, among, b, bins)
 		return err
 	})
 	if err != nil {
@@ -197,12 +197,37 @@ func (s *Server) runStatistics(w http.ResponseWriter, r *http.Request, who Princ
 	write(w, http.StatusOK, out)
 }
 
-// runSeries reads the buckets of one span and, where bins is not zero, its histogram.
-func runSeries(ctx context.Context, wide *db.Wide, among []db.Workflow, b db.Buckets, bins int) ([]statsRunsBucket, []statsBin, error) {
+// runSeries reads the buckets of one span, the span taken as one bucket, and, where bins is not
+// zero, its histogram.
+func runSeries(ctx context.Context, wide *db.Wide, among []db.Workflow, b db.Buckets, bins int) ([]statsRunsBucket, statsRunsBucket, []statsBin, error) {
 	counted, err := wide.RunStatistics(ctx, among, b)
 	if err != nil {
-		return nil, nil, err
+		return nil, statsRunsBucket{}, nil, err
 	}
+	// The span as one bucket is counted apart rather than summed from the buckets, since its
+	// percentiles are taken over every run of the span and those of the buckets do not combine.
+	whole, err := wide.RunStatistics(ctx, among, b.Whole())
+	if err != nil {
+		return nil, statsRunsBucket{}, nil, err
+	}
+	buckets := runBuckets(counted, b)
+	overall := runBuckets(whole, b.Whole())[0]
+	if bins == 0 {
+		return buckets, overall, nil, nil
+	}
+	durations, err := wide.RunDurations(ctx, among, b, bins)
+	if err != nil {
+		return nil, statsRunsBucket{}, nil, err
+	}
+	histogram := make([]statsBin, len(durations))
+	for i, d := range durations {
+		histogram[i] = statsBin{FromMS: d.From, UntilMS: d.Until, Runs: d.Runs}
+	}
+	return buckets, overall, histogram, nil
+}
+
+// runBuckets is what the runs came to in each of b's buckets, as the API writes it.
+func runBuckets(counted []db.RunBucket, b db.Buckets) []statsRunsBucket {
 	buckets := make([]statsRunsBucket, len(counted))
 	for i, c := range counted {
 		since := b.First.Add(time.Duration(i) * b.Width)
@@ -222,18 +247,7 @@ func runSeries(ctx context.Context, wide *db.Wide, among []db.Workflow, b db.Buc
 			buckets[i].Retries[j] = statsExitCode{ExitCode: r.ExitCode, Attempts: r.Attempts}
 		}
 	}
-	if bins == 0 {
-		return buckets, nil, nil
-	}
-	durations, err := wide.RunDurations(ctx, among, b, bins)
-	if err != nil {
-		return nil, nil, err
-	}
-	histogram := make([]statsBin, len(durations))
-	for i, d := range durations {
-		histogram[i] = statsBin{FromMS: d.From, UntilMS: d.Until, Runs: d.Runs}
-	}
-	return buckets, histogram, nil
+	return buckets
 }
 
 func percentiles(p db.Percentiles) *statsPercentiles {
@@ -251,6 +265,8 @@ type statsRuns struct {
 	Bucket   string            `json:"bucket"`
 	Workflow string            `json:"workflow,omitempty"`
 	Buckets  []statsRunsBucket `json:"buckets"`
+	// The range as one bucket, which a figure beside the charts reads.
+	Overall statsRunsBucket `json:"overall"`
 	// Present, and empty where no run has ended, wherever histogram was asked for.
 	Histogram []statsBin       `json:"histogram,omitzero"`
 	Previous  *statsRunsBefore `json:"previous,omitempty"`
@@ -260,6 +276,7 @@ type statsRunsBefore struct {
 	From      string            `json:"from"`
 	To        string            `json:"to"`
 	Buckets   []statsRunsBucket `json:"buckets"`
+	Overall   statsRunsBucket   `json:"overall"`
 	Histogram []statsBin        `json:"histogram,omitzero"`
 }
 
@@ -352,9 +369,10 @@ var runsCSVHeader = []string{
 }
 
 // writeRunsCSV answers a series in RFC 4180: a header row, then a row a bucket, the span before
-// after the range where compare=previous added it. A figure the JSON leaves out is an empty field,
-// retried is the attempts retried whatever their exit code, and the histogram, which is no series
-// of buckets, is not in it.
+// after the range where compare=previous added it, then each span as one bucket, under period
+// overall and previous_overall. A figure the JSON leaves out is an empty field, retried is the
+// attempts retried whatever their exit code, and the histogram, which is no series of buckets, is
+// not in it.
 func writeRunsCSV(w http.ResponseWriter, out statsRuns) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8; header=present")
 	w.WriteHeader(http.StatusOK)
@@ -384,6 +402,10 @@ func writeRunsCSV(w http.ResponseWriter, out statsRuns) {
 	rows("current", out.Buckets)
 	if out.Previous != nil {
 		rows("previous", out.Previous.Buckets)
+	}
+	rows("overall", []statsRunsBucket{out.Overall})
+	if out.Previous != nil {
+		rows("previous_overall", []statsRunsBucket{out.Previous.Overall})
 	}
 	c.Flush()
 }

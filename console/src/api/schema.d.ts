@@ -1143,7 +1143,7 @@ export interface paths {
         };
         /**
          * Read a namespace's runs as series
-         * @description Per bucket, the runs of the namespace's workflows by state, the p50, p95 and p99 of their duration and of their tasks' queue wait, and the attempts retried by exit code; with histogram, their durations over the range in bins. Counts only the workflows the caller holds run:read on, as GET /api/v1/runs lists them, and never asks run:read_data: a series carries counts, durations and exit codes, never an item. Computed from the run and task records rather than kept apart, so a range reaches back as far as the namespace keeps its runs, and no further.
+         * @description Per bucket, the runs of the namespace's workflows by state, the p50, p95 and p99 of their duration and of their tasks' queue wait, and the attempts retried by exit code, and the same over the whole range under overall; with histogram, their durations over the range in bins. Counts only the workflows the caller holds run:read on, as GET /api/v1/runs lists them, and never asks run:read_data: a series carries counts, durations and exit codes, never an item. Computed from the run and task records rather than kept apart, so a range reaches back as far as the namespace keeps its runs, and no further.
          */
         get: operations["getRunStatistics"];
         put?: never;
@@ -1166,7 +1166,7 @@ export interface paths {
         };
         /**
          * Read a workflow's steps as series
-         * @description Per step of one workflow, per bucket: the percentiles of its duration, its attempts and exit codes, and a fan-out's items a minute; with by=hour, its p50 by weekday and hour over the range. Requires run:read on the workflow.
+         * @description Per step of one workflow, per bucket: the percentiles of its duration, its attempts and exit codes, and a fan-out's items a minute, and the same over the whole range under overall; with by=hour, its p50 by weekday and hour over the range. Requires run:read on the workflow.
          */
         get: operations["getStepStatistics"];
         put?: never;
@@ -4672,7 +4672,36 @@ export interface components {
          *           },
          *           "retries": []
          *         }
-         *       ]
+         *       ],
+         *       "overall": {
+         *         "since": "2026-09-30T06:00:00Z",
+         *         "until": "2026-09-30T07:59:59.999999999Z",
+         *         "runs": {
+         *           "queued": 0,
+         *           "running": 1,
+         *           "waiting": 0,
+         *           "succeeded": 20,
+         *           "failed": 1,
+         *           "cancelled": 0,
+         *           "timed_out": 0
+         *         },
+         *         "duration_ms": {
+         *           "p50": 215000,
+         *           "p95": 298000,
+         *           "p99": 308000
+         *         },
+         *         "queue_wait_ms": {
+         *           "p50": 400,
+         *           "p95": 1800,
+         *           "p99": 2500
+         *         },
+         *         "retries": [
+         *           {
+         *             "exit_code": 108,
+         *             "attempts": 3
+         *           }
+         *         ]
+         *       }
          *     }
          * @example {
          *       "from": "2026-09-30T06:00:00Z",
@@ -4722,7 +4751,36 @@ export interface components {
          *           },
          *           "retries": []
          *         }
-         *       ]
+         *       ],
+         *       "overall": {
+         *         "since": "2026-09-30T06:00:00Z",
+         *         "until": "2026-09-30T07:59:59.999999999Z",
+         *         "runs": {
+         *           "queued": 0,
+         *           "running": 0,
+         *           "waiting": 0,
+         *           "succeeded": 11,
+         *           "failed": 1,
+         *           "cancelled": 0,
+         *           "timed_out": 0
+         *         },
+         *         "duration_ms": {
+         *           "p50": 222000,
+         *           "p95": 301000,
+         *           "p99": 309000
+         *         },
+         *         "queue_wait_ms": {
+         *           "p50": 420,
+         *           "p95": 1900,
+         *           "p99": 2600
+         *         },
+         *         "retries": [
+         *           {
+         *             "exit_code": 108,
+         *             "attempts": 3
+         *           }
+         *         ]
+         *       }
          *     }
          * @example {
          *       "from": "2026-09-30T06:00:00Z",
@@ -4784,6 +4842,35 @@ export interface components {
          *           "retries": []
          *         }
          *       ],
+         *       "overall": {
+         *         "since": "2026-09-30T06:00:00Z",
+         *         "until": "2026-09-30T07:59:59.999999999Z",
+         *         "runs": {
+         *           "queued": 0,
+         *           "running": 1,
+         *           "waiting": 0,
+         *           "succeeded": 20,
+         *           "failed": 1,
+         *           "cancelled": 0,
+         *           "timed_out": 0
+         *         },
+         *         "duration_ms": {
+         *           "p50": 215000,
+         *           "p95": 298000,
+         *           "p99": 308000
+         *         },
+         *         "queue_wait_ms": {
+         *           "p50": 400,
+         *           "p95": 1800,
+         *           "p99": 2500
+         *         },
+         *         "retries": [
+         *           {
+         *             "exit_code": 108,
+         *             "attempts": 3
+         *           }
+         *         ]
+         *       },
          *       "histogram": [
          *         {
          *           "from_ms": 180000,
@@ -4863,7 +4950,36 @@ export interface components {
          *               }
          *             ]
          *           }
-         *         ]
+         *         ],
+         *         "overall": {
+         *           "since": "2026-09-30T04:00:00Z",
+         *           "until": "2026-09-30T05:59:59.999999999Z",
+         *           "runs": {
+         *             "queued": 0,
+         *             "running": 0,
+         *             "waiting": 0,
+         *             "succeeded": 22,
+         *             "failed": 0,
+         *             "cancelled": 0,
+         *             "timed_out": 1
+         *           },
+         *           "duration_ms": {
+         *             "p50": 226000,
+         *             "p95": 297000,
+         *             "p99": 2870000
+         *           },
+         *           "queue_wait_ms": {
+         *             "p50": 420,
+         *             "p95": 2000,
+         *             "p99": 2300
+         *           },
+         *           "retries": [
+         *             {
+         *               "exit_code": null,
+         *               "attempts": 1
+         *             }
+         *           ]
+         *         }
          *       }
          *     }
          */
@@ -4948,6 +5064,39 @@ export interface components {
              *     ]
              */
             buckets: components["schemas"]["statsRunsBucket"][];
+            /**
+             * @description The range as one bucket, from the first bucket's since to the last one's until: what its runs came to together, which a figure beside the charts reads. Its counts are the buckets' summed, and its percentiles are taken over the whole range rather than combined from the buckets', which percentiles do not combine into, so a client could not work them out.
+             * @example {
+             *       "since": "2026-09-30T06:00:00Z",
+             *       "until": "2026-09-30T07:59:59.999999999Z",
+             *       "runs": {
+             *         "queued": 0,
+             *         "running": 1,
+             *         "waiting": 0,
+             *         "succeeded": 20,
+             *         "failed": 1,
+             *         "cancelled": 0,
+             *         "timed_out": 0
+             *       },
+             *       "duration_ms": {
+             *         "p50": 215000,
+             *         "p95": 298000,
+             *         "p99": 308000
+             *       },
+             *       "queue_wait_ms": {
+             *         "p50": 400,
+             *         "p95": 1800,
+             *         "p99": 2500
+             *       },
+             *       "retries": [
+             *         {
+             *           "exit_code": 108,
+             *           "attempts": 3
+             *         }
+             *       ]
+             *     }
+             */
+            overall: components["schemas"]["statsRunsBucket"];
             /**
              * @description The durations of the runs that ended over the range, in the bins histogram asked for, shortest first; fewer where the runs are fewer than the bins, and empty where none has ended. Present where histogram was asked for.
              * @example [
@@ -5050,7 +5199,36 @@ export interface components {
              *             }
              *           ]
              *         }
-             *       ]
+             *       ],
+             *       "overall": {
+             *         "since": "2026-09-30T04:00:00Z",
+             *         "until": "2026-09-30T05:59:59.999999999Z",
+             *         "runs": {
+             *           "queued": 0,
+             *           "running": 0,
+             *           "waiting": 0,
+             *           "succeeded": 22,
+             *           "failed": 0,
+             *           "cancelled": 0,
+             *           "timed_out": 1
+             *         },
+             *         "duration_ms": {
+             *           "p50": 226000,
+             *           "p95": 297000,
+             *           "p99": 2870000
+             *         },
+             *         "queue_wait_ms": {
+             *           "p50": 420,
+             *           "p95": 2000,
+             *           "p99": 2300
+             *         },
+             *         "retries": [
+             *           {
+             *             "exit_code": null,
+             *             "attempts": 1
+             *           }
+             *         ]
+             *       }
              *     }
              */
             previous?: {
@@ -5123,6 +5301,39 @@ export interface components {
                  *     ]
                  */
                 buckets: components["schemas"]["statsRunsBucket"][];
+                /**
+                 * @description The span before as one bucket, as overall is the range's: what a figure's change is worked out against.
+                 * @example {
+                 *       "since": "2026-09-30T04:00:00Z",
+                 *       "until": "2026-09-30T05:59:59.999999999Z",
+                 *       "runs": {
+                 *         "queued": 0,
+                 *         "running": 0,
+                 *         "waiting": 0,
+                 *         "succeeded": 22,
+                 *         "failed": 0,
+                 *         "cancelled": 0,
+                 *         "timed_out": 1
+                 *       },
+                 *       "duration_ms": {
+                 *         "p50": 226000,
+                 *         "p95": 297000,
+                 *         "p99": 2870000
+                 *       },
+                 *       "queue_wait_ms": {
+                 *         "p50": 420,
+                 *         "p95": 2000,
+                 *         "p99": 2300
+                 *       },
+                 *       "retries": [
+                 *         {
+                 *           "exit_code": null,
+                 *           "attempts": 1
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                overall: components["schemas"]["statsRunsBucket"];
                 /**
                  * @description The durations of the runs that ended over the range, in the bins histogram asked for, shortest first; fewer where the runs are fewer than the bins, and empty where none has ended. Present where histogram was asked for.
                  * @example [
@@ -5334,7 +5545,23 @@ export interface components {
          *                 }
          *               ]
          *             }
-         *           ]
+         *           ],
+         *           "overall": {
+         *             "since": "2026-09-30T06:00:00Z",
+         *             "until": "2026-09-30T07:59:59.999999999Z",
+         *             "duration_ms": {
+         *               "p50": 1150,
+         *               "p95": 1800,
+         *               "p99": 2050
+         *             },
+         *             "attempts": 21,
+         *             "exit_codes": [
+         *               {
+         *                 "exit_code": 0,
+         *                 "attempts": 21
+         *               }
+         *             ]
+         *           }
          *         },
          *         {
          *           "step": "invoice",
@@ -5377,7 +5604,28 @@ export interface components {
          *               ],
          *               "items_per_minute": 81
          *             }
-         *           ]
+         *           ],
+         *           "overall": {
+         *             "since": "2026-09-30T06:00:00Z",
+         *             "until": "2026-09-30T07:59:59.999999999Z",
+         *             "duration_ms": {
+         *               "p50": 174000,
+         *               "p95": 236000,
+         *               "p99": 249000
+         *             },
+         *             "attempts": 24,
+         *             "exit_codes": [
+         *               {
+         *                 "exit_code": 0,
+         *                 "attempts": 20
+         *               },
+         *               {
+         *                 "exit_code": 108,
+         *                 "attempts": 4
+         *               }
+         *             ],
+         *             "items_per_minute": 77.2
+         *           }
          *         }
          *       ]
          *     }
@@ -5479,7 +5727,23 @@ export interface components {
              *               }
              *             ]
              *           }
-             *         ]
+             *         ],
+             *         "overall": {
+             *           "since": "2026-09-30T06:00:00Z",
+             *           "until": "2026-09-30T07:59:59.999999999Z",
+             *           "duration_ms": {
+             *             "p50": 1150,
+             *             "p95": 1800,
+             *             "p99": 2050
+             *           },
+             *           "attempts": 21,
+             *           "exit_codes": [
+             *             {
+             *               "exit_code": 0,
+             *               "attempts": 21
+             *             }
+             *           ]
+             *         }
              *       },
              *       {
              *         "step": "invoice",
@@ -5522,7 +5786,28 @@ export interface components {
              *             ],
              *             "items_per_minute": 81
              *           }
-             *         ]
+             *         ],
+             *         "overall": {
+             *           "since": "2026-09-30T06:00:00Z",
+             *           "until": "2026-09-30T07:59:59.999999999Z",
+             *           "duration_ms": {
+             *             "p50": 174000,
+             *             "p95": 236000,
+             *             "p99": 249000
+             *           },
+             *           "attempts": 24,
+             *           "exit_codes": [
+             *             {
+             *               "exit_code": 0,
+             *               "attempts": 20
+             *             },
+             *             {
+             *               "exit_code": 108,
+             *               "attempts": 4
+             *             }
+             *           ],
+             *           "items_per_minute": 77.2
+             *         }
              *       }
              *     ]
              */
@@ -5577,6 +5862,31 @@ export interface components {
                  */
                 buckets?: components["schemas"]["statsStepBucket"][];
                 /**
+                 * @description The range as one bucket, from the first bucket's since to the last one's until: what the step came to over the whole range, which a figure beside the charts reads. Its attempts and exit codes are the buckets' summed, and its percentiles and its items a minute are taken over the whole range, since neither combines from the buckets'. Absent with by=hour.
+                 * @example {
+                 *       "since": "2026-09-30T06:00:00Z",
+                 *       "until": "2026-09-30T07:59:59.999999999Z",
+                 *       "duration_ms": {
+                 *         "p50": 174000,
+                 *         "p95": 236000,
+                 *         "p99": 249000
+                 *       },
+                 *       "attempts": 24,
+                 *       "exit_codes": [
+                 *         {
+                 *           "exit_code": 0,
+                 *           "attempts": 20
+                 *         },
+                 *         {
+                 *           "exit_code": 108,
+                 *           "attempts": 4
+                 *         }
+                 *       ],
+                 *       "items_per_minute": 77.2
+                 *     }
+                 */
+                overall?: components["schemas"]["statsStepBucket"];
+                /**
                  * @description The 168 cells, Monday at midnight first. Present with by=hour alone.
                  * @example [
                  *       {
@@ -5622,6 +5932,27 @@ export interface components {
                  *     ]
                  */
                 previous?: components["schemas"]["statsStepBucket"][];
+                /**
+                 * @description The span before as one bucket, as overall is the range's: what a figure's change is worked out against. Present where compare=previous.
+                 * @example {
+                 *       "since": "2026-09-30T04:00:00Z",
+                 *       "until": "2026-09-30T05:59:59.999999999Z",
+                 *       "duration_ms": {
+                 *         "p50": 181000,
+                 *         "p95": 244000,
+                 *         "p99": 260000
+                 *       },
+                 *       "attempts": 22,
+                 *       "exit_codes": [
+                 *         {
+                 *           "exit_code": 0,
+                 *           "attempts": 22
+                 *         }
+                 *       ],
+                 *       "items_per_minute": 70.4
+                 *     }
+                 */
+                previous_overall?: components["schemas"]["statsStepBucket"];
             }[];
         };
         /**

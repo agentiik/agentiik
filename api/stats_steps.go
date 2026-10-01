@@ -61,21 +61,34 @@ func (s *Server) stepStatistics(w http.ResponseWriter, r *http.Request, who Prin
 			}
 			return nil
 		}
+		// Each span is also counted as one bucket, apart, since its percentiles and its items a
+		// minute are taken over the whole span and those of the buckets do not combine.
 		current, err := wide.StepStatistics(ctx, of, rng.Buckets)
 		if err != nil {
 			return err
 		}
-		var previous map[string][]db.StepBucket
+		whole, err := wide.StepStatistics(ctx, of, rng.Buckets.Whole())
+		if err != nil {
+			return err
+		}
+		var previous, wholeBefore map[string][]db.StepBucket
 		_, _, before := rng.before()
 		if rng.Previous {
 			if previous, err = wide.StepStatistics(ctx, of, before); err != nil {
 				return err
 			}
+			if wholeBefore, err = wide.StepStatistics(ctx, of, before.Whole()); err != nil {
+				return err
+			}
 		}
 		for _, step := range stepsIn(order, current, previous) {
 			st := statsStep{Step: step, Buckets: stepBuckets(current[step], rng.Buckets)}
+			overall := stepBuckets(whole[step], rng.Buckets.Whole())[0]
+			st.Overall = &overall
 			if rng.Previous {
 				st.Previous = stepBuckets(previous[step], before)
+				overall := stepBuckets(wholeBefore[step], before.Whole())[0]
+				st.PreviousOverall = &overall
 			}
 			out.Steps = append(out.Steps, st)
 		}
@@ -230,10 +243,12 @@ type statsSteps struct {
 }
 
 type statsStep struct {
-	Step     string            `json:"step"`
-	Buckets  []statsStepBucket `json:"buckets,omitzero"`
-	Hours    []statsStepHour   `json:"hours,omitzero"`
-	Previous []statsStepBucket `json:"previous,omitzero"`
+	Step            string            `json:"step"`
+	Buckets         []statsStepBucket `json:"buckets,omitzero"`
+	Overall         *statsStepBucket  `json:"overall,omitempty"`
+	Hours           []statsStepHour   `json:"hours,omitzero"`
+	Previous        []statsStepBucket `json:"previous,omitzero"`
+	PreviousOverall *statsStepBucket  `json:"previous_overall,omitempty"`
 }
 
 type statsStepBucket struct {
@@ -256,7 +271,8 @@ type statsMedian struct {
 }
 
 // writeStepsCSV answers the steps' series in RFC 4180: a row a step and a bucket, every step's
-// buckets in turn and the span before after them where compare=previous added it; with by=hour, a
+// buckets in turn and the span before after them where compare=previous added it, then a row a
+// step of each span as one bucket, under period overall and previous_overall; with by=hour, a
 // row a step, a weekday and an hour. A figure the JSON leaves out is an empty field, and the exit
 // codes, which are no one figure, are not in it.
 func writeStepsCSV(w http.ResponseWriter, out statsSteps) {
@@ -294,6 +310,14 @@ func writeStepsCSV(w http.ResponseWriter, out statsSteps) {
 			}
 		}
 	}
+	one := func(b *statsStepBucket) []statsStepBucket {
+		if b == nil {
+			return nil
+		}
+		return []statsStepBucket{*b}
+	}
 	rows("current", func(st statsStep) []statsStepBucket { return st.Buckets })
 	rows("previous", func(st statsStep) []statsStepBucket { return st.Previous })
+	rows("overall", func(st statsStep) []statsStepBucket { return one(st.Overall) })
+	rows("previous_overall", func(st statsStep) []statsStepBucket { return one(st.PreviousOverall) })
 }

@@ -28,6 +28,13 @@ type Buckets struct {
 // End is the instant after the last bucket, which no bucket holds.
 func (b Buckets) End() time.Time { return b.First.Add(time.Duration(b.Count) * b.Width) }
 
+// Whole is the buckets taken as one, from the first's start to the last one's end: what a figure
+// beside a chart reads, since a percentile taken over the whole span is not one the buckets'
+// combine into.
+func (b Buckets) Whole() Buckets {
+	return Buckets{First: b.First, Width: b.End().Sub(b.First), Count: 1}
+}
+
 // MaxBuckets is the most buckets one series is counted in: more than any chart draws, which a
 // query would pay for all the same.
 const MaxBuckets = 1000
