@@ -4,8 +4,9 @@
   import { described, presets, type Preset } from "../lib/stats";
 
   // The controls along the top of a statistics page: the range, as a preset or a span a zoom chose,
-  // the way back from a zoom, the comparison with the span before, and what the page exports.
-  let { ranged, bucket, children }: { ranged: Ranged; bucket: string | undefined; children?: Snippet } = $props();
+  // the way back from a zoom, the comparison with the span before where the page's series take one,
+  // and what the page exports.
+  let { ranged, bucket, comparable = true, children }: { ranged: Ranged; bucket: string | undefined; comparable?: boolean; children?: Snippet } = $props();
 </script>
 
 <div class="range">
@@ -16,11 +17,13 @@
   </div>
   <span class="muted mono">{described(ranged.range, bucket)}</span>
   {#if ranged.before.length > 0}<button class="link" onclick={() => ranged.back()}>Back to the range before</button>{/if}
-  <label class="compare">
-    <input type="checkbox" role="switch" checked={ranged.range.compare} onchange={(e) => ranged.compare(e.currentTarget.checked)} />
-    <span class="track" aria-hidden="true"><span class="knob"></span></span>
-    Compare with the span before
-  </label>
+  {#if comparable}
+    <label class="compare">
+      <input type="checkbox" role="switch" checked={ranged.range.compare} onchange={(e) => ranged.compare(e.currentTarget.checked)} />
+      <span class="track" aria-hidden="true"><span class="knob"></span></span>
+      Compare with the span before
+    </label>
+  {/if}
   {#if children}<span class="export">{@render children()}</span>{/if}
 </div>
 

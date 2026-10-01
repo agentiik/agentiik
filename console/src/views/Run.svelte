@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import type { API, Me } from "../api/client";
+  import CompareWith from "../components/CompareWith.svelte";
   import EnvelopePane from "../components/EnvelopePane.svelte";
   import Icon from "../components/Icon.svelte";
   import LogPane from "../components/LogPane.svelte";
@@ -245,9 +246,9 @@
         </span>
         <a class="back" href={place.href(runs)} onclick={follow(place, runs)}>All runs of {namespace}</a>
       </div>
-      {#if mayRun}
+      {#if mayRun || reader.ended}
         <div class="actions">
-          {#if !reader.ended}
+          {#if mayRun && !reader.ended}
             {#if confirming}
               <span>Cancel this run? Its tasks in flight are stopped.</span>
               <button class="control danger" disabled={acting} onclick={cancel}><Icon name="control-cancel" size={14} />Cancel run</button>
@@ -255,11 +256,11 @@
             {:else}
               <button class="control" disabled={acting} onclick={() => (confirming = true)}><Icon name="control-cancel" size={14} />Cancel run</button>
             {/if}
-          {:else if replaying && chosenStep && !run.replay_from_start_only}
+          {:else if mayRun && replaying && chosenStep && !run.replay_from_start_only}
             <span>Replay this run from {chosenStep}? A new run starts there.</span>
             <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
             <button class="control" disabled={acting} onclick={() => (replaying = false)}>Keep it</button>
-          {:else}
+          {:else if mayRun}
             {#if chosenStep && !run.replay_from_start_only}
               <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
             {/if}
@@ -268,6 +269,8 @@
               <span class="muted">An input a step would restart from has been purged, so this run replays from its start only.</span>
             {/if}
           {/if}
+          <!-- Reading a run against another needs nothing but run:read, which reading this one took. -->
+          {#if reader.ended}<CompareWith {api} {place} {run} />{/if}
         </div>
         {#if said}<p class="muted" role="status">{said}</p>{/if}
         {#if problem}<p class="refused" role="alert">{problem}</p>{/if}

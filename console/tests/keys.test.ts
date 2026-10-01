@@ -153,6 +153,17 @@ describe("the inspector's keys", () => {
   });
 });
 
+describe("the run diff's keys", () => {
+  it("goes back to the first run with esc", async () => {
+    const good = "01JMZ8Q6F1T7QK2N4D6F8H0A2F";
+    const { place } = open(`/finance/runs/${failed}/against/${good}`);
+    await screen.findAllByText(good);
+    expect(line()[0]).toBe("esc Back to the first run");
+    await press("Escape");
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "runs", run: failed, against: undefined });
+  });
+});
+
 describe("moving a selection", () => {
   it("starts at either end, moves one at a time and stops at the ends", () => {
     const items = ["a", "b", "c"];
