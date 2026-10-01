@@ -46,6 +46,15 @@ export function measure(): Finding[] {
     if (!inside) out.push({ rule: "outside", where: name(el), detail: `right ${r.right.toFixed(1)} > ${window.innerWidth}` });
   }
 
+  // No box scrolls by a pixel or two: what overhangs a box that scrolls by so little is a box a
+  // pixel too tall or too wide, and the wheel moves it.
+  for (const el of all) {
+    const s = style(el);
+    const over = (overflow: string, by: number) => ["auto", "scroll"].includes(overflow) && by > 0 && by <= 2;
+    if (over(s.overflowY, el.scrollHeight - el.clientHeight)) out.push({ rule: "scrolls", where: name(el), detail: `${el.scrollHeight - el.clientHeight}px up and down` });
+    if (over(s.overflowX, el.scrollWidth - el.clientWidth)) out.push({ rule: "scrolls", where: name(el), detail: `${el.scrollWidth - el.clientWidth}px sideways` });
+  }
+
   // Every button, field and choice is one height.
   const controlSelector = "button.control, a.control, input:not([type=checkbox]):not([type=radio]):not([type=range]), select";
   const heights = new Map<number, string[]>();

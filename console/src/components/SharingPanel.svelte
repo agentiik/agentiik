@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, refused, type Explained } from "../lib/problem";
+  import Problem from "./Problem.svelte";
   import { refusal, type API, type Me } from "../api/client";
   import { sentence } from "../lib/signin";
   import { columns, expiryOf, kindOf, permissions, principalsOf, resolve, roles, type Grant, type Kind, type Line, type Role, type Scope } from "../lib/sharing";
@@ -21,20 +23,20 @@
   const now = Date.now();
 
   let grants = $state<Grant[] | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
   // The groups and their members, which an administrator alone reads: who else is in a group is
   // nobody else's to learn, so for anybody else a group's grants are said to apply to its members.
   let groups = $state<{ name: string; members: string[] }[] | null>(null);
 
   async function read() {
-    unread = "";
+    unread = null;
     const answer = workflow
       ? await api.GET("/api/v1/{ns}/workflows/{name}/grants", { params: { path: { ns: namespace, name: workflow } } })
       : await api.GET("/api/v1/{ns}/grants", { params: { path: { ns: namespace } } });
     if (answer.data) {
       grants = answer.data.grants;
     } else {
-      unread = refusal(answer.response, answer.error).message;
+      unread = explain("load the grants", refusal(answer.response, answer.error));
     }
   }
 
@@ -53,17 +55,17 @@
   // What is being done, said, and what the API refused, said as it said it.
   let working = $state(false);
   let said = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
-  async function act(work: () => Promise<void>) {
+  async function act(failed: string, work: () => Promise<void>) {
     if (working) return;
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -83,16 +85,16 @@
     e.preventDefault();
     const expires = expiryOf(until, Date.now());
     if (expires instanceof Error) {
-      problem = sentence(`The expiry is ${expires.message}`);
+      problem = refused("add the grant", sentence(`The expiry is ${expires.message}`));
       return;
     }
-    return act(async () => {
+    return act("add the grant", async () => {
       const body = { principal, ...(isDeny ? { deny: what as Grant["deny"] } : { role: what as Role }), ...(expires ? { expires_at: expires } : {}) };
       const answer = workflow
         ? await api.POST("/api/v1/{ns}/workflows/{name}/grants", { params: { path: { ns: namespace, name: workflow } }, body })
         : await api.POST("/api/v1/{ns}/grants", { params: { path: { ns: namespace } }, body });
       if (!answer.data) throw refusal(answer.response, answer.error);
-      said = isDeny ? `${what} is denied to ${principal} on ${here}.` : `${principal} holds ${what} on ${here}.`;
+      said = isDeny ? `${what} denied to ${principal}.` : `${what} granted to ${principal}.`;
       name = "";
       until = "";
       await read();
@@ -103,12 +105,12 @@
   let asking = $state("");
 
   function revoke(g: Grant) {
-    return act(async () => {
+    return act("revoke the grant", async () => {
       const answer = workflow
         ? await api.DELETE("/api/v1/{ns}/workflows/{name}/grants/{id}", { params: { path: { ns: namespace, name: workflow, id: g.id } } })
         : await api.DELETE("/api/v1/{ns}/grants/{id}", { params: { path: { ns: namespace, id: g.id } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
-      said = `${g.deny ? `The deny of ${g.deny}` : `The ${g.role} grant`} to ${g.principal} is revoked: it holds from the next request no more.`;
+      said = `${g.deny ? `Deny of ${g.deny}` : `${g.role} grant`} revoked for ${g.principal}.`;
       asking = "";
       await read();
     });
@@ -130,7 +132,6 @@
   });
 
   const lines = $derived<Line[]>(grants ? resolve({ ref: whom, groups: whoseGroups }, grants, at, now) : []);
-  const maybe = $derived(lines.some((l) => l.ifMember.length > 0));
 
   function source(g: Grant): string {
     const by = g.principal === whom ? "own" : g.principal;
@@ -152,20 +153,20 @@
   const placeholders = $derived<Record<Kind, string>>({ user: "login", group: "group name", "service account": `${namespace}/name` });
 </script>
 
-{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <!-- Drawn once the grants are read, every pane at once, so that none is pushed down as the grants
      above it arrive. -->
 {#if grants === null && !unread}
-  <p class="muted" role="status">Reading the grants.</p>
+  <p class="muted" role="status">Loading</p>
 {:else}
 <div class="columns">
   <div class="stack">
     <Pane title="Grants" aside={grants ? `${grants.length} on ${here}` : here}>
-      {#if unread || grants === null}
-        <p class="problem" role="alert">The grants could not be read: {unread}</p>
-      {:else}
+      {#if unread}
+        <Problem explained={unread} onretry={read} />
+      {:else if grants !== null}
         <div class="scroll">
           <table>
             <thead><tr><th>Principal</th><th>Gives</th><th>Scope</th><th>Expires</th><th>Granted</th><th class="end"></th></tr></thead>
@@ -193,7 +194,7 @@
                   </td>
                 </tr>
               {:else}
-                <tr><td colspan="6" class="muted">No grant is written on {here}.</td></tr>
+                <tr><td colspan="6" class="muted">No grants</td></tr>
               {/each}
             </tbody>
           </table>
@@ -229,7 +230,7 @@
       {/if}
     </Pane>
 
-    <Pane title="Roles" aside="four, fixed">
+    <Pane title="Roles">
       <table class="roles">
         <thead>
           <tr><th>Role</th>{#each columns as c (c.name)}<th class="mark" title={c.permissions.join(", ")}>{c.name}</th>{/each}</tr>
@@ -246,19 +247,13 @@
           {/each}
         </tbody>
       </table>
-      <p class="muted note">
-        {#each columns as c, i (c.name)}<span class="term">{c.name}</span> {c.permissions.join(", ")}{i < columns.length - 1 ? "; " : "."}{/each}
-      </p>
-      <p class="note">
-        <span class="term">operator</span> holds no <span class="term">workflow:read</span>: it runs a workflow and follows its runs, <span class="term">run:read</span>, without reading the queries, endpoints and rules inside it. Someone who needs both holds both roles.
-      </p>
     </Pane>
   </div>
 
   <div class="stack">
     {#if workflow}<BranchProtection {api} {namespace} {workflow} />{/if}
 
-    <Pane title="Resolved for" aside={here}>
+    <Pane title="Effective permissions" aside={here}>
       <label class="whom">
         <span class="unseen">Whom</span>
         <select value={whom} onchange={(e) => (chosen = e.currentTarget.value)} aria-label="Whom to resolve">
@@ -266,7 +261,6 @@
         </select>
       </label>
       {#if grants}
-        <p class="muted note">Every grant that applies, its own and its groups', at {workflow ? "both scopes" : "the namespace"}: their union, then each deny taken away.</p>
         <ul class="lines" aria-label="Effective permissions of {whom} on {here}">
           {#each lines as l (l.permission)}
             <li class:held={l.held} class:taken={l.takes.length > 0}>
@@ -274,11 +268,11 @@
               <span class="term">{l.permission}</span>
               <span class="from muted">
                 {#if l.takes.length > 0}
-                  denied: {l.takes.map(source).join("; ")}{#if l.gives.length > 0}, over {l.gives.map(source).join("; ")}{/if}
+                  denied by {l.takes.map(source).join("; ")}
                 {:else if l.held}
-                  {l.gives.map(source).join("; ")}
+                  given by {l.gives.map(source).join("; ")}
                 {:else if l.ifMember.length > 0}
-                  to a member of {l.ifMember.map((g) => g.principal.replace(/^group:/, "")).join(", ")}: {l.ifMember.map(source).join("; ")}
+                  if member of {l.ifMember.map((g) => g.principal.replace(/^group:/, "")).join(", ")}
                 {:else}
                   not given
                 {/if}
@@ -286,20 +280,9 @@
             </li>
           {/each}
         </ul>
-        {#if maybe}
-          <p class="note muted">Who is in a group is an administrator's to read, so whether {whom} is in one of them is not said here.</p>
-        {/if}
       {/if}
     </Pane>
 
-    <Pane title="What sharing never exposes">
-      <ul class="never">
-        <li>Secret values, at any role: a declaration is shown, never what it holds, which exists inside a container alone.</li>
-        <li>Another namespace's artifacts: a presigned address covers one artifact of one run, for 5 minutes.</li>
-        <li>The host that ran a task: a run names each task's runner by its identifier, and nothing of the machine.</li>
-        <li>Workflows somebody cannot read, in any listing, search or error, or in how long a refusal takes.</li>
-      </ul>
-    </Pane>
   </div>
 </div>
 {/if}
@@ -331,13 +314,7 @@
     min-width: 0;
   }
 
-  .problem {
-    color: var(--failed);
-  }
 
-  .problem {
-    margin: 0 0 calc(var(--unit) * 6);
-  }
 
   table {
     width: 100%;
@@ -482,11 +459,6 @@
     font-weight: 600;
   }
 
-  .note {
-    margin: calc(var(--unit) * 5) 0 0;
-    font-size: var(--type-control-size);
-  }
-
   .whom select {
     width: 100%;
   }
@@ -521,34 +493,6 @@
 
   .from {
     overflow-wrap: anywhere;
-  }
-
-  /* Its bullets stand on the pane's edge, under the title, and its lines hang after them. */
-  .never {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-size: var(--type-control-size);
-  }
-
-  .never li {
-    position: relative;
-    padding-left: calc(var(--unit) * 8);
-  }
-
-  .never li::before {
-    content: "";
-    position: absolute;
-    top: calc((1lh - 6px) / 2);
-    left: 0;
-    width: 6px;
-    height: 6px;
-    border-radius: var(--radius-round);
-    background: var(--faint);
-  }
-
-  .never li + li {
-    margin-top: calc(var(--unit) * 3);
   }
 
   /* On a phone the fields of a grant go one above the other. */

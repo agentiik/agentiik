@@ -63,7 +63,7 @@ describe("a workflow's files", () => {
     await waitFor(() => expect(file.textContent).toContain("vat_scale: 4"));
 
     place.narrow(new URLSearchParams({ ref: "nowhere" }));
-    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "No branch, tag or version of monthly-invoicing is named nowhere.");
+    expect(await screen.findByText(/monthly-invoicing has no branch, tag or version named nowhere\. Check the name, or choose one from the list\./)).toBeTruthy();
   });
 
   it("offer the default branch, the other branches and the tags the repository holds, then the versions", async () => {
@@ -111,7 +111,7 @@ describe("a workflow's files", () => {
     const place = open("/finance/workflows/monthly-invoicing/files", `?against=${older}&path=scripts%2Fnormalize.py`);
     expect(place.query.get("path")).toBe("scripts/normalize.py");
     expect(await screen.findByText("mode 0644 to 0755")).toBeTruthy();
-    expect(await screen.findByText("The bytes are the same; only the mode changed.")).toBeTruthy();
+    expect(await screen.findByText("Mode changed only")).toBeTruthy();
   });
 
   it("run the ref shown, its name in the run form, under workflow:run", async () => {
@@ -130,7 +130,7 @@ describe("a workflow's files", () => {
 describe("a namespace's workflows", () => {
   it("are those its runs name, said as such, each with its latest run", async () => {
     open("/finance/workflows");
-    expect(await screen.findByRole("region", { name: "Named by the last 200 runs" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Recently run" })).toBeTruthy();
     expect((await screen.findByRole("link", { name: "monthly-invoicing" })).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
   });
 
@@ -152,7 +152,7 @@ describe("a namespace's workflows", () => {
     await fireEvent.click(await screen.findByRole("button", { name: "New workflow" }));
     await fireEvent.input(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "report" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create report" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("A workflow named report is already in alice, or one deleted under that name is still being purged.");
+    expect(await screen.findByText(/report is already taken\./)).toBeTruthy();
   });
 });
 

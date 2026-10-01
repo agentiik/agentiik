@@ -52,6 +52,11 @@
 
   let holder: HTMLDivElement | undefined = $state();
   let chosen = $state<number | null>(null);
+  // pointed is the bucket under the pointer, which the legend reads out, or the one the arrow keys
+  // chose where the pointer is over none.
+  let pointed = $state<number | null>(null);
+  const at = $derived(pointed ?? chosen);
+  const valueAt = (s: Series, i: number) => (s.values[i] === null || s.values[i] === undefined ? "none" : format(s.values[i]!));
 
   const tones: Record<Tone, [string, number]> = {
     succeeded: ["--succeeded", 1],
@@ -136,7 +141,9 @@
         points: { size: 6 },
       },
       select: { show: true, left: 0, top: 0, width: 0, height: 0 },
-      legend: { live: true },
+      // The legend is the chart's own, below it, at a size that never changes: uPlot's grows and
+      // shrinks with the values it reads out, which moves the page under the pointer.
+      legend: { show: false },
       scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * 1.08 || 1] } },
       axes: [
         { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "12px Archivo, sans-serif" },
@@ -165,6 +172,7 @@
         }),
       ],
       hooks: {
+        setCursor: [(u) => (pointed = u.cursor.idx ?? null)],
         setSelect: [
           (u) => {
             if (u.select.width > 4 && onzoom) {
@@ -258,7 +266,7 @@
 </script>
 
 <figure class="chart">
-  <figcaption>{title}</figcaption>
+  <figcaption class="unseen">{title}</figcaption>
   <!-- A slider over the buckets, as the arrow keys move it; what it draws is in the table below. -->
   <div
     class="plot"
@@ -272,14 +280,14 @@
     aria-valuetext={chosen === null ? "no bucket chosen" : bounds(chosen)}
     onkeydown={key}
   ></div>
-  {#if chosen !== null && since[chosen]}
-    <p class="readout" aria-live="polite">
-      <span class="term">{bounds(chosen)}</span>
+  <div class="legend" aria-live="polite">
+    <p class="bucket term">{at !== null && since[at] ? bounds(at) : "\u00a0"}</p>
+    <ul>
       {#each series as s (s.label)}
-        <span><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label} <span class="term">{s.values[chosen] === null ? "none" : format(s.values[chosen] ?? 0)}</span></span>
+        <li><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label}<span class="value term">{at !== null && since[at] ? valueAt(s, at) : ""}</span></li>
       {/each}
-    </p>
-  {/if}
+    </ul>
+  </div>
   <details>
     <summary>Numbers</summary>
     <table>
@@ -303,58 +311,14 @@
     margin: 0;
   }
 
-  figcaption {
-    margin-bottom: calc(var(--unit) * 3);
-    font-family: var(--type-sectionTitle-font);
-    font-size: var(--type-sectionTitle-size);
-    font-weight: var(--type-sectionTitle-weight);
-  }
-
   .plot {
     border-radius: var(--radius-control);
   }
 
-  .plot :global(.u-legend) {
-    margin-top: calc(var(--unit) * 3);
-    color: var(--muted);
-    font-family: var(--type-body-font);
-    font-size: var(--type-control-size);
-    text-align: left;
-  }
-
-  /* uPlot sets its own leading of 1.5 and a marker of 1em, both fractions at 13.5px: the console's
-     leading in whole units, and a marker of 12px centred on a 20px line, put them on pixels. */
+  /* uPlot sets its own leading of 1.5, a fraction at 13.5px: the console's, in whole units, puts its
+     axes on pixels. */
   .plot :global(.uplot) {
     line-height: round(calc(var(--leading) * 1em), var(--unit));
-  }
-
-  .plot :global(.u-legend th > *) {
-    vertical-align: top;
-  }
-
-  .plot :global(.u-legend .u-marker) {
-    width: 12px;
-    height: 12px;
-    margin-top: 4px;
-  }
-
-  .plot :global(.u-legend .u-value) {
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* A label with nothing beside it until the pointer is over the chart: no colon, and the bucket's own
-     label only while it names one. */
-  .plot :global(.u-legend th::after) {
-    content: none;
-  }
-
-  .plot :global(.u-legend .u-value:not(:empty)) {
-    padding-left: calc(var(--unit) * 2);
-  }
-
-  .plot :global(.u-legend .u-series:first-child:has(.u-value:empty)) {
-    display: none;
   }
 
   .plot :global(.u-select) {
@@ -366,12 +330,33 @@
     border-color: var(--lineStrong);
   }
 
-  .readout {
+  .legend {
+    margin-top: calc(var(--unit) * 3);
+    color: var(--muted);
+    font-size: var(--type-control-size);
+  }
+
+  .bucket {
+    margin: 0;
+    color: var(--text);
+  }
+
+  .legend ul {
     display: flex;
     flex-wrap: wrap;
-    gap: calc(var(--unit) * 3) calc(var(--unit) * 7);
-    margin: calc(var(--unit) * 3) 0 0;
-    font-size: var(--type-control-size);
+    gap: calc(var(--unit) * 2) calc(var(--unit) * 7);
+    margin: calc(var(--unit) * 1) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* A value has its room whether it is read out or not, so that nothing moves as the pointer does. */
+  .value {
+    display: inline-block;
+    min-width: 8ch;
+    padding-left: calc(var(--unit) * 2);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
   }
 
   .swatch {
@@ -391,7 +376,8 @@
 
   .swatch.succeeded { background: var(--succeeded); border-color: var(--succeeded); }
   .swatch.failed { background: var(--failed); border-color: var(--failed); }
-  .swatch.running, .swatch.accent { background: var(--accent); border-color: var(--accent); }
+  .swatch.running { background: var(--running); border-color: var(--running); }
+  .swatch.accent { background: var(--accent); border-color: var(--accent); }
   .swatch.waiting { background: var(--waiting); border-color: var(--waiting); }
   .swatch.quiet { background: var(--faint); border-color: var(--faint); }
   .swatch.accent-2 { background: var(--accentLine); border-color: var(--accentLine); }

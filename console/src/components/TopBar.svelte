@@ -39,6 +39,9 @@
     apply(document.documentElement, globalThis.localStorage, g);
   }
 
+  // Whether what the screen shows is current, in a word: both connections are retried on their own.
+  const standing = $derived(!answering ? "unreachable" : live ? "live" : "reconnecting");
+
   const labels: Record<string, string> = { runs: "Runs", workflows: "Workflows", statistics: "Statistics", sharing: "Sharing", settings: "Settings" };
   const tabs: Record<string, string> = { files: "Files", statistics: "Statistics", mcp: "MCP", graph: "Graph", profile: "Profile", credentials: "Sign-in methods", tokens: "API tokens", "service-accounts": "Service accounts" };
 
@@ -101,7 +104,7 @@
 
   <div class="end">
     <span class="live" class:lost={!answering} class:waiting={answering && !live} role="status">
-      <span class="dot" aria-hidden="true"></span><span class="word">{!answering ? "not answering" : live ? "live" : "not live"}</span>
+      <span class="dot" aria-hidden="true"></span><span class="word">{standing}</span>
     </span>
 
     <Popover label={me.notifications.length === 0 ? "Notifications, none" : `Notifications, ${me.notifications.length}`} align="end" width={340}>

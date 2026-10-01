@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, refused as refusedHere, type Explained } from "../lib/problem";
+  import Problem from "./Problem.svelte";
   import { untrack } from "svelte";
   import type { Validator } from "@cfworker/json-schema";
   import { refusal, type API } from "../api/client";
@@ -22,7 +24,7 @@
   let errors = $state<Record<string, string[]>>({});
   let ref = $state(untrack(() => opensOn));
   let sending = $state(false);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
   let validators = $state<Record<string, Validator | undefined>>({});
 
   $effect(() => {
@@ -52,14 +54,14 @@
 
   async function start(e: SubmitEvent) {
     e.preventDefault();
-    refused = "";
+    refused = null;
     const inputs: Record<string, unknown> = {};
     for (const f of fields) {
       const value = check(f);
       if (value !== undefined) inputs[f.name] = value;
     }
     if (Object.values(errors).some((list) => list.length > 0)) {
-      refused = "Some inputs are refused by their schema: nothing was sent.";
+      refused = refusedHere(`start ${workflow}`, "Some inputs are invalid.");
       return;
     }
     sending = true;
@@ -73,10 +75,10 @@
     const named = error as { input?: string; error?: string } | undefined;
     if (response.status === 422 && named?.input && fields.some((f) => f.name === named.input)) {
       errors = { ...errors, [named.input]: [named.error ?? "refused"] };
-      refused = `The API refused ${named.input}.`;
+      refused = refusedHere(`start ${workflow}`, `The input ${named.input} is invalid.`);
       return;
     }
-    refused = refusal(response, error).message;
+    refused = explain(`start ${workflow}`, refusal(response, error));
   }
 
   const id = (name: string) => `input-${name}`;
@@ -106,16 +108,16 @@
       {#each errors[f.name] ?? [] as problem, i (i)}<p class="problem" role="alert">{problem}</p>{/each}
     </div>
   {:else}
-    <p class="muted">The workflow declares no input: a run is started with none.</p>
+    <p class="muted">No inputs</p>
   {/each}
   <div class="field">
-    <label for="run-ref"><span>Ref</span><span class="muted">a branch, a tag or a commit; the head of the default branch where none is named</span></label>
+    <label for="run-ref"><span>Ref</span></label>
     <input id="run-ref" class="term" type="text" bind:value={ref} placeholder={commit.slice(0, 7)} />
   </div>
   <div class="actions">
     <button class="control primary" type="submit" disabled={sending}><Icon name="control-run" size={14} />Start the run</button>
     <button class="control" type="button" onclick={onclose}>Close</button>
-    {#if refused}<span class="problem" role="alert">{refused}</span>{/if}
+    {#if refused}<Problem explained={refused} />{/if}
   </div>
 </form>
 

@@ -4,6 +4,7 @@
   import { addStep, connect, disconnect, edgesWritten, removeStep, setFanOut, setMaxParallel, setMerge, type Merge } from "../lib/editor/edits";
   import { includedPaths, resolve } from "../lib/editor/resolve";
   import { layout, type Graph } from "../lib/graph";
+  import { refused, type Explained } from "../lib/problem";
   import { lineDiff } from "../lib/tree";
   import { check, type Problem } from "../lib/workflow-check";
   import { Refused, YamlTree } from "../lib/yaml-tree";
@@ -46,7 +47,7 @@
   let earlier = $state<string[]>([]);
   // good is the last file that read whole, which the graph is drawn from while the text does not.
   let good = $state(untrack(() => new YamlTree(entry)));
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let said = $state("");
 
   // The files the entry point includes, read at the version edited, before anything is resolved.
@@ -95,10 +96,10 @@
       earlier = [...earlier, tree.text];
       tree = next;
       if (next.problems.length === 0) good = next;
-      problem = "";
+      problem = null;
       if (done) said = done;
     } catch (e) {
-      problem = e instanceof Refused ? sentenceOf(e.message) : String(e);
+      problem = refused("make this change", e instanceof Refused ? sentenceOf(e.message) : String(e));
     }
   }
 
@@ -176,9 +177,9 @@
   async function copy() {
     try {
       await navigator.clipboard.writeText(tree.text);
-      said = "agentiik.yaml is copied.";
+      said = "Copied.";
     } catch {
-      problem = "The browser would not copy the file: download it instead.";
+      problem = refused("copy agentiik.yaml", "The browser did not allow it. Download the file instead.");
     }
   }
 
@@ -191,7 +192,7 @@
   });
 </script>
 
-{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <div class="bar" role="toolbar" aria-label="The editor">
@@ -205,10 +206,9 @@
     <button class="control" onclick={onclose}>Stop editing</button>
   </span>
 </div>
-<p class="faint commit">The console does not commit yet: commit the file downloaded from a clone, <span class="term">git clone {cloneURL}</span>, where the push is checked as any is.</p>
 
 <div class="columns">
-  <Pane title="Graph" aside={reading ? "reading what it includes" : resolved.problems.length ? `${resolved.problems.length} said below` : "as the file resolves"} focused>
+  <Pane title="Graph" aside={reading ? "loading" : resolved.problems.length ? `${resolved.problems.length} ${resolved.problems.length === 1 ? "problem" : "problems"}` : ""} focused>
     <GraphCanvas {graph} {laid} run={null} {selected} onselect={(s) => (selected = s)} />
     {#if resolved.problems.length}
       <ul class="said">{#each resolved.problems as p (p)}<li class="muted">{p}</li>{/each}</ul>
@@ -216,18 +216,18 @@
   </Pane>
 
   <div class="side">
-    <Pane title={step ?? "Step"} aside={step ? (here ? "written in agentiik.yaml" : "written in a file it includes") : "choose one in the graph"}>
+    <Pane title={step ?? "Step"} aside={step && !here ? "included file" : ""}>
       {#if !step}
-        <p class="muted">Choose a step in the graph to connect it, change how it merges and fans out, or remove it.</p>
+        <p class="muted">Select a step</p>
       {:else if !here}
-        <p class="muted">{step} is written in a file agentiik.yaml includes, and is edited there: the editor writes agentiik.yaml alone.</p>
+        <p class="muted">Defined in an included file.</p>
       {:else}
         <h3 class="sub">Its edges</h3>
         <ul class="edges">
           {#each edges as e, i (i)}
             <li><span class="term">{e.step}.{e.port}</span><span class="faint">onto</span><span class="term">{e.as}</span><button class="control" aria-label="Take the edge from {e.step}.{e.port} away" onclick={() => edit((t) => disconnect(t, step!, i))}>Take away</button></li>
           {:else}
-            <li class="muted">None: it starts with the run.</li>
+            <li class="muted">None</li>
           {/each}
         </ul>
         <form class="row" onsubmit={wire} aria-label="Connect a port to {step}">
@@ -273,7 +273,7 @@
       {/if}
     </Pane>
 
-    <Pane title="agentiik.yaml" aside={problems.length ? `${problems.length} ${problems.length === 1 ? "problem" : "problems"}` : "valid against workflow.schema.json"}>
+    <Pane title="agentiik.yaml" aside={problems.length ? `${problems.length} ${problems.length === 1 ? "problem" : "problems"}` : "valid"}>
       <textarea class="code text" spellcheck="false" aria-label="agentiik.yaml, as it is edited" value={tree.text} oninput={typed}></textarea>
       {#if problems.length}
         <ul class="problems">{#each problems as p, i (i)}<li><span class="faint term">line {p.line}</span> {p.message}</li>{/each}</ul>
@@ -286,7 +286,7 @@
   <form class="form" onsubmit={add} aria-label="Add a step">
     <label><span>Name</span><input bind:value={name} class="term" required placeholder="notify" /></label>
     <label><span>Image</span><input bind:value={image} class="term" required placeholder="ghcr.io/acme/agk-notify:1.0.0" /></label>
-    <label><span>Output ports<span class="faint hint">separated by commas</span></span><input bind:value={ports} class="term" required /></label>
+    <label><span>Output ports</span><input bind:value={ports} class="term" placeholder="ok, rejected" required /></label>
     <p class="buttons"><button class="control primary">Add the step</button><button class="control" type="button" onclick={() => (adding = false)}>Cancel</button></p>
   </form>
 </Dialog>
@@ -316,11 +316,6 @@
   .count.none {
     color: var(--muted);
     font-weight: 400;
-  }
-
-  .commit {
-    margin: 0 0 calc(var(--unit) * 5);
-    font-size: var(--type-control-size);
   }
 
   .columns {
@@ -411,10 +406,6 @@
   .form label {
     display: grid;
     gap: calc(var(--unit) * 2);
-  }
-
-  .hint {
-    margin-left: calc(var(--unit) * 3);
   }
 
   .buttons {

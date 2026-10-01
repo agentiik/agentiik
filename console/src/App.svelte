@@ -2,6 +2,7 @@
   import { onMount, untrack } from "svelte";
   import type { API } from "./api/client";
   import KeyLine from "./components/KeyLine.svelte";
+  import Problem from "./components/Problem.svelte";
   import Pane from "./components/Pane.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import TopBar from "./components/TopBar.svelte";
@@ -162,16 +163,14 @@
   <SignIn {api} {session} {passkeys} />
 {:else if session.standing === "enrol-only"}
   <main class="alone">
-    <Pane title="Enrol a passkey">
-      <p>This session may enrol a passkey, and nothing else until one is.</p>
-      <p><a class="control primary" href="auth/enrol">Enrol a passkey</a></p>
+    <Pane title="Set up a passkey">
+      <p><a class="control primary" href="auth/enrol">Set up a passkey</a></p>
     </Pane>
   </main>
 {:else if session.standing === "unreachable"}
   <main class="alone">
-    <Pane title="Not answering">
-      <p>The installation did not answer: {session.said}</p>
-      <p><button class="control" onclick={() => session.read()}>Ask again</button></p>
+    <Pane title="Agentiik is not available">
+      {#if session.failure}<Problem explained={session.failure} onretry={() => session.read()} />{/if}
     </Pane>
   </main>
 {:else if session.me}

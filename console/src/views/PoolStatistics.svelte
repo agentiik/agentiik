@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import { refusal, type API } from "../api/client";
@@ -24,14 +26,14 @@
   const range = $derived(ranged.range);
 
   let pools = $state<PoolsSeries | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
 
   async function read(r: Range) {
-    refused = "";
+    refused = null;
     const { from, to } = query(r);
     const { data, error, response } = await api.GET("/api/v1/stats/pools", { params: { query: { from, to } } });
     if (data && typeof data !== "string") pools = data;
-    else refused = refusal(response, error).message;
+    else refused = explain("load the statistics", refusal(response, error));
   }
 
   $effect(() => {
@@ -47,7 +49,7 @@
       parseAs: "blob",
     });
     if (!data) {
-      refused = refusal(response, error).message;
+      refused = explain("load the statistics", refusal(response, error));
       return;
     }
     const link = document.createElement("a");
@@ -116,13 +118,13 @@
 <RangeBar {ranged} bucket={pools?.bucket} comparable={false} />
 
 {#if refused}
-  <p class="refused" role="alert">The series could not be read: {refused}</p>
+  <Problem explained={refused} onretry={() => read(range)} />
 {/if}
 
 {#if pools}
   {#key pools}
     {#if drawn.length === 0}
-      <p class="muted">No pool held a runner over the range.</p>
+      <p class="muted">No data</p>
     {/if}
     <div class="grid">
       {#each drawn as p (p.pool)}
@@ -138,7 +140,7 @@
                 {#each p.runners as r (r.runner)}
                   <tr><td class="term">{r.runner}</td><td class="number term">{r.peak}</td><td class="number term">{r.capacity}</td><td class="number term">{r.silences}</td><td class="number term">{r.lost}</td></tr>
                 {:else}
-                  <tr><td colspan="5" class="muted">No runner was in the pool over the range.</td></tr>
+                  <tr><td colspan="5" class="muted">No runners</td></tr>
                 {/each}
               </tbody>
             </table>
@@ -148,10 +150,10 @@
     </div>
 
     <div class="gaps">
-      <Pane title="Heartbeat gaps" aside="silences of two intervals, 20 s, or more, by runner">
+      <Pane title="Heartbeat gaps">
         <p class="legend">
           <span><span class="swatch"></span>20 to 30 s</span>
-          <span><span class="swatch lost"></span>{declaredLost / 1000} s and over: its tasks declared lost</span>
+          <span><span class="swatch lost"></span>{declaredLost / 1000} s and over, tasks lost</span>
         </p>
         <div class="timeline" role="list" aria-label="Silences between heartbeats, by runner">
           {#each gaps as g (g.runner)}
@@ -190,9 +192,6 @@
 
 <style>
 
-  .refused {
-    color: var(--failed);
-  }
 
   .grid {
     display: grid;

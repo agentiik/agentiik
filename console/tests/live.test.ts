@@ -71,17 +71,17 @@ describe("the live connection", () => {
 describe("the console, live", () => {
   it("says it is live once the connection opens, and not live while it is not", async () => {
     open("/finance/runs");
-    const word = await screen.findByText("not live");
+    const word = await screen.findByText("reconnecting");
     expect(word.closest("[role=status]")).toBeTruthy();
     opened();
     expect(await screen.findByText("live")).toBeTruthy();
     sockets.at(-1)!.end(1006);
-    expect(await screen.findByText("not live")).toBeTruthy();
+    expect(await screen.findByText("reconnecting")).toBeTruthy();
   });
 
   it("reads the runs again when one of the namespace's changes, and not for another namespace's", async () => {
     const asked = open("/finance/runs");
-    await screen.findByText("not live");
+    await screen.findByText("reconnecting");
     await waitFor(() => expect(count(asked, "GET /api/v1/runs")).toBe(1));
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/runs")).toBe(2));
@@ -94,7 +94,7 @@ describe("the console, live", () => {
 
   it("reads who it is signed in as again when the caller's notifications change", async () => {
     const asked = open("/finance/runs");
-    await screen.findByText("not live");
+    await screen.findByText("reconnecting");
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/me")).toBe(2));
     s.say({ kind: "notifications" });
@@ -103,7 +103,7 @@ describe("the console, live", () => {
 
   it("reads the runners again when one changes, to an administrator", async () => {
     const asked = open("/runners", "dana");
-    await screen.findByText("not live");
+    await screen.findByText("reconnecting");
     await waitFor(() => expect(count(asked, "GET /api/v1/runners")).toBe(1));
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/runners")).toBe(2));

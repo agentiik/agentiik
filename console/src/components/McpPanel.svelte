@@ -55,16 +55,16 @@
       <pre class="json"><code>{#each tokens(schema ?? true) as tok, i (i)}<span class="t-{tok.kind}">{tok.text}</span>{/each}</code></pre>
       {#if t.output}
         <p class="label">
-          {#if out !== undefined}outputSchema, the schema of the output <span class="term">{t.output.from.output}</span>{:else}The output <span class="term">{t.output.from.output}</span> carries no schema, so none is published{/if}
+          {#if out !== undefined}outputSchema, the schema of the output <span class="term">{t.output.from.output}</span>{:else}no schema{/if}
         </p>
         {#if out !== undefined}<pre class="json"><code>{#each tokens(out) as tok, i (i)}<span class="t-{tok.kind}">{tok.text}</span>{/each}</code></pre>{/if}
       {/if}
     </section>
   {:else}
-    <p class="muted">The block lists no tool, so the endpoint serves an empty list.</p>
+    <p class="muted">No tools</p>
   {/each}
 {:else}
-  <p class="muted">This version declares no mcp block, so the endpoint answers 404, as a route the installation does not serve.</p>
+  <p class="muted">No tools</p>
 {/if}
 
 <style>

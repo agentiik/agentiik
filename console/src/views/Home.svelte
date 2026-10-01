@@ -149,7 +149,7 @@
 
   // The figures under the caller's name: the last seven days of every namespace read, added up.
   const week = $derived(together(read.map((n) => series.get(n.name)).filter((s) => s !== undefined).map((s) => lastWeek(s, now))));
-  const share = $derived(week.ended ? `${Math.round((week.succeeded / week.ended) * 1000) / 10}%` : "none ended");
+  const share = $derived(week.ended ? `${Math.round((week.succeeded / week.ended) * 1000) / 10}%` : "none");
 </script>
 
 <header class="profile">
@@ -169,14 +169,14 @@
 
 <!-- Drawn at their size before the series answer, each value said once they have. -->
 <ul class="figures" aria-label="The last seven days">
-  <li><span class="label">Runs</span><span class="value term">{reading ? "\u00a0" : week.runs}</span><span class="faint">last 7 days</span></li>
-  <li><span class="label">Failed or timed out</span><span class="value term" class:failed={!reading && week.failures > 0}>{reading ? "\u00a0" : week.failures}</span><span class="faint">last 7 days</span></li>
-  <li><span class="label">Succeeded</span><span class="value term">{reading ? "\u00a0" : share}</span><span class="faint">of the runs that ended</span></li>
-  <li><span class="label">Namespaces</span><span class="value term">{read.length}</span><span class="faint">whose runs you read</span></li>
+  <li><span class="label">Runs, 7 days</span><span class="value term">{reading ? "\u00a0" : week.runs}</span></li>
+  <li><span class="label">Failures, 7 days</span><span class="value term" class:failed={!reading && week.failures > 0}>{reading ? "\u00a0" : week.failures}</span></li>
+  <li><span class="label">Success rate, 7 days</span><span class="value term">{reading ? "\u00a0" : share}</span></li>
+  <li><span class="label">Namespaces</span><span class="value term">{read.length}</span></li>
 </ul>
 
-<Pane title="Activity" aside={reading ? "reading" : `${yearTotal} ${by === "runs" ? (yearTotal === 1 ? "run" : "runs") : yearTotal === 1 ? "failure" : "failures"} in the last year, ${read.length} ${read.length === 1 ? "namespace" : "namespaces"}`}>
-  {#if unread.length}<p class="refused">Not read: {unread.join(", ")}</p>{/if}
+<Pane title="Activity" aside={reading ? "loading" : `${yearTotal} ${by === "runs" ? (yearTotal === 1 ? "run" : "runs") : yearTotal === 1 ? "failure" : "failures"}, 12 months`}>
+  {#if unread.length}<p class="refused" role="alert">Could not load the runs of {unread.join(", ")}.</p>{/if}
   <div class="year" class:failures={by === "failures"}>
     <div class="weeks" bind:this={yearBox}>
     <div class="months" style:grid-template-columns="repeat({weeks}, var(--square))" aria-hidden="true">
@@ -254,7 +254,7 @@
 </Pane>
 
 <div class="columns">
-  <Pane title="Namespaces" aside="the last seven days">
+  <Pane title="Namespaces" aside="7 days">
     <ul class="namespaces">
       {#each read as n (n.name)}
         {@const s = series.get(n.name)}
@@ -266,7 +266,7 @@
             <span class="term figure">{week.runs} {week.runs === 1 ? "run" : "runs"}</span>
             <span class="term figure" class:failed={week.failures > 0}>{week.failures} failed</span>
           {:else}
-            <span class="faint figure">{reading ? "reading" : "not read"}</span>
+            <span class="faint figure">{reading ? "loading" : "unavailable"}</span>
           {/if}
         </li>
       {:else}
@@ -274,7 +274,7 @@
       {/each}
     </ul>
   </Pane>
-  <Pane title="Last runs" aside="across every namespace">
+  <Pane title="Last runs">
     <table>
       <thead><tr><th>State</th><th>Run</th><th>Workflow</th><th>Created</th><th class="number">Took</th></tr></thead>
       <tbody>
@@ -372,10 +372,6 @@
 
   .figures .value.failed {
     color: var(--failed);
-  }
-
-  .figures .faint {
-    font-size: 12.5px;
   }
 
   .by {

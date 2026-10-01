@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, Told, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { Refusal, type API, type Me } from "../api/client";
   import Icon from "../components/Icon.svelte";
   import PageHeader from "../components/PageHeader.svelte";
@@ -53,19 +55,19 @@
   // What any act on the screen is doing, said, and what the API refused, said as it said it.
   let working = $state(false);
   let said = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
-  async function act(work: () => Promise<void>) {
+  async function act(failed: string, work: () => Promise<void>) {
     if (working) {
       return;
     }
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -74,19 +76,20 @@
   // The sign-in methods, and the policy that rules them.
   let credentials = $state<Credential[] | null>(null);
   let policy = $state<Policy | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
+  let untokened = $state<Explained | null>(null);
 
   async function reread() {
     try {
       credentials = await credentialsOf(api);
-      unread = "";
+      unread = null;
     } catch (e) {
       // A credential removed ends the sessions it opened, this one among them where it did.
       if (e instanceof Refusal && e.status === 401) {
         await changed();
         return;
       }
-      unread = sentence(e instanceof Error ? e.message : String(e));
+      unread = explain("load your passkeys and passwords", e);
     }
   }
 
@@ -105,20 +108,20 @@
   let code = $state("");
 
   function remove(c: Credential) {
-    return act(async () => {
+    return act("remove the credential", async () => {
       await removeCredential(api, c.id);
       asking = "";
-      said = c.type === "password" ? "The password is removed, with the one-time code generator beside it where there was one." : `${described(c)} is removed.`;
+      said = c.type === "password" ? "Password removed." : `${described(c)} removed.`;
       await reread();
     });
   }
 
   function removeTheGenerator(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("remove the one-time code generator", async () => {
       await removeGenerator(api, code.trim());
       code = "";
-      said = "The one-time code generator is removed. The password stays.";
+      said = "One-time code generator removed.";
       await reread();
     });
   }
@@ -132,16 +135,16 @@
 
   function add(event?: SubmitEvent) {
     event?.preventDefault();
-    return act(async () => {
+    return act("add the passkey", async () => {
       if (!passkeys.credentials) {
-        throw new Error(passkeys.unavailable);
+        throw new Told(passkeys.unavailable);
       }
       said = "Waiting for your authenticator.";
       try {
         const made = await addPasskey(api, passkeys.credentials, label);
         again = false;
         label = "";
-        said = made ? `${made.label ? `“${made.label}”, a` : "A"} ${made.kind} passkey is added.` : "The passkey is added.";
+        said = "Passkey added.";
       } catch (e) {
         said = "";
         if (e instanceof SignInAgain) {
@@ -154,9 +157,9 @@
   }
 
   function signInAgainWithPasskey() {
-    return act(async () => {
+    return act("sign in again with your passkey", async () => {
       if (!passkeys.credentials) {
-        throw new Error(passkeys.unavailable);
+        throw new Told(passkeys.unavailable);
       }
       said = "Waiting for your passkey.";
       await signInWithPasskey(api, passkeys.credentials);
@@ -168,7 +171,7 @@
 
   function signInAgainWithPassword(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("sign in again with your password", async () => {
       await signInWithPassword(api, me.user?.login ?? me.principal, password, totp.trim());
       password = "";
       totp = "";
@@ -199,9 +202,9 @@
   async function retokens() {
     try {
       tokens = await tokensOf(api);
-      unread = "";
+      untokened = null;
     } catch (e) {
-      unread = sentence(e instanceof Error ? e.message : String(e));
+      untokened = explain("load your tokens", e);
     }
   }
 
@@ -226,7 +229,7 @@
 
   function mintOne(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("create the token", async () => {
       const ask: TokenRequest = { expires_at: expiringIn(days, new Date()) };
       if (whose !== "") {
         ask.principal = whose;
@@ -262,10 +265,10 @@
   }
 
   function revokeOne(t: Token) {
-    return act(async () => {
+    return act("revoke the token", async () => {
       await revoke(api, t.id);
       revoking = "";
-      said = `The token ${t.device_label ? `“${t.device_label}”` : t.id} is revoked from its next request.`;
+      said = "Token revoked.";
       await retokens();
     });
   }
@@ -289,7 +292,7 @@
   { label: "Service accounts", icon: "control-groups", to: routes.accounts, current: shown === "service-accounts" },
 ]} />
 
-{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 {#if shown === "profile"}
@@ -301,11 +304,11 @@
     <Pane title="Sign-in methods" aside={credentials ? String(credentials.length) : ""}>
       {#if policy}<p class="muted lead">{policyLine(policy)}</p>{/if}
       {#if unread}
-        <p class="problem" role="alert">{unread}</p>
+        <Problem explained={unread} onretry={reread} />
       {:else if credentials === null}
-        <p class="muted">Reading what you sign in with.</p>
+        <p class="muted">Loading</p>
       {:else if credentials.length === 0}
-        <p class="muted">You hold no credential: a service account signs in with tokens alone.</p>
+        <p class="muted">Tokens only</p>
       {:else}
         <table>
           <thead><tr><th>Credential</th><th>Kind</th><th>Enrolled</th><th>Last used</th><th class="end"></th></tr></thead>
@@ -347,19 +350,19 @@
         <p class="muted">{passkeys.unavailable}</p>
       {:else}
         <form onsubmit={add}>
-          <label for="passkey-label">A name for it, so that you can tell it from the others when a device is lost</label>
+          <label for="passkey-label">Name</label>
           <input id="passkey-label" maxlength="256" placeholder="work laptop" bind:value={label} />
           <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add a passkey</button></p>
         </form>
         {#if again}
           <div class="again">
-            <p>Adding a way in takes a sign-in in the last 10 minutes, so that a session left open is not enough to add one. Sign in again, and the passkey is added straight after.</p>
+            <p>Sign in again to add a passkey.</p>
             <p><button class="control" disabled={working} onclick={signInAgainWithPasskey}><Icon name="control-passkey" size={14} />Sign in again with a passkey</button></p>
             {#if holdsPassword}
               <form onsubmit={signInAgainWithPassword}>
                 <label for="again-password">Or with your password</label>
                 <input id="again-password" type="password" autocomplete="current-password" bind:value={password} />
-                <label for="again-totp">A code from your generator, where you enrolled one</label>
+                <label for="again-totp">One-time code</label>
                 <input id="again-totp" class="term" inputmode="numeric" autocomplete="one-time-code" maxlength="6" bind:value={totp} />
                 <p><button class="control" disabled={working || password === ""}>Sign in again with the password</button></p>
               </form>
@@ -367,7 +370,6 @@
           </div>
         {/if}
       {/if}
-      <p class="foot muted">A password and a one-time code generator are set on the <a href="auth/enrol">sign-in page</a>.</p>
     </Pane>
   </div>
 {:else}
@@ -375,7 +377,7 @@
     <Pane title="API tokens" aside={tokens ? String(tokens.length) : ""}>
       {#if issued}
         <div class="issued" role="status">
-          <p>The token for <span class="term">{issued.api_token.principal}</span>, shown this once: copy it now. Lose it and mint another.</p>
+          <p>Token for <span class="term">{issued.api_token.principal}</span>. Shown once: copy it now.</p>
           <p class="value code">{issued.token}</p>
           <p class="buttons">
             <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy"}</button>
@@ -383,12 +385,12 @@
           </p>
         </div>
       {/if}
-      {#if unread}
-        <p class="problem" role="alert">{unread}</p>
+      {#if untokened}
+        <Problem explained={untokened} onretry={retokens} />
       {:else if tokens === null}
-        <p class="muted">Reading your tokens.</p>
+        <p class="muted">Loading</p>
       {:else if tokens.length === 0}
-        <p class="muted">No token is accepted for you or your service accounts.</p>
+        <p class="muted">No tokens</p>
       {:else}
         <table>
           <thead><tr><th>Token</th><th>Principal</th><th>Narrowed to</th><th>Created</th><th>Expires</th><th>Last used</th><th class="end"></th></tr></thead>
@@ -427,7 +429,7 @@
             <option value={`${a.namespace}/${a.name}`}>{a.namespace}/{a.name}</option>
           {/each}
         </select>
-        <label for="token-label">What it is for or on, so that the one on a lost machine can be revoked</label>
+        <label for="token-label">Label</label>
         <input id="token-label" maxlength="256" placeholder="deploy pipeline" bind:value={deviceLabel} />
         <label for="token-days">Expires in</label>
         <select id="token-days" bind:value={days}>
@@ -436,15 +438,14 @@
           {/each}
         </select>
         <fieldset>
-          <legend>Permissions it keeps, every one its principal holds where none is ticked</legend>
+          <legend>Permissions (all if none ticked)</legend>
           {#each permissions as p (p)}
             <label class="check"><input type="checkbox" checked={kept.includes(p)} onchange={(e) => toggle(p, e.currentTarget.checked)} /><span class="term">{p}</span></label>
           {/each}
         </fieldset>
-        <label for="token-within">Namespaces and workflows it reaches, everywhere its principal does where none is written</label>
+        <label for="token-within">Scope (everywhere if empty)</label>
         <input id="token-within" class="term" placeholder="finance, finance/monthly-invoicing" bind:value={within} />
         <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Mint the token</button></p>
-        <p class="foot muted">A token can only narrow what its principal holds, and none lasts more than a year.</p>
       </form>
     </Pane>
   </div>
@@ -459,13 +460,7 @@
     align-items: start;
   }
 
-  .problem {
-    color: var(--failed);
-  }
 
-  .problem {
-    margin: 0 0 calc(var(--unit) * 6);
-  }
 
   .lead {
     margin: 0 0 calc(var(--unit) * 5);
@@ -577,11 +572,6 @@
     margin-top: calc(var(--unit) * 6);
     padding-top: calc(var(--unit) * 4);
     border-top: var(--border-hairline) solid var(--line);
-  }
-
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
-    font-size: var(--type-control-size);
   }
 
   .issued {

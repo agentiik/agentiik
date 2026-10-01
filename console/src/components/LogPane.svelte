@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Problem from "./Problem.svelte";
   import type { API } from "../api/client";
   import { LogTail } from "../lib/logs.svelte";
 
@@ -22,19 +23,19 @@
   });
 
   const dispatches = $derived(tail.of(task));
-  const live = $derived(tail.verdict === null && tail.refused === "");
+  const live = $derived(tail.verdict === null && tail.refused === null);
 </script>
 
 <section class="log" aria-label="Log of the task chosen">
   <p class="state muted">
     {#if tail.refused}
-      <span class="problem" role="alert">{tail.refused}</span>
+      <Problem explained={tail.refused} />
     {:else if tail.reconnecting}
-      The stream was cut; the browser is reconnecting, and resumes after the last line it was given.
+      Reconnecting
     {:else if live}
-      <span class="dot" aria-hidden="true"></span> Following the log as it is written.
+      <span class="dot" aria-hidden="true"></span> Live
     {:else}
-      The step's log is over: {tail.verdict}.
+      Finished: {tail.verdict}
     {/if}
   </p>
 
@@ -53,19 +54,19 @@
 </span>{/each}</code></pre>
     {/if}
     {#each d.gaps as g (g.first)}
-      <p class="gap">Lines {g.first} to {g.first + g.lines - 1} were written and cannot be read back: {g.reason}.</p>
+      <p class="gap">Lines {g.first} to {g.first + g.lines - 1} unavailable: {g.reason}</p>
     {/each}
     {#if d.over?.truncated}
-      <p class="muted">The runner cut this log at its caps, log_max_bytes or log_max_lines.</p>
+      <p class="muted">Log truncated</p>
     {/if}
     {#if d.over && !d.over.final}
-      <p class="muted">The dispatch was still running when the stream let go of it.</p>
+      <p class="muted">Log incomplete</p>
     {/if}
   {:else}
     {#if !live && !tail.refused}
-      <p class="muted">The task chosen has no log: it was never dispatched.</p>
+      <p class="muted">No log</p>
     {:else if !tail.refused}
-      <p class="muted">Waiting for the task chosen to be dispatched.</p>
+      <p class="muted">Not started</p>
     {/if}
   {/each}
 </section>
@@ -91,9 +92,6 @@
     background: var(--running);
   }
 
-  .problem {
-    color: var(--failed);
-  }
 
   h4 {
     margin: calc(var(--unit) * 2) 0 0;

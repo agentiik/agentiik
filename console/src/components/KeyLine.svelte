@@ -39,7 +39,6 @@
         {/each}
       </tbody>
     </table>
-    <p class="faint">A key does nothing while a field is typed into. Every one stands beside a button or a link that does the same.</p>
   </div>
 {/if}
 
@@ -136,10 +135,5 @@
   .keys {
     width: 40%;
     white-space: nowrap;
-  }
-
-  .faint {
-    margin: calc(var(--unit) * 5) 0 0;
-    font-size: var(--type-control-size);
   }
 </style>

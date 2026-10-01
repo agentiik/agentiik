@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import type { API, Me } from "../api/client";
   import Pane from "../components/Pane.svelte";
@@ -60,7 +62,7 @@
 
   // What each port held in the two runs, compared on asking, since an envelope is read whole to be
   // compared and may be large: as two bags of items, by their data and files and not their ids.
-  type Compared = { reading: true } | { refused: string } | { same: number; onlyFirst: Item[]; onlySecond: Item[] };
+  type Compared = { reading: true } | { refused: Explained } | { same: number; onlyFirst: Item[]; onlySecond: Item[] };
   let compared = $state<Record<string, Compared>>({});
 
   async function compare(port: string) {
@@ -70,7 +72,7 @@
       const [p, q] = await Promise.all([readEnvelope(api, x.run, chosen.step, port, "output"), readEnvelope(api, y.run, chosen.step, port, "output")]);
       compared = { ...compared, [port]: sameItems(p, q) };
     } catch (e) {
-      compared = { ...compared, [port]: { refused: e instanceof Error ? e.message : String(e) } };
+      compared = { ...compared, [port]: { refused: explain(`compare what ${port} held`, e) } };
     }
   }
 
@@ -83,7 +85,7 @@
 {#if missing}
   <Refused />
 {:else if first.refused || second.refused}
-  <Pane title="Two runs"><p class="refused" role="alert">The runs could not be read: {first.refused || second.refused}</p></Pane>
+  <Pane title="Two runs"><Problem explained={(first.refused ?? second.refused)!} onretry={() => { first.read(); second.read(); }} /></Pane>
 {:else if x && y}
   <div class="diff">
     <Pane title="Two runs of {x.workflow}" aside="{x.namespace}/{x.workflow}@{x.commit.slice(0, 7)}">
@@ -104,11 +106,11 @@
         <a class="swap" href={place.href(swapped)} onclick={follow(place, swapped)}>Swap them</a>
       </div>
       {#if x.workflow !== y.workflow || x.commit !== y.commit}
-        <p class="warning" role="note">These are runs of {x.workflow}@{x.commit.slice(0, 7)} and {y.workflow}@{y.commit.slice(0, 7)}: two runs are read side by side where they ran one commit, and a difference here may be the code's, which the diff of the two commits shows.</p>
+        <p class="warning" role="note">Different commits: {x.commit.slice(0, 7)} and {y.commit.slice(0, 7)}.</p>
       {/if}
       {#if readsData}
         {#if sameInputs}
-          <p class="muted">Both were started with the same inputs.</p>
+          <p class="muted">Same inputs</p>
         {:else}
           <p>They were started with different inputs.</p>
           <div class="pair json">
@@ -118,7 +120,7 @@
           </div>
         {/if}
       {:else}
-        <p class="faint">Their inputs and parameters are not compared: you do not hold run:read_data on {x.namespace}/{x.workflow}.</p>
+        <p class="faint">Inputs hidden (needs <span class="term">run:read_data</span>)</p>
       {/if}
     </Pane>
 
@@ -174,17 +176,17 @@
                 {#if readsData}
                   <td>
                     {#if !p || !q}
-                      <span class="muted">only one run published here</span>
+                      <span class="muted">in one run only</span>
                     {:else if p.items === 0 && q.items === 0}
                       <span class="muted">nothing in either</span>
                     {:else if p.purged_at || q.purged_at}
-                      <span class="muted">purged with the run's retention</span>
+                      <span class="muted">purged</span>
                     {:else if !c}
                       <button class="control" onclick={() => compare(port)}>Compare the items</button>
                     {:else if "reading" in c}
-                      <span class="muted" role="status">Reading both envelopes</span>
+                      <span class="muted" role="status">Loading</span>
                     {:else if "refused" in c}
-                      <span class="refused" role="alert">{c.refused}</span>
+                      <Problem explained={c.refused} />
                     {:else if c.onlyFirst.length === 0 && c.onlySecond.length === 0}
                       <span role="status">The same {c.same} items</span>
                     {:else}
@@ -208,7 +210,7 @@
                 </tr>
               {/if}
             {:else}
-              <tr><td colspan={readsData ? 4 : 3} class="muted">The step published nothing in either run.</td></tr>
+              <tr><td colspan={readsData ? 4 : 3} class="muted">Nothing published</td></tr>
             {/each}
           </tbody>
         </table>
@@ -216,7 +218,7 @@
           {@const pa = paramsOf(x, chosen.step)}
           {@const pb = paramsOf(y, chosen.step)}
           {#if canonical(pa ?? {}) === canonical(pb ?? {})}
-            <p class="muted">It was dispatched with the same parameters in both.</p>
+            <p class="muted">Same parameters</p>
           {:else}
             <p>It was dispatched with different parameters.</p>
             <div class="pair json">
