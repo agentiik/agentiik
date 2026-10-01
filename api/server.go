@@ -66,7 +66,12 @@ type Server struct {
 	logs      *logWatch
 	streaming streamTiming
 	stopping  <-chan struct{}
-	trouble   func(error)
+
+	// liveHub hands the changes the API hears to the live connections it serves, which spend
+	// their time as liveTiming says.
+	liveHub    *liveHub
+	liveTiming liveTiming
+	trouble    func(error)
 }
 
 // ServerOptions are what a Server is given.
@@ -136,6 +141,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	s := &Server{
 		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now,
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
+		liveHub: &liveHub{pool: o.Pool}, liveTiming: defaultLiveTiming,
 		publicURL: o.PublicURL, router: rt, hooks: o.Hooks,
 	}
 	starter, err := trigger.New(trigger.Options{Pool: o.Pool, Versions: o.Versions, Objects: o.Objects, Report: s.report, Now: o.Now})
@@ -228,6 +234,11 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		if err := rt.HandleAcross("GET", pattern, Across{Permission: RunRead}, s.across); err != nil {
 			return nil, err
 		}
+	}
+	// The caller's live connection, told of each change among what it may read: the runs of each
+	// workflow it holds run:read on, asked about each as it changes, as the listing asks.
+	if err := rt.HandleAcross("GET", "/api/v1/me/live", Across{Permission: RunRead}, s.live); err != nil {
+		return nil, err
 	}
 	// A namespace's runs as series count what its listing lists, and are asked about each workflow
 	// the same way: an aggregate over runs discloses the runs.

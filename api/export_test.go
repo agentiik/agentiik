@@ -16,6 +16,11 @@ func StreamTiming(s *Server, sweep, pace, keepAlive, reauthorise, settling time.
 	s.logs.sweep = sweep
 }
 
+// LiveTiming gives a server's live connections timings a test can wait out.
+func LiveTiming(s *Server, pace, ping, reauthorise time.Duration) {
+	s.liveTiming = liveTiming{pace: pace, ping: ping, reauthorise: reauthorise, write: 5 * time.Second}
+}
+
 // Hashing gives s the turns to hash and the wait for one given in place of those sized from the
 // machine, and answers the function that takes one of its turns and holds it until the function it
 // answers is called.
