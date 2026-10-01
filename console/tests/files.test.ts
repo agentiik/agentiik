@@ -124,3 +124,19 @@ describe("a namespace's workflows", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("A workflow named report is already in alice, or one deleted under that name is still being purged.");
   });
 });
+
+describe("the entry point's check", () => {
+  it("says the file is valid against workflow.schema.json, and where it is not", async () => {
+    open("/finance/workflows/monthly-invoicing/files");
+    expect(await screen.findByText(/Valid against/)).toBeTruthy();
+  });
+
+  it("names each problem on its line, and marks the line", async () => {
+    open("/finance/workflows/monthly-invoicing/files", "?ref=try-retries");
+    const said = await screen.findByText(/1 problem against/);
+    const list = said.parentElement!.querySelector("ul")!;
+    expect(list.textContent).toBe("line 58steps.invoice.retriesretries is not a key steps.invoice takes");
+    const file = screen.getByRole("list", { name: "agentiik.yaml at try-retries" });
+    expect([...file.querySelectorAll("li.wrong")].map((l) => l.textContent)).toEqual(["58    retries: 3"]);
+  });
+});

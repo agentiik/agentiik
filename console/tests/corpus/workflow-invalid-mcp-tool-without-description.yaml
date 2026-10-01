@@ -1,0 +1,32 @@
+# invalid: A published tool with no description. The description is the field
+#   a model acts on, so a tool without one is published to nobody's benefit.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+
+mcp:
+  name: invoicing
+  tools:
+    - name: create_invoice
+      title: Create an invoice
+      input:
+        from: { input: orders }
+      mode: sync
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]
