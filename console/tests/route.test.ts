@@ -5,7 +5,7 @@ describe("an address", () => {
   const root = "/prefix/";
 
   it("names the screen it opens, and is written back the same", () => {
-    for (const path of ["finance/runs", "finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A", "finance/workflows/monthly-invoicing/statistics", "finance/sharing", "me/tokens", "runners", "users"]) {
+    for (const path of ["finance/runs", "finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A", "finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A/against/01JMZ7Q2R5T8V0X2Z4B6D8F0H2", "finance/workflows/monthly-invoicing/statistics", "finance/sharing", "me/tokens", "runners", "users"]) {
       expect(address(read(root + path, root))).toBe(path);
     }
   });
@@ -22,6 +22,8 @@ describe("an address", () => {
     expect(read("/elsewhere/finance/runs", root).kind).toBe("unknown");
     expect(read(root + "finance/nothing", root).kind).toBe("unknown");
     expect(read(root + "finance/runs/a/b", root).kind).toBe("unknown");
+    expect(read(root + "finance/runs/a/against", root).kind).toBe("unknown");
+    expect(read(root + "finance/runs/a/against/b/c", root).kind).toBe("unknown");
     expect(read(root + "finance/%E0%A4%A", root).kind).toBe("unknown");
   });
 
