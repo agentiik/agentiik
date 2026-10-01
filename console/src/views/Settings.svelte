@@ -169,8 +169,10 @@
 </div>
 
 <style>
+  /* One column the width of the page, never of its widest table, which scrolls inside its pane. */
   .sections {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: calc(var(--unit) * 8);
   }
 
