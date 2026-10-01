@@ -4,8 +4,9 @@
 // from a scenario of recorded answers. No controller, runner or database is behind it.
 //
 // A scenario is a JSON file under tests/fixtures mapping "METHOD /path" or "METHOD /path?query" to
-// {"status": 200, "body": ...}. A route it does not hold is answered as the API answers what the
-// caller may not see: 404, no such thing, or not yours.
+// {"status": 200, "body": ...}, where the query may be a part of the one asked, by=hour alone say.
+// A route it does not hold is answered as the API answers what the caller may not see: 404, no such
+// thing, or not yours.
 //
 //     node tests/serve.js tests/fixtures/alice.json [port] [path]
 
@@ -39,6 +40,26 @@ const types = {
 
 const apiRoots = ["/api/", "/auth/", "/hooks/", "/mcp", "/objects/"];
 
+// recordedFor is what a scenario holds for a request: the answer recorded for its whole query, or
+// else for a part of it, the one naming the most of the request's parameters, or else for its path,
+// as tests/scenario.ts reads one.
+function recordedFor(scenario, method, path, search) {
+  const key = `${method} ${path}`;
+  if (scenario[`${key}${search}`] !== undefined) return scenario[`${key}${search}`];
+  const asked = new URLSearchParams(search);
+  let best;
+  let named = 0;
+  for (const [recorded, value] of Object.entries(scenario)) {
+    if (!recorded.startsWith(`${key}?`)) continue;
+    const wants = [...new URLSearchParams(recorded.slice(key.length + 1))];
+    if (wants.length > named && wants.every(([k, v]) => asked.getAll(k).includes(v))) {
+      best = value;
+      named = wants.length;
+    }
+  }
+  return best ?? scenario[key];
+}
+
 // serve starts the stand-in and answers with its address once it listens. scenario may be changed
 // between requests by the caller, which is how a test moves the installation along.
 export function serve({ scenario, port = 0, prefix = "/" }) {
@@ -58,7 +79,7 @@ export function serve({ scenario, port = 0, prefix = "/" }) {
 
     if (apiRoots.some((r) => path.startsWith(r))) {
       state.asked.push(`${req.method} ${path}${url.search}`);
-      const recorded = state.scenario[`${req.method} ${path}${url.search}`] ?? state.scenario[`${req.method} ${path}`];
+      const recorded = recordedFor(state.scenario, req.method, path, url.search);
       const answer = recorded ?? { status: 404, body: { error: "no such thing, or not yours" } };
       res.writeHead(answer.status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(answer.body === undefined ? "" : JSON.stringify(answer.body));

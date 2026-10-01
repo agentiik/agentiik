@@ -5,8 +5,10 @@
   import Chart, { type Series } from "../components/Chart.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
+  import RangeBar from "../components/RangeBar.svelte";
   import type { Place } from "../lib/place.svelte";
-  import { bytes, described, ms, presets, queryOfRange, rangeOf, type Preset, type Range } from "../lib/stats";
+  import { query, Ranged } from "../lib/range.svelte";
+  import { bytes, ms, type Range } from "../lib/stats";
 
   // A namespace's statistics: its runs, as GET /api/v1/{ns}/stats/runs counts the ones the caller may
   // read, and its load against its quotas, as GET /api/v1/{ns}/stats/quotas answers whoever reads the
@@ -17,17 +19,12 @@
   type QuotasSeries = components["schemas"]["statsQuotas"];
 
   const tab = $derived(place.query.get("tab") === "quotas" ? "quotas" : "runs");
-  const range = $derived(rangeOf(place.query, Date.now()));
+  const ranged = new Ranged(() => place);
+  const range = $derived(ranged.range);
 
   let runs = $state<RunsSeries | null>(null);
   let quotas = $state<QuotasSeries | null>(null);
   let refused = $state("");
-  // Each zoom is kept, so that a double click steps back to the range before it.
-  let before = $state<Range[]>([]);
-
-  function query(r: Range) {
-    return { from: r.from.toISOString(), to: r.to.toISOString(), compare: r.compare ? ("previous" as const) : undefined };
-  }
 
   async function read(which: "runs" | "quotas", r: Range) {
     refused = "";
@@ -48,27 +45,8 @@
     untrack(() => read(which, r));
   });
 
-  function narrow(change: Partial<Range>, keep = true) {
-    if (keep) before = [...before, range];
-    place.narrow(queryOfRange({ ...range, ...change }, place.query));
-  }
-
-  function choose(preset: Preset) {
-    before = [];
-    const now = Date.now();
-    narrow({ preset, from: new Date(now - presets[preset].ms), to: new Date(now) }, false);
-  }
-
-  function zoom(from: Date, to: Date) {
-    narrow({ from, to, preset: undefined });
-  }
-
-  function back() {
-    const last = before.at(-1);
-    if (!last) return;
-    before = before.slice(0, -1);
-    place.narrow(queryOfRange(last, place.query));
-  }
+  const zoom = (from: Date, to: Date) => ranged.zoom(from, to);
+  const back = () => ranged.back();
 
   function show(which: "runs" | "quotas") {
     const q = new URLSearchParams(place.query);
@@ -183,25 +161,11 @@
   <button class="tab" aria-pressed={tab === "quotas"} onclick={() => show("quotas")}>Quotas</button>
 </nav>
 
-<div class="range">
-  <div class="presets" role="group" aria-label="Range">
-    {#each Object.entries(presets) as [key, p] (key)}
-      <button class="preset" aria-pressed={range.preset === key} onclick={() => choose(key as Preset)}>{p.label}</button>
-    {/each}
-  </div>
-  <span class="muted mono">{described(range, series?.bucket)}</span>
-  {#if before.length > 0}<button class="link" onclick={back}>Back to the range before</button>{/if}
-  <label class="compare">
-    <input type="checkbox" role="switch" checked={range.compare} onchange={(e) => narrow({ compare: e.currentTarget.checked }, false)} />
-    <span class="track" aria-hidden="true"><span class="knob"></span></span>
-    Compare with the span before
-  </label>
-  <span class="export">
-    <span class="muted">Export the series</span>
-    <button class="control" onclick={() => exported("csv")}><Icon name="control-download" size={14} />CSV</button>
-    <button class="control" onclick={() => exported("json")}><Icon name="control-download" size={14} />JSON</button>
-  </span>
-</div>
+<RangeBar {ranged} bucket={series?.bucket}>
+  <span class="muted">Export the series</span>
+  <button class="control" onclick={() => exported("csv")}><Icon name="control-download" size={14} />CSV</button>
+  <button class="control" onclick={() => exported("json")}><Icon name="control-download" size={14} />JSON</button>
+</RangeBar>
 
 {#if refused}
   <p class="refused" role="alert">The series could not be read: {refused}</p>
@@ -317,8 +281,7 @@
     font-weight: 600;
   }
 
-  .tab,
-  .preset {
+  .tab {
     height: 29px;
     padding: 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid transparent;
@@ -330,94 +293,10 @@
     cursor: pointer;
   }
 
-  .tab[aria-pressed="true"],
-  .preset[aria-pressed="true"] {
+  .tab[aria-pressed="true"] {
     border-color: var(--accentLine);
     background: var(--accentDim);
     color: var(--accent);
-  }
-
-  .range {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: calc(var(--unit) * 7);
-    margin-bottom: calc(var(--unit) * 10);
-    font-size: var(--type-control-size);
-  }
-
-  .presets {
-    display: flex;
-    gap: calc(var(--unit) * 1);
-    padding: 2px;
-    border: var(--border-hairline) solid var(--lineStrong);
-    border-radius: var(--radius-control);
-    background: var(--raised);
-  }
-
-  .preset {
-    height: 25px;
-    font-size: var(--type-control-size);
-  }
-
-  .link {
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--accent);
-    font-size: var(--type-control-size);
-    cursor: pointer;
-  }
-
-  .compare {
-    display: inline-flex;
-    align-items: center;
-    gap: calc(var(--unit) * 4);
-    cursor: pointer;
-  }
-
-  .compare input {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .track {
-    position: relative;
-    width: 29px;
-    height: 17px;
-    border-radius: var(--radius-round);
-    background: var(--lineStrong);
-  }
-
-  .knob {
-    position: absolute;
-    top: 2.5px;
-    left: 2.5px;
-    width: 12px;
-    height: 12px;
-    border-radius: var(--radius-round);
-    background: var(--raised);
-  }
-
-  .compare input:checked + .track {
-    background: var(--accent);
-  }
-
-  .compare input:checked + .track .knob {
-    left: 14.5px;
-  }
-
-  .compare input:focus-visible + .track {
-    outline: var(--border-focus) solid var(--accent);
-    outline-offset: 1px;
-  }
-
-  .export {
-    display: inline-flex;
-    align-items: center;
-    gap: calc(var(--unit) * 4);
-    margin-left: auto;
   }
 
   .refused {

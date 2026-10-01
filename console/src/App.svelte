@@ -16,6 +16,7 @@
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
   import Statistics from "./views/Statistics.svelte";
   import Users from "./views/Users.svelte";
+  import WorkflowStatistics from "./views/WorkflowStatistics.svelte";
 
   // The console: who it is signed in as, the top bar, the screen the address names, and the key line.
   let { api, session, place, version, passkeys }: { api: API; session: Session; place: Place; version: string; passkeys: Passkeys } = $props();
@@ -42,6 +43,13 @@
 
   const known = $derived(namespace !== undefined && session.namespaces.some((n) => n.name === namespace));
   const shown = $derived(namespace && known ? all.filter((v) => built.has(v.view) && v.shows(namespace)) : []);
+
+  // A workflow's own statistics, the one page of a workflow built so far, open to whoever reads runs
+  // somewhere in its namespace: the series answer a workflow the caller cannot read as one that does
+  // not exist, so the page says no more than the API does.
+  const workflowStatistics = $derived(
+    route.kind === "namespace" && route.view === "workflows" && route.workflow !== undefined && route.tab === "statistics" && known && !!session.me && holdsSomewhereIn(session.me, "run:read", route.namespace),
+  );
 
   // The address with nothing after the console's root opens the caller's own namespace.
   $effect(() => {
@@ -89,7 +97,9 @@
       ondismiss={(id) => session.dismiss(id)}
     />
     <main class="screen">
-      {#if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
+      {#if route.kind === "namespace" && route.workflow && workflowStatistics}
+        <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} />
+      {:else if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
         <Refused />
       {:else if route.kind === "namespace" && route.view === "runs" && route.run && route.against}
         <RunDiff {api} {place} me={session.me} namespace={route.namespace} a={route.run} b={route.against} />
