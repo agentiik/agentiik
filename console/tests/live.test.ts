@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/svelte";
+import { render, waitFor } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -17,6 +17,9 @@ function open(path: string, who: "alice" | "dana" = "alice") {
   render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
   return asked;
 }
+
+// connecting waits for the console to open its live connection, which it does once it is drawn.
+const connecting = () => waitFor(() => expect(sockets.length).toBeGreaterThan(0));
 
 // count is how many times a route was asked for, its query aside.
 const count = (asked: string[], route: string) => asked.filter((a) => a.split("?")[0] === route).length;
@@ -71,19 +74,9 @@ describe("the live connection", () => {
 });
 
 describe("the console, live", () => {
-  it("says it is live once the connection opens, and not live while it is not", async () => {
-    open("/finance/runs");
-    const word = await screen.findByText("reconnecting");
-    expect(word.closest("[role=status]")).toBeTruthy();
-    opened();
-    expect(await screen.findByText("live")).toBeTruthy();
-    sockets.at(-1)!.end(1006);
-    expect(await screen.findByText("reconnecting")).toBeTruthy();
-  });
-
   it("reads the runs again when one of the namespace's changes, and not for another namespace's", async () => {
     const asked = open("/finance/runs");
-    await screen.findByText("reconnecting");
+    await connecting();
     await waitFor(() => expect(count(asked, "GET /api/v1/runs")).toBe(1));
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/runs")).toBe(2));
@@ -96,7 +89,7 @@ describe("the console, live", () => {
 
   it("reads who it is signed in as again when the caller's notifications change", async () => {
     const asked = open("/finance/runs");
-    await screen.findByText("reconnecting");
+    await connecting();
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/me")).toBe(2));
     s.say({ kind: "notifications" });
@@ -105,7 +98,7 @@ describe("the console, live", () => {
 
   it("reads the installation's activity again on an administrator's home when a run changes anywhere, at most every two seconds", async () => {
     const asked = open("/", "dana");
-    await screen.findByText("reconnecting");
+    await connecting();
     await waitFor(() => expect(count(asked, "GET /api/v1/stats/activity")).toBe(1));
     const s = opened();
     // Opening reads everything again, two seconds after the first read at the soonest.
@@ -119,7 +112,7 @@ describe("the console, live", () => {
 
   it("reads the runners again when one changes, to an administrator", async () => {
     const asked = open("/runners", "dana");
-    await screen.findByText("reconnecting");
+    await connecting();
     await waitFor(() => expect(count(asked, "GET /api/v1/runners")).toBe(1));
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/runners")).toBe(2));

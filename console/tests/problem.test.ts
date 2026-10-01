@@ -45,6 +45,6 @@ describe("the console when the installation does not answer", () => {
     expect(screen.getByText("500 “what the caller holds could not be read”")).toBeTruthy();
     s["GET /api/v1/me"] = me;
     await fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("navigation", { name: "Where you are" })).toBeTruthy();
+    expect(await screen.findByRole("navigation", { name: "Navigation" })).toBeTruthy();
   });
 });
