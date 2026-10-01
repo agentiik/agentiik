@@ -179,3 +179,35 @@ describe("moving a selection", () => {
     expect(["ArrowUp", "Enter", "Escape", "?", "j"].map(shown)).toEqual(["↑", "enter", "esc", "?", "j"]);
   });
 });
+
+describe("the workflow page's keys", () => {
+  it("move between the steps as the graph draws them, and go back to the workflow's runs", async () => {
+    const { place } = open("/finance/workflows/monthly-invoicing");
+    await screen.findByRole("button", { name: /^Step normalize/ });
+    expect(line()).toEqual(["↑↓ Step", "esc Runs of monthly-invoicing", "12 Runs, statistics", "? Every key"]);
+    await press("j");
+    expect(place.query.get("step")).toBe("invoice");
+    await press("ArrowDown");
+    expect(place.query.get("step")).toBe("archive");
+    await press("k");
+    expect(place.query.get("step")).toBe("invoice");
+    await press("Escape");
+    expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "runs" });
+    expect(place.query.get("workflow")).toBe("monthly-invoicing");
+  });
+});
+
+describe("the runners' keys", () => {
+  it("narrow the runners to one pool after another, and to every pool again", async () => {
+    const { place } = open("/runners", scenario("dana"));
+    await screen.findByRole("button", { name: "dmz" });
+    expect(line()).toEqual(["↑↓ Pool", "? Every key"]);
+    await press("j");
+    expect(place.query.get("pool")).toBe("default");
+    await press("j");
+    expect(place.query.get("pool")).toBe("dmz");
+    expect(line()).toEqual(["↑↓ Pool", "esc Every pool", "? Every key"]);
+    await press("Escape");
+    expect(place.query.get("pool")).toBeNull();
+  });
+});
