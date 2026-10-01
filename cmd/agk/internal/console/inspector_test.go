@@ -153,7 +153,7 @@ func TestAnEnvelopeIsShownUnderRunReadDataAlone(t *testing.T) {
 // An administrator reads each runner's pool and labels beside its name; nobody else asks.
 func TestAnAdministratorSeesARunnersPoolAndLabels(t *testing.T) {
 	admin := &installation{me: &principal{Principal: "dana", Admin: true, Permissions: map[string][]string{"finance": {"run:read"}}},
-		runners: []runner{{Runner: "runner-dmz-02", Pool: "dmz", Labels: []string{"arch=amd64", "zone=dmz"}}}}
+		runners: []db.Runner{{ID: "runner-dmz-02", Pool: "dmz", Labels: []string{"arch=amd64", "zone=dmz"}}}}
 	if s := screen(inspecting(t, admin, 200)); !strings.Contains(s, "runner-dmz-02 · pool dmz · arch=amd64,zone=dmz") {
 		t.Errorf("an administrator does not see the runner's pool and labels:\n%s", s)
 	}

@@ -39,17 +39,9 @@ func (p principal) holds(permission, namespace, workflow string) bool {
 	return slices.Contains(held, permission)
 }
 
-// runner is what an administrator reads of a runner beside its name: its pool and its labels, as
-// its pool writes them.
-type runner struct {
-	Runner string   `json:"runner"`
-	Pool   string   `json:"pool"`
-	Labels []string `json:"labels"`
-}
-
 type (
 	// runnersRead is the inventory, read once a run is opened by an administrator, who alone may.
-	runnersRead struct{ runners map[string]runner }
+	runnersRead struct{ runners map[string]db.Runner }
 	// payloadRead is one port's envelope, read when it is chosen.
 	payloadRead struct {
 		key  string
@@ -61,14 +53,14 @@ type (
 func (m Model) readRunners() tea.Cmd {
 	return func() tea.Msg {
 		var listed struct {
-			Runners []runner `json:"runners"`
+			Runners []db.Runner `json:"runners"`
 		}
 		if err := m.o.Read(m.ctx, "/api/v1/runners", &listed); err != nil {
 			return runnersRead{}
 		}
-		byName := make(map[string]runner, len(listed.Runners))
+		byName := make(map[string]db.Runner, len(listed.Runners))
 		for _, r := range listed.Runners {
-			byName[r.Runner] = r
+			byName[r.ID] = r
 		}
 		return runnersRead{runners: byName}
 	}

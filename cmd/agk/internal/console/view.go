@@ -41,6 +41,8 @@ func (m Model) screen() string {
 		lines = m.keysListed(t)
 	case m.view == runView:
 		lines = m.runLines(t, body)
+	case m.view == runnersView:
+		lines = m.runnersLines(t, body)
 	default:
 		lines = m.runsLines(t, body)
 	}
@@ -54,24 +56,59 @@ func (m Model) screen() string {
 // for once it has answered.
 func (m Model) theme() theme { return theme{depth: m.depth, light: m.light} }
 
-// topLine names the installation, the namespace shown, the principal, and whether the
-// installation answers: a green dot and the word while it does, and in words, asked again, once
-// it stops, since somebody is watching.
+// topLine names the installation, the namespace shown, the principal, the views a digit turns
+// to, and whether the installation answers: a green dot and the word while it does, and in words,
+// asked again, once it stops, since somebody is watching. Where the window is too narrow for all
+// of it, the installation is left out first, since it is the one thing on the line that does not
+// change while the console is open.
 func (m Model) topLine(t theme) string {
 	where := m.o.Namespace
 	if where == "" {
 		where = "every namespace"
 	}
-	rest := "  " + m.o.Installation + "  " + where
-	if m.me.Principal != "" {
-		rest += "  " + m.me.Principal
-	}
-	left := []part{{strong, "agentiik"}, {muted, rest}}
 	right := []part{{succeededText, "●"}, {plain, " live"}}
 	if m.unanswered != "" {
 		right = []part{{failedText, "not answering, asked again: " + m.unanswered}}
 	}
+	var left []part
+	for _, installation := range []string{m.o.Installation, ""} {
+		rest := "  " + where
+		if installation != "" {
+			rest = "  " + installation + rest
+		}
+		if m.me.Principal != "" {
+			rest += "  " + m.me.Principal
+		}
+		left = append([]part{{strong, "agentiik"}, {muted, rest}}, m.tabs()...)
+		if widthOf(left)+2+widthOf(right) <= m.width {
+			break
+		}
+	}
 	return t.line(false, m.width, fitted(left, right, m.width)...)
+}
+
+// tab is a view a digit turns to.
+type tab struct {
+	key, name string
+	view      view
+}
+
+// tabs are the views a digit turns to, the one shown in bold: the runs, and the runners to an
+// administrator. Workflows and sharing take 2 and 3 once the console draws them.
+func (m Model) tabs() []part {
+	tabs := []tab{{"1", "Runs", runsView}}
+	if m.me.Admin {
+		tabs = append(tabs, tab{"4", "Runners", runnersView})
+	}
+	var parts []part
+	for _, v := range tabs {
+		r := muted
+		if m.view == v.view || v.view == runsView && m.view == runView {
+			r = strong
+		}
+		parts = append(parts, part{plain, "   "}, part{r, v.key + " " + v.name})
+	}
+	return parts
 }
 
 // keyLine names the keys of the view by their effect, as the documentation's bottom line does.
@@ -82,6 +119,8 @@ func (m Model) keyLine(t theme) string {
 		keys = [][2]string{{"esc", "Close"}, {"q", "Quit"}}
 	case m.view == runView:
 		keys = [][2]string{{"↑↓", "Step"}, {"[]", "Port"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
+	case m.view == runnersView:
+		keys = [][2]string{{"↑↓", "Move"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
 	default:
 		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"q", "Quit"}, {"?", "Every key"}}
 	}
@@ -97,10 +136,16 @@ func (m Model) keyLine(t theme) string {
 
 // keysListed is every key of the view, which ? opens over it.
 func (m Model) keysListed(t theme) []string {
-	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}}
-	if m.view == runView {
+	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}, {"1", "The runs"}}
+	if m.me.Admin {
+		rows = append(rows, [2]string{"4", "The runners and their pools"})
+	}
+	switch m.view {
+	case runView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"esc", "Back to the runs"})
-	} else {
+	case runnersView:
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runners"}, [2]string{"esc", "Back to the runs"})
+	default:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"})
 	}
 	lines := []string{t.line(false, m.width, part{strong, "Every key of this view"}), t.line(false, m.width)}
@@ -221,11 +266,19 @@ func (m Model) columns(state, run, workflow, trigger, started, took, by []part) 
 		byWidth = 14
 	}
 	cells = append(cells, cell{started, m.startedWidth(), false}, cell{took, tookWidth, true}, cell{by, byWidth, false})
+	return laid(cells, 2, m.width)
+}
+
+// laid lays cells out on one line as wide as width, a space between two, the cell at grow taking
+// what the others leave and never under twelve columns.
+func laid(cells []cell, grow, width int) []part {
 	taken := len(cells) - 1
-	for _, c := range cells {
-		taken += c.width
+	for i, c := range cells {
+		if i != grow {
+			taken += c.width
+		}
 	}
-	cells[2].width = max(12, m.width-taken)
+	cells[grow].width = max(12, width-taken)
 
 	var parts []part
 	for i, c := range cells {

@@ -16,6 +16,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -71,6 +72,7 @@ type view int
 const (
 	runsView view = iota
 	runView
+	runnersView
 )
 
 // Model is the console's state, as Bubble Tea holds it between one message and the next.
@@ -96,7 +98,18 @@ type Model struct {
 	step     string
 	port     int
 	payloads map[string]payloadRead
-	runners  map[string]runner
+	runners  map[string]db.Runner
+
+	// The runners view's: the pools and the runners as last read, and the runner chosen.
+	pools       []api.Pool
+	fleet       []db.Runner
+	fleetRead   bool
+	fleetFailed string
+	runner      string
+
+	// shown counts the views shown, so that a read again asked for by a view since left, and come
+	// back to, is told from the one that view asks for now.
+	shown int
 
 	// unanswered is why the last read failed, said in the top line until a read succeeds.
 	unanswered string
@@ -154,7 +167,10 @@ type (
 		err error
 	}
 	// again asks for what is shown to be read again, once Every has passed since the last read.
-	again struct{ view view }
+	again struct {
+		view  view
+		shown int
+	}
 	// silent is the tenth of a second a terminal is given to say what its background is, passed.
 	silent struct{}
 )
@@ -181,6 +197,9 @@ func (m Model) readMe() tea.Cmd {
 }
 
 func (m Model) readShown() tea.Cmd {
+	if m.view == runnersView {
+		return m.readFleet()
+	}
 	if m.view == runView {
 		run := m.selected
 		return func() tea.Msg {
@@ -205,10 +224,11 @@ func (m Model) readShown() tea.Cmd {
 }
 
 // later reads the view shown again once Every has passed, and only that view: a message for one
-// left meanwhile is dropped when it comes.
+// left meanwhile is dropped when it comes, even where that view has been come back to, since it
+// is read again from the moment it is.
 func (m Model) later() tea.Cmd {
-	v := m.view
-	return m.tick(m.o.Every, func(time.Time) tea.Msg { return again{view: v} })
+	v, shown := m.view, m.shown
+	return m.tick(m.o.Every, func(time.Time) tea.Msg { return again{view: v, shown: shown} })
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -270,8 +290,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.readChosen())
 		return m, tea.Batch(cmds...)
+	case fleetRead:
+		if msg.err != nil {
+			if m.fleetRead {
+				m.unanswered = said(msg.err)
+			} else {
+				m.fleetFailed = said(msg.err)
+			}
+		} else {
+			m.unanswered, m.fleetFailed, m.fleetRead, m.pools, m.fleet = "", "", true, msg.pools, msg.runners
+			m.runner = movedRunner(m.fleet, m.runner, 0)
+			m.runners = make(map[string]db.Runner, len(m.fleet))
+			for _, r := range m.fleet {
+				m.runners[r.ID] = r
+			}
+		}
+		if m.view == runnersView {
+			return m, m.later()
+		}
 	case again:
-		if msg.view == m.view {
+		if msg.view == m.view && msg.shown == m.shown {
 			return m, m.readShown()
 		}
 	case tea.KeyPressMsg:
@@ -324,11 +362,34 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		m.listing = true
 		return m, nil
 	}
+	switch key {
+	case "1":
+		if m.view != runsView {
+			return m.showing(runsView)
+		}
+		return m, nil
+	case "4":
+		// The runners are an administrator's alone, and the key is nobody else's either.
+		if m.me.Admin && m.view != runnersView {
+			return m.showing(runnersView)
+		}
+		return m, nil
+	}
+	if m.view == runnersView {
+		switch key {
+		case "esc":
+			return m.showing(runsView)
+		case "up", "k":
+			m.runner = movedRunner(m.fleet, m.runner, -1)
+		case "down", "j":
+			m.runner = movedRunner(m.fleet, m.runner, 1)
+		}
+		return m, nil
+	}
 	if m.view == runView {
 		switch key {
 		case "esc":
-			m.view, m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = runsView, nil, false, "", "", 0, nil
-			return m, m.readShown()
+			return m.showing(runsView)
 		case "up", "k", "down", "j":
 			if m.run != nil {
 				by := 1
@@ -358,11 +419,21 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		m.selected = moved(m.runs, m.selected, 1)
 	case "enter":
 		if m.selected != "" {
-			m.view = runView
-			return m, m.readShown()
+			return m.showing(runView)
 		}
 	}
 	return m, nil
+}
+
+// showing is the console turned to another view, which is read at once: a run left behind is
+// forgotten, and opened again from the runs.
+func (m Model) showing(v view) (tea.Model, tea.Cmd) {
+	if m.view == runView {
+		m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
+	}
+	m.view = v
+	m.shown++
+	return m, m.readShown()
 }
 
 // moved is the run before or after the one selected, the first where none is, and the one
