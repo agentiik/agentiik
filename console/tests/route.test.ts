@@ -1,17 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { address, read } from "../src/lib/route";
+import { address, read, runAt, runsOf } from "../src/lib/route";
 
 describe("an address", () => {
   const root = "/prefix/";
 
   it("names the screen it opens, and is written back the same", () => {
-    for (const path of ["finance/runs", "finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A", "finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A/against/01JMZ7Q2R5T8V0X2Z4B6D8F0H2", "finance/workflows/monthly-invoicing/statistics", "finance/sharing", "me/tokens", "runners", "users", "groups", "namespaces"]) {
+    for (const path of ["finance/workflows", "finance/workflows/monthly-invoicing/runs", "finance/workflows/monthly-invoicing/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A", "finance/workflows/monthly-invoicing/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A/against/01JMZ7Q2R5T8V0X2Z4B6D8F0H2", "finance/workflows/monthly-invoicing/statistics", "finance/sharing", "me/tokens", "runners", "users", "groups", "namespaces"]) {
       expect(address(read(root + path, root))).toBe(path);
     }
   });
 
-  it("opens the runs of a namespace named alone", () => {
-    expect(read(root + "finance", root)).toEqual({ kind: "namespace", namespace: "finance", view: "runs", run: undefined });
+  it("opens the workflows of a namespace named alone", () => {
+    expect(read(root + "finance", root)).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", workflow: undefined, tab: undefined });
+  });
+
+  it("puts a run under its workflow, and still reads a run's address of before, its workflow not yet known", () => {
+    expect(read(root + "finance/workflows/monthly-invoicing/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A", root)).toEqual(runAt("finance", "monthly-invoicing", "01JMZ8V1P9C4XQ7K2N4D6F8H0A"));
+    expect(read(root + "finance/runs", root)).toEqual({ kind: "namespace", namespace: "finance", view: "workflows" });
+    const before = read(root + "finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A/against/01JMZ7Q2R5T8V0X2Z4B6D8F0H2", root);
+    expect(before).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A", against: "01JMZ7Q2R5T8V0X2Z4B6D8F0H2" });
+    expect(address(before)).toBe("finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A/against/01JMZ7Q2R5T8V0X2Z4B6D8F0H2");
+    expect(address(runsOf("finance", "monthly-invoicing"))).toBe("finance/workflows/monthly-invoicing/runs");
   });
 
   it("is the landing at the console's root", () => {
@@ -24,6 +33,8 @@ describe("an address", () => {
     expect(read(root + "finance/runs/a/b", root).kind).toBe("unknown");
     expect(read(root + "finance/runs/a/against", root).kind).toBe("unknown");
     expect(read(root + "finance/runs/a/against/b/c", root).kind).toBe("unknown");
+    expect(read(root + "finance/workflows/w/runs/a/b", root).kind).toBe("unknown");
+    expect(read(root + "finance/workflows/w/runs/a/against/b/c", root).kind).toBe("unknown");
     expect(read(root + "finance/%E0%A4%A", root).kind).toBe("unknown");
   });
 

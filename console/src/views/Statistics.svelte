@@ -58,14 +58,6 @@
     place.narrow(q);
   }
 
-  // A point opens the runs it counts: the runs view narrowed to the bucket's bounds, as GET
-  // /api/v1/runs takes them.
-  function open(bucket: { since: string; until: string }, state?: string) {
-    const q = new URLSearchParams({ since: bucket.since, until: bucket.until });
-    if (state) q.set("state", state);
-    place.go({ kind: "namespace", namespace, view: "runs" }, false, q);
-  }
-
   // The series behind the page, as the route answered them, never the picture.
   async function exported(kind: "csv" | "json") {
     const path = tab === "runs" ? "/api/v1/{ns}/stats/runs" : "/api/v1/{ns}/stats/quotas";
@@ -187,7 +179,7 @@
           format={count}
           onzoom={zoom}
           onback={back}
-          onpick={(i) => buckets[i] && open(buckets[i])}
+         
         />
       </Pane>
       <Pane title="Retries by exit code">
@@ -207,10 +199,10 @@
         {/if}
       </Pane>
       <Pane title="Duration">
-        <Chart title="How long the runs took" since={runSeries.since} width={width(runs?.bucket)} series={runSeries.duration} format={ms} onzoom={zoom} onback={back} onpick={(i) => buckets[i] && open(buckets[i])} />
+        <Chart title="How long the runs took" since={runSeries.since} width={width(runs?.bucket)} series={runSeries.duration} format={ms} onzoom={zoom} onback={back} />
       </Pane>
       <Pane title="Queue wait">
-        <Chart title="How long the tasks waited for a runner" since={runSeries.since} width={width(runs?.bucket)} series={runSeries.wait} format={ms} onzoom={zoom} onback={back} onpick={(i) => buckets[i] && open(buckets[i])} />
+        <Chart title="How long the tasks waited for a runner" since={runSeries.since} width={width(runs?.bucket)} series={runSeries.wait} format={ms} onzoom={zoom} onback={back} />
       </Pane>
     </div>
   {/key}
@@ -229,7 +221,7 @@
             format={count}
             onzoom={zoom}
             onback={back}
-            onpick={(i) => buckets[i] && open(buckets[i])}
+           
           />
         </Pane>
         <Pane title="Tasks running">

@@ -20,6 +20,7 @@
   import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt, runsOf } from "../lib/route";
   import { lastAttempt, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
   import { sentence } from "../lib/signin";
 
@@ -155,7 +156,7 @@
     return act("replay the run", async () => {
       if (!run) return;
       const started = await replayRun(api, run.run, from);
-      place.go({ kind: "namespace", namespace: run.namespace, view: "runs", run: started });
+      place.go(runAt(run.namespace, run.workflow, started));
     });
   }
 
@@ -191,7 +192,14 @@
     return ms === undefined ? "" : took(ms);
   }
 
-  const runs = $derived({ kind: "namespace" as const, namespace, view: "runs" as const });
+  // A run reached by the address it had before runs were put under their workflow is written under
+  // its workflow once it is read, in place, so that the address names where the run is.
+  $effect(() => {
+    const route = place.route;
+    if (run && here && route.kind === "namespace" && route.run === id && route.workflow === undefined) {
+      place.go(runAt(namespace, run.workflow, id), true, place.query);
+    }
+  });
 
   // Replaying from a key asks first, as agk console's p does, since a key is pressed by mistake
   // more easily than a button naming the step is clicked.
@@ -224,7 +232,7 @@
     }
     if (mayRun && !reader.ended) out.push({ keys: ["c"], effect: "Cancel run", does: () => (confirming = true) });
     if (mayRun && reader.ended && chosenStep && !run.replay_from_start_only) out.push({ keys: ["p"], effect: "Replay from this step", does: () => (replaying = true) });
-    out.push({ keys: ["Escape"], effect: `All runs of ${namespace}`, does: () => place.go(runs) });
+    out.push({ keys: ["Escape"], effect: "Runs of the workflow", does: () => place.go(runsOf(namespace, run.workflow)) });
     return out;
   });
 </script>

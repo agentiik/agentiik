@@ -55,14 +55,12 @@ describe("a namespace's statistics", () => {
     expect(Date.parse(q.get("to")!) - Date.parse(q.get("from")!)).toBe(7 * 86_400_000);
   });
 
-  it("opens the runs of a bucket chosen with the arrow keys", async () => {
+  it("opens no runs from a bucket, since a namespace's runs are listed under each workflow", async () => {
     const { place } = open("/finance/statistics");
     const [chart] = await screen.findAllByRole("slider");
     await fireEvent.keyDown(chart!, { key: "ArrowRight" });
     await fireEvent.keyDown(chart!, { key: "Enter" });
-    expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "runs" });
-    expect(place.query.get("since")).toBe("2026-09-29T07:00:00Z");
-    expect(place.query.get("until")).toBe("2026-09-29T07:59:59.999999999Z");
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "statistics" });
   });
 
   it("holds each chart's numbers in a table, and the namespace's quotas beside its load", async () => {

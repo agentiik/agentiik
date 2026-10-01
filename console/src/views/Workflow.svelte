@@ -21,6 +21,7 @@
   import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt, runsOf } from "../lib/route";
   import { RunReader } from "../lib/run.svelte";
   import { workflowTabs } from "../lib/page";
   import { blocks } from "../lib/yaml-blocks";
@@ -120,7 +121,7 @@
   // the ref the files are read at where it opens from theirs, so that a branch is tried on real
   // inputs before it is merged.
   let runRef = $state("");
-  function runAt(ref: string) {
+  function runFrom(ref: string) {
     runRef = ref === detail?.repository.default_branch ? "" : ref;
     running = true;
   }
@@ -157,17 +158,16 @@
               if (step) narrow({ step });
             },
           },
-          { keys: ["Escape"], effect: `Runs of ${workflow}`, does: () => place.go(runsOf, false, new URLSearchParams({ workflow })) },
+          { keys: ["Escape"], effect: "Its runs", does: () => place.go(runsOf(namespace, workflow)) },
         ],
   );
 
-  const runsOf = $derived({ kind: "namespace" as const, namespace, view: "runs" as const });
   const sharing = $derived({ kind: "namespace" as const, namespace, view: "sharing" as const });
   const shares = $derived(holds(me, "grant:manage", namespace, workflow));
 
   // narrowed follows a view of the namespace narrowed to this workflow, as a plain click does and
   // leaving every other click to the browser.
-  function narrowed(route: typeof runsOf | typeof sharing) {
+  function narrowed(route: typeof sharing) {
     return (e: MouseEvent) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
@@ -178,7 +178,7 @@
   const graphTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow });
   const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
   const filesTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "files" });
-  const runRoute = $derived(run ? { kind: "namespace" as const, namespace, view: "runs" as const, run: run.run } : undefined);
+  const runRoute = $derived(run ? runAt(namespace, workflow, run.run) : undefined);
   const tabs = $derived(workflowTabs(namespace, workflow, tab, { shares, mcp: !!graph?.mcp, go: (r, q) => place.go(r, false, q) }));
   const now = Date.now();
 </script>
@@ -273,7 +273,7 @@
       <pre class="clone term">git clone {detail.repository.clone_url}</pre>
     </Pane>
   {:else if tab === "files"}
-    <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runAt} />
+    <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runFrom} />
   {:else if tab === "mcp" && graph}
     <Pane title="MCP">
       <McpPanel {graph} {namespace} {workflow} />
