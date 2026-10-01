@@ -103,7 +103,7 @@ describe("a namespace's secrets", () => {
     const row = (await screen.findByText("github-token", { selector: "td" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove it" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("github-token removed.")).toBeTruthy();
     expect(asked.filter((a) => a.key.startsWith("DELETE")).map((a) => a.key)).toEqual(["DELETE /api/v1/alice/secrets/github-token"]);
   });

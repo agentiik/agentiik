@@ -178,7 +178,7 @@ describe("the sharing panel", () => {
     await fireEvent.change(within(form).getByRole("combobox", { name: "What the principal is" }), { target: { value: "group" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Who" }), { target: { value: "team-ops" } });
     await fireEvent.change(within(form).getByRole("combobox", { name: "Gives" }), { target: { value: "deny:run:read_data" } });
-    expect(within(form).getByRole("button", { name: "Deny run:read_data" })).toBeTruthy();
+    expect(within(form).getByRole("button", { name: "Add" })).toBeTruthy();
     await fireEvent.submit(form);
     expect(await screen.findByText("This would leave no administrator able to sign in.")).toBeTruthy();
     expect(asked.find((a) => a.key === "POST /api/v1/alice/grants")!.body).toEqual({ principal: "group:team-ops", deny: "run:read_data" });
@@ -202,7 +202,7 @@ describe("the sharing panel", () => {
     const row = (await within(grants).findByText("alice/ci")).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Revoke it" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
     expect(await screen.findByText("operator grant revoked for alice/ci.")).toBeTruthy();
     expect(asked.filter((a) => a.key.startsWith("DELETE")).map((a) => a.key)).toEqual(["DELETE /api/v1/alice/grants/01JMZ7A8F9G0H1J2K3M4N5P6Q7"]);
   });

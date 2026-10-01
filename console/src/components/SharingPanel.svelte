@@ -185,8 +185,8 @@
                       <span class="muted">on {namespace}</span>
                     {:else if asking === g.id}
                       <span class="confirm">
-                        <button class="control danger" disabled={working} onclick={() => revoke(g)}>Revoke it</button>
-                        <button class="control" onclick={() => (asking = "")}>Keep it</button>
+                        <button class="control" onclick={() => (asking = "")}>Keep</button>
+                        <button class="control danger" disabled={working} onclick={() => revoke(g)}><Icon name="control-remove" size={14} />Revoke</button>
                       </span>
                     {:else}
                       <button class="control" onclick={() => (asking = g.id)}><Icon name="control-remove" size={14} />Revoke</button>
@@ -225,7 +225,7 @@
             <span>Expires</span>
             <input class="term" bind:value={until} placeholder="never, 30d or 2027-01-01" />
           </label>
-          <button class="control primary" disabled={working || name.trim() === ""}>{isDeny ? `Deny ${what}` : `Grant ${what}`}</button>
+          <button class="control primary" disabled={working || name.trim() === ""}>Add</button>
         </form>
       {/if}
     </Pane>

@@ -89,7 +89,7 @@ describe("the inspector's keys", () => {
   it("moves between the steps and goes back to the runs", async () => {
     const { place, asked } = open(`/finance/runs/${failed}`);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
-    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from invoice", "esc All runs of finance", "1234 Runs, workflows, statistics, settings", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from this step", "esc All runs of finance", "1234 Runs, workflows, statistics, settings", "? Every key"]);
     await press("ArrowUp");
     expect(place.query.get("step")).toBe("normalize");
     await press("Escape");
@@ -113,7 +113,7 @@ describe("the inspector's keys", () => {
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     await press("p");
     expect(screen.getByText("Replay this run from invoice?")).toBeTruthy();
-    expect(line().slice(0, 2)).toEqual(["y Replay from invoice", "nesc Keep it"]);
+    expect(line().slice(0, 2)).toEqual(["y Replay from this step", "nesc Keep it"]);
     await press("x");
     await press("n");
     expect(screen.queryByText(/A new run starts there/)).toBeNull();

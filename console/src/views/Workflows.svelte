@@ -104,7 +104,7 @@
       <input id="new-branch" class="term" bind:value={branch} autocomplete="off" />
       <label class="check"><input type="checkbox" bind:checked={protect} /><span>Protected</span></label>
       {#if said}<Problem explained={said} />{/if}
-      <button class="control primary" type="submit" disabled={sending || !name.trim()}>Create {name.trim() || "the workflow"}</button>
+      <button class="control primary" type="submit" disabled={sending || !name.trim()}>Create</button>
     </form>
   </Dialog>
 {/if}

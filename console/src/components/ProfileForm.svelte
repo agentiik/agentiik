@@ -143,7 +143,7 @@
         <Avatar name={user.display_name} src={photo} size={120} />
         <div class="acts">
           <input bind:this={picker} class="unseen" type="file" accept={photoTypes.join(",")} onchange={chosen} aria-label="A photo, a PNG or a JPEG" />
-          <button class="control" disabled={working} onclick={() => picker?.click()}><Icon name="control-edit" size={14} />{photo ? "Change the photo" : "Choose a photo"}</button>
+          <button class="control" disabled={working} onclick={() => picker?.click()}><Icon name="control-edit" size={14} />Choose a photo</button>
           {#if photo}<button class="control" disabled={working} onclick={remove}><Icon name="control-remove" size={14} />Remove it</button>{/if}
         </div>
         <p class="faint">Max 1 MiB and 2048 × 2048 px</p>

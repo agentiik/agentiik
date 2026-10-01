@@ -213,7 +213,7 @@
     if (replaying && chosenStep) {
       const from = chosenStep;
       return [
-        { keys: ["y"], effect: `Replay from ${from}`, does: () => ((replaying = false), void replay(from)) },
+        { keys: ["y"], effect: "Replay from this step", does: () => ((replaying = false), void replay(from)) },
         { keys: ["n", "Escape"], effect: "Keep it", does: () => (replaying = false) },
       ];
     }
@@ -223,7 +223,7 @@
       out.push({ keys: ["[", "]"], effect: "Port", does: (key) => choose({ pane: tab, port: moved(openable, port, key === "]" ? "ArrowDown" : "ArrowUp")! }) });
     }
     if (mayRun && !reader.ended) out.push({ keys: ["c"], effect: "Cancel run", does: () => (confirming = true) });
-    if (mayRun && reader.ended && chosenStep && !run.replay_from_start_only) out.push({ keys: ["p"], effect: `Replay from ${chosenStep}`, does: () => (replaying = true) });
+    if (mayRun && reader.ended && chosenStep && !run.replay_from_start_only) out.push({ keys: ["p"], effect: "Replay from this step", does: () => (replaying = true) });
     out.push({ keys: ["Escape"], effect: `All runs of ${namespace}`, does: () => place.go(runs) });
     return out;
   });
@@ -271,11 +271,11 @@
             {/if}
           {:else if mayRun && replaying && chosenStep && !run.replay_from_start_only}
             <span>Replay this run from {chosenStep}?</span>
-            <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
+            <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from this step</button>
             <button class="control" disabled={acting} onclick={() => (replaying = false)}>Keep it</button>
           {:else if mayRun}
             {#if chosenStep && !run.replay_from_start_only}
-              <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
+              <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from this step</button>
             {/if}
             <button class="control" disabled={acting} onclick={() => replay()}><Icon name="control-replay" size={14} />Replay from the start</button>
             {#if run.replay_from_start_only}

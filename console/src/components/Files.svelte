@@ -242,7 +242,7 @@
     {#if against}<button class="control" type="button" onclick={() => narrow({ against: null, path: null })}>Stop comparing</button>{/if}
   </form>
   {#if mayRun && listing && !against}
-    <button class="control primary right" onclick={() => onrun(ref)}><Icon name="control-run" size={14} />Run {ref === repository.default_branch ? "the head" : ref}</button>
+    <button class="control primary right" onclick={() => onrun(ref)}><Icon name="control-run" size={14} />Run this ref</button>
   {/if}
 </div>
 
