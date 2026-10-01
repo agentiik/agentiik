@@ -83,9 +83,9 @@ func TestTheEndOfYourRunIsToasted(t *testing.T) {
 
 func TestANotificationSaysWhatTheWebConsoleSays(t *testing.T) {
 	for n, want := range map[notice]string{
-		widened:  "carol wrote a grant by the installation's power in finance.",
-		recovery: "A recovery code was issued to alice from the installation's host.",
-		counter:  "A sign-in with one of your passkeys was refused: its signature counter did not move forward, as a copied authenticator's does.",
+		widened:                        "carol wrote a grant by the installation's power in finance.",
+		recovery:                       "A recovery code was issued to alice from the installation's host.",
+		counter:                        "A sign-in with one of your passkeys was refused: its signature counter did not move forward, as a copied authenticator's does.",
 		{Kind: "admin_access_widened"}: "An administrator widened access in a namespace.",
 	} {
 		if got := n.sentence(); got != want {
