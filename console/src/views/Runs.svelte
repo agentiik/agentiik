@@ -1,18 +1,19 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { API, Namespace } from "../api/client";
+  import type { API, Me, Namespace } from "../api/client";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import StepStrip from "../components/StepStrip.svelte";
   import { between, clock, took } from "../lib/format";
   import { moved, useKeys } from "../lib/keys.svelte";
+  import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
 
   // The runs view, the screen the console opens on: a namespace's runs, newest first and kept live,
   // the ones that failed lifted into a band above the list, since they are why the page is opened.
-  let { api, place, namespace, record }: { api: API; place: Place; namespace: string; record: Namespace | undefined } = $props();
+  let { api, place, me, namespace, record }: { api: API; place: Place; me: Me; namespace: string; record: Namespace | undefined } = $props();
 
   const filters = $derived(filtersOf(place.query));
   const list = $derived(new RunList(api, namespace, filters));
@@ -190,7 +191,12 @@
         <tr data-run={r.run} class:chosen={r.run === selected} aria-selected={r.run === selected} onclick={() => (selected = r.run)}>
           <td><StatePill state={r.state} {live} /></td>
           <td class="mono id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
-          <td class="mono name">{r.workflow}</td>
+          <td class="mono name">
+            {#if holds(me, "workflow:read", r.namespace, r.workflow)}
+              {@const page = { kind: "namespace" as const, namespace: r.namespace, view: "workflows" as const, workflow: r.workflow }}
+              <a class="workflow" href={place.href(page)} onclick={follow(place, page)}>{r.workflow}</a>
+            {:else}{r.workflow}{/if}
+          </td>
           <td class="mono muted commit" title={r.commit}>{r.commit.slice(0, 7)}</td>
           <td class="trigger" title={r.from ? `called by run ${r.from.run} at step ${r.from.step}` : undefined}><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="mono">{r.trigger_kind}</span></td>
           <td><StepStrip steps={r.steps ?? []} {now} /></td>
@@ -425,6 +431,16 @@
 
   .name {
     font-weight: 600;
+  }
+
+  .workflow {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .workflow:hover {
+    color: var(--accent);
+    text-decoration: underline;
   }
 
   .id {

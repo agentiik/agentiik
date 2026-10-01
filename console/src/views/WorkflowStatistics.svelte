@@ -7,7 +7,7 @@
   import RangeBar from "../components/RangeBar.svelte";
   import { band } from "../lib/exit";
   import { took } from "../lib/format";
-  import type { Place } from "../lib/place.svelte";
+  import { follow, type Place } from "../lib/place.svelte";
   import { query, Ranged } from "../lib/range.svelte";
   import { ms, type Range } from "../lib/stats";
   import { chosen, count, exitCodes, figures, heat, notSucceeded, refused, type PortsSeries, type RunsSeries, type StepsSeries } from "../lib/workflow-stats";
@@ -17,7 +17,9 @@
   // published, as /stats/ports does. Every chart of the page is drawn over one range, which the
   // address holds, and the step the exit codes, the heatmap and the last figure are of is named
   // there too.
-  let { api, place, namespace, workflow }: { api: API; place: Place; namespace: string; workflow: string } = $props();
+  // graph says whether the caller reads the workflow itself, which its graph takes and its series do
+  // not: the tab is left out for one who reads only its runs.
+  let { api, place, namespace, workflow, graph = false }: { api: API; place: Place; namespace: string; workflow: string; graph?: boolean } = $props();
 
   const ranged = new Ranged(() => place);
   const range = $derived(ranged.range);
@@ -158,6 +160,10 @@
 
 <nav class="sub" aria-label="{namespace}/{workflow}">
   <span class="mono where">{namespace} / {workflow}</span>
+  {#if graph}
+    {@const page = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow }}
+    <a class="tab" href={place.href(page)} onclick={follow(place, page)}>Graph</a>
+  {/if}
   <a class="tab" href={place.href({ kind: "namespace", namespace, view: "runs" }) + `?workflow=${encodeURIComponent(workflow)}`} onclick={runsOf}>Runs</a>
   <span class="tab" aria-current="page">Statistics</span>
   {#if steps && steps.steps.length > 0}
