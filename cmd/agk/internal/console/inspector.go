@@ -39,11 +39,12 @@ func (p principal) holds(permission, namespace, workflow string) bool {
 	return slices.Contains(held, permission)
 }
 
-// runner is what an administrator reads of a runner beside its name: its pool and its labels.
+// runner is what an administrator reads of a runner beside its name: its pool and its labels, as
+// its pool writes them.
 type runner struct {
-	Runner string            `json:"runner"`
-	Pool   string            `json:"pool"`
-	Labels map[string]string `json:"labels"`
+	Runner string   `json:"runner"`
+	Pool   string   `json:"pool"`
+	Labels []string `json:"labels"`
 }
 
 type (
@@ -318,7 +319,7 @@ func (m Model) stepLines(step string, now time.Time, width int) [][]part {
 			if r, ok := m.runners[t.Runner]; ok {
 				where += " · pool " + r.Pool
 				if len(r.Labels) > 0 {
-					where += " · " + labelsOf(r.Labels)
+					where += " · " + strings.Join(r.Labels, ",")
 				}
 			}
 		}
@@ -366,19 +367,6 @@ func (m Model) stepLines(step string, now time.Time, width int) [][]part {
 		}
 	}
 	return lines
-}
-
-func labelsOf(labels map[string]string) string {
-	keys := make([]string, 0, len(labels))
-	for k := range labels {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	parts := make([]string, len(keys))
-	for i, k := range keys {
-		parts[i] = k + "=" + labels[k]
-	}
-	return strings.Join(parts, ",")
 }
 
 func sizeOf(bytes int64) string {
