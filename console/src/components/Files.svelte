@@ -336,6 +336,7 @@
 
   .pick input {
     width: 220px;
+    min-width: 0;
     height: 29px;
     padding: 0 calc(var(--unit) * 4);
     border: var(--border-hairline) solid var(--lineStrong);
@@ -536,5 +537,26 @@
 
   .refused {
     color: var(--failed);
+  }
+
+  /* On a phone the tree goes above the file it opens, and a ref's field takes the room its label
+     leaves. */
+  @media (max-width: 759px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .pick {
+      width: 100%;
+    }
+
+    .pick input {
+      flex: 1;
+      width: auto;
+    }
+
+    .pick label {
+      white-space: nowrap;
+    }
   }
 </style>

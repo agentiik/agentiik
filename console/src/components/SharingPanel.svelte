@@ -326,7 +326,9 @@
 
   .stack {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: calc(var(--unit) * 8);
+    min-width: 0;
   }
 
   .problem {
@@ -433,6 +435,7 @@
 
   .pair input {
     flex: 1;
+    min-width: 0;
   }
 
   .pair select {
@@ -528,5 +531,12 @@
 
   .never li + li {
     margin-top: calc(var(--unit) * 3);
+  }
+
+  /* On a phone the fields of a grant go one above the other. */
+  @media (max-width: 759px) {
+    .add {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

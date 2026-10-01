@@ -5,6 +5,7 @@
   import Pane from "./components/Pane.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import TopBar from "./components/TopBar.svelte";
+  import { Viewport } from "./lib/viewport.svelte";
   import { Keys, provide } from "./lib/keys.svelte";
   import { holds, holdsSomewhereIn, inNamespace } from "./lib/permissions";
   import type { Place } from "./lib/place.svelte";
@@ -66,6 +67,17 @@
     fold(globalThis.localStorage, value);
   }
 
+  // The frame as the window's width lays it out (lib/viewport): the sidebar folded under 1100px
+  // whatever its reader chose, and under 760px a drawer, whole, opened from the top bar and closed
+  // again by the screen it leads to, by esc or by a click beside it.
+  const viewport = new Viewport();
+  const folded = $derived(!viewport.narrow && (viewport.compact || sidebarFolded));
+  let drawer = $state(false);
+  $effect(() => {
+    void route;
+    drawer = false;
+  });
+
   // The views of a namespace, each shown to a caller who holds what reading it takes there, and to no
   // other: a view the caller cannot use is left out of the bar rather than drawn disabled.
   const all: { view: View; label: string; shows: (ns: string) => boolean }[] = [
@@ -111,11 +123,20 @@
   );
 </script>
 
-<svelte:window onkeydown={(e) => session.me && session.standing === "signed-in" && keys.press(e)} />
+<svelte:window
+  onkeydown={(e) => {
+    if (drawer && e.key === "Escape") {
+      drawer = false;
+      e.preventDefault();
+      return;
+    }
+    if (session.me && session.standing === "signed-in") keys.press(e);
+  }}
+/>
 
 {#if session.standing === "reading"}
   <!-- The frame is drawn while the session is read, empty, so that nothing moves when it fills. -->
-  <div class="frame" class:folded={sidebarFolded}>
+  <div class="frame" class:folded class:narrow={viewport.narrow}>
     <div class="side blank" aria-hidden="true"></div>
     <div class="top blank" aria-hidden="true"></div>
     <main class="screen" aria-busy="true"></main>
@@ -138,12 +159,16 @@
     </Pane>
   </main>
 {:else if session.me}
-  <div class="frame" class:folded={sidebarFolded}>
-    <div class="side">
-      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} folded={sidebarFolded} onfold={foldSidebar} />
+  <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer}>
+    <div class="side" inert={viewport.narrow && !drawer}>
+      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} />
     </div>
+    {#if viewport.narrow && drawer}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="scrim" onclick={() => (drawer = false)}></div>
+    {/if}
     <div class="top">
-      <TopBar me={session.me} {route} answering={session.answering} {place} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} />
+      <TopBar me={session.me} {route} answering={session.answering} {place} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
     </div>
     <main class="screen">
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
@@ -245,6 +270,56 @@
   .alone {
     max-width: 480px;
     margin: 18vh auto 0;
+  }
+
+  /* Under 760px the screen takes the window's whole width, the sidebar opens over it as a drawer, and
+     the key line is not drawn, since the keys it names are a keyboard's. */
+  .frame.narrow {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--bar-top) minmax(0, 1fr);
+    grid-template-areas: "top" "screen";
+  }
+
+  .frame.narrow .keys {
+    display: none;
+  }
+
+  .frame.narrow .side {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.18s ease;
+  }
+
+  .frame.narrow.drawn .side {
+    transform: none;
+    box-shadow: 0 0 32px rgb(0 0 0 / 0.25);
+  }
+
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+
+  @media (max-width: 759px) {
+    .screen {
+      padding: 16px 16px 24px;
+    }
+
+    .alone {
+      margin: 10vh 16px 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .frame.narrow .side {
+      transition: none;
+    }
   }
 
   .alone p {

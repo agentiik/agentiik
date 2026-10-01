@@ -82,7 +82,7 @@
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    padding: 12vh calc(var(--unit) * 8) calc(var(--unit) * 8);
+    padding: 12vh 16px 16px;
     overflow-y: auto;
     background: color-mix(in srgb, var(--bg) 55%, transparent);
     backdrop-filter: blur(1px);

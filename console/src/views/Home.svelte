@@ -137,6 +137,13 @@
   const weekdays = ["Mon", "", "Wed", "", "Fri", "", ""];
   const name = $derived(me.user?.display_name ?? me.principal);
 
+  // Where the year is wider than its pane, on a phone, it opens on its latest weeks, as a calendar
+  // opens on today.
+  let yearBox = $state<HTMLDivElement | undefined>();
+  $effect(() => {
+    if (yearBox) yearBox.scrollLeft = yearBox.scrollWidth;
+  });
+
   // The figures under the caller's name: the last seven days of every namespace read, added up.
   const week = $derived(together(read.map((n) => series.get(n.name)).filter((s) => s !== undefined).map((s) => lastWeek(s, now))));
   const share = $derived(week.ended ? `${Math.round((week.succeeded / week.ended) * 1000) / 10}%` : "none ended");
@@ -161,6 +168,7 @@
 <Pane title="Activity" aside={reading ? "reading" : `${yearTotal} ${by === "runs" ? (yearTotal === 1 ? "run" : "runs") : yearTotal === 1 ? "failure" : "failures"} in the last year, ${read.length} ${read.length === 1 ? "namespace" : "namespaces"}`}>
   {#if unread.length}<p class="refused">Not read: {unread.join(", ")}</p>{/if}
   <div class="year" class:failures={by === "failures"}>
+    <div class="weeks" bind:this={yearBox}>
     <div class="months" style:grid-template-columns="repeat({weeks}, var(--square))" aria-hidden="true">
       {#each labels as m (m.column)}<span style:grid-column="{m.column + 1} / span 3">{m.name}</span>{/each}
     </div>
@@ -189,6 +197,7 @@
           </div>
         {/each}
       </div>
+    </div>
     </div>
     <div class="legend">
       <div class="by" role="group" aria-label="What shades the squares">
@@ -379,8 +388,15 @@
     gap: calc(var(--unit) * 2);
     width: max-content;
     max-width: 100%;
-    overflow-x: auto;
     font-size: var(--type-identifier-size-min);
+  }
+
+  /* The weeks alone scroll where the year is wider than the pane, its legend staying in view. */
+  .weeks {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--unit) * 2);
+    overflow-x: auto;
   }
 
   .year.failures {
@@ -571,5 +587,34 @@
 
   .number {
     text-align: right;
+  }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .figures {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 759px) {
+    .profile {
+      gap: calc(var(--unit) * 6);
+    }
+
+    .figures {
+      gap: calc(var(--unit) * 5);
+    }
+
+    .figures li {
+      padding: calc(var(--unit) * 5) calc(var(--unit) * 6);
+    }
+
+    .figures .value {
+      font-size: 22px;
+    }
   }
 </style>

@@ -18,6 +18,7 @@
     place,
     onsignout,
     ondismiss,
+    onmenu,
   }: {
     me: Me;
     route: Route;
@@ -25,6 +26,7 @@
     place: Place;
     onsignout: () => void;
     ondismiss: (id: string) => void;
+    onmenu?: () => void;
   } = $props();
 
   let ground = $state<Ground>(chosen(globalThis.localStorage));
@@ -76,6 +78,9 @@
 </script>
 
 <header class="bar">
+  {#if onmenu}
+    <button class="menu-button" aria-label="Open the navigation" onclick={onmenu}><Icon name="control-sidebar" size={18} /></button>
+  {/if}
   <nav class="trail" aria-label="Where you are">
     <ol>
       {#each trail as step, i (i)}
@@ -93,7 +98,7 @@
 
   <div class="end">
     <span class="live" class:lost={!answering} role="status">
-      <span class="dot" aria-hidden="true"></span>{answering ? "live" : "not answering"}
+      <span class="dot" aria-hidden="true"></span><span class="word">{answering ? "live" : "not answering"}</span>
     </span>
 
     <Popover label={me.notifications.length === 0 ? "Notifications, none" : `Notifications, ${me.notifications.length}`} align="end" width={340}>
@@ -146,6 +151,54 @@
 </header>
 
 <style>
+  .menu-button {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-left: calc(var(--unit) * -3);
+    border: none;
+    border-radius: var(--radius-control);
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .menu-button:hover {
+    background: var(--raised);
+  }
+
+  /* On a phone the trail keeps where the screen is and drops the way back up, which the drawer gives,
+     the installation's state keeps its dot, and the caller their face. */
+  @media (max-width: 759px) {
+    .bar {
+      padding: 0 16px;
+    }
+
+    .trail li:not(:last-child) {
+      display: none;
+    }
+
+    .trail li:last-child .sep {
+      display: none;
+    }
+
+    .live .word {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .who .login {
+      display: none;
+    }
+  }
+
   .bar {
     display: flex;
     align-items: center;

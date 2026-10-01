@@ -55,10 +55,12 @@
     border-bottom: var(--border-hairline) solid var(--line);
   }
 
+  /* In a window too narrow for both, what can be done goes under the title rather than over it. */
   .row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: calc(var(--unit) * 6);
+    gap: calc(var(--unit) * 4) calc(var(--unit) * 6);
     min-height: 34px;
   }
 
@@ -101,8 +103,23 @@
   }
 
   .subtitle {
+    min-width: 0;
     color: var(--muted);
     font-size: var(--type-body-size);
+  }
+
+  .what {
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 759px) {
+    h1 {
+      font-size: 18px;
+    }
+
+    .icon {
+      display: none;
+    }
   }
 
   .actions {
@@ -113,10 +130,17 @@
     margin-left: auto;
   }
 
+  /* Tabs that do not fit scroll along their line rather than wrapping onto a second one. */
   .tabs {
     display: flex;
     gap: calc(var(--unit) * 2);
     margin-top: calc(var(--unit) * 6);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .tab {
@@ -133,6 +157,7 @@
     font-family: var(--type-navigation-font);
     font-size: var(--type-navigation-size);
     font-weight: var(--type-navigation-weight);
+    white-space: nowrap;
     cursor: pointer;
   }
 

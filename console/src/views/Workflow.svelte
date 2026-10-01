@@ -355,6 +355,20 @@
     font-size: 12.5px;
   }
 
+  /* On a phone a trigger wraps within its chip, a long webhook path breaking where it must. */
+  @media (max-width: 759px) {
+    .triggers li {
+      flex-wrap: wrap;
+      max-width: 100%;
+      padding: calc(var(--unit) * 2) calc(var(--unit) * 5);
+      white-space: normal;
+    }
+
+    .triggers li .code {
+      overflow-wrap: anywhere;
+    }
+  }
+
   .history {
     width: 100%;
     border-collapse: collapse;
@@ -428,5 +442,12 @@
     border-radius: var(--radius-control);
     background: var(--sunken);
     font-size: var(--type-identifier-size-min);
+  }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

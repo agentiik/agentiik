@@ -879,4 +879,11 @@
     color: var(--text);
     font-weight: 600;
   }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
 </style>

@@ -8,7 +8,9 @@
   // The navigation, down the left of every screen: the home, the views of one namespace, what an
   // administrator manages, and the caller's account. Its entries never move: the namespace's views are
   // listed in one order, those of the namespace last opened while the home or the account is shown, so
-  // that a menu is where it was whichever screen is open. Folded, it keeps its icons alone.
+  // that a menu is where it was whichever screen is open. Folded, it keeps its icons alone; in a
+  // window too narrow to choose otherwise it is folded or a drawer whatever was chosen, and offers no
+  // fold.
   let {
     me,
     namespaces,
@@ -17,6 +19,7 @@
     route,
     place,
     folded,
+    foldable = true,
     onfold,
   }: {
     me: Me;
@@ -26,6 +29,7 @@
     route: Route;
     place: Place;
     folded: boolean;
+    foldable?: boolean;
     onfold: (value: boolean) => void;
   } = $props();
 
@@ -94,11 +98,13 @@
         <Icon name="control-passkey" /><span class="label">Your account</span>
       </a>
     </li>
-    <li>
-      <button class="entry" aria-pressed={folded} onclick={() => onfold(!folded)} title={folded ? "Unfold the sidebar" : undefined}>
-        <Icon name="control-sidebar" /><span class="label">Fold the sidebar</span>
-      </button>
-    </li>
+    {#if foldable}
+      <li>
+        <button class="entry" aria-pressed={folded} onclick={() => onfold(!folded)} title={folded ? "Unfold the sidebar" : undefined}>
+          <Icon name="control-sidebar" /><span class="label">Fold the sidebar</span>
+        </button>
+      </li>
+    {/if}
   </ul>
 </nav>
 

@@ -292,6 +292,7 @@
     gap: calc(var(--unit) * 4);
     color: var(--muted);
     font-size: var(--type-control-size);
+    white-space: nowrap;
   }
 
   .select select {
@@ -479,5 +480,22 @@
     min-height: 1.4em;
     margin: calc(var(--unit) * 3) 0 0;
     font-size: var(--type-control-size);
+  }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 759px) {
+    .codes li {
+      grid-template-columns: 44px minmax(0, 1fr) 40px;
+    }
+
+    .codes .meaning {
+      display: none;
+    }
   }
 </style>

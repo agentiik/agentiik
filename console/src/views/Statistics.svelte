@@ -325,4 +325,12 @@
     margin: 0;
     text-align: right;
   }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .grid,
+    .grid.quotas {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
 </style>

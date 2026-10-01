@@ -178,6 +178,7 @@
     <p class="refused" role="alert">The runs could not be read: {list.refused}</p>
   {/if}
 
+  <div class="scroll">
   <table>
     <thead>
       <tr>
@@ -217,6 +218,7 @@
       {/each}
     </tbody>
   </table>
+  </div>
 
   {#if list.settled}
   <footer>
@@ -231,20 +233,24 @@
 </Pane>
 
 <style>
+  /* The filters wrap onto a second line where the window is too narrow for one. */
   .bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: calc(var(--unit) * 6);
+    gap: calc(var(--unit) * 4) calc(var(--unit) * 6);
     margin-bottom: calc(var(--unit) * 6);
   }
 
   .chips {
     display: flex;
+    flex-wrap: wrap;
     gap: calc(var(--unit) * 3);
   }
 
   .chip {
     height: 29px;
+    white-space: nowrap;
     padding: 0 calc(var(--unit) * 6);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-round);
@@ -389,6 +395,7 @@
   .failure {
     display: grid;
     grid-template-columns: 120px 220px 200px 1fr auto;
+    overflow-x: auto;
     align-items: center;
     gap: calc(var(--unit) * 6);
     padding: calc(var(--unit) * 2) 0;
@@ -397,6 +404,12 @@
 
   .refused {
     color: var(--failed);
+  }
+
+  /* The table alone scrolls where the window is narrower than its columns, the filters above it
+     and the count under it staying put. */
+  .scroll {
+    overflow-x: auto;
   }
 
   table {

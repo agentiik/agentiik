@@ -382,4 +382,12 @@
   .t-literal {
     color: var(--succeeded);
   }
+
+  /* On a phone the two runs go one above the other. */
+  @media (max-width: 759px) {
+    .pair,
+    .pair.json {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
 </style>

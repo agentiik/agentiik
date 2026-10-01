@@ -81,11 +81,13 @@
     text-align: right;
   }
 
+  /* A table wider than the window scrolls inside its pane, rather than the page beside it. */
   .body {
     display: flex;
     flex-direction: column;
     min-height: 0;
     flex: 1;
+    overflow-x: auto;
     padding: var(--padding-panel) var(--padding-panel) var(--padding-panel) calc(var(--padding-panel) + 2px);
   }
 </style>

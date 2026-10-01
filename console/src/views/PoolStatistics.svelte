@@ -196,7 +196,7 @@
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(480px, 100%), 1fr));
     gap: calc(var(--unit) * 12) calc(var(--unit) * 7);
   }
 
@@ -324,5 +324,11 @@
     min-height: 1.4em;
     margin: calc(var(--unit) * 5) 0 0;
     font-size: var(--type-control-size);
+  }
+
+  @media (max-width: 759px) {
+    .row {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>
