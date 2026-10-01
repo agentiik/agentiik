@@ -18,50 +18,50 @@ func TestAUsersProfileAndPhotoAreKeptBesideThem(t *testing.T) {
 	pool := identity(t)
 	ctx := t.Context()
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		return w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"})
+		return w.CreateUser(ctx, User{Login: "alice"})
 	})
 
-	// A user created says nothing of themself and holds no photo.
+	// A user created says nothing of themself, holds no photo and is shown by their login.
 	var alice User
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		var err error
 		alice, err = w.User(ctx, "alice")
 		return err
 	})
-	if alice.Profile != (Profile{}) || !alice.AvatarUpdatedAt.IsZero() {
+	if alice.Profile != (Profile{}) || !alice.AvatarUpdatedAt.IsZero() || alice.DisplayName() != "alice" || alice.Email != "" {
 		t.Errorf("a user just created reads as %+v", alice)
 	}
 
 	said := Profile{GivenName: "Alice", FamilyName: "Martin", Title: "Technical lead", Location: "Lyon", Timezone: "Europe/Paris", Bio: "Writes the invoicing workflows."}
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.UpdateProfile(ctx, "alice", "Alice Martin", said); err != nil {
+		if err := w.UpdateProfile(ctx, "alice", said); err != nil {
 			return err
 		}
 		// An administrator suspending her, as UpdateUser writes it, leaves what she said.
-		if err := w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice Martin", Suspended: true}); err != nil {
+		if err := w.UpdateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Another Alice"}, Suspended: true}); err != nil {
 			return err
 		}
 		var err error
 		alice, err = w.User(ctx, "alice")
 		return err
 	})
-	if alice.DisplayName != "Alice Martin" || alice.Profile != said || !alice.Suspended {
+	if alice.DisplayName() != "Alice Martin" || alice.Profile != said || !alice.Suspended {
 		t.Errorf("alice reads as %+v", alice)
 	}
 	err := pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
-		return w.UpdateProfile(ctx, "nobody", "Nobody", Profile{})
+		return w.UpdateProfile(ctx, "nobody", Profile{})
 	})
 	if !errors.Is(err, ErrNoPrincipal) {
 		t.Errorf("the profile of nobody was written as %v", err)
 	}
 	err = pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
-		return w.UpdateProfile(ctx, "alice", "Alice Martin", Profile{Bio: strings.Repeat("é", 281)})
+		return w.UpdateProfile(ctx, "alice", Profile{Bio: strings.Repeat("é", 281)})
 	})
 	if err == nil {
 		t.Error("a bio of 281 characters was kept")
 	}
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		return w.UpdateProfile(ctx, "alice", "Alice Martin", Profile{Bio: strings.Repeat("é", 280)})
+		return w.UpdateProfile(ctx, "alice", Profile{Bio: strings.Repeat("é", 280)})
 	})
 
 	// A photo, set, read alone, set again and removed once.

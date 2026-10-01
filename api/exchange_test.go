@@ -217,7 +217,7 @@ func TestACodeLapsesAfterAMinute(t *testing.T) {
 // nothing gets, and no token is minted for anybody.
 func TestACodeOpensNothingOnceItsAccountOrCredentialIsGone(t *testing.T) {
 	again := func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "alice", DisplayName: "Another Alice"}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "alice", Profile: db.Profile{GivenName: "Another Alice"}}); err != nil {
 			return err
 		}
 		hash, err := password.Hash(thePasswords["alice"])
@@ -228,7 +228,7 @@ func TestACodeOpensNothingOnceItsAccountOrCredentialIsGone(t *testing.T) {
 	}
 	for what, change := range map[string]func(context.Context, *db.Wide) error{
 		"suspended": func(ctx context.Context, w *db.Wide) error {
-			return w.UpdateUser(ctx, db.User{Login: "alice", DisplayName: "Alice", Suspended: true})
+			return w.UpdateUser(ctx, db.User{Login: "alice", Profile: db.Profile{GivenName: "Alice"}, Suspended: true})
 		},
 		"removed and created again": func(ctx context.Context, w *db.Wide) error {
 			if err := w.RemoveNamespace(ctx, "alice"); err != nil {

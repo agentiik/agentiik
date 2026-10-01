@@ -42,7 +42,7 @@ func anAdministeredInstallation(t *testing.T) administered {
 	now := time.Now().UTC()
 	hash := func(v string) []byte { sum := sha256.Sum256([]byte(v)); return sum[:] }
 	err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		for _, u := range []db.User{{Login: "carol", DisplayName: "Carol", Admin: true}, {Login: "alice", DisplayName: "Alice"}} {
+		for _, u := range []db.User{{Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true}, {Login: "alice", Profile: db.Profile{GivenName: "Alice"}}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}
@@ -109,7 +109,7 @@ var aLink = regexp.MustCompile(`(?m)^https://agentiik\.example\.com/auth/enrol#a
 // is printed the link alone.
 func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(t *testing.T) {
 	in := anAdministeredInstallation(t)
-	code, out, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--admin", "--display-name", "Dan Martin")
+	code, out, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--admin", "--given-name", "Dan", "--family-name", "Martin", "--email", "dan.martin@example.com")
 	if code != exitSucceeded {
 		t.Fatalf("agk user create dan --admin left with %d: %s", code, errs)
 	}
@@ -120,7 +120,7 @@ func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(
 		t.Fatalf("agk user create dan --admin printed:\n%s", out)
 	}
 
-	code, again, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--admin", "--display-name", "Dan Martin")
+	code, again, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--admin", "--given-name", "Dan", "--family-name", "Martin", "--email", "dan.martin@example.com")
 	if code != exitSucceeded || !strings.HasPrefix(again, "dan is an administrator who has not enrolled yet, and the link issued before no longer works. Open this one once") {
 		t.Fatalf("agk user create dan --admin again left with %d:\n%s%s", code, again, errs)
 	}
@@ -143,25 +143,28 @@ func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(
 	}
 
 	// Run again with the login alone, or with --admin alone, dan is kept as he was created and
-	// printed a fresh link; with another display name, refused in the installation's words.
+	// printed a fresh link; with another name or email address, refused in the installation's words.
 	for _, args := range [][]string{{"user", "create", "dan"}, {"user", "create", "dan", "--admin"}} {
 		code, out, errs := in.agk(t, in.bootstrap, args...)
 		if code != exitSucceeded || !strings.HasPrefix(out, "dan is an administrator who has not enrolled yet") || !strings.Contains(out, "the bootstrap token works until dan has signed in") {
 			t.Errorf("agk %s left with %d:\n%s%s", strings.Join(args, " "), code, out, errs)
 		}
 	}
-	code, _, errs = in.agk(t, in.bootstrap, "user", "create", "dan", "--display-name", "Dan")
-	if code != exitRefused || !strings.Contains(errs, "another display name or admin") {
-		t.Errorf("dan with another display name left with %d: %s", code, errs)
-	}
-	if code, _, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--display-name", ""); code != exitUsage {
-		t.Errorf("an empty --display-name left with %d: %s", code, errs)
+	for _, args := range [][]string{{"--given-name", "Daniel"}, {"--email", "dan@example.org"}} {
+		code, _, errs = in.agk(t, in.bootstrap, append([]string{"user", "create", "dan"}, args...)...)
+		if code != exitRefused || !strings.Contains(errs, "another name, email address or admin") {
+			t.Errorf("dan with %s left with %d: %s", strings.Join(args, " "), code, errs)
+		}
 	}
 
-	// A user created with no display name reads as their login.
+	// dan is shown by his names and his address; a user created with neither name reads as their
+	// login.
+	if code, out, errs := in.agk(t, in.carol, "user", "show", "dan"); code != exitSucceeded || !strings.HasPrefix(out, "dan (Dan Martin <dan.martin@example.com>): an administrator\n") {
+		t.Errorf("agk user show dan left with %d:\n%s%s", code, out, errs)
+	}
 	var erin api.User
-	if code, out, _ := in.agk(t, in.carol, "user", "show", "erin", "-o", "json"); code != exitSucceeded || json.Unmarshal([]byte(out), &erin) != nil || erin.DisplayName != "erin" {
-		t.Errorf("erin, created with no display name, reads as %d %s", code, out)
+	if code, out, _ := in.agk(t, in.carol, "user", "show", "erin", "-o", "json"); code != exitSucceeded || json.Unmarshal([]byte(out), &erin) != nil || erin.DisplayName != "erin" || erin.Email != "" {
+		t.Errorf("erin, created with no name, reads as %d %s", code, out)
 	}
 }
 
@@ -212,7 +215,7 @@ func TestAgkUserRecoverPrintsARecoveryCodesLink(t *testing.T) {
 // groups, each verb saying what it did in one line.
 func TestAnAdministratorManagesUsersAndGroupsWithAgk(t *testing.T) {
 	in := anAdministeredInstallation(t)
-	if code, _, errs := in.agk(t, in.carol, "user", "create", "bob-martin", "--display-name", "Bob Martin"); code != exitSucceeded {
+	if code, _, errs := in.agk(t, in.carol, "user", "create", "bob-martin", "--given-name", "Bob", "--family-name", "Martin"); code != exitSucceeded {
 		t.Fatalf("creating bob-martin left with %d: %s", code, errs)
 	}
 	for _, c := range []struct {

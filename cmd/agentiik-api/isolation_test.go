@@ -120,9 +120,9 @@ func someTenants(t *testing.T) *tenants {
 	x.credential = ulid.New()
 	err = in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, u := range []db.User{
-			{Login: "alice", DisplayName: "Alice"}, {Login: "mallory", DisplayName: "Mallory"},
-			{Login: "oscar", DisplayName: "Oscar"}, {Login: "carol", DisplayName: "Carol", Admin: true},
-			{Login: "victor", DisplayName: "Victor"}, {Login: "walter", DisplayName: "Walter"},
+			{Login: "alice", Profile: db.Profile{GivenName: "Alice"}}, {Login: "mallory", Profile: db.Profile{GivenName: "Mallory"}},
+			{Login: "oscar", Profile: db.Profile{GivenName: "Oscar"}}, {Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true},
+			{Login: "victor", Profile: db.Profile{GivenName: "Victor"}}, {Login: "walter", Profile: db.Profile{GivenName: "Walter"}},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err

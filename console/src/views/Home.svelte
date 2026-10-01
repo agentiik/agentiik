@@ -237,7 +237,7 @@
     <div class="who">
       <h1>{name}</h1>
       <p class="muted">
-        <span class="term">{me.principal}</span>
+        {#if me.user?.email}<span>{me.user.email}</span>{:else}<span class="term">{me.principal}</span>{/if}
         {#if me.user?.title}<span>{me.user.title}</span>{/if}
         {#if me.user?.location}<span>{me.user.location}</span>{/if}
         {#if here}<span class="term">{here}</span>{/if}

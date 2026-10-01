@@ -1,23 +1,23 @@
 // What a user says of themself, as PATCH /api/v1/me writes it, and their photo, as
 // /api/v1/me/avatar sets and removes it. A profile is the user's alone: no administrator writes it,
-// and a service account has none.
+// and a service account has none. Their display name is written by nobody: it is made of their given
+// and family names, so the form has no field for it.
 
 import { refusal, type API, type Me } from "../api/client";
 import type { components } from "../api/schema";
 
 export type User = components["schemas"]["user"];
 
-export const fields = ["display_name", "given_name", "family_name", "title", "location", "timezone", "bio"] as const;
+export const fields = ["given_name", "family_name", "title", "location", "timezone", "bio"] as const;
 export type Field = (typeof fields)[number];
 export type Profile = Record<Field, string>;
 
 // The longest each is, in characters, as the API holds them, so that the form refuses what the API
 // would before anything is sent.
-export const longest: Record<Field, number> = { display_name: 256, given_name: 128, family_name: 128, title: 128, location: 128, timezone: 64, bio: 280 };
+export const longest: Record<Field, number> = { given_name: 128, family_name: 128, title: 128, location: 128, timezone: 64, bio: 280 };
 
 export function profileOf(user: User): Profile {
   return {
-    display_name: user.display_name,
     given_name: user.given_name ?? "",
     family_name: user.family_name ?? "",
     title: user.title ?? "",
