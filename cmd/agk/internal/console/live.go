@@ -155,11 +155,25 @@ func (m Model) readRecent() tea.Cmd {
 	}
 }
 
-// sparkline is the durations of a workflow's last twenty runs, one bar each, oldest first: a
-// failure in red, the run in progress in the accent, the rest muted, beside their median. A run
-// not started yet has taken nothing to draw, and is left out.
+// sparkline is the durations of a workflow's last twenty runs beside their median, as the run's
+// header draws it.
 func sparkline(runs []db.ListedRun, now time.Time) []part {
-	bars := []rune("▁▂▃▄▅▆▇█")
+	drawn, median := bars(runs, now)
+	if len(drawn) == 0 {
+		return nil
+	}
+	parts := append([]part{{quiet, "last " + fmt.Sprint(len(drawn)) + " "}}, drawn...)
+	if median > 0 {
+		parts = append(parts, part{muted, "  median " + Took(median)})
+	}
+	return parts
+}
+
+// bars are the durations of a workflow's last twenty runs, one bar each, oldest first: a failure
+// in red, the run in progress in the accent, the rest muted; and the median of those that ended,
+// 0 where none has. A run not started yet has taken nothing to draw, and is left out.
+func bars(runs []db.ListedRun, now time.Time) ([]part, time.Duration) {
+	blocks := []rune("▁▂▃▄▅▆▇█")
 	type bar struct {
 		took  time.Duration
 		state agk.RunState
@@ -181,14 +195,14 @@ func sparkline(runs []db.ListedRun, now time.Time) []part {
 		}
 	}
 	if len(drawn) == 0 {
-		return nil
+		return nil, 0
 	}
 	longest := slices.MaxFunc(drawn, func(a, b bar) int { return int(a.took - b.took) }).took
-	parts := []part{{quiet, "last " + fmt.Sprint(len(drawn)) + " "}}
+	var parts []part
 	for _, b := range drawn {
 		i := 0
 		if longest > 0 {
-			i = int(b.took * time.Duration(len(bars)-1) / longest)
+			i = int(b.took * time.Duration(len(blocks)-1) / longest)
 		}
 		r := muted
 		switch {
@@ -197,15 +211,75 @@ func sparkline(runs []db.ListedRun, now time.Time) []part {
 		case b.state == agk.Running:
 			r = runningText
 		}
-		parts = append(parts, part{r, string(bars[i])})
+		parts = append(parts, part{r, string(blocks[i])})
 	}
+	var median time.Duration
 	if len(settled) > 0 {
 		slices.Sort(settled)
-		median := settled[len(settled)/2]
+		median = settled[len(settled)/2]
 		if len(settled)%2 == 0 {
 			median = (settled[len(settled)/2-1] + settled[len(settled)/2]) / 2
 		}
-		parts = append(parts, part{muted, "  median " + Took(median)})
+	}
+	return parts, median
+}
+
+// stepStrip is a listed run's steps, one cell each in its verdict's colour, in the order the run
+// lists them.
+func stepStrip(r db.ListedRun) []part {
+	var parts []part
+	for _, s := range r.Steps {
+		glyph := "■"
+		if s.Verdict == agk.VerdictPending || s.Verdict == agk.VerdictSkipped {
+			glyph = "□"
+		}
+		parts = append(parts, part{verdictRole(s.Verdict), glyph})
 	}
 	return parts
 }
+
+// sparkRead is the last twenty runs of a workflow the runs view lists, for its sparkline.
+type sparkRead struct {
+	key  string
+	runs []db.ListedRun
+	at   time.Time
+}
+
+// sparkEvery is how often a workflow's last runs are read again for the runs view: the list itself
+// is read every five seconds, and a sparkline is a glance that a minute old still answers.
+const sparkEvery = time.Minute
+
+// readSparks reads the last runs of each workflow listed that has none, or only a minute old,
+// where the window is wide enough to draw them.
+func (m Model) readSparks() []tea.Cmd {
+	if !m.full() {
+		return nil
+	}
+	now := m.o.Now()
+	var cmds []tea.Cmd
+	seen := map[string]bool{}
+	for _, r := range m.shownRuns() {
+		key := r.Namespace + "/" + r.Workflow
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if s, ok := m.sparks[key]; ok && now.Sub(s.at) < sparkEvery {
+			continue
+		}
+		ns, wf := r.Namespace, r.Workflow
+		cmds = append(cmds, func() tea.Msg {
+			var listed struct {
+				Runs []db.ListedRun `json:"runs"`
+			}
+			// A sparkline that cannot be read is left out, and asked for again a minute later.
+			_ = m.o.Read(m.ctx, "/api/v1/runs?limit=20&namespace="+url.QueryEscape(ns)+"&workflow="+url.QueryEscape(wf), &listed)
+			return sparkRead{key: key, runs: listed.Runs, at: now}
+		})
+	}
+	return cmds
+}
+
+// full says whether the runs view is wide enough for a run's steps and its workflow's last runs
+// beside every other column: 160 columns, as the documentation's full width is.
+func (m Model) full() bool { return m.width >= 160 }
