@@ -17442,15 +17442,30 @@
           "orders": {
             "schema": {
               "type": "array",
+              "description": "The orders to invoice, as the shop exports them.",
               "items": {
-                "type": "object"
+                "type": "object",
+                "required": [
+                  "order",
+                  "amount"
+                ],
+                "properties": {
+                  "order": {
+                    "type": "string",
+                    "pattern": "^ORD-[0-9]{4}$"
+                  },
+                  "amount": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
               }
             },
             "required": true
           },
           "customers": {
             "schema": {
-              "type": "array"
+              "$ref": "./schemas/customers.json"
             },
             "required": false,
             "default": []
@@ -17464,6 +17479,12 @@
             },
             "retain": {
               "for": "90d"
+            },
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
             }
           },
           "errors": {
@@ -17610,6 +17631,33 @@
             "cache": true,
             "idempotent": true
           }
+        },
+        "mcp": {
+          "name": "invoicing",
+          "description": "Invoices a batch of orders for the finance team, as the monthly run does.",
+          "tools": [
+            {
+              "name": "create_invoices",
+              "title": "Create invoices",
+              "description": "Invoices the orders given and returns the invoices it created. Refuses an order with no amount.",
+              "input": {
+                "from": {
+                  "input": "orders"
+                }
+              },
+              "output": {
+                "from": {
+                  "output": "invoices"
+                }
+              },
+              "mode": "sync",
+              "timeout": "2m",
+              "annotations": {
+                "idempotentHint": true,
+                "destructiveHint": false
+              }
+            }
+          ]
         }
       },
       "history": [
@@ -18051,6 +18099,58 @@
           "granted_at": "2026-09-29T10:03:00Z"
         }
       ]
+    }
+  },
+  "GET /api/v1/finance/secrets": {
+    "status": 200,
+    "body": {
+      "secrets": [
+        {
+          "name": "smtp-password",
+          "provider": "env",
+          "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+          "mount": "/agk/secrets/smtp-password",
+          "declared_by": "bruno",
+          "declared_at": "2026-09-22T08:30:00Z"
+        },
+        {
+          "name": "stripe-key",
+          "provider": "builtin",
+          "mount": "/agk/secrets/stripe-key",
+          "declared_by": "bruno",
+          "declared_at": "2026-09-21T16:05:00Z"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/alice/secrets": {
+    "status": 200,
+    "body": {
+      "secrets": [
+        {
+          "name": "github-token",
+          "provider": "builtin",
+          "mount": "/agk/secrets/github-token",
+          "declared_by": "alice",
+          "declared_at": "2026-09-29T10:40:00Z"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/finance/workflows/monthly-invoicing/tree/a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f?path=schemas/customers.json": {
+    "status": 200,
+    "text": "{\n  \"type\": \"array\",\n  \"items\": {\n    \"$ref\": \"./customer.json\"\n  }\n}\n"
+  },
+  "GET /api/v1/finance/workflows/monthly-invoicing/tree/a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f?path=schemas/customer.json": {
+    "status": 200,
+    "text": "{\n  \"type\": \"object\",\n  \"required\": [\n    \"id\"\n  ],\n  \"properties\": {\n    \"id\": {\n      \"type\": \"string\"\n    },\n    \"vat\": {\n      \"type\": \"string\"\n    }\n  }\n}\n"
+  },
+  "POST /api/v1/finance/workflows/monthly-invoicing/runs": {
+    "status": 202,
+    "body": {
+      "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+      "state": "queued",
+      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
     }
   },
   "GET /api/v1/service-accounts": {
