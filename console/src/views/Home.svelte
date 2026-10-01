@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import type { API, Me, Namespace } from "../api/client";
   import Avatar from "../components/Avatar.svelte";
+  import { localTime, photoOf } from "../lib/profile";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
@@ -136,6 +137,8 @@
   const lasted = (r: Run) => (r.started_at ? took(Math.max(0, (r.finished_at ? Date.parse(r.finished_at) : now) - Date.parse(r.started_at))) : "");
   const weekdays = ["Mon", "", "Wed", "", "Fri", "", ""];
   const name = $derived(me.user?.display_name ?? me.principal);
+  // The time where the caller is, where their profile names a zone.
+  const here = $derived(localTime(me.user?.timezone ?? "", now));
 
   // Where the year is wider than its pane, on a phone, it opens on its latest weeks, as a calendar
   // opens on today.
@@ -150,10 +153,17 @@
 </script>
 
 <header class="profile">
-  <Avatar {name} size={64} />
+  <Avatar {name} src={photoOf(me)} size={64} />
   <div class="who">
     <h1>{name}</h1>
-    <p class="muted"><span class="term">{me.principal}</span>{#if me.admin}<span class="role">administrator</span>{/if}</p>
+    <p class="muted">
+      <span class="term">{me.principal}</span>
+      {#if me.user?.title}<span>{me.user.title}</span>{/if}
+      {#if me.user?.location}<span>{me.user.location}</span>{/if}
+      {#if here}<span class="term">{here} where you are</span>{/if}
+      {#if me.admin}<span class="role">administrator</span>{/if}
+    </p>
+    {#if me.user?.bio}<p class="bio">{me.user.bio}</p>{/if}
   </div>
 </header>
 
@@ -302,9 +312,22 @@
 
   .who p {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: calc(var(--unit) * 4);
+    gap: calc(var(--unit) * 2) calc(var(--unit) * 6);
     margin: calc(var(--unit) * 1) 0 0;
+  }
+
+  .who p span {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--unit) * 2);
+  }
+
+  .who .bio {
+    max-width: 70ch;
+    margin-top: calc(var(--unit) * 3);
+    color: var(--text);
   }
 
   .role {

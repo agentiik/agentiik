@@ -4,6 +4,7 @@
   import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import Notice from "../components/Notice.svelte";
+  import ProfileForm from "../components/ProfileForm.svelte";
   import ServiceAccounts from "../components/ServiceAccounts.svelte";
   import {
     addPasskey,
@@ -46,7 +47,7 @@
     changed,
   }: { api: API; place: Place; me: Me; tab: string | undefined; passkeys: Passkeys; changed: () => Promise<void> } = $props();
 
-  const shown = $derived(tab === "tokens" || tab === "service-accounts" ? tab : "credentials");
+  const shown = $derived(tab === "profile" || tab === "tokens" || tab === "service-accounts" ? tab : "credentials");
   const now = Date.now();
 
   // What any act on the screen is doing, said, and what the API refused, said as it said it.
@@ -274,6 +275,7 @@
   }
 
   const routes = {
+    profile: { kind: "account" as const, tab: "profile" },
     credentials: { kind: "account" as const },
     tokens: { kind: "account" as const, tab: "tokens" },
     accounts: { kind: "account" as const, tab: "service-accounts" },
@@ -281,6 +283,7 @@
 </script>
 
 <PageHeader title="Your account" icon="control-users" {place} tabs={[
+  { label: "Profile", icon: "control-users", to: routes.profile, current: shown === "profile" },
   { label: "Sign-in methods", icon: "control-passkey", to: routes.credentials, current: shown === "credentials" },
   { label: "API tokens", icon: "control-copy", to: routes.tokens, current: shown === "tokens" },
   { label: "Service accounts", icon: "control-groups", to: routes.accounts, current: shown === "service-accounts" },
@@ -289,7 +292,9 @@
 {#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
-{#if shown === "service-accounts"}
+{#if shown === "profile"}
+  <ProfileForm {api} {me} reread={changed} />
+{:else if shown === "service-accounts"}
   <ServiceAccounts {api} {me} />
 {:else if shown === "credentials"}
   <div class="columns">

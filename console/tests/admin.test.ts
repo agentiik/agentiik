@@ -83,12 +83,12 @@ describe("the users, for an administrator", () => {
     const s = scenario("dana");
     s["DELETE /api/v1/users/carol"] = { status: 409, body: { error: "carol's personal namespace holds 3 workflows" } };
     const { asked } = open("/users", s);
-    const row = (await screen.findByText("carol", { selector: "td" })).closest("tr")!;
+    const row = (await screen.findByText("carol", { selector: "td .login" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
     await fireEvent.click(within(row).getByRole("button", { name: "Remove carol" }));
     expect(await screen.findByText("Carol's personal namespace holds 3 workflows.")).toBeTruthy();
-    const own = (await screen.findByText("dana", { selector: "td" })).closest("tr")!;
+    const own = (await screen.findByText("dana", { selector: "td .login" })).closest("tr")!;
     expect(within(own).queryByRole("button", { name: "Remove" })).toBeNull();
   });
 });

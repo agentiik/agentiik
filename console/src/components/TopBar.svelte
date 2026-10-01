@@ -4,6 +4,7 @@
   import type { Route } from "../lib/route";
   import { said } from "../lib/notifications";
   import { apply, chosen, type Ground } from "../lib/theme";
+  import { photoOf } from "../lib/profile";
   import Avatar from "./Avatar.svelte";
   import Icon from "./Icon.svelte";
   import Popover from "./Popover.svelte";
@@ -37,7 +38,7 @@
   }
 
   const labels: Record<string, string> = { runs: "Runs", workflows: "Workflows", statistics: "Statistics", sharing: "Sharing", settings: "Settings" };
-  const tabs: Record<string, string> = { files: "Files", statistics: "Statistics", mcp: "MCP", graph: "Graph", credentials: "Sign-in methods", tokens: "API tokens", "service-accounts": "Service accounts" };
+  const tabs: Record<string, string> = { files: "Files", statistics: "Statistics", mcp: "MCP", graph: "Graph", profile: "Profile", credentials: "Sign-in methods", tokens: "API tokens", "service-accounts": "Service accounts" };
 
   // The trail: each step a link but the last, which is where the screen is.
   const trail = $derived.by((): { label: string; to?: Route; code?: boolean }[] => {
@@ -128,7 +129,7 @@
     <Popover label="You, {me.principal}" align="end" width={240}>
       {#snippet button()}
         <span class="who">
-          <Avatar {name} size={24} />
+          <Avatar {name} src={photoOf(me)} size={24} />
           <span class="login">{name}</span>
           <Icon name="control-expand" size={14} />
         </span>
@@ -136,7 +137,7 @@
       {#snippet children(close)}
         <div class="menu">
           <p class="name">{name}<span class="faint">{me.principal}</span></p>
-          <a class="entry" href={place.href({ kind: "account" })} onclick={(e) => { follow(place, { kind: "account" })(e); close(); }}>Your account</a>
+          <a class="entry" href={place.href({ kind: "account", tab: "profile" })} onclick={(e) => { follow(place, { kind: "account", tab: "profile" })(e); close(); }}>Your account</a>
           <fieldset class="ground">
             <legend>Ground</legend>
             {#each [["system", "System"], ["light", "Light"], ["dark", "Dark"]] as [value, label] (value)}
