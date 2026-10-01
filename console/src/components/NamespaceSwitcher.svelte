@@ -6,25 +6,34 @@
   import Icon from "./Icon.svelte";
   import Popover from "./Popover.svelte";
 
-  // The namespace switcher, in the top bar: the caller's personal namespace first, the shared ones
-  // grouped after it, and for an administrator the other users' personal ones last. Choosing one opens
-  // the same view in it, since a person switching namespace is usually comparing the same thing.
+  // The namespace switcher, at the head of the sidebar's views: the caller's personal namespace first,
+  // the shared ones grouped after it, and for an administrator the other users' personal ones last.
+  // Choosing one opens the same view in it, since a person switching namespace is usually comparing the
+  // same thing. Folded, it is the namespace's initial alone.
   let {
     namespaces,
     principal,
     current,
     view,
     place,
-  }: { namespaces: Namespace[]; principal: string; current: string | undefined; view: View; place: Place } = $props();
+    folded = false,
+  }: { namespaces: Namespace[]; principal: string; current: string | undefined; view: View; place: Place; folded?: boolean } = $props();
 
   const groups = $derived(ordered(namespaces, principal));
+  const record = $derived(namespaces.find((n) => n.name === current));
 </script>
 
-<Popover label="Switch namespace">
+<Popover label="Switch namespace" block width={248}>
   {#snippet button()}
-    <span class="current">
-      <span class="name">{current ?? "no namespace"}</span>
-      <Icon name="control-expand" size={14} />
+    <span class="current" class:folded title={folded ? current : undefined}>
+      <span class="initial" aria-hidden="true">{(current ?? "?").charAt(0).toUpperCase()}</span>
+      {#if !folded}
+        <span class="what">
+          <span class="name">{current ?? "No namespace"}</span>
+          <span class="kind">{record ? (record.kind === "personal" ? (record.name === principal ? "Your namespace" : "Personal") : "Shared") : "Namespace"}</span>
+        </span>
+        <Icon name="control-expand" size={14} />
+      {/if}
     </span>
   {/snippet}
   {#snippet children(close)}
@@ -64,28 +73,68 @@
       close();
     }}
   >
-    <span class="mono">{namespace.name}</span>
+    <span>{namespace.name}</span>
     {#if namespace.owner && namespace.kind === "shared"}<span class="owner">{namespace.owner}</span>{/if}
   </a>
 {/snippet}
 
 <style>
   .current {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: calc(var(--unit) * 3);
-    height: 29px;
-    padding: 0 calc(var(--unit) * 4) 0 calc(var(--unit) * 5);
-    border: var(--border-hairline) solid var(--accentLine);
+    gap: calc(var(--unit) * 5);
+    width: 100%;
+    padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-control);
+    background: var(--raised);
+    color: var(--muted);
+    text-align: left;
+  }
+
+  .current:hover {
+    border-color: var(--lineStrong);
+  }
+
+  .current.folded {
+    justify-content: center;
+    padding: calc(var(--unit) * 3) 0;
+  }
+
+  .initial {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
     border-radius: var(--radius-control);
     background: var(--accentDim);
     color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .what {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    --leading: 1.25;
   }
 
   .name {
-    font-family: var(--type-identifier-font);
-    font-size: var(--type-identifier-size-max);
+    overflow: hidden;
+    color: var(--text);
+    font-size: var(--type-name-size);
     font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .kind {
+    color: var(--faint);
+    font-size: 12px;
   }
 
   .heading {
@@ -109,7 +158,7 @@
     padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
     border-radius: var(--radius-control);
     color: var(--text);
-    font-size: var(--type-identifier-size-max);
+    font-size: var(--type-name-size);
   }
 
   .item:hover {
@@ -125,8 +174,7 @@
 
   .owner {
     color: var(--faint);
-    font-family: var(--type-identifier-font);
-    font-size: var(--type-identifier-size-min);
+    font-size: 12px;
     font-weight: 400;
   }
 

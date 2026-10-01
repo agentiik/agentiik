@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "./Problem.svelte";
   import { refusal, type API } from "../api/client";
   import { clock } from "../lib/format";
   import { follow, type Place } from "../lib/place.svelte";
@@ -14,14 +16,14 @@
   let open = $state(false);
   let listed = $state<Listed[] | null>(null);
   let chosen = $state("");
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
 
   async function ask() {
     open = true;
     if (listed) return;
     const { data, error, response } = await api.GET("/api/v1/runs", { params: { query: { namespace: run.namespace, workflow: run.workflow, limit: 200 } } });
     if (!data) {
-      refused = `The runs could not be listed: ${refusal(response, error).message}`;
+      refused = explain("load the runs to compare with", refusal(response, error));
       return;
     }
     listed = candidates(run, data.runs);
@@ -34,9 +36,9 @@
 {#if !open}
   <button class="control" onclick={ask}>Compare with another run</button>
 {:else if refused}
-  <span class="refused" role="alert">{refused}</span>
+  <Problem explained={refused} />
 {:else if listed && listed.length === 0}
-  <span class="muted">No other run of {run.workflow}@{run.commit.slice(0, 7)} has ended to compare it with.</span>
+  <span class="muted">No other run to compare with</span>
 {:else if listed}
   <label class="select">
     <span class="muted">Compare with</span>
@@ -46,7 +48,7 @@
   </label>
   <a class="control" href={place.href(target)} onclick={follow(place, target)}>Compare</a>
 {:else}
-  <span class="muted" role="status">Listing the runs of {run.workflow}@{run.commit.slice(0, 7)}</span>
+  <span class="muted" role="status">Loading</span>
 {/if}
 
 <style>
@@ -58,7 +60,7 @@
   }
 
   .select select {
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
@@ -68,8 +70,4 @@
     font-size: var(--type-control-size);
   }
 
-  .refused {
-    color: var(--failed);
-    font-size: var(--type-control-size);
-  }
 </style>

@@ -89,7 +89,7 @@ describe("the inspector's keys", () => {
   it("moves between the steps and goes back to the runs", async () => {
     const { place, asked } = open(`/finance/runs/${failed}`);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
-    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from invoice", "esc All runs of finance", "1234 Runs, workflows, statistics, settings", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from this step", "esc All runs of finance", "1234 Runs, workflows, statistics, settings", "? Every key"]);
     await press("ArrowUp");
     expect(place.query.get("step")).toBe("normalize");
     await press("Escape");
@@ -112,8 +112,8 @@ describe("the inspector's keys", () => {
     const { asked, place } = open(`/finance/runs/${failed}`, s);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     await press("p");
-    expect(screen.getByText("Replay this run from invoice? A new run starts there.")).toBeTruthy();
-    expect(line().slice(0, 2)).toEqual(["y Replay from invoice", "nesc Keep it"]);
+    expect(screen.getByText("Replay this run from invoice?")).toBeTruthy();
+    expect(line().slice(0, 2)).toEqual(["y Replay from this step", "nesc Keep it"]);
     await press("x");
     await press("n");
     expect(screen.queryByText(/A new run starts there/)).toBeNull();
@@ -132,12 +132,12 @@ describe("the inspector's keys", () => {
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     expect(line()).toContain("c Cancel run");
     await press("c");
-    expect(screen.getByText("Cancel this run? Its tasks in flight are stopped.")).toBeTruthy();
+    expect(screen.getByText("Cancel this run?")).toBeTruthy();
     await press("Escape");
     expect(screen.queryByText(/Its tasks in flight are stopped/)).toBeNull();
     await press("c");
     await press("y");
-    expect(await screen.findByText(/Cancelling was asked/)).toBeTruthy();
+    expect(await screen.findByText("Cancelling.")).toBeTruthy();
     expect(asked.filter((a) => a === `POST /api/v1/runs/${failed}/cancel`)).toHaveLength(1);
   });
 

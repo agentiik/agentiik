@@ -14,7 +14,7 @@
 </script>
 
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import uPlot from "uplot";
   import "uplot/dist/uPlot.min.css";
 
@@ -52,6 +52,11 @@
 
   let holder: HTMLDivElement | undefined = $state();
   let chosen = $state<number | null>(null);
+  // pointed is the bucket under the pointer, which the legend reads out, or the one the arrow keys
+  // chose where the pointer is over none.
+  let pointed = $state<number | null>(null);
+  const at = $derived(pointed ?? chosen);
+  const valueAt = (s: Series, i: number) => (s.values[i] === null || s.values[i] === undefined ? "none" : format(s.values[i]!));
 
   const tones: Record<Tone, [string, number]> = {
     succeeded: ["--succeeded", 1],
@@ -77,14 +82,15 @@
     return since.map((s) => Date.parse(s) / 1000 + width / 2);
   }
 
-  // What each series draws: its values, or for a stack, the sum of it and every series under it. A
-  // dashed series, the span before, is drawn behind the stack and not on it.
+  // What each series draws: its values, or for a stack, the sum of it and every series under it. Only
+  // columns stack: a line, the span before dashed or another count beside the columns, is drawn over
+  // the stack and not on it.
   function drawn(): (number | null)[][] {
     if (!stacked) return series.map((s) => s.values);
     const sums: (number | null)[][] = [];
     let under: number[] = since.map(() => 0);
     for (const s of series) {
-      if (s.dashed) {
+      if (s.dashed || s.kind !== "bars") {
         sums.push(s.values);
         continue;
       }
@@ -119,13 +125,25 @@
     return `${from} to ${to} UTC`;
   }
 
-  function build(el: HTMLDivElement): uPlot {
+  // A stack is drawn from its top down, so that each series covers the part of the one above it
+  // that is not its own.
+  const ordered = () => (stacked ? [...series.keys()].reverse() : [...series.keys()]);
+
+  // dataOf is what uPlot draws: the buckets' middles, then each series in the order drawn.
+  function dataOf(): uPlot.AlignedData {
     const ys = drawn();
+    return [x(), ...ordered().map((i) => ys[i]!)];
+  }
+
+  // shapeOf is what a chart is built for, beside its numbers: its series and how each is drawn. New
+  // numbers in the same shape are drawn in place, as a live chart's are each time it is read; a new
+  // shape builds the chart again.
+  const shapeOf = () => `${stacked} ${height} ${series.map((s) => `${s.label}/${s.kind}/${s.tone}/${s.dashed ?? false}`).join(" ")}`;
+
+  function build(el: HTMLDivElement): uPlot {
     const bars = uPlot.paths.bars!({ size: [0.7, 60] });
     const stepped = uPlot.paths.stepped!({ align: 1 });
-    // A stack is drawn from its top down, so that each series covers the part of the one above it
-    // that is not its own.
-    const order = stacked ? [...series.keys()].reverse() : [...series.keys()];
+    const order = ordered();
     const opts: uPlot.Options = {
       width: el.clientWidth || 600,
       height,
@@ -136,11 +154,13 @@
         points: { size: 6 },
       },
       select: { show: true, left: 0, top: 0, width: 0, height: 0 },
-      legend: { live: true },
+      // The legend is the chart's own, below it, at a size that never changes: uPlot's grows and
+      // shrinks with the values it reads out, which moves the page under the pointer.
+      legend: { show: false },
       scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * 1.08 || 1] } },
       axes: [
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "11px JetBrains Mono, monospace" },
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: 64, values: (_u, vals) => vals.map((v) => format(v)), font: "11px JetBrains Mono, monospace" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "12px Archivo, sans-serif" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: 64, values: (_u, vals) => vals.map((v) => format(v)), font: "12px Archivo, sans-serif" },
       ],
       series: [
         { label: "bucket", value: (_u, _v, _si, i) => (i === null || i === undefined ? "" : bounds(i)) },
@@ -165,6 +185,7 @@
         }),
       ],
       hooks: {
+        setCursor: [(u) => (pointed = u.cursor.idx ?? null)],
         setSelect: [
           (u) => {
             if (u.select.width > 4 && onzoom) {
@@ -190,7 +211,7 @@
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.fillStyle = colour("--failed");
-            ctx.font = `${11 * devicePixelRatio}px JetBrains Mono, monospace`;
+            ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
             ctx.textAlign = "right";
             ctx.fillText(`${limit.label} ${format(limit.value)}`, u.bbox.left + u.bbox.width - 6 * devicePixelRatio, y - 5 * devicePixelRatio);
             ctx.restore();
@@ -198,39 +219,55 @@
         ],
       },
     };
-    const data: uPlot.AlignedData = [x(), ...order.map((i) => ys[i]!)];
-    return new uPlot(opts, data, el);
+    return new uPlot(opts, dataOf(), el);
   }
+
+  let plot: uPlot | undefined;
+  let built = "";
+  let rebuild = () => {};
+
+  // New numbers, read again on a live chart, are drawn into the chart there is.
+  $effect(() => {
+    void [series, since, width, limit];
+    untrack(() => {
+      if (!plot) return;
+      if (shapeOf() !== built) rebuild();
+      else plot.setData(dataOf());
+    });
+  });
 
   onMount(() => {
     if (!holder) return;
     const el = holder;
-    let plot = build(el);
+    plot = build(el);
+    built = shapeOf();
     let down = 0;
 
     // A click with no drag opens the runs of the bucket under the pointer.
     const pressed = (e: MouseEvent) => (down = e.clientX);
     const released = (e: MouseEvent) => {
-      if (Math.abs(e.clientX - down) < 4 && plot.cursor.idx !== null && plot.cursor.idx !== undefined) {
+      if (Math.abs(e.clientX - down) < 4 && plot?.cursor.idx !== null && plot?.cursor.idx !== undefined) {
         onpick?.(plot.cursor.idx);
       }
     };
     const twice = () => onback?.();
     const listen = () => {
-      plot.over.addEventListener("mousedown", pressed);
-      plot.over.addEventListener("mouseup", released);
-      plot.over.addEventListener("dblclick", twice);
+      plot?.over.addEventListener("mousedown", pressed);
+      plot?.over.addEventListener("mouseup", released);
+      plot?.over.addEventListener("dblclick", twice);
     };
     listen();
 
     // Drawn again at the new size when the page is, and in the new ground's colours when it changes.
-    const resized = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height }));
+    const resized = new ResizeObserver(() => plot?.setSize({ width: el.clientWidth, height }));
     resized.observe(el);
     const redraw = () => {
-      plot.destroy();
+      plot?.destroy();
       plot = build(el);
+      built = shapeOf();
       listen();
     };
+    rebuild = redraw;
     const system = matchMedia("(prefers-color-scheme: dark)");
     system.addEventListener("change", redraw);
     const ground = new MutationObserver(redraw);
@@ -240,7 +277,8 @@
       resized.disconnect();
       system.removeEventListener("change", redraw);
       ground.disconnect();
-      plot.destroy();
+      plot?.destroy();
+      plot = undefined;
     };
   });
 
@@ -258,7 +296,7 @@
 </script>
 
 <figure class="chart">
-  <figcaption>{title}</figcaption>
+  <figcaption class="unseen">{title}</figcaption>
   <!-- A slider over the buckets, as the arrow keys move it; what it draws is in the table below. -->
   <div
     class="plot"
@@ -272,14 +310,14 @@
     aria-valuetext={chosen === null ? "no bucket chosen" : bounds(chosen)}
     onkeydown={key}
   ></div>
-  {#if chosen !== null && since[chosen]}
-    <p class="readout" aria-live="polite">
-      <span class="mono">{bounds(chosen)}</span>
+  <div class="legend" aria-live="polite">
+    <p class="bucket term">{at !== null && since[at] ? bounds(at) : "\u00a0"}</p>
+    <ul>
       {#each series as s (s.label)}
-        <span><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label} <span class="mono">{s.values[chosen] === null ? "none" : format(s.values[chosen] ?? 0)}</span></span>
+        <li><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label}<span class="value term">{at !== null && since[at] ? valueAt(s, at) : ""}</span></li>
       {/each}
-    </p>
-  {/if}
+    </ul>
+  </div>
   <details>
     <summary>Numbers</summary>
     <table>
@@ -289,8 +327,8 @@
       <tbody>
         {#each since as at, i (at)}
           <tr>
-            <td class="mono">{bounds(i)}</td>
-            {#each series as s (s.label)}<td class="number mono">{s.values[i] === null || s.values[i] === undefined ? "" : format(s.values[i]!)}</td>{/each}
+            <td class="term">{bounds(i)}</td>
+            {#each series as s (s.label)}<td class="number term">{s.values[i] === null || s.values[i] === undefined ? "" : format(s.values[i]!)}</td>{/each}
           </tr>
         {/each}
       </tbody>
@@ -303,28 +341,14 @@
     margin: 0;
   }
 
-  figcaption {
-    margin-bottom: calc(var(--unit) * 3);
-    font-family: var(--type-sectionTitle-font);
-    font-size: var(--type-sectionTitle-size);
-    font-weight: var(--type-sectionTitle-weight);
-  }
-
   .plot {
     border-radius: var(--radius-control);
   }
 
-  .plot :global(.u-legend) {
-    margin-top: calc(var(--unit) * 3);
-    color: var(--muted);
-    font-family: var(--type-body-font);
-    font-size: var(--type-control-size);
-    text-align: left;
-  }
-
-  .plot :global(.u-legend .u-value) {
-    color: var(--text);
-    font-family: var(--type-identifier-font);
+  /* uPlot sets its own leading of 1.5, a fraction at 13.5px: the console's, in whole units, puts its
+     axes on pixels. */
+  .plot :global(.uplot) {
+    line-height: round(calc(var(--leading) * 1em), var(--unit));
   }
 
   .plot :global(.u-select) {
@@ -336,12 +360,33 @@
     border-color: var(--lineStrong);
   }
 
-  .readout {
+  .legend {
+    margin-top: calc(var(--unit) * 3);
+    color: var(--muted);
+    font-size: var(--type-control-size);
+  }
+
+  .bucket {
+    margin: 0;
+    color: var(--text);
+  }
+
+  .legend ul {
     display: flex;
     flex-wrap: wrap;
-    gap: calc(var(--unit) * 3) calc(var(--unit) * 7);
-    margin: calc(var(--unit) * 3) 0 0;
-    font-size: var(--type-control-size);
+    gap: calc(var(--unit) * 2) calc(var(--unit) * 7);
+    margin: calc(var(--unit) * 1) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* A value has its room whether it is read out or not, so that nothing moves as the pointer does. */
+  .value {
+    display: inline-block;
+    min-width: 8ch;
+    padding-left: calc(var(--unit) * 2);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
   }
 
   .swatch {
@@ -361,7 +406,8 @@
 
   .swatch.succeeded { background: var(--succeeded); border-color: var(--succeeded); }
   .swatch.failed { background: var(--failed); border-color: var(--failed); }
-  .swatch.running, .swatch.accent { background: var(--accent); border-color: var(--accent); }
+  .swatch.running { background: var(--running); border-color: var(--running); }
+  .swatch.accent { background: var(--accent); border-color: var(--accent); }
   .swatch.waiting { background: var(--waiting); border-color: var(--waiting); }
   .swatch.quiet { background: var(--faint); border-color: var(--faint); }
   .swatch.accent-2 { background: var(--accentLine); border-color: var(--accentLine); }
@@ -386,7 +432,7 @@
   th,
   td {
     padding: calc(var(--unit) * 2) calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     text-align: left;
   }
 

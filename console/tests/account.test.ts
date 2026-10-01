@@ -135,7 +135,7 @@ describe("what you sign in with", () => {
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
     expect(screen.getByText("This passkey signs nobody in from now on, and the sessions it opened end.")).toBeTruthy();
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove it" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Removing it would leave fewer passkeys than min_passkeys, 2.")).toBeTruthy();
     expect(asked.filter((a) => a.key === "DELETE /api/v1/me/credentials/aVBob25lUGFzc2tleQ")).toHaveLength(1);
   });
@@ -145,7 +145,7 @@ describe("what you sign in with", () => {
     const input = await screen.findByLabelText("A code the generator shows now");
     await fireEvent.input(input, { target: { value: "492039" } });
     await fireEvent.submit(input.closest("form")!);
-    expect(await screen.findByText("The one-time code generator is removed. The password stays.")).toBeTruthy();
+    expect(await screen.findByText("One-time code generator removed.")).toBeTruthy();
     expect(asked.find((a) => a.key === "DELETE /api/v1/me/totp")?.body).toEqual({ totp: "492039" });
   });
 
@@ -159,9 +159,9 @@ describe("what you sign in with", () => {
       }),
       { unavailable: "", credentials: a.credentials },
     );
-    await fireEvent.input(await screen.findByLabelText(/A name for it/), { target: { value: "desk" } });
+    await fireEvent.input(await screen.findByLabelText(/^Name$/), { target: { value: "desk" } });
     await fireEvent.click(screen.getByRole("button", { name: "Add a passkey" }));
-    expect(await screen.findByText("“desk”, a device-bound passkey is added.")).toBeTruthy();
+    expect(await screen.findByText("Passkey added.")).toBeTruthy();
     expect(asked.find((x) => x.key === "POST /api/v1/auth/passkey/options")?.body).toEqual({ ceremony: "registration" });
     expect(asked.find((x) => x.key === "POST /api/v1/auth/passkey/verify")?.body).toMatchObject({ ceremony: "registration", label: "desk", credential: { id: "bmV3UGFzc2tleQ" } });
     const publicKey = a.asked.create[0]!.publicKey!;
@@ -184,10 +184,10 @@ describe("what you sign in with", () => {
       { unavailable: "", credentials: a.credentials },
     );
     await fireEvent.click(await screen.findByRole("button", { name: "Add a passkey" }));
-    expect(await screen.findByText(/Adding a way in takes a sign-in in the last 10 minutes/)).toBeTruthy();
+    expect(await screen.findByText(/Sign in again to add a passkey/)).toBeTruthy();
     expect(screen.getByLabelText("Or with your password")).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Sign in again with a passkey" }));
-    expect(await screen.findByText("“desk”, a device-bound passkey is added.")).toBeTruthy();
+    expect(await screen.findByText("Passkey added.")).toBeTruthy();
     expect(a.asked.get).toHaveLength(1);
     expect(asked.filter((x) => x.key === "POST /api/v1/auth/passkey/options").map((x) => x.body)).toEqual([{ ceremony: "registration" }, { ceremony: "assertion" }, { ceremony: "registration" }]);
     expect(screen.queryByText(/Adding a way in takes a sign-in/)).toBeNull();
@@ -206,7 +206,7 @@ describe("what you sign in with", () => {
     open("/me", s);
     const row = (await screen.findByText("The password")).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove the password" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByRole("button", { name: "Sign in with a passkey" })).toBeTruthy();
   });
 });
@@ -219,8 +219,8 @@ describe("API tokens", () => {
     expect(screen.getByText("its principal's full rights")).toBeTruthy();
     await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Revoke it" }));
-    expect(await screen.findByText(/is revoked from its next request/)).toBeTruthy();
+    await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
+    expect(await screen.findByText(/^Token revoked\.$/)).toBeTruthy();
     expect(asked.filter((a) => a.key === "DELETE /api/v1/auth/tokens/01M2AD1R3T5W7Y9A1C3E5G7J9N")).toHaveLength(1);
   });
 
@@ -234,14 +234,14 @@ describe("API tokens", () => {
     await waitFor(() => expect(within(select).queryByText("finance/deployer")).toBeTruthy());
     expect(within(select).queryByText("finance/agentiik")).toBeNull();
     await fireEvent.change(select, { target: { value: "finance/deployer" } });
-    await fireEvent.input(screen.getByLabelText(/What it is for or on/), { target: { value: "deploy pipeline" } });
+    await fireEvent.input(screen.getByLabelText(/^Label$/), { target: { value: "deploy pipeline" } });
     await fireEvent.change(screen.getByLabelText("Expires in"), { target: { value: "30" } });
     await fireEvent.click(screen.getByLabelText("workflow:run"));
-    await fireEvent.input(screen.getByLabelText(/Namespaces and workflows it reaches/), { target: { value: "finance/monthly-invoicing, finance/monthly-invoicing" } });
+    await fireEvent.input(screen.getByLabelText(/^Scope/), { target: { value: "finance/monthly-invoicing, finance/monthly-invoicing" } });
     const before = Date.now();
     await fireEvent.click(screen.getByRole("button", { name: "Mint the token" }));
     expect(await screen.findByText(issued.token)).toBeTruthy();
-    expect(screen.getByText(/shown this once: copy it now/)).toBeTruthy();
+    expect(screen.getByText(/Shown once: copy it now\./)).toBeTruthy();
     const body = asked.find((a) => a.key === "POST /api/v1/auth/tokens")?.body as Record<string, unknown>;
     expect(body).toMatchObject({ principal: "finance/deployer", device_label: "deploy pipeline", scope: { permissions: ["workflow:run"], within: ["finance/monthly-invoicing"] } });
     const days = (Date.parse(body.expires_at as string) - before) / 86400000;
@@ -287,15 +287,14 @@ describe("the users, for an administrator", () => {
       "/users",
       alice({ ...users, "POST /api/v1/users/bruno/recovery": { status: 201, body: { code: "AB12-CD34-EF56", link: "https://stand-in/auth/enrol#AB12-CD34-EF56", expires_at: "2026-10-01T10:00:00Z" } } }, true),
     );
-    const own = (await screen.findByText("Alice Martin")).closest("tr")!;
+    const own = (await screen.findByText("Alice Martin", { selector: "td" })).closest("tr")!;
     expect(within(own).queryByRole("button")).toBeNull();
-    expect(within(own).getByText("Another administrator issues yours")).toBeTruthy();
     const bruno = screen.getByText("Bruno Petit").closest("tr")!;
-    expect(within(bruno).getByText("suspended, holding no passkey the policy accepts")).toBeTruthy();
+    expect(within(bruno).getByText("suspended (no passkey)")).toBeTruthy();
     expect(within(bruno).queryByRole("button", { name: "Enrolment link" })).toBeNull();
     await fireEvent.click(within(bruno).getByRole("button", { name: "Recovery code" }));
     expect(await screen.findByText("https://stand-in/auth/enrol#AB12-CD34-EF56")).toBeTruthy();
-    expect(screen.getByText(/Hand it over yourself: it is never sent by mail/)).toBeTruthy();
+    expect(screen.getByText(/^Shown once\. Expires/)).toBeTruthy();
     expect(asked.filter((a) => a.key === "POST /api/v1/users/bruno/recovery")).toHaveLength(1);
   });
 
@@ -308,7 +307,7 @@ describe("the users, for an administrator", () => {
 
   it("is no screen for somebody who is not an administrator", async () => {
     const { asked } = open("/users", alice(users));
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
     expect(asked.some((a) => a.key === "GET /api/v1/users")).toBe(false);
   });
 });

@@ -39,7 +39,7 @@ describe("a namespace's secrets", () => {
     expect(rows.slice(1).map((r) => r.querySelector("td")!.textContent)).toEqual(["smtp-password", "stripe-key"]);
     expect(within(pane).getByText("AGK_DEV_FINANCE_SMTP_PASSWORD")).toBeTruthy();
     expect(within(pane).getByText("/agk/secrets/stripe-key")).toBeTruthy();
-    expect(within(pane).getByText("under finance and its name")).toBeTruthy();
+    expect(within(pane).getByText("stored by Agentiik")).toBeTruthy();
     expect(within(pane).queryByRole("button")).toBeNull();
     expect(screen.queryByRole("form")).toBeNull();
     expect(screen.getByRole("link", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
@@ -49,7 +49,7 @@ describe("a namespace's secrets", () => {
     const s = scenario("alice");
     (s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> }).permissions["finance"] = ["run:read"];
     const { asked } = open("/finance/settings", s);
-    expect(await screen.findByText(/shown to whoever reads its workflows/)).toBeTruthy();
+    expect(await screen.findByText(/^Hidden/)).toBeTruthy();
     expect(asked.some((a) => a.key.endsWith("/secrets"))).toBe(false);
   });
 
@@ -57,26 +57,28 @@ describe("a namespace's secrets", () => {
     const s = scenario("alice");
     s["PUT /api/v1/alice/secrets/stripe-key"] = { status: 201, body: declared };
     const { asked } = open("/alice/settings", s);
-    const form = await screen.findByRole("form", { name: "Declare a secret" });
+    await fireEvent.click(await screen.findByRole("button", { name: "New secret" }));
+    const form = screen.getByRole("form", { name: "Declare a secret" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "stripe-key" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Value" }), { target: { value: "sk_live_never_shown" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText("stripe-key is declared and its value written. It is shown nowhere.")).toBeTruthy();
+    expect(await screen.findByText("stripe-key saved.")).toBeTruthy();
     expect(asked.find((a) => a.key === "PUT /api/v1/alice/secrets/stripe-key")!.body).toEqual({ provider: "builtin", value: "sk_live_never_shown" });
     expect(document.body.innerHTML).not.toContain("sk_live_never_shown");
-    expect((within(form).getByRole("textbox", { name: "Value" }) as HTMLTextAreaElement).value).toBe("");
+    expect(screen.queryByRole("form", { name: "Declare a secret" })).toBeNull();
   });
 
   it("declares one kept in the API's environment by the variable it is read from", async () => {
     const s = scenario("alice");
     s["PUT /api/v1/alice/secrets/smtp"] = { status: 201, body: { ...declared, name: "smtp", provider: "env", path: "AGK_DEV_ALICE_SMTP", mount: "/agk/secrets/smtp" } };
     const { asked } = open("/alice/settings", s);
-    const form = await screen.findByRole("form", { name: "Declare a secret" });
+    await fireEvent.click(await screen.findByRole("button", { name: "New secret" }));
+    const form = screen.getByRole("form", { name: "Declare a secret" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "smtp" } });
     await fireEvent.change(within(form).getByRole("combobox", { name: "Kept in" }), { target: { value: "env" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Variable" }), { target: { value: "AGK_DEV_ALICE_SMTP" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText("smtp is declared, kept in env.")).toBeTruthy();
+    expect(await screen.findByText("smtp saved.")).toBeTruthy();
     expect(asked.find((a) => a.key === "PUT /api/v1/alice/secrets/smtp")!.body).toEqual({ provider: "env", path: "AGK_DEV_ALICE_SMTP" });
   });
 
@@ -90,7 +92,7 @@ describe("a namespace's secrets", () => {
     await fireEvent.input(within(form).getByRole("textbox", { name: "Value" }), { target: { value: "Z2hwX25ldw==" } });
     await fireEvent.click(within(form).getByRole("checkbox"));
     await fireEvent.submit(form);
-    expect(await screen.findByText(/The value of github-token is written/)).toBeTruthy();
+    expect(await screen.findByText("github-token updated.")).toBeTruthy();
     expect(asked.find((a) => a.key === "PUT /api/v1/alice/secrets/github-token")!.body).toEqual({ provider: "builtin", value: "Z2hwX25ldw==", encoding: "base64" });
   });
 
@@ -101,8 +103,8 @@ describe("a namespace's secrets", () => {
     const row = (await screen.findByText("github-token", { selector: "td" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove it" }));
-    expect(await screen.findByText(/github-token is removed, its value with it/)).toBeTruthy();
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("github-token removed.")).toBeTruthy();
     expect(asked.filter((a) => a.key.startsWith("DELETE")).map((a) => a.key)).toEqual(["DELETE /api/v1/alice/secrets/github-token"]);
   });
 
@@ -110,11 +112,12 @@ describe("a namespace's secrets", () => {
     const s = scenario("alice");
     s["PUT /api/v1/alice/secrets/smtp"] = { status: 400, body: { error: "env is not a store this installation reads the secrets of alice from" } };
     open("/alice/settings", s);
-    const form = await screen.findByRole("form", { name: "Declare a secret" });
+    await fireEvent.click(await screen.findByRole("button", { name: "New secret" }));
+    const form = screen.getByRole("form", { name: "Declare a secret" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "smtp" } });
     await fireEvent.change(within(form).getByRole("combobox", { name: "Kept in" }), { target: { value: "env" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Variable" }), { target: { value: "AGK_DEV_ALICE_SMTP" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText("Env is not a store this installation reads the secrets of alice from.")).toBeTruthy();
+    expect(await screen.findByText(/Env is not a store this installation reads the secrets of alice from\./)).toBeTruthy();
   });
 });

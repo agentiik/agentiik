@@ -69,7 +69,8 @@ describe("the users, for an administrator", () => {
       body: { user: { kind: "user", login: "erin", display_name: "Erin Lowe", admin: false, suspended: false, created_at: "2026-10-01T06:00:00Z" }, enrolment: { link: "https://agentiik.example.com/auth/enrol#code=agkenrol_x", expires_at: "2026-10-02T06:00:00Z" } },
     };
     const { asked } = open("/users", s);
-    const form = await screen.findByRole("form", { name: "Add a user" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Add a user" }));
+    const form = screen.getByRole("form", { name: "Add a user" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Login" }), { target: { value: "erin" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Display name" }), { target: { value: "Erin Lowe" } });
     await fireEvent.submit(form);
@@ -82,12 +83,12 @@ describe("the users, for an administrator", () => {
     const s = scenario("dana");
     s["DELETE /api/v1/users/carol"] = { status: 409, body: { error: "carol's personal namespace holds 3 workflows" } };
     const { asked } = open("/users", s);
-    const row = (await screen.findByText("carol", { selector: "td" })).closest("tr")!;
+    const row = (await screen.findByText("carol", { selector: "td .login" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove carol" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Carol's personal namespace holds 3 workflows.")).toBeTruthy();
-    const own = (await screen.findByText("dana", { selector: "td" })).closest("tr")!;
+    const own = (await screen.findByText("dana", { selector: "td .login" })).closest("tr")!;
     expect(within(own).queryByRole("button", { name: "Remove" })).toBeNull();
   });
 });
@@ -99,11 +100,12 @@ describe("the groups, for an administrator", () => {
     const { asked } = open("/groups", s);
     const row = (await screen.findByText("group:research", { selector: "td" })).closest("tr")!;
     expect(within(row).getAllByRole("button", { name: /^Take .* out of group:research$/ }).map((b) => b.getAttribute("aria-label"))).toEqual(["Take carol out of group:research", "Take dana out of group:research"]);
+    await fireEvent.click(screen.getByRole("button", { name: "New group" }));
     const form = screen.getByRole("form", { name: "Create a group" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "platform" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "First members, by login" }), { target: { value: "alice, dana" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/group:platform is created, with alice, dana in it/)).toBeTruthy();
+    expect(await screen.findByText("group:platform created.")).toBeTruthy();
     expect(sent(asked, "POST /api/v1/groups")).toEqual([{ name: "platform", members: ["alice", "dana"] }]);
   });
 
@@ -115,9 +117,9 @@ describe("the groups, for an administrator", () => {
     const form = await screen.findByRole("form", { name: "Add a member to group:team-ops" });
     await fireEvent.input(within(form).getByRole("combobox", { name: "Login to add to group:team-ops" }), { target: { value: "bob-martin" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/bob-martin is in group:team-ops/)).toBeTruthy();
+    expect(await screen.findByText("bob-martin added.")).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Take carol out of group:research" }));
-    expect(await screen.findByText(/carol is out of group:research/)).toBeTruthy();
+    expect(await screen.findByText("carol removed.")).toBeTruthy();
     expect(asked.filter((a) => a.key.startsWith("PUT") || a.key.startsWith("DELETE")).map((a) => a.key)).toEqual(["PUT /api/v1/groups/team-ops/members/bob-martin", "DELETE /api/v1/groups/research/members/carol"]);
   });
 
@@ -127,7 +129,7 @@ describe("the groups, for an administrator", () => {
     open("/groups", s);
     const row = (await screen.findByText("group:finance-leads", { selector: "td" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove group:finance-leads" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Group:finance-leads owns finance: name another owner first.")).toBeTruthy();
   });
 });
@@ -148,7 +150,7 @@ describe("the namespaces, for an administrator", () => {
     await fireEvent.input(within(form).getByRole("textbox", { name: /Tasks at once/ }), { target: { value: "30" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: /Longest run/ }), { target: { value: "24h" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/The quotas of finance are written: 30 tasks at once/)).toBeTruthy();
+    expect(await screen.findByText("Quotas saved.")).toBeTruthy();
     expect(sent(asked, "PUT /api/v1/namespaces/finance/quotas")).toEqual([{ max_concurrent_tasks: 30, max_retention_days: 180, max_run_duration: "24h", allowed_runner_pools: ["default", "dmz"] }]);
   });
 
@@ -166,34 +168,34 @@ describe("the namespaces, for an administrator", () => {
     s["POST /api/v1/namespaces"] = { status: 201, body: { name: "platform", kind: "shared", owner: "group:platform", quotas: { max_concurrent_tasks: 20, max_retention_days: 90 } } };
     s["DELETE /api/v1/namespaces/team-ops"] = { status: 204 };
     const { asked } = open("/namespaces", s);
-    const form = await screen.findByRole("form", { name: "Create a namespace" });
+    await fireEvent.click(await screen.findByRole("button", { name: "New namespace" }));
+    const form = screen.getByRole("form", { name: "Create a namespace" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "platform" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Owner, a login or group:NAME" }), { target: { value: "group:platform" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/platform is created, owned by group:platform/)).toBeTruthy();
+    expect(await screen.findByText("platform created.")).toBeTruthy();
     expect(sent(asked, "POST /api/v1/namespaces")).toEqual([{ name: "platform", kind: "shared", owner: "group:platform" }]);
 
     const personal = screen.getByRole("button", { name: "dana" }).closest("tr")!;
     expect(within(personal).queryByRole("button", { name: "Remove" })).toBeNull();
     const shared = screen.getByRole("button", { name: "team-ops" }).closest("tr")!;
     await fireEvent.click(within(shared).getByRole("button", { name: "Remove" }));
-    await fireEvent.click(within(shared).getByRole("button", { name: "Remove team-ops" }));
-    expect(await screen.findByText(/team-ops is removed/)).toBeTruthy();
+    await fireEvent.click(within(shared).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("team-ops removed.")).toBeTruthy();
     expect(asked.filter((a) => a.key.startsWith("DELETE")).map((a) => a.key)).toEqual(["DELETE /api/v1/namespaces/team-ops"]);
   });
 
-  it("are reached from the menu and the tabs, and offered to nobody else", async () => {
+  it("are reached from the sidebar, and offered to nobody else", async () => {
     const { place } = open("/dana/runs");
-    await fireEvent.click(await screen.findByRole("button", { name: /You, dana/ }));
-    await fireEvent.click(screen.getByRole("link", { name: "Users, groups and namespaces" }));
+    const installation = await screen.findByRole("list", { name: "Installation" });
+    await fireEvent.click(within(installation).getByRole("link", { name: "Users" }));
     expect(place.route).toEqual({ kind: "users" });
-    const tabs = await screen.findByRole("navigation", { name: "What an administrator manages" });
-    await fireEvent.click(within(tabs).getByRole("link", { name: "Namespaces" }));
+    await fireEvent.click(within(installation).getByRole("link", { name: "Namespaces" }));
     expect(place.route).toEqual({ kind: "namespaces" });
     cleanup();
 
     open("/groups", scenario("alice"));
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
   });
 });
 
@@ -210,7 +212,7 @@ describe("the service accounts of the namespaces the caller owns", () => {
     expect([...within(form).getByRole("combobox", { name: "In" }).querySelectorAll("option")].map((o) => o.value)).toEqual(["alice"]);
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "nightly" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/alice\/nightly is created/)).toBeTruthy();
+    expect(await screen.findByText("alice/nightly created.")).toBeTruthy();
     expect(sent(asked, "POST /api/v1/service-accounts")).toEqual([{ namespace: "alice", name: "nightly" }]);
   });
 
@@ -221,7 +223,7 @@ describe("the service accounts of the namespaces the caller owns", () => {
     const row = (await screen.findByText("alice/deploy-bot", { selector: "td" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove alice/deploy-bot" }));
-    expect(await screen.findByText("alice/deploy-bot is removed, with its tokens and its grants.")).toBeTruthy();
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("alice/deploy-bot removed.")).toBeTruthy();
   });
 });

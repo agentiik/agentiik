@@ -1,12 +1,15 @@
 <script lang="ts">
+  import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
   import type { API, Me, Namespace } from "../api/client";
   import Icon from "../components/Icon.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import StepStrip from "../components/StepStrip.svelte";
   import { between, clock, took } from "../lib/format";
   import { moved, useKeys } from "../lib/keys.svelte";
+  import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
@@ -27,20 +30,20 @@
     untrack(() => l.read());
   });
 
-  // Live, the list is read again every five seconds while the page is in view, and the durations of
-  // the runs still going move every second.
+  // Live, the list is read again each time the live connection says a run it may list changed, and
+  // the durations of the runs still going move every second.
+  const changes = useLive();
   $effect(() => {
     if (!live) {
       return;
     }
-    const reading = setInterval(() => {
-      if (document.visibilityState === "visible" && !list.reading) {
-        list.read();
-      }
-    }, 5000);
+    const l = list;
+    const reading = changes.when((c) => c.kind === "run" && c.namespace === namespace, () => {
+      if (!l.reading) l.read();
+    });
     const ticking = setInterval(() => (now = Date.now()), 1000);
     return () => {
-      clearInterval(reading);
+      reading();
       clearInterval(ticking);
     };
   });
@@ -109,7 +112,17 @@
   }
 </script>
 
-<Pane title="Runs" aside={namespace}>
+<PageHeader title="Runs" icon="control-runs" count={list.settled ? list.runs.length : undefined} {place}>
+  {#snippet actions()}
+    <label class="live">
+      <input type="checkbox" role="switch" bind:checked={live} />
+      <span class="track" aria-hidden="true"><span class="knob"></span></span>
+      Live
+    </label>
+  {/snippet}
+</PageHeader>
+
+<Pane title="" label="Runs of {namespace}">
   <div class="bar">
     <div class="chips" role="group" aria-label="State">
       {#each chips as chip (chip.label)}
@@ -130,7 +143,7 @@
     {/if}
     {#if bounded}
       <span class="bounds">
-        Created <span class="mono">{bounded}</span>
+        Created <span class="term">{bounded}</span>
         <button class="clear" aria-label="Show the last 24 hours again" onclick={() => narrow({ since: undefined, until: undefined, span: "24h" })}><Icon name="control-close" size={12} /></button>
       </span>
     {:else}
@@ -142,11 +155,6 @@
         <Icon name="control-expand" size={14} />
       </label>
     {/if}
-    <label class="live">
-      <input type="checkbox" role="switch" bind:checked={live} />
-      <span class="track" aria-hidden="true"><span class="knob"></span></span>
-      Live
-    </label>
   </div>
 
   {#if attention.length > 0}
@@ -159,19 +167,20 @@
       {#each attention as r (r.run)}
         <div class="failure">
           <StatePill state={r.state} />
-          <a class="mono" href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a>
-          <span class="mono name">{r.workflow}</span>
-          <span class="muted">{r.trigger_kind} by <span class="mono">{r.triggered_by}</span></span>
-          <time class="muted mono" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
+          <a class="code" href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a>
+          <span class="term name">{r.workflow}</span>
+          <span class="muted">{r.trigger_kind} by <span class="term">{r.triggered_by}</span></span>
+          <time class="muted term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
         </div>
       {/each}
     </section>
   {/if}
 
   {#if list.refused}
-    <p class="refused" role="alert">The runs could not be read: {list.refused}</p>
+    <Problem explained={list.refused} onretry={() => list.read()} />
   {/if}
 
+  <div class="scroll">
   <table>
     <thead>
       <tr>
@@ -190,28 +199,30 @@
       {#each list.runs as r (r.run)}
         <tr data-run={r.run} class:chosen={r.run === selected} aria-selected={r.run === selected} onclick={() => (selected = r.run)}>
           <td><StatePill state={r.state} {live} /></td>
-          <td class="mono id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
-          <td class="mono name">
+          <td class="code id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
+          <td class="term name">
             {#if holds(me, "workflow:read", r.namespace, r.workflow)}
               {@const page = { kind: "namespace" as const, namespace: r.namespace, view: "workflows" as const, workflow: r.workflow }}
               <a class="workflow" href={place.href(page)} onclick={follow(place, page)}>{r.workflow}</a>
             {:else}{r.workflow}{/if}
           </td>
-          <td class="mono muted commit" title={r.commit}>{r.commit.slice(0, 7)}</td>
-          <td class="trigger" title={r.from ? `called by run ${r.from.run} at step ${r.from.step}` : undefined}><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="mono">{r.trigger_kind}</span></td>
+          <td class="code muted commit" title={r.commit}>{r.commit.slice(0, 7)}</td>
+          <td class="trigger" title={r.from ? `called by run ${r.from.run} at step ${r.from.step}` : undefined}><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="term">{r.trigger_kind}</span></td>
           <td><StepStrip steps={r.steps ?? []} {now} /></td>
-          <td class="mono by">{r.triggered_by}</td>
-          <td><time class="mono" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
-          <td class="number mono" class:going={r.state === "running"}>{duration(r)}</td>
+          <td class="term by">{r.triggered_by}</td>
+          <td><time class="term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
+          <td class="number term" class:going={r.state === "running"}>{duration(r)}</td>
         </tr>
       {:else}
         {#if !list.reading && !list.refused}
-          <tr><td class="empty" colspan="9">No run {filters.state ? `in ${filters.state} ` : ""}{filters.workflow ? `of ${filters.workflow} ` : ""}was created in this span.</td></tr>
+          <tr><td class="empty" colspan="9">No runs</td></tr>
         {/if}
       {/each}
     </tbody>
   </table>
+  </div>
 
+  {#if list.settled}
   <footer>
     <span class="muted">
       Showing {list.runs.length === 1 ? "1 run" : `${list.runs.length} runs`}{retention ? ` · retention ${retention} days` : ""}
@@ -220,23 +231,28 @@
       <button class="control" disabled={list.reading} onclick={() => list.more()}>Load 25 more</button>
     {/if}
   </footer>
+  {/if}
 </Pane>
 
 <style>
+  /* The filters wrap onto a second line where the window is too narrow for one. */
   .bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: calc(var(--unit) * 6);
+    gap: calc(var(--unit) * 4) calc(var(--unit) * 6);
     margin-bottom: calc(var(--unit) * 6);
   }
 
   .chips {
     display: flex;
+    flex-wrap: wrap;
     gap: calc(var(--unit) * 3);
   }
 
   .chip {
-    height: 29px;
+    height: var(--control-height);
+    white-space: nowrap;
     padding: 0 calc(var(--unit) * 6);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-round);
@@ -262,7 +278,7 @@
 
   .select select {
     appearance: none;
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 14) 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
@@ -282,7 +298,7 @@
     display: inline-flex;
     align-items: center;
     gap: calc(var(--unit) * 3);
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 3) 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid var(--accentLine);
     border-radius: var(--radius-control);
@@ -317,16 +333,16 @@
 
   .track {
     position: relative;
-    width: 29px;
-    height: 17px;
+    width: 30px;
+    height: 18px;
     border-radius: var(--radius-round);
     background: var(--lineStrong);
   }
 
   .knob {
     position: absolute;
-    top: 2.5px;
-    left: 2.5px;
+    top: 3px;
+    left: 3px;
     width: 12px;
     height: 12px;
     border-radius: var(--radius-round);
@@ -339,7 +355,7 @@
   }
 
   .live input:checked + .track .knob {
-    left: 14.5px;
+    left: 15px;
   }
 
   .live input:focus-visible + .track {
@@ -381,14 +397,18 @@
   .failure {
     display: grid;
     grid-template-columns: 120px 220px 200px 1fr auto;
+    overflow-x: auto;
     align-items: center;
     gap: calc(var(--unit) * 6);
     padding: calc(var(--unit) * 2) 0;
     font-size: var(--type-identifier-size-max);
   }
 
-  .refused {
-    color: var(--failed);
+
+  /* The table alone scrolls where the window is narrower than its columns, the filters above it
+     and the count under it staying put. */
+  .scroll {
+    overflow-x: auto;
   }
 
   table {
@@ -399,7 +419,7 @@
   th {
     height: var(--row-header);
     padding: 0 calc(var(--unit) * 5);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     color: var(--faint);
     font-size: var(--type-columnHead-size);
     font-weight: var(--type-columnHead-weight);
@@ -411,7 +431,7 @@
   td {
     height: var(--row-body);
     padding: 0 calc(var(--unit) * 5);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     font-size: var(--type-identifier-size-max);
     white-space: nowrap;
   }
@@ -422,7 +442,7 @@
   }
 
   tbody tr.chosen td:first-child {
-    box-shadow: inset 3px 0 0 var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent), inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
   }
 
   .number {

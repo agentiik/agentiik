@@ -22,7 +22,8 @@ import (
 )
 
 // The administrator's routes for people: the users of an installation, the enrolment link a user
-// with no credential enrols their first passkey with, and the groups users are put in.
+// with no credential enrols their first passkey with, the groups users are put in, and a user's
+// photo, which an administrator reads and removes where it should not be shown (avatar.go).
 //
 // "A platform administrator manages users, groups, namespaces, quotas, runners, runner policies and
 // the authentication policy", so every route here requires grant:manage at installation scope,
@@ -119,6 +120,8 @@ func NewUsers(rt *Router, o UserOptions) (*UserAPI, error) {
 		{"DELETE", "/api/v1/groups/{group}", s.removeGroup},
 		{"PUT", "/api/v1/groups/{group}/members/{login}", s.addMember},
 		{"DELETE", "/api/v1/groups/{group}/members/{login}", s.removeMember},
+		{"GET", "/api/v1/users/{login}/avatar", s.avatar},
+		{"DELETE", "/api/v1/users/{login}/avatar", s.removeAvatar},
 	} {
 		if err := rt.Handle(r.method, r.pattern, admin, r.handler); err != nil {
 			return nil, err
@@ -238,6 +241,20 @@ type User struct {
 	// or a recovery code brings the account back, which lifts that suspension and no other.
 	SuspendedFor string `json:"suspended_for,omitempty"`
 
+	// What the user says of themself, PATCH /api/v1/me, each the empty string where it is left
+	// unsaid rather than absent, so that a client reads one spelling of nothing.
+	GivenName  string `json:"given_name"`
+	FamilyName string `json:"family_name"`
+	Title      string `json:"title"`
+	Location   string `json:"location"`
+	Timezone   string `json:"timezone"`
+	Bio        string `json:"bio"`
+
+	// AvatarUpdatedAt is when the user's photo was last set, and null where they hold none: the
+	// console adds it to the photo's address, so that a cache keeping the photo before it is never
+	// asked for that one again, and draws the user's initials where it is null.
+	AvatarUpdatedAt *time.Time `json:"avatar_updated_at"`
+
 	CreatedAt    time.Time `json:"created_at"`
 	LastSignInAt time.Time `json:"last_sign_in_at,omitzero"`
 }
@@ -245,7 +262,12 @@ type User struct {
 func userOf(u db.User) User {
 	answered := User{
 		Kind: db.KindUser, Login: u.Login, DisplayName: u.DisplayName, Admin: u.Admin, Suspended: u.Suspended,
-		SuspendedFor: u.SuspendedFor, CreatedAt: u.CreatedAt.UTC(),
+		SuspendedFor: u.SuspendedFor, GivenName: u.GivenName, FamilyName: u.FamilyName, Title: u.Title,
+		Location: u.Location, Timezone: u.Timezone, Bio: u.Bio, CreatedAt: u.CreatedAt.UTC(),
+	}
+	if !u.AvatarUpdatedAt.IsZero() {
+		at := u.AvatarUpdatedAt.UTC()
+		answered.AvatarUpdatedAt = &at
 	}
 	if !u.LastSignInAt.IsZero() {
 		answered.LastSignInAt = u.LastSignInAt.UTC()

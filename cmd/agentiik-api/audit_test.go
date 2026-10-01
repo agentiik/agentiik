@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,7 +48,7 @@ const publicOrigin = "https://agentiik.example.com"
 var reads = []string{
 	"GET /api/v1/runner-pools", "GET /api/v1/runners", "GET /api/v1/users", "GET /api/v1/users/{login}",
 	"GET /api/v1/groups", "GET /api/v1/groups/{group}", "GET /api/v1/auth/tokens", "GET /api/v1/service-accounts",
-	"GET /api/v1/runs", "GET /api/v1/{namespace}/runs", "GET /api/v1/{namespace}/stats/runs", "GET /api/v1/{namespace}/stats/steps", "GET /api/v1/{namespace}/stats/ports", "GET /api/v1/{namespace}/stats/quotas", "GET /api/v1/stats/pools", "GET /api/v1/runs/{run}", "GET /api/v1/{namespace}/runs/{run}",
+	"GET /api/v1/runs", "GET /api/v1/me/live", "GET /api/v1/{namespace}/runs", "GET /api/v1/{namespace}/stats/runs", "GET /api/v1/{namespace}/stats/steps", "GET /api/v1/{namespace}/stats/ports", "GET /api/v1/{namespace}/stats/quotas", "GET /api/v1/stats/pools", "GET /api/v1/stats/activity", "GET /api/v1/runs/{run}", "GET /api/v1/{namespace}/runs/{run}",
 	"GET /api/v1/runs/{run}/steps/{step}/logs", "GET /api/v1/runs/{run}/outputs/{name}",
 	"GET /api/v1/runs/{run}/steps/{step}/outputs/{port}", "GET /api/v1/runs/{run}/steps/{step}/inputs/{port}",
 	"GET /api/v1/artifacts/{uri}", "GET /api/v1/{namespace}/secrets", "GET /api/v1/{namespace}/secrets/{name}",
@@ -54,8 +56,9 @@ var reads = []string{
 	"GET /api/v1/{namespace}/grants", "GET /api/v1/{namespace}/workflows/{workflow}/grants",
 	"GET /api/v1/{namespace}/workflows/{workflow}/images", "GET /api/v1/{namespace}/workflows/{workflow}/triggers",
 	"GET /{namespace}/{repository}/info/refs",
-	"GET /api/v1/{namespace}/workflows/{workflow}", "GET /api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
-	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
+	"GET /api/v1/{namespace}/workflows/{workflow}", "GET /api/v1/{namespace}/workflows/{workflow}/refs", "GET /api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
+	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/me/avatar", "GET /api/v1/users/{login}/avatar",
+	"GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
 	"GET /auth/sign-in", "GET /auth/enrol", "GET /auth/assets/{name}", "GET /objects/{key...}",
 }
 
@@ -145,6 +148,10 @@ func (s *scenario) ask(route, path string, who actor, body any, status int) *htt
 		// What a publisher sends, where the route takes an event.
 		if strings.HasSuffix(path, "/events") {
 			r.Header.Set("Content-Type", "application/cloudevents+json")
+		}
+		// A photo, where the route takes one.
+		if route == "PUT /api/v1/me/avatar" {
+			r.Header.Set("Content-Type", "image/png")
 		}
 	}
 	if who.bearer != "" {
@@ -462,6 +469,19 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.act("DELETE /api/v1/auth/tokens/{id}", "/api/v1/auth/tokens/"+minted, carol, nil, http.StatusNoContent,
 		"api_token.revoke carol "+minted+" - done")
 
+	// dave says who he is and sets a photo, removes it and sets another, which carol, administering
+	// the installation, removes.
+	s.act("PATCH /api/v1/me", "/api/v1/me", dave, `{"given_name":"Dave","timezone":"Europe/Paris"}`, http.StatusOK,
+		"user.profile dave dave - done")
+	s.act("PUT /api/v1/me/avatar", "/api/v1/me/avatar", dave, aPhoto(t), http.StatusNoContent,
+		"user.avatar dave dave - done")
+	s.act("DELETE /api/v1/me/avatar", "/api/v1/me/avatar", dave, nil, http.StatusNoContent,
+		"user.avatar dave dave - done")
+	s.act("PUT /api/v1/me/avatar", "/api/v1/me/avatar", dave, aPhoto(t), http.StatusNoContent,
+		"user.avatar dave dave - done")
+	s.act("DELETE /api/v1/users/{login}/avatar", "/api/v1/users/dave/avatar", carol, nil, http.StatusNoContent,
+		"user.avatar carol dave - done")
+
 	// A namespace carol owns, its quotas, and a service account of it with a token, removed with it.
 	s.act("POST /api/v1/namespaces", "/api/v1/namespaces", carol, `{"name":"ops","owner":"carol"}`, http.StatusCreated,
 		"grant.create carol * ops done", "namespace.create carol ops - done")
@@ -728,4 +748,18 @@ func aGitPush(t *testing.T, branch, document string) string {
 		t.Fatal(err)
 	}
 	return string(command) + "0000" + pack.String()
+}
+
+// aPhoto is a photo as a user sends one: a PNG of a few pixels, written as the body is sent.
+func aPhoto(t *testing.T) string {
+	t.Helper()
+	picture := image.NewNRGBA(image.Rect(0, 0, 4, 3))
+	for i := range picture.Pix {
+		picture.Pix[i] = uint8(i * 17)
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, picture); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.String()
 }

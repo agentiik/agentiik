@@ -451,7 +451,7 @@ export interface paths {
         };
         /**
          * Who the caller is
-         * @description The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; and break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.
+         * @description The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, a user's carrying what they say of themself and when their photo was last set, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; and break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.
          */
         get: operations["getMe"];
         put?: never;
@@ -459,7 +459,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change what the caller says of themself
+         * @description Changes the caller's display name and profile as the body names them: given_name, family_name, title, location, timezone and bio, each set to what the body holds, the empty string clearing it, and each the body leaves out kept. The display name is never cleared, since a user always has one. Set by the user alone, and by no administrator: a profile is what a person tells the people they work with about themself, and one somebody else could rewrite would put words in their mouth. The bootstrap token and a service account have no profile, and are refused saying so; a token narrowed by a scope keeps only the permissions it names, and saying who its holder is to everybody who reads their name is none of them. Each field is one line holding no control character, since it is shown in a console and printed at a terminal: at most 128 characters, the display name 256 and the bio 280. timezone is a name of the IANA database, which a client turns an instant into the user's own hours with; Local, the server's own zone, names no place and is refused. The user's row is held while the change is merged into it, so that two changes at once each keep what the other wrote. Answers who the caller is, as GET /api/v1/me does. Audited as user.profile with the names of the fields that changed and never what they hold, since the log is kept for good and what a person wrote about themself is theirs to take back; unchanged where none did.
+         */
+        patch: operations["updateMe"];
         trace?: never;
     };
     "/api/v1/me/notifications/{id}": {
@@ -480,6 +484,54 @@ export interface paths {
          * @description Dismisses one of the notifications GET /api/v1/me lists, which lists it no more. One not dismissed is kept 90 days from when it was written: long enough to reach someone back from leave, and bounded so that GET /api/v1/me does not grow for ever. Dismissing changes nothing of what happened: the grant.create, the signin.fail or the enrolment.issue the audit log recorded stays. A notification owed to a group was written once for each of its members, so that one member dismissing it dismisses it for nobody else. A token narrowed by a scope dismisses none, as it reads none.
          */
         delete: operations["dismissNotification"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the caller's photo
+         * @description The caller's photo, the PNG PUT /api/v1/me/avatar stored, at most 512 by 512 pixels. Kept a day by the browser that asked and by no shared cache, since a photo is shown to its owner and to administrators alone; a client asks for it with v, the user's avatar_updated_at, so that a photo set again is asked for at another address, and revalidates past the day by its tag. nosniff, so that a browser shows it as the PNG it is declared as. A token narrowed by a scope reads its holder's, as it reads who they are. The bootstrap token and a service account hold none.
+         */
+        get: operations["getMyAvatar"];
+        /**
+         * Set the caller's photo
+         * @description Sets the caller's photo in place of any before it: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it, which a photo shown to colleagues would hand them. The Content-Type says the body is one of the two and the bytes say which, since a browser names a file's type by its extension. Set by the user alone, as the profile is: the bootstrap token, a service account and a token narrowed by a scope are refused saying so. avatar_updated_at says when it was set, which a client adds to the photo's address. Audited as user.avatar with the size it was stored at, and never the photo.
+         */
+        put: operations["setMyAvatar"];
+        post?: never;
+        /**
+         * Remove the caller's photo
+         * @description Removes the caller's photo, which a client draws as their initials from then on, avatar_updated_at null. Removing none is the same answer, so that a client that lost the first answer asks again with nothing to sort out. Set and removed by the user alone: the bootstrap token, a service account and a token narrowed by a scope are refused saying so. Audited as user.avatar with removed, and as unchanged where there was none. No body is read, and one sent is refused.
+         */
+        delete: operations["removeMyAvatar"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Be told what changed, over a WebSocket
+         * @description A WebSocket, RFC 6455, telling its caller as it happens what changed among what it may read, so that a console reads again what it shows when it changes rather than on a clock. Each message is a text frame holding one liveChange: a run created or moved on, or one of whose steps or tasks did, sent where the caller holds run:read on that run's workflow; the caller's notifications, told or dismissed; the runners, to an administrator, for a runner or a pool changed, a heartbeat included; and all, where a change may have been missed, which reads everything again. What changed within a quarter of a second is sent once. A message holds an identifier and never a record, and what it names is read through the route that answers it, under that route's permissions. The client sends nothing but the protocol's own frames, a message from it closing the connection with 1008, and the API pings every 15 seconds. A session's handshake carries the installation's Origin, since a page of another site sharing its domain could otherwise open one with the cookie. A permission revoked stops its messages within 30 seconds, when it is asked again; a credential that no longer identifies its caller closes the connection with 1008, and the API stopping closes it with 1001, after which a client connects again and reads again what it shows. Under /api/v1/me, a word already reserved, since what it tells is the caller's own. Any authenticated principal.
+         */
+        get: operations["openLiveConnection"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -572,7 +624,7 @@ export interface paths {
         };
         /**
          * List users
-         * @description Every user of the installation, by login, with whether each is an administrator, whether it is suspended and, where the policy suspended it, why, and when each was created and last signed in; never a credential. Administrator only.
+         * @description Every user of the installation, by login, with whether each is an administrator, whether it is suspended and, where the policy suspended it, why, when each was created and last signed in, and what each says of themself and when their photo was last set; never a credential, and never a photo. Administrator only.
          */
         get: operations["listUsers"];
         put?: never;
@@ -599,7 +651,7 @@ export interface paths {
         };
         /**
          * Read a user
-         * @description One user: login, display name, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in; never a credential. Administrator only. What the Terraform provider refreshes and imports a user with.
+         * @description One user: login, display name, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.
          */
         get: operations["getUser"];
         put?: never;
@@ -609,6 +661,33 @@ export interface paths {
          * @description Removes a user with everything they hold: their credentials, tokens, sessions, enrolment links, memberships, grants and notifications, and their personal namespace where it holds nothing, recorded as namespace.delete beside user.delete. Refused while their personal namespace holds something, saying what, since what a namespace holds is somebody's work, or while another namespace's record names them as owner, so that no namespace is left owned by somebody who is gone; and, once the bootstrap token has ended, for the last administrator who can sign in, not suspended and holding a credential the policy that applies to them signs them in with, since from then on only an administrator makes another. Administrator only, and audited as user.delete. No body is read, and one sent is refused.
          */
         delete: operations["deleteUser"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{login}/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user, by login. */
+                login: components["parameters"]["login"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read a user's photo
+         * @description A user's photo, read by an administrator as the user's record is, with what GET /api/v1/me/avatar answers it with. Administrator only, as every route about a user: which users an installation has is not something another user may ask it, and a photo read by login would answer that, a picture or a 404, for every login somebody tried. No user, a login no user can have and a user holding no photo are one 404.
+         */
+        get: operations["getUserAvatar"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove a user's photo
+         * @description Removes a user's photo, one that should not be shown to the people they work with; they may set another, and nothing else of them changes. Administrator only, and the bootstrap token's until the first administrator has signed in, as every route about a user. No user, a login no user can have and a user holding no photo are one 404, as the photo is read. Audited as user.avatar, by the administrator, with removed. No body is read, and one sent is refused.
+         */
+        delete: operations["removeUserAvatar"];
         options?: never;
         head?: never;
         patch?: never;
@@ -932,6 +1011,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/{ns}/workflows/{name}/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a workflow's branches and tags
+         * @description The branches and tags the workflow's repository holds, for the console's ref switcher, which could otherwise offer only the default branch and the versions of its history: git's advertisement lists them, and git's routes take an API token and never a session. Each ref is named in full, in git's order, byte by byte, with the commit it points at, an annotated tag peeled to its commit, and null for the default branch while it is unborn; whether it is protected; and who last moved it and when, absent while it is unborn. Every commit a ref points at is a version, which the tree route reads at it. Listed whole and not paged, since the advertisement lists every ref to whoever may clone, which is whoever may read. Requires workflow:read.
+         */
+        get: operations["listWorkflowRefs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/workflows/{name}/tree/{ref}": {
         parameters: {
             query?: never;
@@ -1248,6 +1352,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stats/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read what the installation is doing
+         * @description Every namespace together, per bucket: the runs created by the state each is in now, and the most tasks in flight at once. Under now, as the request is answered: the runs queued, running and waiting, the tasks in flight, the slots the runners ready and heard from in the last 30 s offer, and those runners against the runners not revoked. Counts only, naming no run, workflow or namespace, so that an administrator who reads no namespace's runs sees how busy the installation is and not what it runs. Administrator only. Served at this path alone, so that a namespace named stats made before v0.3.0 reserved the word keeps every route it has.
+         */
+        get: operations["getActivityStatistics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stats/pools": {
         parameters: {
             query?: never;
@@ -1459,6 +1583,50 @@ export interface components {
          * @enum {string}
          */
         ceremony: "registration" | "assertion";
+        /**
+         * Live change
+         * @description One message of the live connection, GET /api/v1/me/live: what changed, named and never held.
+         * @example {
+         *       "kind": "run",
+         *       "namespace": "finance",
+         *       "workflow": "monthly-invoicing",
+         *       "run": "01JMZ8W4K2R7AAAAAAAAAAAAAA"
+         *     }
+         * @example {
+         *       "kind": "notifications"
+         *     }
+         * @example {
+         *       "kind": "runners"
+         *     }
+         * @example {
+         *       "kind": "all"
+         *     }
+         */
+        liveChange: {
+            /**
+             * @description What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; to an administrator, a run anywhere, named nowhere, which GET /api/v1/stats/activity counts; or anything, where a change may have been missed.
+             * @example run
+             * @example activity
+             * @example all
+             * @enum {string}
+             */
+            kind: "run" | "notifications" | "runners" | "activity" | "all";
+            /**
+             * @description The namespace of the run, for a run alone.
+             * @example finance
+             */
+            namespace?: components["schemas"]["namespace"];
+            /**
+             * @description The workflow of the run, for a run alone.
+             * @example monthly-invoicing
+             */
+            workflow?: components["schemas"]["identifier"];
+            /**
+             * @description The run, for a run alone.
+             * @example 01JMZ8W4K2R7AAAAAAAAAAAAAA
+             */
+            run?: components["schemas"]["ulid"];
+        };
         /**
          * Session kind
          * @description What a session may do, as it was when it opened; what it may do is read again from the policy at every request. full reaches every route the principal's grants allow. enrolment is a session a password opened where the policy that applies to the account requires a passkey, whatever passkeys it holds: it registers passkeys, sets the password that opened it and signs out, and nothing else, so it cannot read a workflow, start a run or mint a token. The server records the credential that opened each session, so the difference is known to it rather than kept by convention.
@@ -2413,6 +2581,13 @@ export interface components {
          *         "display_name": "Alice Martin",
          *         "admin": true,
          *         "suspended": false,
+         *         "given_name": "Alice",
+         *         "family_name": "Martin",
+         *         "title": "Technical lead",
+         *         "location": "Lyon, France",
+         *         "timezone": "Europe/Paris",
+         *         "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+         *         "avatar_updated_at": "2026-09-28T10:15:00Z",
          *         "created_at": "2026-09-27T08:50:00Z"
          *       },
          *       "groups": [
@@ -2510,6 +2685,13 @@ export interface components {
              *       "display_name": "Alice Martin",
              *       "admin": true,
              *       "suspended": false,
+             *       "given_name": "Alice",
+             *       "family_name": "Martin",
+             *       "title": "Technical lead",
+             *       "location": "Lyon, France",
+             *       "timezone": "Europe/Paris",
+             *       "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+             *       "avatar_updated_at": "2026-09-28T10:15:00Z",
              *       "created_at": "2026-09-27T08:50:00Z"
              *     }
              */
@@ -2996,6 +3178,13 @@ export interface components {
          *         "display_name": "Alice Martin",
          *         "admin": true,
          *         "suspended": false,
+         *         "given_name": "",
+         *         "family_name": "",
+         *         "title": "",
+         *         "location": "",
+         *         "timezone": "",
+         *         "bio": "",
+         *         "avatar_updated_at": null,
          *         "created_at": "2026-09-27T08:50:00Z"
          *       },
          *       "enrolment": {
@@ -3013,6 +3202,13 @@ export interface components {
              *       "display_name": "Alice Martin",
              *       "admin": true,
              *       "suspended": false,
+             *       "given_name": "",
+             *       "family_name": "",
+             *       "title": "",
+             *       "location": "",
+             *       "timezone": "",
+             *       "bio": "",
+             *       "avatar_updated_at": null,
              *       "created_at": "2026-09-27T08:50:00Z"
              *     }
              */
@@ -3063,6 +3259,13 @@ export interface components {
          *           "display_name": "Alice Martin",
          *           "admin": true,
          *           "suspended": false,
+         *           "given_name": "",
+         *           "family_name": "",
+         *           "title": "",
+         *           "location": "",
+         *           "timezone": "",
+         *           "bio": "",
+         *           "avatar_updated_at": null,
          *           "created_at": "2026-09-27T08:50:00Z"
          *         },
          *         {
@@ -3071,6 +3274,13 @@ export interface components {
          *           "display_name": "Bob Martin",
          *           "admin": false,
          *           "suspended": false,
+         *           "given_name": "",
+         *           "family_name": "",
+         *           "title": "",
+         *           "location": "",
+         *           "timezone": "",
+         *           "bio": "",
+         *           "avatar_updated_at": null,
          *           "created_at": "2026-09-27T09:20:00Z"
          *         }
          *       ]
@@ -3086,6 +3296,13 @@ export interface components {
              *         "display_name": "Alice Martin",
              *         "admin": true,
              *         "suspended": false,
+             *         "given_name": "",
+             *         "family_name": "",
+             *         "title": "",
+             *         "location": "",
+             *         "timezone": "",
+             *         "bio": "",
+             *         "avatar_updated_at": null,
              *         "created_at": "2026-09-27T08:50:00Z"
              *       },
              *       {
@@ -3094,6 +3311,13 @@ export interface components {
              *         "display_name": "Bob Martin",
              *         "admin": false,
              *         "suspended": false,
+             *         "given_name": "",
+             *         "family_name": "",
+             *         "title": "",
+             *         "location": "",
+             *         "timezone": "",
+             *         "bio": "",
+             *         "avatar_updated_at": null,
              *         "created_at": "2026-09-27T09:20:00Z"
              *       }
              *     ]
@@ -4273,6 +4497,80 @@ export interface components {
              * @example a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a
              */
             sha256: string;
+        };
+        /**
+         * Refs
+         * @description A workflow repository's branches and tags, as GET /api/v1/{ns}/workflows/{name}/refs answers them.
+         * @example {
+         *       "refs": [
+         *         {
+         *           "name": "refs/heads/feature/vat-rounding",
+         *           "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+         *           "protected": false,
+         *           "moved_by": "chloe",
+         *           "moved_at": "2026-09-30T15:02:00Z"
+         *         },
+         *         {
+         *           "name": "refs/heads/main",
+         *           "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *           "protected": true,
+         *           "moved_by": "alice",
+         *           "moved_at": "2026-09-28T10:12:00Z"
+         *         },
+         *         {
+         *           "name": "refs/tags/v2.1.0",
+         *           "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+         *           "protected": false,
+         *           "moved_by": "bob",
+         *           "moved_at": "2026-09-20T16:40:00Z"
+         *         }
+         *       ]
+         *     }
+         * @example {
+         *       "refs": [
+         *         {
+         *           "name": "refs/heads/main",
+         *           "commit": null,
+         *           "protected": true
+         *         }
+         *       ]
+         *     }
+         */
+        refs: {
+            /**
+             * @description Every branch and tag, in git's order, byte by byte. Never empty, since the default branch is held from the repository's creation, without a commit until something is pushed to it.
+             * @example [
+             *       {
+             *         "name": "refs/heads/feature/vat-rounding",
+             *         "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+             *         "protected": false,
+             *         "moved_by": "chloe",
+             *         "moved_at": "2026-09-30T15:02:00Z"
+             *       },
+             *       {
+             *         "name": "refs/heads/main",
+             *         "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+             *         "protected": true,
+             *         "moved_by": "alice",
+             *         "moved_at": "2026-09-28T10:12:00Z"
+             *       },
+             *       {
+             *         "name": "refs/tags/v2.1.0",
+             *         "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+             *         "protected": false,
+             *         "moved_by": "bob",
+             *         "moved_at": "2026-09-20T16:40:00Z"
+             *       }
+             *     ]
+             * @example [
+             *       {
+             *         "name": "refs/heads/main",
+             *         "commit": null,
+             *         "protected": true
+             *       }
+             *     ]
+             */
+            refs: components["schemas"]["ref"][];
         };
         /**
          * Tree
@@ -6498,6 +6796,291 @@ export interface components {
             };
         };
         /**
+         * A bucket of the installation's activity
+         * @description What every namespace together did in one bucket, in counts alone.
+         * @example {
+         *       "since": "2026-10-01T10:41:00Z",
+         *       "until": "2026-10-01T10:41:59.999999999Z",
+         *       "runs": {
+         *         "queued": 0,
+         *         "running": 0,
+         *         "waiting": 0,
+         *         "succeeded": 7,
+         *         "failed": 1,
+         *         "cancelled": 0,
+         *         "timed_out": 0
+         *       },
+         *       "tasks_in_flight_max": 14
+         *     }
+         * @example {
+         *       "since": "2026-10-01T10:42:00Z",
+         *       "until": "2026-10-01T10:42:59.999999999Z",
+         *       "runs": {
+         *         "queued": 1,
+         *         "running": 3,
+         *         "waiting": 1,
+         *         "succeeded": 2,
+         *         "failed": 0,
+         *         "cancelled": 0,
+         *         "timed_out": 0
+         *       },
+         *       "tasks_in_flight_max": 19
+         *     }
+         */
+        statsActivityBucket: {
+            /**
+             * @description Where the bucket starts, included: the since GET /api/v1/runs takes.
+             * @example 2026-10-01T10:41:00Z
+             */
+            since: components["schemas"]["timestamp"];
+            /**
+             * @description The last instant of the bucket, included, a nanosecond before the next one starts: the until GET /api/v1/runs takes.
+             * @example 2026-10-01T10:41:59.999999999Z
+             */
+            until: components["schemas"]["timestamp"];
+            /**
+             * @description The runs created in the bucket in every namespace, by state: a run that has ended under its final state, one still going under where it is now. A namespace's runs count within its retention, as in every series.
+             * @example {
+             *       "queued": 0,
+             *       "running": 1,
+             *       "waiting": 0,
+             *       "succeeded": 7,
+             *       "failed": 1,
+             *       "cancelled": 0,
+             *       "timed_out": 0
+             *     }
+             */
+            runs: {
+                /**
+                 * @description The runs in queued.
+                 * @example 0
+                 */
+                queued: number;
+                /**
+                 * @description The runs in running.
+                 * @example 1
+                 */
+                running: number;
+                /**
+                 * @description The runs in waiting.
+                 * @example 0
+                 */
+                waiting: number;
+                /**
+                 * @description The runs in succeeded.
+                 * @example 7
+                 */
+                succeeded: number;
+                /**
+                 * @description The runs in failed.
+                 * @example 1
+                 */
+                failed: number;
+                /**
+                 * @description The runs in cancelled.
+                 * @example 0
+                 */
+                cancelled: number;
+                /**
+                 * @description The runs in timed_out.
+                 * @example 0
+                 */
+                timed_out: number;
+            };
+            /**
+             * @description The most tasks handed out, or on their way to a runner, and not yet ended at once in the bucket, in every namespace together: one ending as another is handed out is not two at once, and one still running is in flight until now.
+             * @example 14
+             */
+            tasks_in_flight_max: number;
+        };
+        /**
+         * What the installation is doing now
+         * @description What every namespace together is doing as the request is answered.
+         * @example {
+         *       "at": "2026-10-01T10:42:31Z",
+         *       "runs": {
+         *         "queued": 1,
+         *         "running": 3,
+         *         "waiting": 1
+         *       },
+         *       "tasks_in_flight": 17,
+         *       "slots": 24,
+         *       "runners_ready": 3,
+         *       "runners": 4
+         *     }
+         */
+        statsActivityNow: {
+            /**
+             * @description When it was read.
+             * @example 2026-10-01T10:42:31Z
+             */
+            at: components["schemas"]["timestamp"];
+            /**
+             * @description The runs not ended, in every namespace, by state, whenever they were created.
+             * @example {
+             *       "queued": 1,
+             *       "running": 3,
+             *       "waiting": 1
+             *     }
+             */
+            runs: {
+                /**
+                 * @description The runs in queued.
+                 * @example 1
+                 */
+                queued: number;
+                /**
+                 * @description The runs in running.
+                 * @example 3
+                 */
+                running: number;
+                /**
+                 * @description The runs in waiting.
+                 * @example 1
+                 */
+                waiting: number;
+            };
+            /**
+             * @description The tasks handed out, or on their way to a runner, and not yet ended.
+             * @example 17
+             */
+            tasks_in_flight: number;
+            /**
+             * @description The tasks the runners counted in runners_ready offer to run at once together: what tasks_in_flight is set against.
+             * @example 24
+             */
+            slots: number;
+            /**
+             * @description The runners that may be handed work: ready, reporting themselves ready, and heard from within 30 s, after which a runner's tasks are declared lost.
+             * @example 3
+             */
+            runners_ready: number;
+            /**
+             * @description The runners not revoked, ready or not.
+             * @example 4
+             */
+            runners: number;
+        };
+        /**
+         * The installation's activity
+         * @description What every namespace together did, bucket by bucket, and what it is doing now, in counts that name no run, workflow or namespace. Administrator only. compare=previous is not taken.
+         * @example {
+         *       "from": "2026-10-01T10:41:00Z",
+         *       "to": "2026-10-01T10:43:00Z",
+         *       "bucket": "1m",
+         *       "buckets": [
+         *         {
+         *           "since": "2026-10-01T10:41:00Z",
+         *           "until": "2026-10-01T10:41:59.999999999Z",
+         *           "runs": {
+         *             "queued": 0,
+         *             "running": 0,
+         *             "waiting": 0,
+         *             "succeeded": 7,
+         *             "failed": 1,
+         *             "cancelled": 0,
+         *             "timed_out": 0
+         *           },
+         *           "tasks_in_flight_max": 14
+         *         },
+         *         {
+         *           "since": "2026-10-01T10:42:00Z",
+         *           "until": "2026-10-01T10:42:59.999999999Z",
+         *           "runs": {
+         *             "queued": 1,
+         *             "running": 3,
+         *             "waiting": 1,
+         *             "succeeded": 2,
+         *             "failed": 0,
+         *             "cancelled": 0,
+         *             "timed_out": 0
+         *           },
+         *           "tasks_in_flight_max": 19
+         *         }
+         *       ],
+         *       "now": {
+         *         "at": "2026-10-01T10:42:31Z",
+         *         "runs": {
+         *           "queued": 1,
+         *           "running": 3,
+         *           "waiting": 1
+         *         },
+         *         "tasks_in_flight": 17,
+         *         "slots": 24,
+         *         "runners_ready": 3,
+         *         "runners": 4
+         *       }
+         *     }
+         */
+        statsActivity: {
+            /**
+             * @description The start of the range, included, as the request gave it or as it was taken.
+             * @example 2026-10-01T10:41:00Z
+             */
+            from: components["schemas"]["timestamp"];
+            /**
+             * @description The end of the range, excluded.
+             * @example 2026-10-01T10:43:00Z
+             */
+            to: components["schemas"]["timestamp"];
+            /**
+             * @description How long a bucket is, as asked or as the range chose.
+             * @example 1m
+             * @enum {string}
+             */
+            bucket: "1m" | "15m" | "1h" | "1d";
+            /**
+             * @description Every bucket of the range, oldest first, those counting nothing included.
+             * @example [
+             *       {
+             *         "since": "2026-10-01T10:41:00Z",
+             *         "until": "2026-10-01T10:41:59.999999999Z",
+             *         "runs": {
+             *           "queued": 0,
+             *           "running": 0,
+             *           "waiting": 0,
+             *           "succeeded": 7,
+             *           "failed": 1,
+             *           "cancelled": 0,
+             *           "timed_out": 0
+             *         },
+             *         "tasks_in_flight_max": 14
+             *       },
+             *       {
+             *         "since": "2026-10-01T10:42:00Z",
+             *         "until": "2026-10-01T10:42:59.999999999Z",
+             *         "runs": {
+             *           "queued": 1,
+             *           "running": 3,
+             *           "waiting": 1,
+             *           "succeeded": 2,
+             *           "failed": 0,
+             *           "cancelled": 0,
+             *           "timed_out": 0
+             *         },
+             *         "tasks_in_flight_max": 19
+             *       }
+             *     ]
+             */
+            buckets: components["schemas"]["statsActivityBucket"][];
+            /**
+             * @description What the installation is doing as the request is answered.
+             * @example {
+             *       "at": "2026-10-01T10:42:31Z",
+             *       "runs": {
+             *         "queued": 1,
+             *         "running": 3,
+             *         "waiting": 1
+             *       },
+             *       "tasks_in_flight": 17,
+             *       "slots": 24,
+             *       "runners_ready": 3,
+             *       "runners": 4
+             *     }
+             */
+            now: components["schemas"]["statsActivityNow"];
+        };
+        /**
          * A bucket of slots
          * @description A pool's or a runner's slots in one bucket.
          * @example {
@@ -8347,6 +8930,66 @@ export interface components {
             runner_pools: components["schemas"]["runnerPool"][];
         };
         /**
+         * Profile change
+         * @description What changes of the caller's display name and profile, and nothing else: a field left out keeps what is recorded, and the empty string clears a field, the display name excepted, which a user always has. Null is refused rather than read as either, since a client could have meant both.
+         * @example {
+         *       "given_name": "Alice",
+         *       "family_name": "Martin",
+         *       "title": "Technical lead",
+         *       "timezone": "Europe/Paris"
+         *     }
+         * @example {
+         *       "bio": "",
+         *       "location": ""
+         *     }
+         * @example {
+         *       "display_name": "Alice Martin"
+         *     }
+         */
+        profileUpdate: {
+            /**
+             * @description The name people read in the console and in the sharing panel, never cleared.
+             * @example Alice Martin
+             */
+            display_name?: components["schemas"]["display_name"];
+            /**
+             * @description The name the user is called by; the empty string clears it.
+             * @example Alice
+             * @example
+             */
+            given_name?: components["schemas"]["given_name"];
+            /**
+             * @description The user's family name; the empty string clears it.
+             * @example Martin
+             * @example
+             */
+            family_name?: components["schemas"]["family_name"];
+            /**
+             * @description What the user does, as they put it; the empty string clears it.
+             * @example Technical lead
+             * @example
+             */
+            title?: components["schemas"]["title"];
+            /**
+             * @description Where the user works, as they put it; the empty string clears it.
+             * @example Lyon, France
+             * @example
+             */
+            location?: components["schemas"]["location"];
+            /**
+             * @description The time zone the user works in, a name the IANA database holds, Local refused; the empty string clears it.
+             * @example Europe/Paris
+             * @example
+             */
+            timezone?: components["schemas"]["timezone"];
+            /**
+             * @description A line the user writes about themself, 280 characters at most; the empty string clears it.
+             * @example Writes the invoicing workflows, and reviews what touches payroll.
+             * @example
+             */
+            bio?: components["schemas"]["bio"];
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -8770,13 +9413,20 @@ export interface components {
         actor: components["schemas"]["principalRef"] | "operator" | "installation";
         /**
          * User
-         * @description A local account: a login, a display name and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with.
+         * @description A local account: a login, a display name and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, and when their photo was last set, null where they hold none: set by the user alone, and answered wherever a user is, so that every client draws a person the same way.
          * @example {
          *       "kind": "user",
          *       "login": "alice",
          *       "display_name": "Alice Martin",
          *       "admin": false,
          *       "suspended": false,
+         *       "given_name": "Alice",
+         *       "family_name": "Martin",
+         *       "title": "Technical lead",
+         *       "location": "Lyon, France",
+         *       "timezone": "Europe/Paris",
+         *       "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+         *       "avatar_updated_at": "2026-09-28T10:15:00Z",
          *       "created_at": "2026-09-27T09:00:00Z"
          *     }
          * @example {
@@ -8786,6 +9436,13 @@ export interface components {
          *       "admin": false,
          *       "suspended": true,
          *       "suspended_for": "no_passkey",
+         *       "given_name": "",
+         *       "family_name": "",
+         *       "title": "",
+         *       "location": "",
+         *       "timezone": "",
+         *       "bio": "",
+         *       "avatar_updated_at": null,
          *       "created_at": "2026-09-27T09:30:00Z",
          *       "last_sign_in_at": "2026-09-27T11:00:00Z"
          *     }
@@ -8828,6 +9485,49 @@ export interface components {
              * @enum {string}
              */
             suspended_for?: "no_passkey";
+            /**
+             * @description The name the user is called by, set by the user at PATCH /api/v1/me, and the empty string where they have not said it. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
+             * @example Alice
+             * @example
+             */
+            given_name?: string;
+            /**
+             * @description The user's family name, set by the user, and the empty string where they have not said it. One line of at most 128 characters holding no control character.
+             * @example Martin
+             * @example
+             */
+            family_name?: string;
+            /**
+             * @description What the user does, as they put it, set by the user, and the empty string where they have not said it: shown beside their name, so that whoever reads it in a sharing panel knows whom they are giving access to. One line of at most 128 characters holding no control character.
+             * @example Technical lead
+             * @example
+             */
+            title?: string;
+            /**
+             * @description Where the user works, as they put it, set by the user, and the empty string where they have not said it. Free text rather than a place a map knows, since it is read by people. One line of at most 128 characters holding no control character.
+             * @example Lyon, France
+             * @example
+             */
+            location?: string;
+            /**
+             * @description The time zone the user works in, an IANA name, set by the user, and the empty string where they have not said it: what a client turns an instant into the user's own hours with, so that a colleague reads when it is for them. The API refuses a name the IANA database does not hold, and Local, which is whatever zone the server is set to and names no place. At most 64 characters, twice the longest name the database holds.
+             * @example Europe/Paris
+             * @example America/Argentina/Buenos_Aires
+             * @example
+             */
+            timezone?: string;
+            /**
+             * @description A line the user writes about themself, set by the user, and the empty string where they have not written one. At most 280 characters, a few sentences, since it is shown beside the name rather than read as a page, and one line holding no control character, as every field shown in a console and printed at a terminal is.
+             * @example Writes the invoicing workflows, and reviews what touches payroll.
+             * @example
+             */
+            bio?: string;
+            /**
+             * @description When the user's photo was last set, and null where they hold none. The photo is read on its own, at GET /api/v1/me/avatar by the user and at GET /api/v1/users/{login}/avatar by an administrator, and a client adds this instant to its address, ?v=, so that a photo set again is fetched again rather than taken from a cache; where it is null, a client draws the user's initials. It changes only when the user sets a photo, and goes back to null when the photo is removed.
+             * @example 2026-09-28T10:15:00Z
+             * @example null
+             */
+            avatar_updated_at?: components["schemas"]["timestamp"] | null;
             /**
              * @description When the account was created.
              * @example 2026-09-27T09:00:00Z
@@ -9083,6 +9783,49 @@ export interface components {
             login?: components["schemas"]["namespace"];
         } & (unknown & unknown & unknown);
         /**
+         * @description The name a person reads in the console and in the sharing panel: one line holding no control character, since it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Free text otherwise, because it is shown and never matched against: everything that decides access reads the login.
+         * @example Alice Martin
+         * @example Bob
+         */
+        display_name: string;
+        /**
+         * @description The name the user is called by, set by the user at PATCH /api/v1/me, and the empty string where they have not said it. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
+         * @example Alice
+         * @example
+         */
+        given_name: string;
+        /**
+         * @description The user's family name, set by the user, and the empty string where they have not said it. One line of at most 128 characters holding no control character.
+         * @example Martin
+         * @example
+         */
+        family_name: string;
+        /**
+         * @description What the user does, as they put it, set by the user, and the empty string where they have not said it: shown beside their name, so that whoever reads it in a sharing panel knows whom they are giving access to. One line of at most 128 characters holding no control character.
+         * @example Technical lead
+         * @example
+         */
+        title: string;
+        /**
+         * @description Where the user works, as they put it, set by the user, and the empty string where they have not said it. Free text rather than a place a map knows, since it is read by people. One line of at most 128 characters holding no control character.
+         * @example Lyon, France
+         * @example
+         */
+        location: string;
+        /**
+         * @description The time zone the user works in, an IANA name, set by the user, and the empty string where they have not said it: what a client turns an instant into the user's own hours with, so that a colleague reads when it is for them. The API refuses a name the IANA database does not hold, and Local, which is whatever zone the server is set to and names no place. At most 64 characters, twice the longest name the database holds.
+         * @example Europe/Paris
+         * @example America/Argentina/Buenos_Aires
+         * @example
+         */
+        timezone: string;
+        /**
+         * @description A line the user writes about themself, set by the user, and the empty string where they have not written one. At most 280 characters, a few sentences, since it is shown beside the name rather than read as a page, and one line holding no control character, as every field shown in a console and printed at a terminal is.
+         * @example Writes the invoicing workflows, and reviews what touches payroll.
+         * @example
+         */
+        bio: string;
+        /**
          * @description How long this shard may take, as the step declared it. It travels beside deadline rather than instead of it because the two answer different questions: the deadline is the instant this attempt is stopped at, and the timeout is what a person reading the message sees the workflow having asked for.
          * @example 10m
          * @example 4h
@@ -9231,12 +9974,6 @@ export interface components {
              */
             auth_policy?: components["schemas"]["authPolicy"];
         };
-        /**
-         * @description The name a person reads in the console and in the sharing panel: one line holding no control character, since it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Free text otherwise, because it is shown and never matched against: everything that decides access reads the login.
-         * @example Alice Martin
-         * @example Bob
-         */
-        display_name: string;
         /**
          * @description Whether the user is a platform administrator, who manages users, groups, namespaces, quotas, runners and runner policies. It grants no run:read_data anywhere: reading another namespace's payloads still means granting oneself access first, which is audited and told to the namespace's owner.
          * @default false
@@ -10378,6 +11115,68 @@ export interface components {
             };
         };
         /**
+         * Ref name
+         * @description A ref as git writes it in full: refs/heads/<branch> for a branch and refs/tags/<tag> for a tag, the only two kinds a workflow repository holds, the name after the prefix on the rules of $defs/branch save the two git keeps for a branch's short name, a leading - and @ alone. Full, so that a branch and a tag of one short name are two refs rather than one ambiguity.
+         * @example refs/heads/main
+         * @example refs/tags/v2.1.0
+         * @example refs/heads/feature/vat-rounding
+         */
+        refName: string;
+        /**
+         * Ref
+         * @description One branch or tag of a workflow repository: a row of the database rather than a file beside the objects, so that moving it is an ordinary transaction beside every other piece of state. Only branches and tags are held; HEAD is the default branch, answered on the repository and never stored as a ref.
+         * @example {
+         *       "name": "refs/heads/main",
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "protected": true,
+         *       "moved_by": "alice",
+         *       "moved_at": "2026-09-28T10:12:00Z"
+         *     }
+         * @example {
+         *       "name": "refs/tags/v2.1.0",
+         *       "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+         *       "protected": false,
+         *       "moved_by": "bob",
+         *       "moved_at": "2026-09-20T16:40:00Z"
+         *     }
+         * @example {
+         *       "name": "refs/heads/main",
+         *       "commit": null,
+         *       "protected": true
+         *     }
+         */
+        ref: {
+            /**
+             * @description The ref in full, as git writes it.
+             * @example refs/heads/main
+             * @example refs/tags/v2.1.0
+             */
+            name: components["schemas"]["refName"];
+            /**
+             * @description The commit it points at, an annotated tag peeled to the commit it names; null for an unborn branch, the default branch of a repository nothing was pushed to yet, which is the one ref held without a commit.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             * @example null
+             */
+            commit: components["schemas"]["commit"] | null;
+            /**
+             * @description Whether pushing to it takes grant:manage rather than workflow:write. Only the default branch is protected, and only where its repository is. A force-push and a deletion take grant:manage on any ref, protected or not.
+             * @example true
+             * @example false
+             */
+            protected: boolean;
+            /**
+             * @description Who last moved it: the principal whose push created, moved or forced it. Absent on an unborn branch, which nobody has moved.
+             * @example alice
+             * @example finance/nightly-sync
+             */
+            moved_by?: components["schemas"]["actor"];
+            /**
+             * @description When it last moved, in the transaction that accepted the push. Absent exactly when moved_by is.
+             * @example 2026-09-28T10:12:00Z
+             */
+            moved_at?: components["schemas"]["timestamp"];
+        };
+        /**
          * Run state
          * @description Where a run is, as the documentation fixes the vocabulary. Every component reads this one enumeration: the controller writes it, the API serves it, the console colours it and a phone notifies on it, and a seventh state invented in one of them would be a state the others cannot render.
          * @example running
@@ -11460,6 +12259,8 @@ export interface components {
         artifactUri: string;
         /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
         secret: string;
+        /** @description Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it. */
+        avatarVersion: string;
     };
     requestBodies: never;
     headers: {
@@ -11485,6 +12286,12 @@ export interface components {
         retryAfter: number;
         /** @description Where the workflow is read once the move is done: /api/v1/{target}/workflows/{name}. */
         location: string;
+        /** @description private, max-age=86400: the photo is kept a day by the browser that asked and by no shared cache, since it is shown to its owner and to administrators alone. A client asks for it at an address that changes with avatar_updated_at, so that keeping it a day never shows a photo set since. */
+        privateDay: "private, max-age=86400";
+        /** @description nosniff, so that a browser takes the body for the type it is declared as, and never for anything its bytes might be taken for. */
+        noSniff: "nosniff";
+        /** @description The photo's tag, the instant it was set in microseconds since the epoch, in quotes, which a client keeping the photo past its day sends in If-None-Match and is answered 304 for while the photo is the same. */
+        avatarTag: string;
     };
     pathItems: never;
 }
@@ -12337,6 +13144,38 @@ export interface operations {
             403: components["responses"]["forbidden"];
         };
     };
+    updateMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What changes. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["profileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Written: who the caller is, as GET /api/v1/me answers it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["me"];
+                };
+            };
+            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, a field null, written twice or not a string, a field past its length or holding a line break or another control character, an empty display name, or a time zone the IANA database does not hold, named, or Local. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            /** @description No credential, or one that opens nothing, a user removed since their credential was read among them. */
+            401: components["responses"]["unauthorised"];
+            /** @description The bootstrap token or a service account, which have no profile or photo, or a token narrowed by a scope, which changes neither, each refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. */
+            403: components["responses"]["forbidden"];
+            413: components["responses"]["tooLarge"];
+        };
+    };
     dismissNotification: {
         parameters: {
             query?: never;
@@ -12363,6 +13202,168 @@ export interface operations {
             403: components["responses"]["forbidden"];
             /** @description No notification of the caller's by that identifier: dismissed already, past its 90 days, or never the caller's; and any through a token narrowed by a scope, or the bootstrap token, which are told nothing. */
             404: components["responses"]["notFound"];
+        };
+    };
+    getMyAvatar: {
+        parameters: {
+            query?: {
+                /** @description Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it. */
+                v?: components["parameters"]["avatarVersion"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The photo. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["privateDay"];
+                    ETag: components["headers"]["avatarTag"];
+                    "X-Content-Type-Options": components["headers"]["noSniff"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            /** @description The photo is the one the If-None-Match tag names: the client's copy is still the photo. */
+            304: {
+                headers: {
+                    ETag: components["headers"]["avatarTag"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description The caller holds no photo: one never set or removed, and always for the bootstrap token and a service account. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    setMyAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The photo, a PNG or a JPEG of at most 1 MiB and 2048 by 2048 pixels. */
+        requestBody: {
+            content: {
+                "image/png": string;
+                "image/jpeg": string;
+            };
+        };
+        responses: {
+            /** @description Stored, as GET /api/v1/me/avatar answers it from now on. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An empty body. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            /** @description No credential, or one that opens nothing, a user removed since their credential was read among them. */
+            401: components["responses"]["unauthorised"];
+            /** @description The bootstrap token or a service account, which have no profile or photo, or a token narrowed by a scope, which changes neither, each refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. */
+            403: components["responses"]["forbidden"];
+            /** @description A photo past 1 MiB, refused before it is decoded. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description A Content-Type other than image/png and image/jpeg, refused before the body is read. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The body is not a PNG or a JPEG that can be read, or its header announces more than 2048 pixels a side, saying how many. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    removeMyAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed, or there was none. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            /** @description No credential, or one that opens nothing, a user removed since their credential was read among them. */
+            401: components["responses"]["unauthorised"];
+            /** @description The bootstrap token or a service account, which have no profile or photo, or a token narrowed by a scope, which changes neither, each refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. */
+            403: components["responses"]["forbidden"];
+            413: components["responses"]["tooLarge"];
+        };
+    };
+    openLiveConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Switching Protocols: the connection is a WebSocket from then on, whose text frames each hold one liveChange. */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A handshake RFC 6455 refuses: a version other than 13, or not one Sec-WebSocket-Key of 16 bytes in base64. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session's handshake carrying another Origin than the public URL's, or none; or a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description A request that asks for no WebSocket, with Upgrade: websocket in the answer, as RFC 9110 has it. */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
         };
     };
     listNamespaces: {
@@ -12680,6 +13681,93 @@ export interface operations {
             404: components["responses"]["notFound"];
             /** @description Another namespace's record names the user as owner, the error naming it; their personal namespace holds something, saying what; or they are the last administrator who can sign in. */
             409: components["responses"]["conflict"];
+            413: components["responses"]["tooLarge"];
+        };
+    };
+    getUserAvatar: {
+        parameters: {
+            query?: {
+                /** @description Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it. */
+                v?: components["parameters"]["avatarVersion"];
+            };
+            header?: never;
+            path: {
+                /** @description The user, by login. */
+                login: components["parameters"]["login"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The photo. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["privateDay"];
+                    ETag: components["headers"]["avatarTag"];
+                    "X-Content-Type-Options": components["headers"]["noSniff"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            /** @description The photo is the one the If-None-Match tag names: the client's copy is still the photo. */
+            304: {
+                headers: {
+                    ETag: components["headers"]["avatarTag"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description No user by that login, a login no user can have, or a user holding no photo: one answer for the three. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    removeUserAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user, by login. */
+                login: components["parameters"]["login"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
+            403: components["responses"]["forbidden"];
+            /** @description No user by that login, a login no user can have, or a user holding no photo: one answer for the three. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
             413: components["responses"]["tooLarge"];
         };
     };
@@ -13423,6 +14511,38 @@ export interface operations {
             };
         };
     };
+    listWorkflowRefs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every branch and tag of the repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["refs"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, or one the caller cannot read: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
     getWorkflowTree: {
         parameters: {
             query?: {
@@ -14016,6 +15136,42 @@ export interface operations {
             403: components["responses"]["forbidden"];
             /** @description No such namespace, or one the caller holds nothing in and does not administer. */
             404: components["responses"]["notFound"];
+        };
+    };
+    getActivityStatistics: {
+        parameters: {
+            query?: {
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                from?: components["parameters"]["statsFrom"];
+                /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
+                to?: components["parameters"]["statsTo"];
+                /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
+                bucket?: components["parameters"]["statsBucket"];
+                /** @description previous adds the span just before the range, in as many buckets of the same length, under previous, so that a chart draws it behind point for point and a figure shows its change. The only value. */
+                compare?: components["parameters"]["statsCompare"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The series, and what is running now. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["statsActivity"];
+                    "text/csv": string;
+                };
+            };
+            /** @description The query is refused: from or to not in RFC 3339, from not before to, a bucket or a compare the route does not know, or a range that would take more than 1,000 buckets. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A caller who is not an administrator, or a session that may only enrol. */
+            403: components["responses"]["forbidden"];
         };
     };
     getPoolStatistics: {

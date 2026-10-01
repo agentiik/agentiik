@@ -100,10 +100,9 @@ describe("the runners and pools", () => {
     expect(drained.textContent).toMatch(/drained by dana, .*: kernel update/);
     const revoked = rows.find((r) => r.textContent!.includes("runner-dmz-00"))!;
     expect(revoked.textContent).toMatch(/revoked by dana, .*: disk replaced/);
-    expect(revoked.textContent).toContain("its results taken until");
+    expect(revoked.textContent).toContain("results accepted until");
     const behind = within(revoked).getByText("0.5.2");
     expect(behind.getAttribute("title")).toBe("The installation runs 0.6.0");
-    expect(within(pane).getByText(/never the host it runs on/)).toBeTruthy();
   });
 
   it("narrow the runners to the pool chosen, kept in the address", async () => {
@@ -116,15 +115,15 @@ describe("the runners and pools", () => {
     expect(place.query.get("pool")).toBeNull();
   });
 
-  it("are reached from the menu, and offered to nobody else", async () => {
+  it("are reached from the sidebar, and offered to nobody else", async () => {
     const place = open("dana", "/dana/runs");
-    await fireEvent.click(await screen.findByRole("button", { name: /You, dana/ }));
-    await fireEvent.click(screen.getByRole("link", { name: "Runners and pools" }));
+    const installation = await screen.findByRole("list", { name: "Installation" });
+    await fireEvent.click(within(installation).getByRole("link", { name: "Runners" }));
     expect(place.route).toEqual({ kind: "runners" });
     expect(await screen.findByRole("region", { name: "Pools" })).toBeTruthy();
     cleanup();
 
     open("alice", "/runners");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
   });
 });

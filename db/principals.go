@@ -52,8 +52,27 @@ type User struct {
 	// where it is not suspended or was suspended for no reason recorded.
 	SuspendedFor string
 
+	// Profile is what the user says of themself, set by them alone.
+	Profile
+
+	// AvatarUpdatedAt is when the user's photo was last set, and zero where they have none. The
+	// photo itself is read on its own (Avatar), so that a listing of users carries none.
+	AvatarUpdatedAt time.Time
+
 	CreatedAt    time.Time
 	LastSignInAt time.Time
+}
+
+// Profile is what a user says of themself beside their display name, each field empty where it is
+// left unsaid: their given and family names, what they do, where they are, the IANA time zone they
+// work in, and a line about themself.
+type Profile struct {
+	GivenName  string
+	FamilyName string
+	Title      string
+	Location   string
+	Timezone   string
+	Bio        string
 }
 
 // CreateUser writes a user and the principal it is, in one statement.
@@ -84,14 +103,21 @@ func principalCreated(err error, what, name string) error {
 	return nil
 }
 
-const userColumns = `login, display_name, admin, suspended, coalesce(suspended_for, ''), created_at, last_sign_in_at`
+// userColumns are what a user is read with, the photo's bytes left out: a listing of every user
+// would otherwise carry every photo, which nobody reading it shows.
+const userColumns = `login, display_name, admin, suspended, coalesce(suspended_for, ''),
+	given_name, family_name, title, location, timezone, bio, avatar_updated_at, created_at, last_sign_in_at`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	var signedIn *time.Time
-	err := row.Scan(&u.Login, &u.DisplayName, &u.Admin, &u.Suspended, &u.SuspendedFor, &u.CreatedAt, &signedIn)
+	var signedIn, avatarAt *time.Time
+	err := row.Scan(&u.Login, &u.DisplayName, &u.Admin, &u.Suspended, &u.SuspendedFor,
+		&u.GivenName, &u.FamilyName, &u.Title, &u.Location, &u.Timezone, &u.Bio, &avatarAt, &u.CreatedAt, &signedIn)
 	if signedIn != nil {
 		u.LastSignInAt = *signedIn
+	}
+	if avatarAt != nil {
+		u.AvatarUpdatedAt = *avatarAt
 	}
 	return u, err
 }
@@ -141,9 +167,10 @@ func (w *Wide) Users(ctx context.Context) ([]User, error) {
 	return users, nil
 }
 
-// UpdateUser writes what may change of a user: the display name, whether they administer, and
-// whether they are suspended, and why. The login never changes, since it is also the name of their
-// personal namespace.
+// UpdateUser writes what an administrator and the authentication policy change of a user: the
+// display name, whether they administer, and whether they are suspended, and why. The login never
+// changes, since it is also the name of their personal namespace, and the profile and the photo are
+// left as they are, being the user's own to write (UpdateProfile, SetAvatar).
 func (w *Wide) UpdateUser(ctx context.Context, u User) error {
 	tag, err := w.tx.Exec(ctx,
 		`update users set display_name = $2, admin = $3, suspended = $4, suspended_for = $5 where login = $1`,
@@ -155,6 +182,75 @@ func (w *Wide) UpdateUser(ctx context.Context, u User) error {
 		return fmt.Errorf("%w: %s", ErrNoPrincipal, u.Login)
 	}
 	return nil
+}
+
+// UpdateProfile writes what a user says of themself: their display name and their profile, every
+// field of it, the empty string clearing one. A login no user holds is ErrNoPrincipal.
+func (w *Wide) UpdateProfile(ctx context.Context, login, displayName string, p Profile) error {
+	tag, err := w.tx.Exec(ctx,
+		`update users set display_name = $2, given_name = $3, family_name = $4, title = $5, location = $6,
+		        timezone = $7, bio = $8
+		  where login = $1`,
+		login, displayName, p.GivenName, p.FamilyName, p.Title, p.Location, p.Timezone, p.Bio)
+	if err != nil {
+		return fmt.Errorf("db: the profile of %s could not be written: %w", login, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrNoPrincipal, login)
+	}
+	return nil
+}
+
+// ErrNoAvatar is a user who holds no photo.
+var ErrNoAvatar = errors.New("db: that user holds no photo")
+
+// SetAvatar writes a user's photo, as the API re-encoded it, set at at, in place of any before it.
+// A login no user holds is ErrNoPrincipal.
+func (w *Wide) SetAvatar(ctx context.Context, login string, png []byte, at time.Time) error {
+	tag, err := w.tx.Exec(ctx, `update users set avatar = $2, avatar_updated_at = $3 where login = $1`, login, png, at)
+	if err != nil {
+		return fmt.Errorf("db: the photo of %s could not be written: %w", login, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrNoPrincipal, login)
+	}
+	return nil
+}
+
+// RemoveAvatar removes a user's photo, and answers whether they held one. A login no user holds is
+// ErrNoPrincipal, told apart from a user holding no photo, which removing changes nothing of.
+func (w *Wide) RemoveAvatar(ctx context.Context, login string) (bool, error) {
+	tag, err := w.tx.Exec(ctx,
+		`update users set avatar = null, avatar_updated_at = null where login = $1 and avatar is not null`, login)
+	if err != nil {
+		return false, fmt.Errorf("db: the photo of %s could not be removed: %w", login, err)
+	}
+	if tag.RowsAffected() == 1 {
+		return true, nil
+	}
+	// Nothing removed: a user holding no photo, or no user at all, which the caller answers
+	// otherwise.
+	if _, err := w.User(ctx, login); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+// Avatar reads a user's photo, the PNG SetAvatar wrote, and when it was set. A login no user holds
+// is ErrNoPrincipal, and a user holding no photo ErrNoAvatar.
+func (w *Wide) Avatar(ctx context.Context, login string) ([]byte, time.Time, error) {
+	var png []byte
+	var at *time.Time
+	err := w.tx.QueryRow(ctx, `select avatar, avatar_updated_at from users where login = $1`, login).Scan(&png, &at)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, time.Time{}, fmt.Errorf("%w: %s", ErrNoPrincipal, login)
+	case err != nil:
+		return nil, time.Time{}, fmt.Errorf("db: the photo of %s could not be read: %w", login, err)
+	case png == nil || at == nil:
+		return nil, time.Time{}, fmt.Errorf("%w: %s", ErrNoAvatar, login)
+	}
+	return png, *at, nil
 }
 
 // SuspendedNoPasskey is the reason an account is suspended where passwords were forbidden while it

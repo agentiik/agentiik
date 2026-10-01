@@ -9,6 +9,7 @@ npm ci
 npm run build                    # into dist/, which agentiik-api then carries
 npm run check                    # svelte-check, types and components, warnings included
 npm test                         # vitest, on recorded answers of the API
+npm run screens                  # Playwright: every screen drawn and measured, after npm run build
 AGK_CONSOLE_API=https://localhost:8443 npm run dev   # against a running installation
 node tests/serve.js tests/fixtures/alice.json 4173   # against a recorded scenario, with the API's own headers
 ```
@@ -20,6 +21,9 @@ node tests/serve.js tests/fixtures/alice.json 4173   # against a recorded scenar
 - **One dialect with the API.** `src/api/schema.d.ts` is generated from `vendor/openapi.json` by `npm run generate`, and the client is typed from it, so a route `openapi.json` does not describe does not compile. The workflow regenerates it and fails where the file committed differs.
 - **The API's Content-Security-Policy.** The console loads its own scripts, styles, fonts and icons and reaches its own origin, nothing else: no style or script is written into the page, and nothing is inlined as a `data:` address. `tests/serve.js` reads the policy out of `api/console.go` and serves the build under it.
 - **Its addresses.** The build's addresses are relative, `base: "./"`, since the API rewrites the page's `<base>` to the public URL's path.
+- **Aligned to the pixel.** Every line is a whole number of units high, two pixels, so that every box starts on a whole pixel and every line centred in a bar, a row or a control, all an even number of pixels high, does too; every button, field and choice is `--control-height` high; a hairline across a bar, a header or a table row is drawn inside its box, as an inset shadow, so that what is centred in it is centred in its whole height. `npm run screens` draws every screen the recorded scenarios reach at 1440, 1099, 759 and 390 pixels in both themes and fails on anything out of line: a box off a whole pixel, two controls of different heights, a row's centres or baselines apart, a pane's content not starting under its title, anything running off the page.
+- **No explanation on screen.** A screen says what it shows with labels, values and short empty states, never a sentence explaining a feature: one that needs explaining is built wrong. A failure is told by `lib/problem.ts` and drawn by `Problem` or a notice: what could not be done, the reason in a few words, decided by the status, and the server's answer in small type.
+- **A button's words never change.** No name, count or word chosen by a state in a control's label, since its width would change with the value and move what is beside it: what it acts on is said by its row, its pane or the question before it. A confirmation puts Keep before the same button turned red, so that the button clicked stays where it was. `tests/labels.test.ts` reads every component for a control whose label holds an expression.
 - **Hide, never disable.** What the principal does not hold, as `GET /api/v1/me` gives it, is left out rather than drawn disabled, and what it may not see is answered as what does not exist.
 
 ## Dependencies

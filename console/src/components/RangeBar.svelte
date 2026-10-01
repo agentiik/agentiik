@@ -15,7 +15,7 @@
       <button class="preset" aria-pressed={ranged.range.preset === key} onclick={() => ranged.choose(key as Preset)}>{p.label}</button>
     {/each}
   </div>
-  <span class="muted mono">{described(ranged.range, bucket)}</span>
+  <span class="muted term">{described(ranged.range, bucket)}</span>
   {#if ranged.before.length > 0}<button class="link" onclick={() => ranged.back()}>Back to the range before</button>{/if}
   {#if comparable}
     <label class="compare">
@@ -39,6 +39,8 @@
 
   .presets {
     display: flex;
+    max-width: 100%;
+    overflow-x: auto;
     gap: calc(var(--unit) * 1);
     padding: 2px;
     border: var(--border-hairline) solid var(--lineStrong);
@@ -47,7 +49,10 @@
   }
 
   .preset {
-    height: 25px;
+    flex: none;
+    /* The frame around the presets is a control high: 2px of padding and a hairline on each side. */
+    height: calc(var(--control-height) - 6px);
+    white-space: nowrap;
     padding: 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid transparent;
     border-radius: var(--radius-control);
@@ -88,16 +93,16 @@
 
   .track {
     position: relative;
-    width: 29px;
-    height: 17px;
+    width: 30px;
+    height: 18px;
     border-radius: var(--radius-round);
     background: var(--lineStrong);
   }
 
   .knob {
     position: absolute;
-    top: 2.5px;
-    left: 2.5px;
+    top: 3px;
+    left: 3px;
     width: 12px;
     height: 12px;
     border-radius: var(--radius-round);
@@ -109,7 +114,7 @@
   }
 
   .compare input:checked + .track .knob {
-    left: 14.5px;
+    left: 15px;
   }
 
   .compare input:focus-visible + .track {
@@ -119,8 +124,10 @@
 
   .export {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: calc(var(--unit) * 4);
+    max-width: 100%;
     margin-left: auto;
   }
 </style>

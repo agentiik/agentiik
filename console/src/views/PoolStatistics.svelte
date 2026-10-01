@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import { refusal, type API } from "../api/client";
   import Chart, { type Series } from "../components/Chart.svelte";
@@ -23,14 +26,14 @@
   const range = $derived(ranged.range);
 
   let pools = $state<PoolsSeries | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
 
   async function read(r: Range) {
-    refused = "";
+    refused = null;
     const { from, to } = query(r);
     const { data, error, response } = await api.GET("/api/v1/stats/pools", { params: { query: { from, to } } });
     if (data && typeof data !== "string") pools = data;
-    else refused = refusal(response, error).message;
+    else refused = explain("load the statistics", refusal(response, error));
   }
 
   $effect(() => {
@@ -46,7 +49,7 @@
       parseAs: "blob",
     });
     if (!data) {
-      refused = refusal(response, error).message;
+      refused = explain("load the statistics", refusal(response, error));
       return;
     }
     const link = document.createElement("a");
@@ -102,26 +105,26 @@
   }
 </script>
 
-<nav class="sub" aria-label="The installation's runners">
-  <span class="mono where">installation / Runners</span>
-  <a class="tab" href={place.href(inventory)} onclick={follow(place, inventory)}>Runners and pools</a>
-  <span class="tab" aria-current="page">Statistics</span>
-</nav>
+<PageHeader title="Runners" icon="control-runners" {place} tabs={[
+  { label: "Runners and pools", icon: "control-runners", to: { kind: "runners" }, current: false },
+  { label: "Statistics", icon: "control-statistics", to: { kind: "runners", tab: "statistics" }, current: true },
+]}>
+  {#snippet actions()}
+    <button class="control" title="Export the series as CSV" onclick={() => exported("csv")}><Icon name="control-download" size={14} />CSV</button>
+    <button class="control" title="Export the series as JSON" onclick={() => exported("json")}><Icon name="control-download" size={14} />JSON</button>
+  {/snippet}
+</PageHeader>
 
-<RangeBar {ranged} bucket={pools?.bucket} comparable={false}>
-  <span class="muted">Export the series</span>
-  <button class="control" onclick={() => exported("csv")}><Icon name="control-download" size={14} />CSV</button>
-  <button class="control" onclick={() => exported("json")}><Icon name="control-download" size={14} />JSON</button>
-</RangeBar>
+<RangeBar {ranged} bucket={pools?.bucket} comparable={false} />
 
 {#if refused}
-  <p class="refused" role="alert">The series could not be read: {refused}</p>
+  <Problem explained={refused} onretry={() => read(range)} />
 {/if}
 
 {#if pools}
   {#key pools}
     {#if drawn.length === 0}
-      <p class="muted">No pool held a runner over the range.</p>
+      <p class="muted">No data</p>
     {/if}
     <div class="grid">
       {#each drawn as p (p.pool)}
@@ -135,9 +138,9 @@
               </thead>
               <tbody>
                 {#each p.runners as r (r.runner)}
-                  <tr><td class="mono">{r.runner}</td><td class="number mono">{r.peak}</td><td class="number mono">{r.capacity}</td><td class="number mono">{r.silences}</td><td class="number mono">{r.lost}</td></tr>
+                  <tr><td class="term">{r.runner}</td><td class="number term">{r.peak}</td><td class="number term">{r.capacity}</td><td class="number term">{r.silences}</td><td class="number term">{r.lost}</td></tr>
                 {:else}
-                  <tr><td colspan="5" class="muted">No runner was in the pool over the range.</td></tr>
+                  <tr><td colspan="5" class="muted">No runners</td></tr>
                 {/each}
               </tbody>
             </table>
@@ -147,15 +150,15 @@
     </div>
 
     <div class="gaps">
-      <Pane title="Heartbeat gaps" aside="silences of two intervals, 20 s, or more, by runner">
+      <Pane title="Heartbeat gaps">
         <p class="legend">
           <span><span class="swatch"></span>20 to 30 s</span>
-          <span><span class="swatch lost"></span>{declaredLost / 1000} s and over: its tasks declared lost</span>
+          <span><span class="swatch lost"></span>{declaredLost / 1000} s and over, tasks lost</span>
         </p>
         <div class="timeline" role="list" aria-label="Silences between heartbeats, by runner">
           {#each gaps as g (g.runner)}
             <div class="row" role="listitem">
-              <span class="mono name" title="pool {g.pool}">{g.runner}</span>
+              <span class="term name" title="pool {g.pool}">{g.runner}</span>
               <span class="track">
                 {#each g.marks as m (m.silence.at)}
                   <button
@@ -177,7 +180,7 @@
           <div class="row axis" aria-hidden="true">
             <span></span>
             <span class="track">
-              {#each axis as t (t.at)}<span class="tick mono" style:left="{t.at}%">{t.label}</span>{/each}
+              {#each axis as t (t.at)}<span class="tick term" style:left="{t.at}%">{t.label}</span>{/each}
             </span>
           </div>
         </div>
@@ -188,44 +191,11 @@
 {/if}
 
 <style>
-  .sub {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 2);
-    margin: calc(var(--unit) * -3) 0 calc(var(--unit) * 7);
-  }
 
-  .where {
-    margin-right: calc(var(--unit) * 6);
-    font-weight: 600;
-  }
-
-  .tab {
-    display: inline-flex;
-    align-items: center;
-    height: 29px;
-    padding: 0 calc(var(--unit) * 5);
-    border: var(--border-hairline) solid transparent;
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: var(--type-navigation-size);
-    font-weight: 500;
-    text-decoration: none;
-  }
-
-  .tab[aria-current="page"] {
-    border-color: var(--accentLine);
-    background: var(--accentDim);
-    color: var(--accent);
-  }
-
-  .refused {
-    color: var(--failed);
-  }
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(480px, 100%), 1fr));
     gap: calc(var(--unit) * 12) calc(var(--unit) * 7);
   }
 
@@ -252,7 +222,7 @@
   th,
   td {
     padding: calc(var(--unit) * 2) calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     text-align: left;
   }
 
@@ -350,8 +320,14 @@
   }
 
   .readout {
-    min-height: 1.4em;
+    min-height: 1lh;
     margin: calc(var(--unit) * 5) 0 0;
     font-size: var(--type-control-size);
+  }
+
+  @media (max-width: 759px) {
+    .row {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

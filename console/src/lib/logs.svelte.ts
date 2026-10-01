@@ -1,4 +1,5 @@
 import { refusal, type API } from "../api/client";
+import { explain, refused as refusedHere, type Explained } from "./problem";
 
 // A step's log as GET /api/v1/runs/{id}/steps/{step}/logs streams it: server-sent events, history
 // then live, each dispatch whole and one after the other, secrets masked before anything was
@@ -51,7 +52,7 @@ export class LogTail {
   dispatches = $state<Dispatch[]>([]);
   // verdict is the step's once the stream has said its log is over; the stream is closed then.
   verdict = $state<string | null>(null);
-  refused = $state("");
+  refused = $state<Explained | null>(null);
   reconnecting = $state(false);
 
   readonly #api: API;
@@ -132,9 +133,9 @@ export class LogTail {
     });
     if (response.ok) {
       await response.body?.cancel();
-      this.refused = "The log stream was cut, and the browser gave up on it.";
+      this.refused = refusedHere("follow the log", "The connection that streams the log was cut, and the browser stopped reconnecting. Reload the page to follow it again.");
       return;
     }
-    this.refused = refusal(response, error).message;
+    this.refused = explain("follow the log", refusal(response, error));
   }
 }
