@@ -56,10 +56,14 @@
 
 </script>
 
+<!-- The home's trail would be its own name and nothing above it, so the home has none; on a phone the
+     bar is still drawn, holding the way to the navigation. -->
+{#if route.kind !== "landing" || onmenu}
 <header class="bar">
   {#if onmenu}
     <button class="menu-button" aria-label="Open the navigation" onclick={onmenu}><Icon name="control-sidebar" size={18} /></button>
   {/if}
+  {#if route.kind !== "landing"}
   <nav class="trail" aria-label="Where you are">
     <ol>
       {#each trail as step, i (i)}
@@ -74,7 +78,9 @@
       {/each}
     </ol>
   </nav>
+  {/if}
 </header>
+{/if}
 
 <style>
   .menu-button {
