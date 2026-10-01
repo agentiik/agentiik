@@ -29,6 +29,15 @@ if (typeof scope.ResizeObserver !== "function") {
   };
 }
 
+// CodeMirror measures what it draws, which a document with no layout cannot: a range answers no
+// rectangle, and every box has no size.
+const rects = { length: 0, item: () => null, [Symbol.iterator]: function* () {} };
+const box = { x: 0, y: 0, top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, toJSON() {} };
+if (typeof Range !== "undefined") {
+  Range.prototype.getClientRects ??= () => rects as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () => box as DOMRect;
+}
+
 // The live connection is a stand-in in every test, which a test opens and speaks on: the document the
 // tests draw in would otherwise try to reach the stand-in address over the network.
 beforeEach(() => standIn());

@@ -9,6 +9,7 @@
   import GraphCanvas from "../components/GraphCanvas.svelte";
   import Icon from "../components/Icon.svelte";
   import McpPanel from "../components/McpPanel.svelte";
+  import Notice from "../components/Notice.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import RunForm from "../components/RunForm.svelte";
@@ -135,6 +136,19 @@
     place.narrow(q);
   }
 
+  // A commit from the editor: on the default branch, the page reads the workflow again at its new
+  // head; on a new branch, its files are opened at that branch, where Run tries it.
+  let said = $state("");
+  async function committed(branch: string, _commit: string) {
+    if (detail && branch === detail.repository.default_branch) {
+      narrow({ edit: null, view: null });
+      await read();
+      said = `Committed to ${branch}.`;
+      return;
+    }
+    place.go({ kind: "namespace", namespace, view: "workflows", workflow, tab: "files" }, false, new URLSearchParams({ ref: branch }));
+  }
+
   // The visual editor, under workflow:write, over the file at the head of the default branch: the
   // address says it is open, so that Back leaves it.
   const mayEdit = $derived(holds(me, "workflow:write", namespace, workflow));
@@ -182,6 +196,8 @@
   const tabs = $derived(workflowTabs(namespace, workflow, tab, { shares, mcp: !!graph?.mcp, go: (r, q) => place.go(r, false, q) }));
   const now = Date.now();
 </script>
+
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <PageHeader title={workflow} icon="control-workflows" {place} tabs={tabs}>
   {#snippet subtitle()}
@@ -280,7 +296,7 @@
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
     {#await import("../components/Editor.svelte") then { default: Editor }}
-      <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} bind:selected={editSelected} onclose={() => narrow({ edit: null })} />
+      <Editor {api} {me} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
     {/await}
   {:else if graph && laid}
     <div class="columns fills">
