@@ -44,12 +44,12 @@
     display: inline-flex;
     align-items: center;
     gap: calc(var(--unit) * 3);
-    height: 21px;
+    height: 22px;
     padding: 0 calc(var(--unit) * 4) 0 calc(var(--unit) * 4);
     border: var(--border-hairline) solid;
     border-radius: var(--radius-pill);
-    font-family: var(--type-identifier-font);
-    font-size: 11.5px;
+    font-size: 12.5px;
+    font-weight: 500;
     line-height: 1;
     white-space: nowrap;
   }

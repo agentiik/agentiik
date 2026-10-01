@@ -17,10 +17,11 @@ function open(path: string, s: Scenario = scenario("alice")) {
 }
 
 describe("the console", () => {
-  it("opens on the caller's own namespace", async () => {
+  it("opens on the caller's home, every namespace together, and stays there", async () => {
     const { place } = open("/");
-    await screen.findByText("alice", { selector: ".login" });
-    expect(place.route).toEqual({ kind: "namespace", namespace: "alice", view: "runs", run: undefined });
+    await screen.findByRole("button", { name: "You, alice" });
+    expect(await screen.findByRole("region", { name: "Activity" })).toBeTruthy();
+    expect(place.route).toEqual({ kind: "landing" });
   });
 
   it("lists a namespace's runs, and those that failed in the last hour apart", async () => {

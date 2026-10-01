@@ -29,9 +29,9 @@ describe("a workflow's files", () => {
     const rows = within(list).getAllByRole("button").map((b) => (b.classList.contains("folder") ? b.textContent!.replace(/^[▸▾]/, "") : [...b.querySelectorAll("span")].map((x) => x.textContent).join(" ")));
     expect(rows).toEqual(["assets", "schemas", "scripts", expect.stringMatching(/^agentiik\.yaml \d\.\d KiB$/), "common-bricks.yaml 99 B"]);
     const file = await screen.findByRole("list", { name: "agentiik.yaml at main" });
-    expect(file.classList.contains("mono")).toBe(true);
+    expect(file.classList.contains("code")).toBe(true);
     expect(within(file).getAllByRole("listitem")[0]!.textContent).toBe("1# finance/monthly-invoicing");
-    expect(screen.getByText(head.slice(0, 7))).toBeTruthy();
+    expect(screen.getAllByText(head.slice(0, 7)).length).toBeGreaterThan(0);
   });
 
   it("open a folder, show a file chosen, and say a binary file is not drawn", async () => {
@@ -101,14 +101,15 @@ describe("a workflow's files", () => {
 describe("a namespace's workflows", () => {
   it("are those its runs name, said as such, each with its latest run", async () => {
     open("/finance/workflows");
-    expect(await screen.findByText(/The API lists no namespace's workflows/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "monthly-invoicing" }).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
+    expect(await screen.findByRole("region", { name: "Named by the last 200 runs" })).toBeTruthy();
+    expect((await screen.findByRole("link", { name: "monthly-invoicing" })).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
   });
 
   it("gain a new one, empty, which opens on how to fill it", async () => {
     const sent: { path: string; body: unknown }[] = [];
     const place = open("/alice/workflows", "", scenario("alice"), sent);
-    await fireEvent.input(await screen.findByLabelText(/^Name/), { target: { value: "vat-reconciliation" } });
+    await fireEvent.click(await screen.findByRole("button", { name: "New workflow" }));
+    await fireEvent.input(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "vat-reconciliation" } });
     await fireEvent.click(screen.getByRole("checkbox"));
     await fireEvent.click(screen.getByRole("button", { name: "Create vat-reconciliation" }));
     await waitFor(() => expect(sent).toEqual([{ path: "/api/v1/alice/workflows", body: { name: "vat-reconciliation", protected: true } }]));
@@ -119,7 +120,8 @@ describe("a namespace's workflows", () => {
     const s = scenario("alice");
     s["POST /api/v1/alice/workflows"] = { status: 409, body: { error: "a workflow of that name is in the namespace" } };
     open("/alice/workflows", "", s);
-    await fireEvent.input(await screen.findByLabelText(/^Name/), { target: { value: "report" } });
+    await fireEvent.click(await screen.findByRole("button", { name: "New workflow" }));
+    await fireEvent.input(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "report" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create report" }));
     expect((await screen.findByRole("alert")).textContent).toBe("A workflow named report is already in alice, or one deleted under that name is still being purged.");
   });

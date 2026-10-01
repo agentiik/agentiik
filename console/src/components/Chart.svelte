@@ -139,8 +139,8 @@
       legend: { live: true },
       scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * 1.08 || 1] } },
       axes: [
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "11px JetBrains Mono, monospace" },
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: 64, values: (_u, vals) => vals.map((v) => format(v)), font: "11px JetBrains Mono, monospace" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "12px Archivo, sans-serif" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: 64, values: (_u, vals) => vals.map((v) => format(v)), font: "12px Archivo, sans-serif" },
       ],
       series: [
         { label: "bucket", value: (_u, _v, _si, i) => (i === null || i === undefined ? "" : bounds(i)) },
@@ -190,7 +190,7 @@
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.fillStyle = colour("--failed");
-            ctx.font = `${11 * devicePixelRatio}px JetBrains Mono, monospace`;
+            ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
             ctx.textAlign = "right";
             ctx.fillText(`${limit.label} ${format(limit.value)}`, u.bbox.left + u.bbox.width - 6 * devicePixelRatio, y - 5 * devicePixelRatio);
             ctx.restore();
@@ -274,9 +274,9 @@
   ></div>
   {#if chosen !== null && since[chosen]}
     <p class="readout" aria-live="polite">
-      <span class="mono">{bounds(chosen)}</span>
+      <span class="term">{bounds(chosen)}</span>
       {#each series as s (s.label)}
-        <span><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label} <span class="mono">{s.values[chosen] === null ? "none" : format(s.values[chosen] ?? 0)}</span></span>
+        <span><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label} <span class="term">{s.values[chosen] === null ? "none" : format(s.values[chosen] ?? 0)}</span></span>
       {/each}
     </p>
   {/if}
@@ -289,8 +289,8 @@
       <tbody>
         {#each since as at, i (at)}
           <tr>
-            <td class="mono">{bounds(i)}</td>
-            {#each series as s (s.label)}<td class="number mono">{s.values[i] === null || s.values[i] === undefined ? "" : format(s.values[i]!)}</td>{/each}
+            <td class="term">{bounds(i)}</td>
+            {#each series as s (s.label)}<td class="number term">{s.values[i] === null || s.values[i] === undefined ? "" : format(s.values[i]!)}</td>{/each}
           </tr>
         {/each}
       </tbody>
@@ -324,7 +324,21 @@
 
   .plot :global(.u-legend .u-value) {
     color: var(--text);
-    font-family: var(--type-identifier-font);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A label with nothing beside it until the pointer is over the chart: no colon, and the bucket's own
+     label only while it names one. */
+  .plot :global(.u-legend th::after) {
+    content: none;
+  }
+
+  .plot :global(.u-legend .u-value:not(:empty)) {
+    padding-left: calc(var(--unit) * 2);
+  }
+
+  .plot :global(.u-legend .u-series:first-child:has(.u-value:empty)) {
+    display: none;
   }
 
   .plot :global(.u-select) {

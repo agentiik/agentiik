@@ -30,7 +30,7 @@
   });
 </script>
 
-<ol class="file mono" bind:this={holder} aria-label="agentiik.yaml">
+<ol class="file code" bind:this={holder} aria-label="agentiik.yaml">
   {#each lines as line, i (i)}
     {@const n = i + 1}
     {@const p = parts(line)}

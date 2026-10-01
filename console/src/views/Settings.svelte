@@ -1,8 +1,12 @@
 <script lang="ts">
+  import type { Place } from "../lib/place.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import { refusal, type API, type Me } from "../api/client";
   import type { components } from "../api/schema";
+  import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
+  import Notice from "../components/Notice.svelte";
   import { holds } from "../lib/permissions";
   import { sentence } from "../lib/signin";
 
@@ -11,7 +15,7 @@
   // what reading the workflows that name them already takes, and written by whoever holds
   // secret:write there. A value goes one way: it is written to the built-in store with its
   // declaration, no answer returns it, and rotating it is writing it again, never reading it first.
-  let { api, me, namespace }: { api: API; me: Me; namespace: string } = $props();
+  let { api, place, me, namespace }: { api: API; place: Place; me: Me; namespace: string } = $props();
 
   type Declaration = components["schemas"]["secretDeclaration"];
   type Store = Declaration["provider"];
@@ -69,6 +73,7 @@
     value = "";
     base64 = false;
     rotating = "";
+    declaring = false;
   }
 
   // The form that declares a secret, the same that rotates one, its name then given.
@@ -78,6 +83,9 @@
   let value = $state("");
   let base64 = $state(false);
   let rotating = $state("");
+  // declaring is whether the dialog that declares one is open; rotating one opens it too.
+  let declaring = $state(false);
+  const writing = $derived(declaring || rotating !== "");
 
   function declare(e: SubmitEvent) {
     e.preventDefault();
@@ -120,108 +128,105 @@
   ];
 </script>
 
-{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
-{#if said}<p class="said" role="status">{said}</p>{/if}
-
-<div class="columns" class:alone={!(reads && writes)}>
-  <Pane title="Secrets" aside={secrets ? `${secrets.length} in ${namespace}` : namespace}>
-    {#if !reads}
-      <p class="muted">The secrets a namespace declares are shown to whoever reads its workflows, workflow:read at namespace scope, which you do not hold in {namespace}.</p>
-    {:else if unread}
-      <p class="problem" role="alert">The secrets could not be read: {unread}</p>
-    {:else if secrets === null}
-      <p class="muted">Reading the secrets.</p>
-    {:else}
-      <table>
-        <thead><tr><th>Name</th><th>Kept in</th><th>Given to a step at</th><th>Declared</th><th class="end"></th></tr></thead>
-        <tbody>
-          {#each secrets as d (d.name)}
-            <tr>
-              <td class="mono">{d.name}</td>
-              <td>
-                <span class="mono">{d.provider}</span>
-                {#if d.path}<span class="mono muted path">{d.path}</span>{:else if d.provider === "builtin"}<span class="muted path">under {namespace} and its name</span>{/if}
-              </td>
-              <td class="mono muted">{d.mount}</td>
-              <td class="muted nowrap"><span class="mono">{d.declared_by}</span> <time class="mono" datetime={d.declared_at} title={d.declared_at}>{d.declared_at.slice(0, 10)}</time></td>
-              <td class="end">
-                {#if writes}
-                  {#if asking === d.name}
-                    <span class="confirm">
-                      <button class="control danger" disabled={working} onclick={() => remove(d)}>Remove it</button>
-                      <button class="control" onclick={() => (asking = "")}>Keep it</button>
-                    </span>
-                  {:else}
-                    {#if d.provider === "builtin"}<button class="control" onclick={() => rotate(d)}><Icon name="control-replay" size={14} />Rotate</button>{/if}
-                    <button class="control" onclick={() => (asking = d.name)}><Icon name="control-remove" size={14} />Remove</button>
-                  {/if}
-                {/if}
-              </td>
-            </tr>
-          {:else}
-            <tr><td colspan="5" class="muted">{namespace} declares no secret.</td></tr>
-          {/each}
-        </tbody>
-      </table>
+<PageHeader title="Settings" icon="control-settings" {place}>
+  {#snippet actions()}
+    {#if reads && writes}
+      <button class="control primary" onclick={() => { reset(); store = "builtin"; problem = ""; declaring = true; }}><Icon name="control-add" size={14} />New secret</button>
     {/if}
-  </Pane>
+  {/snippet}
+</PageHeader>
 
-  {#if reads && writes}
-    <Pane title={rotating ? `Rotate ${rotating}` : "Declare a secret"} focused={rotating !== ""}>
-      <form onsubmit={declare} aria-label={rotating ? `Rotate ${rotating}` : "Declare a secret"}>
-        {#if !rotating}
-          <label>
-            <span>Name</span>
-            <input class="mono" bind:value={name} placeholder="stripe-key" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" maxlength="255" />
-          </label>
-          <label>
-            <span>Kept in</span>
-            <select bind:value={store}>
-              {#each stores as s (s.store)}<option value={s.store}>{s.label}</option>{/each}
-            </select>
-          </label>
-        {/if}
-        {#if store === "env"}
-          <label>
-            <span>Variable</span>
-            <input class="mono" bind:value={path} placeholder="AGK_DEV_{namespace.toUpperCase().replaceAll('-', '_')}_STRIPE_KEY" required />
-          </label>
+{#if problem && !writing}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
+
+<Pane title="Secrets" aside={secrets ? `${secrets.length} in ${namespace}` : namespace}>
+  {#if !reads}
+    <p class="muted">The secrets a namespace declares are shown to whoever reads its workflows, workflow:read at namespace scope, which you do not hold in {namespace}.</p>
+  {:else if unread}
+    <p class="problem" role="alert">The secrets could not be read: {unread}</p>
+  {:else if secrets === null}
+    <p class="muted">Reading the secrets.</p>
+  {:else}
+    <table>
+      <thead><tr><th>Name</th><th>Kept in</th><th>Given to a step at</th><th>Declared</th><th class="end"></th></tr></thead>
+      <tbody>
+        {#each secrets as d (d.name)}
+          <tr>
+            <td class="term">{d.name}</td>
+            <td>
+              <span class="term">{d.provider}</span>
+              {#if d.path}<span class="term muted path">{d.path}</span>{:else if d.provider === "builtin"}<span class="muted path">under {namespace} and its name</span>{/if}
+            </td>
+            <td class="term muted">{d.mount}</td>
+            <td class="muted nowrap"><span class="term">{d.declared_by}</span> <time class="term" datetime={d.declared_at} title={d.declared_at}>{d.declared_at.slice(0, 10)}</time></td>
+            <td class="end">
+              {#if writes}
+                {#if asking === d.name}
+                  <span class="confirm">
+                    <button class="control danger" disabled={working} onclick={() => remove(d)}>Remove it</button>
+                    <button class="control" onclick={() => (asking = "")}>Keep it</button>
+                  </span>
+                {:else}
+                  {#if d.provider === "builtin"}<button class="control" onclick={() => rotate(d)}><Icon name="control-replay" size={14} />Rotate</button>{/if}
+                  <button class="control" onclick={() => (asking = d.name)}><Icon name="control-remove" size={14} />Remove</button>
+                {/if}
+              {/if}
+            </td>
+          </tr>
         {:else}
-          <label>
-            <span>Value</span>
-            <textarea class="mono" bind:value rows="3" spellcheck="false" autocomplete="off" required={rotating !== ""}></textarea>
-          </label>
-          <label class="check"><input type="checkbox" bind:checked={base64} />Written as base64, for a value that is not text</label>
-        {/if}
-        <p class="muted note">
-          {#if store === "builtin"}A value is written once and shown nowhere, here or in any answer; rotating it is writing it again.{#if !rotating}{" "}Left empty, the declaration is written and a value kept before is kept.{/if}{:else}The API reads the variable from its own environment, under the prefix this installation gives {namespace}, and only where it gives one.{/if}
-        </p>
-        <span class="buttons">
-          <button class="control primary" disabled={working}>{rotating ? "Write the value" : "Declare it"}</button>
-          {#if rotating}<button class="control" type="button" onclick={() => (rotating = "")}>Keep the value it has</button>{/if}
-        </span>
-      </form>
-    </Pane>
+          <tr><td colspan="5" class="muted">{namespace} declares no secret.</td></tr>
+        {/each}
+      </tbody>
+    </table>
   {/if}
-</div>
+</Pane>
+
+{#if reads && writes}
+  <Dialog title={rotating ? `Rotate ${rotating}` : "Declare a secret"} open={writing} onclose={() => ((declaring = false), (rotating = ""))}>
+    {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+    <form onsubmit={declare} aria-label={rotating ? `Rotate ${rotating}` : "Declare a secret"}>
+      {#if !rotating}
+        <label>
+          <span>Name</span>
+          <input class="term" bind:value={name} placeholder="stripe-key" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" maxlength="255" />
+        </label>
+        <label>
+          <span>Kept in</span>
+          <select bind:value={store}>
+            {#each stores as s (s.store)}<option value={s.store}>{s.label}</option>{/each}
+          </select>
+        </label>
+      {/if}
+      {#if store === "env"}
+        <label>
+          <span>Variable</span>
+          <input class="term" bind:value={path} placeholder="AGK_DEV_{namespace.toUpperCase().replaceAll('-', '_')}_STRIPE_KEY" required />
+        </label>
+      {:else}
+        <label>
+          <span>Value</span>
+          <textarea class="term" bind:value rows="3" spellcheck="false" autocomplete="off" required={rotating !== ""}></textarea>
+        </label>
+        <label class="check"><input type="checkbox" bind:checked={base64} />Written as base64, for a value that is not text</label>
+      {/if}
+      <p class="muted note">
+        {#if store === "builtin"}A value is written once and shown nowhere, here or in any answer; rotating it is writing it again.{#if !rotating}{" "}Left empty, the declaration is written and a value kept before is kept.{/if}{:else}The API reads the variable from its own environment, under the prefix this installation gives {namespace}, and only where it gives one.{/if}
+      </p>
+      <span class="buttons">
+        <button class="control primary" disabled={working}>{rotating ? "Write the value" : "Declare it"}</button>
+        {#if rotating}<button class="control" type="button" onclick={() => (rotating = "")}>Keep the value it has</button>{/if}
+      </span>
+    </form>
+  </Dialog>
+{/if}
 
 <style>
-  .columns {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
-    gap: calc(var(--unit) * 8);
-    align-items: start;
-  }
 
-  .columns.alone {
-    grid-template-columns: minmax(0, 1fr);
-  }
 
   .problem {
     color: var(--failed);
   }
 
-  .said,
   .problem {
     margin: 0 0 calc(var(--unit) * 6);
   }

@@ -5,6 +5,7 @@
   import { sentence } from "../lib/signin";
   import Icon from "./Icon.svelte";
   import Pane from "./Pane.svelte";
+  import Notice from "./Notice.svelte";
 
   // The service accounts of the namespaces the caller owns: non-human principals, written NS/NAME,
   // that hold API tokens and never sign in to a client. Creating one gives nobody anything, since it
@@ -87,8 +88,8 @@
   const now = Date.now();
 </script>
 
-{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
-{#if said}<p class="said" role="status">{said}</p>{/if}
+{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <div class="columns">
   <Pane title="Service accounts" aside={accounts ? String(accounts.length) : ""}>
@@ -102,9 +103,9 @@
         <tbody>
           {#each accounts as a (id(a))}
             <tr>
-              <td class="mono">{id(a)}</td>
+              <td class="code">{id(a)}</td>
               <td class="muted">
-                {#if a.name === "agentiik"}built in: its namespace's scheduled, webhook and event runs are attributed to it{:else if a.created_by}by <span class="mono">{a.created_by}</span>{#if a.created_at}, <time datetime={a.created_at} title={a.created_at}>{clock(a.created_at, now)}</time>{/if}{/if}
+                {#if a.name === "agentiik"}built in: its namespace's scheduled, webhook and event runs are attributed to it{:else if a.created_by}by <span class="term">{a.created_by}</span>{#if a.created_at}, <time datetime={a.created_at} title={a.created_at}>{clock(a.created_at, now)}</time>{/if}{/if}
               </td>
               <td class="end">
                 {#if a.name !== "agentiik"}
@@ -137,9 +138,9 @@
         </label>
         <label>
           <span>Name</span>
-          <input class="mono" bind:value={name} placeholder="deploy-bot" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
+          <input class="term" bind:value={name} placeholder="deploy-bot" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
         </label>
-        <p class="foot muted">It is written <span class="mono">{namespace || "NS"}/{name.trim() || "NAME"}</span> wherever a principal is written, and is given nothing until a grant names it.</p>
+        <p class="foot muted">It is written <span class="term">{namespace || "NS"}/{name.trim() || "NAME"}</span> wherever a principal is written, and is given nothing until a grant names it.</p>
         <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create it</button></p>
       </form>
     {:else}
@@ -154,10 +155,6 @@
     color: var(--failed);
   }
 
-  .said {
-    margin: 0 0 calc(var(--unit) * 6);
-  }
-
   .columns {
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
@@ -166,7 +163,7 @@
   }
 
   /* The form goes under the list where the two side by side would squeeze the list's columns. */
-  @media (max-width: 1499px) {
+  @media (max-width: 1099px) {
     .columns {
       grid-template-columns: minmax(0, 1fr);
     }

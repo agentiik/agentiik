@@ -125,6 +125,7 @@
   .alone {
     max-width: 480px;
     margin: 18vh auto 0;
+    padding: 0 16px;
   }
 
   p {

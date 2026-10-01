@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Namespace } from "../api/client";
   import Pane from "../components/Pane.svelte";
@@ -69,23 +70,24 @@
 
 <!-- A list of namespaces, each kept whole on its line: a name breaks nowhere, its hyphens included. -->
 {#snippet names(list: string[])}
-  {#each list as n, i (n)}<span class="mono nowrap">{n}{i < list.length - 1 ? "," : ""}</span>{i < list.length - 1 ? " " : ""}{/each}
+  {#each list as n, i (n)}<span class="term nowrap">{n}{i < list.length - 1 ? "," : ""}</span>{i < list.length - 1 ? " " : ""}{/each}
 {/snippet}
 
-<nav class="sub" aria-label="The installation's runners">
-  <span class="mono where">installation / Runners</span>
-  <span class="tab" aria-current="page">Runners and pools</span>
-  <a class="tab" href={place.href(statistics)} onclick={follow(place, statistics)}>Statistics</a>
-</nav>
+<PageHeader title="Runners" icon="control-runners" {place} tabs={[
+  { label: "Runners and pools", icon: "control-runners", to: { kind: "runners" }, current: true },
+  { label: "Statistics", icon: "control-statistics", to: { kind: "runners", tab: "statistics" }, current: false },
+]} />
 
 {#if refused}
   <p class="refused" role="alert">The runners could not be read: {refused}</p>
 {/if}
 
+<!-- The runners' pane is drawn once the pools above it are read, so that it is not pushed down. -->
+{#if pools === null && !refused}
+  <p class="muted" role="status">Reading the pools.</p>
+{:else}
 <Pane title="Pools" aside={pools ? `${pools.length} ${pools.length === 1 ? "pool" : "pools"}` : ""}>
-  {#if pools === null}
-    <p class="muted">Reading the pools.</p>
-  {:else}
+  {#if pools}
     <div class="scroll">
       <table>
         <thead>
@@ -95,13 +97,13 @@
           {#each pools as p (p.name)}
             {@const reached = reachedBy(p, namespaces)}
             <tr class:chosen={chosen === p.name}>
-              <td><button class="name mono" aria-pressed={chosen === p.name} onclick={() => choose(p.name)}>{p.name}</button></td>
-              <td class="nowrap">{#each p.labels as l (l)}<span class="chip mono">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
+              <td><button class="name term" aria-pressed={chosen === p.name} onclick={() => choose(p.name)}>{p.name}</button></td>
+              <td class="nowrap">{#each p.labels as l (l)}<span class="chip term">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
               <td>{#if p.namespaces.length}{@render names(p.namespaces)}{:else}<span class="muted">every namespace</span>{/if}</td>
-              <td class="mono nowrap">{ceilings(p)}</td>
-              <td class="mono">{p.containment}</td>
+              <td class="term nowrap">{ceilings(p)}</td>
+              <td class="term">{p.containment}</td>
               <td class="nowrap">{of(p.name).length ? counted(of(p.name), now) : "none"}</td>
-              <td class="number mono">{offered(of(p.name), now)}</td>
+              <td class="number term">{offered(of(p.name), now)}</td>
               <td>{#if reached.length}{@render names(reached)}{:else}<span class="muted">no namespace</span>{/if}</td>
             </tr>
           {:else}
@@ -117,7 +119,7 @@
 <div class="below">
   <Pane title="Runners" aside={runners ? `${shown.length} ${chosen ? `in ${chosen}` : `of ${runners.length}`}` : ""}>
     {#if chosen}
-      <p class="narrowed">In <span class="mono">{chosen}</span> alone. <button class="link" onclick={() => choose(undefined)}>Every pool</button></p>
+      <p class="narrowed">In <span class="term">{chosen}</span> alone. <button class="link" onclick={() => choose(undefined)}>Every pool</button></p>
     {/if}
     {#if runners === null}
       <p class="muted">Reading the runners.</p>
@@ -131,24 +133,24 @@
             {#each shown as r (r.runner)}
               {@const c = condition(r, now)}
               <tr>
-                <td class="mono nowrap">{r.runner}</td>
-                <td class="mono">{r.pool}</td>
-                <td class="nowrap">{#each r.labels as l (l)}<span class="chip mono">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
+                <td class="term nowrap">{r.runner}</td>
+                <td class="term">{r.pool}</td>
+                <td class="nowrap">{#each r.labels as l (l)}<span class="chip term">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
                 <td class="condition">
                   <span class="nowrap"><StatePill state={c} />{#if c !== r.reported_state && r.reported_state && r.state !== "revoked"}<span class="muted said">says {r.reported_state}</span>{/if}</span>
                   {#if r.revoked_by && r.revoked_at}
-                    <span class="order">revoked by <span class="mono">{r.revoked_by}</span>, <time datetime={r.revoked_at} title={r.revoked_at}>{clock(r.revoked_at, now)}</time>{#if r.drain_reason}: {r.drain_reason}{/if}</span>
+                    <span class="order">revoked by <span class="term">{r.revoked_by}</span>, <time datetime={r.revoked_at} title={r.revoked_at}>{clock(r.revoked_at, now)}</time>{#if r.drain_reason}: {r.drain_reason}{/if}</span>
                     {#if r.results_accepted_until}<span class="order muted">its results taken until <time datetime={r.results_accepted_until} title={r.results_accepted_until}>{clock(r.results_accepted_until, now)}</time></span>{/if}
                   {:else if r.drained_by && r.drained_at}
-                    <span class="order">drained by <span class="mono">{r.drained_by}</span>, <time datetime={r.drained_at} title={r.drained_at}>{clock(r.drained_at, now)}</time>{#if r.drain_reason}: {r.drain_reason}{/if}</span>
+                    <span class="order">drained by <span class="term">{r.drained_by}</span>, <time datetime={r.drained_at} title={r.drained_at}>{clock(r.drained_at, now)}</time>{#if r.drain_reason}: {r.drain_reason}{/if}</span>
                   {/if}
                 </td>
-                <td class="number mono">{r.concurrency ?? ""}</td>
+                <td class="number term">{r.concurrency ?? ""}</td>
                 <td class="nowrap">
-                  {#if r.last_seen_at}<time class="mono" datetime={r.last_seen_at} title={r.last_seen_at}>{took(Math.max(0, now - Date.parse(r.last_seen_at)))} ago</time>{:else}<span class="muted">not yet</span>{/if}
+                  {#if r.last_seen_at}<time class="term" datetime={r.last_seen_at} title={r.last_seen_at}>{took(Math.max(0, now - Date.parse(r.last_seen_at)))} ago</time>{:else}<span class="muted">not yet</span>{/if}
                 </td>
-                <td class="mono nowrap">{capacity(r)}</td>
-                <td class="mono" class:behind={release !== undefined && r.agent_version !== release} title={release !== undefined && r.agent_version !== release ? `The installation runs ${release}` : undefined}>{r.agent_version}</td>
+                <td class="term nowrap">{capacity(r)}</td>
+                <td class="term" class:behind={release !== undefined && r.agent_version !== release} title={release !== undefined && r.agent_version !== release ? `The installation runs ${release}` : undefined}>{r.agent_version}</td>
               </tr>
             {:else}
               <tr><td colspan="8" class="muted">{chosen ? `No runner has joined ${chosen}.` : "No runner has joined yet."}</td></tr>
@@ -160,38 +162,9 @@
     {/if}
   </Pane>
 </div>
+{/if}
 
 <style>
-  .sub {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 2);
-    margin: calc(var(--unit) * -3) 0 calc(var(--unit) * 7);
-  }
-
-  .where {
-    margin-right: calc(var(--unit) * 6);
-    font-weight: 600;
-  }
-
-  .tab {
-    display: inline-flex;
-    align-items: center;
-    height: 29px;
-    padding: 0 calc(var(--unit) * 5);
-    border: var(--border-hairline) solid transparent;
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: var(--type-navigation-size);
-    font-weight: 500;
-    text-decoration: none;
-  }
-
-  .tab[aria-current="page"] {
-    border-color: var(--accentLine);
-    background: var(--accentDim);
-    color: var(--accent);
-  }
 
   .refused {
     color: var(--failed);
