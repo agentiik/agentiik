@@ -6,6 +6,7 @@
   import { readEnvelope, tokens, type Item } from "../lib/envelope";
   import { between, clock, took } from "../lib/format";
   import { holds } from "../lib/permissions";
+  import { useKeys } from "../lib/keys.svelte";
   import { follow, type Place } from "../lib/place.svelte";
   import { canonical, diffSteps, exits, firstDifference, paramsOf, sameItems, summed } from "../lib/run-diff";
   import { RunReader, type RunDetail } from "../lib/run.svelte";
@@ -47,6 +48,9 @@
 
   const route = (run: string) => ({ kind: "namespace" as const, namespace, view: "runs" as const, run });
   const swapped = $derived({ kind: "namespace" as const, namespace, view: "runs" as const, run: b, against: a });
+
+  // Back to the first run, whose inspector the comparison was opened from.
+  useKeys(() => [{ keys: ["Escape"], effect: "Back to the first run", does: () => place.go({ kind: "namespace", namespace, view: "runs", run: a }) }]);
 
   function lasted(r: RunDetail | { started_at?: string; finished_at?: string } | undefined): string {
     const ms = between(r?.started_at, r?.finished_at, Date.now());

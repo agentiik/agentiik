@@ -109,8 +109,7 @@
           <a class="entry" href={place.href({ kind: "account" })} onclick={(e) => { follow(place, { kind: "account" })(e); close(); }}>Your account</a>
           {#if me.admin}
             <a class="entry" href={place.href({ kind: "users" })} onclick={(e) => { follow(place, { kind: "users" })(e); close(); }}>Users</a>
-            <!-- The runners' statistics, the one page of the runners built so far. -->
-            <a class="entry" href={place.href({ kind: "runners", tab: "statistics" })} onclick={(e) => { follow(place, { kind: "runners", tab: "statistics" })(e); close(); }}>Runners and pools</a>
+            <a class="entry" href={place.href({ kind: "runners" })} onclick={(e) => { follow(place, { kind: "runners" })(e); close(); }}>Runners and pools</a>
           {/if}
           <fieldset class="ground">
             <legend>Ground</legend>

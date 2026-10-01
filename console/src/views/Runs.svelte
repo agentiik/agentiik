@@ -6,6 +6,7 @@
   import StatePill from "../components/StatePill.svelte";
   import StepStrip from "../components/StepStrip.svelte";
   import { between, clock, took } from "../lib/format";
+  import { moved, useKeys } from "../lib/keys.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
@@ -76,6 +77,31 @@
   function opened(r: Run) {
     return { kind: "namespace" as const, namespace: r.namespace, view: "runs" as const, run: r.run };
   }
+
+  // The run selected with the keys, by its identifier, so that a list read again keeps it.
+  let selected = $state<string | undefined>(undefined);
+  let body = $state<HTMLElement | undefined>(undefined);
+
+  function select(run: string | undefined) {
+    selected = run;
+    if (run) body?.querySelector(`[data-run="${run}"]`)?.scrollIntoView?.({ block: "nearest" });
+  }
+
+  useKeys(() =>
+    list.runs.length === 0
+      ? []
+      : [
+          { keys: ["ArrowUp", "ArrowDown", "k", "j"], brief: ["ArrowUp", "ArrowDown"], effect: "Move", does: (key) => select(moved(list.runs.map((r) => r.run), selected, key)) },
+          {
+            keys: ["Enter"],
+            effect: "Open",
+            does: () => {
+              const r = list.runs.find((r) => r.run === selected);
+              if (r) place.go(opened(r));
+            },
+          },
+        ],
+  );
 
   function duration(r: Run): string {
     const ms = between(r.started_at, r.finished_at, now);
@@ -160,9 +186,9 @@
         <th class="number">Took</th>
       </tr>
     </thead>
-    <tbody>
+    <tbody bind:this={body}>
       {#each list.runs as r (r.run)}
-        <tr>
+        <tr data-run={r.run} class:chosen={r.run === selected} aria-selected={r.run === selected} onclick={() => (selected = r.run)}>
           <td><StatePill state={r.state} {live} /></td>
           <td class="mono id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
           <td class="mono name">
@@ -390,8 +416,13 @@
     white-space: nowrap;
   }
 
-  tbody tr:hover {
+  tbody tr:hover,
+  tbody tr.chosen {
     background: var(--raised);
+  }
+
+  tbody tr.chosen td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent);
   }
 
   .number {

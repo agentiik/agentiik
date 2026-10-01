@@ -1316,6 +1316,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/{ns}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a namespace's secret declarations
+         * @description Every secret the namespace declares, each with its name, its store and the path in it where it has one, where a step is given it, and who declared it when; never a value, which no route reads. Requires workflow:read at namespace scope, which reading the workflows that name these secrets already takes; a grant on one workflow shows none.
+         */
+        get: operations["listSecrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/secrets/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+                name: components["parameters"]["secret"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read one secret declaration
+         * @description One declaration, as the list gives it, never its value. Requires workflow:read at namespace scope.
+         */
+        get: operations["readSecret"];
+        /**
+         * Declare, change or rotate one secret
+         * @description Declares the secret, or changes where its value is kept, and for builtin writes the value, sealed in the declaration's own transaction so that a store refusing it leaves the declaration as it was. One secret per request, so that two Terraform applies each declaring their own never drop each other's change. A value goes one way: no answer returns it, and rotating is writing again. env is taken only where the installation gives the namespace a prefix and the path begins with it; vault is refused until its provider arrives. Requires secret:write at namespace scope, and is audited as secret.write with the store, the path and whether a value was written, never the value.
+         */
+        put: operations["declareSecret"];
+        post?: never;
+        /**
+         * Remove one secret declaration
+         * @description Removes the declaration and, where the built-in store keeps one, its value, so that declaring the name again later does not bring back a credential somebody meant to be gone. Requires secret:write at namespace scope, and is audited as secret.delete.
+         */
+        delete: operations["removeSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the runners
+         * @description The runner inventory: each runner's pool and labels, what its host has, the state the installation gives it and the one it last reported, its concurrency and last heartbeat, who drained or revoked it and when, and the end of a revocation's grace. Never a host's name or address, which the installation does not hold, nor its key. Administrator only, since a user learns of a runner its identifier alone.
+         */
+        get: operations["listRunners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner-pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the runner pools
+         * @description Every pool with its labels, the namespaces it accepts, its resource ceilings and its containment tier: what a namespace's allowed_runner_pools is written against. Administrator only.
+         */
+        get: operations["listRunnerPools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7725,6 +7821,532 @@ export interface components {
             rule: "required" | "schema" | "undeclared";
         };
         /**
+         * Secret declaration
+         * @description One secret as the routes answer it: its name, the store its value is kept in and where in it, and where a step is given it. Never its value, which no route reads.
+         * @example {
+         *       "name": "stripe-key",
+         *       "provider": "builtin",
+         *       "mount": "/agk/secrets/stripe-key",
+         *       "declared_by": "alice",
+         *       "declared_at": "2026-09-29T14:02:11Z"
+         *     }
+         * @example {
+         *       "name": "smtp-password",
+         *       "provider": "env",
+         *       "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+         *       "mount": "/agk/secrets/smtp-password",
+         *       "declared_by": "alice",
+         *       "declared_at": "2026-09-29T14:05:40Z"
+         *     }
+         */
+        secretDeclaration: {
+            /**
+             * @description The secret's name, as the workflow file names it.
+             * @example stripe-key
+             */
+            name: string;
+            /**
+             * @description The store its value is kept in: builtin, the encrypted store, which keeps it sealed under the namespace and the name; env, the API's own environment, for development, where the installation has opted the namespace in; or vault, which no installation reads from until its provider arrives.
+             * @example builtin
+             * @example env
+             * @enum {string}
+             */
+            provider: "builtin" | "env" | "vault";
+            /**
+             * @description Where the value sits inside its store: an environment variable's name for env, beginning with the prefix the installation gives the namespace. Absent for builtin, which keeps a value under the namespace and the name and takes no path.
+             * @example AGK_DEV_FINANCE_STRIPE_KEY
+             */
+            path?: string;
+            /**
+             * @description Where a step is given the value, as a file on tmpfs, where its brick's manifest names no mount of its own: /agk/secrets/<name>. Answered rather than stored, since it follows from the name, and answered at all because the file a brick reads is what a person looking at a declaration is usually trying to find.
+             * @example /agk/secrets/stripe-key
+             */
+            mount: string;
+            /**
+             * @description Who wrote the declaration last.
+             * @example alice
+             */
+            declared_by: components["schemas"]["actor"];
+            /**
+             * Format: date-time
+             * @description When it was written last.
+             * @example 2026-09-29T14:02:11Z
+             */
+            declared_at: string;
+        };
+        /**
+         * Secret list
+         * @description A namespace's secret declarations, by name.
+         * @example {
+         *       "secrets": [
+         *         {
+         *           "name": "stripe-key",
+         *           "provider": "builtin",
+         *           "mount": "/agk/secrets/stripe-key",
+         *           "declared_by": "alice",
+         *           "declared_at": "2026-09-29T14:02:11Z"
+         *         },
+         *         {
+         *           "name": "smtp-password",
+         *           "provider": "env",
+         *           "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+         *           "mount": "/agk/secrets/smtp-password",
+         *           "declared_by": "alice",
+         *           "declared_at": "2026-09-29T14:05:40Z"
+         *         }
+         *       ]
+         *     }
+         */
+        secretList: {
+            /**
+             * @description Every declaration of the namespace, never a value.
+             * @example [
+             *       {
+             *         "name": "stripe-key",
+             *         "provider": "builtin",
+             *         "mount": "/agk/secrets/stripe-key",
+             *         "declared_by": "alice",
+             *         "declared_at": "2026-09-29T14:02:11Z"
+             *       }
+             *     ]
+             */
+            secrets: components["schemas"]["secretDeclaration"][];
+        };
+        /**
+         * Secret declaration written
+         * @description What a PUT writes: the store a value is kept in, where in it, and for builtin the value itself, written once and returned by no answer. A PUT naming builtin without a value keeps the value stored; rotating is sending one again, never reading one first. A secret moved out of builtin, or removed, takes its stored value with it.
+         * @example {
+         *       "provider": "builtin",
+         *       "value": "sk_live_51H..."
+         *     }
+         * @example {
+         *       "provider": "builtin"
+         *     }
+         * @example {
+         *       "provider": "env",
+         *       "path": "AGK_DEV_FINANCE_SMTP_PASSWORD"
+         *     }
+         */
+        secretDeclare: {
+            /**
+             * @description The store: builtin, env where the installation has opted the namespace in, or vault, refused until its provider arrives, since nothing gives a namespace its prefix in Vault before then.
+             * @example builtin
+             * @enum {string}
+             */
+            provider: "builtin" | "env" | "vault";
+            /**
+             * @description For env, the variable the value is read from, which begins with the prefix the installation gives the namespace. Refused for builtin, which takes none.
+             * @example AGK_DEV_FINANCE_SMTP_PASSWORD
+             */
+            path?: string;
+            /**
+             * @description The value, for builtin alone, at most 1 MiB once decoded. No answer carries it, now or later, and an empty one is refused rather than taken for a PUT that keeps the old one.
+             * @example sk_live_51H...
+             */
+            value?: string;
+            /**
+             * @description How value is written: utf-8 where absent, or base64 for a value that is not text, a keystore for instance, since JSON carries no arbitrary bytes.
+             * @example base64
+             * @enum {string}
+             */
+            encoding?: "utf-8" | "base64";
+        };
+        /**
+         * Runner
+         * @description One runner as the inventory holds it: its identifier, pool and labels, what the host has, what the installation and the runner each say of its state, and who took it out of service and when. Never the host it runs on, nor the key it joined with, which proves it rather than lists it: a runner is a name, a pool and labels, so that a host can be reimaged or moved while what is written against the fleet stays true.
+         * @example {
+         *       "runner": "01jmz8x2d5f8qx7t2n5r8wd3hk",
+         *       "pool": "dmz",
+         *       "labels": [
+         *         "zone=dmz",
+         *         "arch=amd64"
+         *       ],
+         *       "cpu": 8,
+         *       "memory_bytes": 34359738368,
+         *       "disk_bytes": 214748364800,
+         *       "architecture": "amd64",
+         *       "agent_version": "0.6.0",
+         *       "containment": {
+         *         "runtime": "runc",
+         *         "userns_remap": true
+         *       },
+         *       "state": "ready",
+         *       "reported_state": "ready",
+         *       "concurrency": 4,
+         *       "joined_at": "2026-09-20T08:14:02Z",
+         *       "last_seen_at": "2026-10-01T06:41:57Z",
+         *       "rotate_by": "2026-10-21T08:14:02Z"
+         *     }
+         * @example {
+         *       "runner": "01jmz8x9t4m2ke6v0c3b7n1a5q",
+         *       "pool": "dmz",
+         *       "labels": [
+         *         "zone=dmz",
+         *         "arch=amd64"
+         *       ],
+         *       "cpu": 8,
+         *       "memory_bytes": 34359738368,
+         *       "disk_bytes": 214748364800,
+         *       "architecture": "amd64",
+         *       "agent_version": "0.6.0",
+         *       "containment": {
+         *         "runtime": "runc",
+         *         "userns_remap": true
+         *       },
+         *       "state": "draining",
+         *       "drain_reason": "kernel update",
+         *       "drained_by": "dana",
+         *       "drained_at": "2026-10-01T06:02:18Z",
+         *       "reported_state": "draining",
+         *       "concurrency": 4,
+         *       "joined_at": "2026-09-20T08:16:40Z",
+         *       "last_seen_at": "2026-10-01T06:41:55Z",
+         *       "rotate_by": "2026-10-21T08:16:40Z"
+         *     }
+         * @example {
+         *       "runner": "01jmyq3c8w5h0r2f6t9k4p7x1d",
+         *       "pool": "gpu",
+         *       "labels": [
+         *         "gpu=true"
+         *       ],
+         *       "cpu": 16,
+         *       "memory_bytes": 68719476736,
+         *       "disk_bytes": 1099511627776,
+         *       "architecture": "amd64",
+         *       "agent_version": "0.5.2",
+         *       "namespaces": [
+         *         "research"
+         *       ],
+         *       "state": "revoked",
+         *       "drain_reason": "disk replaced",
+         *       "revoked_by": "dana",
+         *       "revoked_at": "2026-09-25T09:30:00Z",
+         *       "results_accepted_until": "2026-09-25T10:30:00Z",
+         *       "reported_state": "draining",
+         *       "concurrency": 1,
+         *       "joined_at": "2026-09-02T11:00:12Z",
+         *       "last_seen_at": "2026-09-25T10:12:31Z",
+         *       "rotate_by": "2026-10-02T11:00:12Z"
+         *     }
+         */
+        runner: {
+            /**
+             * @description The identifier the API minted at the join, a lowercase ULID: the name a run gives the runner of each task, and the only one.
+             * @example 01jmz8x2d5f8qx7t2n5r8wd3hk
+             */
+            runner: components["schemas"]["properties-runner"];
+            /**
+             * @description The pool it joined, the one its join token was issued from.
+             * @example dmz
+             * @example default
+             */
+            pool: components["schemas"]["name"];
+            /**
+             * @description The labels it joined with, each one its pool carries and its join token permitted: what a step's runs_on selects it by. Empty for a runner that claimed none.
+             * @example [
+             *       "zone=dmz",
+             *       "arch=amd64"
+             *     ]
+             * @example []
+             */
+            labels: components["schemas"]["$defs-label"][];
+            /**
+             * @description The host's virtual cores, as the agent measured them at the join.
+             * @example 8
+             * @example 64
+             */
+            cpu: number;
+            /**
+             * @description The host's memory in bytes, as the agent measured it at the join.
+             * @example 34359738368
+             */
+            memory_bytes: number;
+            /**
+             * @description The disk its working directory may use, in bytes, as the agent measured it at the join.
+             * @example 214748364800
+             */
+            disk_bytes: number;
+            /**
+             * @description What the host runs, as the agent reported it at the join.
+             * @example amd64
+             * @example arm64
+             */
+            architecture: components["schemas"]["architecture"];
+            /**
+             * @description The agent's version, as it last reported it: at the join, then at each heartbeat, since an agent upgraded in place is the same runner.
+             * @example 0.6.0
+             */
+            agent_version: components["schemas"]["agent_version"];
+            /**
+             * @description The namespaces the host's own policy accepts, where it narrows its pool's; absent where it narrows nothing, which is the ordinary case.
+             * @example [
+             *       "research"
+             *     ]
+             */
+            namespaces?: components["schemas"]["namespace"][];
+            /**
+             * @description What the host reported at the join about how a container is contained on it; absent where it reported nothing.
+             * @example {
+             *       "runtime": "runc",
+             *       "userns_remap": true
+             *     }
+             */
+            containment?: components["schemas"]["containment"];
+            /**
+             * @description The installation's word on the runner, which is the one obeyed: ready, draining once an administrator drained it, revoked once one revoked it. What the runner says of itself is reported_state.
+             * @example ready
+             * @example draining
+             * @example revoked
+             * @enum {string}
+             */
+            state: "ready" | "draining" | "revoked";
+            /**
+             * @description What the runner said of itself at its last heartbeat: ready, draining, or unhealthy where it took itself out of service. Recorded and never obeyed. Absent until its first heartbeat.
+             * @example ready
+             * @example unhealthy
+             */
+            reported_state?: components["schemas"]["state"];
+            /**
+             * @description The most tasks it runs at once, as it reported it at its last heartbeat. Absent until its first heartbeat.
+             * @example 4
+             */
+            concurrency?: components["schemas"]["concurrency"];
+            /**
+             * @description Why it was taken out of service, in the order's words, one line: a drain's, or a revocation's, which replaces it.
+             * @example kernel update
+             * @example disk replaced
+             */
+            drain_reason?: string;
+            /**
+             * @description Who ordered the drain, present with drained_at once one was ordered. An order given twice keeps the first.
+             * @example dana
+             */
+            drained_by?: components["schemas"]["actor"];
+            /**
+             * Format: date-time
+             * @description When the drain was ordered.
+             * @example 2026-10-01T06:02:18Z
+             */
+            drained_at?: string;
+            /**
+             * @description Who revoked it, present with revoked_at once it is revoked.
+             * @example dana
+             */
+            revoked_by?: components["schemas"]["actor"];
+            /**
+             * Format: date-time
+             * @description When it was revoked.
+             * @example 2026-09-25T09:30:00Z
+             */
+            revoked_at?: string;
+            /**
+             * Format: date-time
+             * @description The end of a revocation's grace, fixed at the revocation: the results of the tasks it still holds are taken until then, and it is refused everywhere after. Present only for a revoked runner.
+             * @example 2026-09-25T10:30:00Z
+             */
+            results_accepted_until?: string;
+            /**
+             * Format: date-time
+             * @description When it joined.
+             * @example 2026-09-20T08:14:02Z
+             */
+            joined_at: string;
+            /**
+             * Format: date-time
+             * @description Its last heartbeat, by the installation's clock. Absent until its first; three intervals with none move its tasks to lost.
+             * @example 2026-10-01T06:41:57Z
+             */
+            last_seen_at?: string;
+            /**
+             * Format: date-time
+             * @description When its credential has to have been rotated by; past it, the credential is refused.
+             * @example 2026-10-21T08:14:02Z
+             */
+            rotate_by?: string;
+        };
+        /**
+         * Runner inventory
+         * @description Every runner of the installation, revoked ones included, by pool and then by identifier.
+         * @example {
+         *       "runners": [
+         *         {
+         *           "runner": "01jmz8x2d5f8qx7t2n5r8wd3hk",
+         *           "pool": "dmz",
+         *           "labels": [
+         *             "zone=dmz",
+         *             "arch=amd64"
+         *           ],
+         *           "cpu": 8,
+         *           "memory_bytes": 34359738368,
+         *           "disk_bytes": 214748364800,
+         *           "architecture": "amd64",
+         *           "agent_version": "0.6.0",
+         *           "containment": {
+         *             "runtime": "runc",
+         *             "userns_remap": true
+         *           },
+         *           "state": "ready",
+         *           "reported_state": "ready",
+         *           "concurrency": 4,
+         *           "joined_at": "2026-09-20T08:14:02Z",
+         *           "last_seen_at": "2026-10-01T06:41:57Z",
+         *           "rotate_by": "2026-10-21T08:14:02Z"
+         *         },
+         *         {
+         *           "runner": "01jmz8x9t4m2ke6v0c3b7n1a5q",
+         *           "pool": "dmz",
+         *           "labels": [
+         *             "zone=dmz",
+         *             "arch=amd64"
+         *           ],
+         *           "cpu": 8,
+         *           "memory_bytes": 34359738368,
+         *           "disk_bytes": 214748364800,
+         *           "architecture": "amd64",
+         *           "agent_version": "0.6.0",
+         *           "containment": {
+         *             "runtime": "runc",
+         *             "userns_remap": true
+         *           },
+         *           "state": "draining",
+         *           "drain_reason": "kernel update",
+         *           "drained_by": "dana",
+         *           "drained_at": "2026-10-01T06:02:18Z",
+         *           "reported_state": "draining",
+         *           "concurrency": 4,
+         *           "joined_at": "2026-09-20T08:16:40Z",
+         *           "last_seen_at": "2026-10-01T06:41:55Z",
+         *           "rotate_by": "2026-10-21T08:16:40Z"
+         *         },
+         *         {
+         *           "runner": "01jmyq3c8w5h0r2f6t9k4p7x1d",
+         *           "pool": "gpu",
+         *           "labels": [
+         *             "gpu=true"
+         *           ],
+         *           "cpu": 16,
+         *           "memory_bytes": 68719476736,
+         *           "disk_bytes": 1099511627776,
+         *           "architecture": "amd64",
+         *           "agent_version": "0.5.2",
+         *           "namespaces": [
+         *             "research"
+         *           ],
+         *           "state": "revoked",
+         *           "drain_reason": "disk replaced",
+         *           "revoked_by": "dana",
+         *           "revoked_at": "2026-09-25T09:30:00Z",
+         *           "results_accepted_until": "2026-09-25T10:30:00Z",
+         *           "reported_state": "draining",
+         *           "concurrency": 1,
+         *           "joined_at": "2026-09-02T11:00:12Z",
+         *           "last_seen_at": "2026-09-25T10:12:31Z",
+         *           "rotate_by": "2026-10-02T11:00:12Z"
+         *         }
+         *       ]
+         *     }
+         */
+        runnerList: {
+            /**
+             * @description The runners, in the order of their pool's name and then their identifier.
+             * @example [
+             *       {
+             *         "runner": "01jmz8x2d5f8qx7t2n5r8wd3hk",
+             *         "pool": "dmz",
+             *         "labels": [
+             *           "zone=dmz",
+             *           "arch=amd64"
+             *         ],
+             *         "cpu": 8,
+             *         "memory_bytes": 34359738368,
+             *         "disk_bytes": 214748364800,
+             *         "architecture": "amd64",
+             *         "agent_version": "0.6.0",
+             *         "containment": {
+             *           "runtime": "runc",
+             *           "userns_remap": true
+             *         },
+             *         "state": "ready",
+             *         "reported_state": "ready",
+             *         "concurrency": 4,
+             *         "joined_at": "2026-09-20T08:14:02Z",
+             *         "last_seen_at": "2026-10-01T06:41:57Z",
+             *         "rotate_by": "2026-10-21T08:14:02Z"
+             *       }
+             *     ]
+             */
+            runners: components["schemas"]["runner"][];
+        };
+        /**
+         * Runner pool list
+         * @description Every runner pool of the installation, by name.
+         * @example {
+         *       "runner_pools": [
+         *         {
+         *           "pool": {
+         *             "name": "default",
+         *             "labels": [],
+         *             "namespaces": [],
+         *             "resource_ceilings": {},
+         *             "containment": "hardened"
+         *           }
+         *         },
+         *         {
+         *           "pool": {
+         *             "name": "dmz",
+         *             "labels": [
+         *               "zone=dmz",
+         *               "arch=amd64"
+         *             ],
+         *             "namespaces": [
+         *               "finance",
+         *               "team-ops"
+         *             ],
+         *             "resource_ceilings": {
+         *               "cpu": "4",
+         *               "memory": "8Gi"
+         *             },
+         *             "containment": "hardened"
+         *           }
+         *         },
+         *         {
+         *           "pool": {
+         *             "name": "gpu",
+         *             "labels": [
+         *               "gpu=true"
+         *             ],
+         *             "namespaces": [
+         *               "research"
+         *             ],
+         *             "resource_ceilings": {
+         *               "cpu": "16",
+         *               "memory": "64Gi",
+         *               "pids": 4096
+         *             },
+         *             "containment": "sandboxed"
+         *           }
+         *         }
+         *       ]
+         *     }
+         */
+        runnerPoolList: {
+            /**
+             * @description The pools, each as the wire writes one with its token half absent, since a listing issues no join token. Every field is written, containment included, so that nobody reading a pool has to know a default.
+             * @example [
+             *       {
+             *         "pool": {
+             *           "name": "default",
+             *           "labels": [],
+             *           "namespaces": [],
+             *           "resource_ceilings": {},
+             *           "containment": "hardened"
+             *         }
+             *       }
+             *     ]
+             */
+            runner_pools: components["schemas"]["runnerPool"][];
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -10379,6 +11001,287 @@ export interface components {
                 };
             };
         };
+        /**
+         * Runner identifier
+         * @description The identifier the API minted for this machine, and the name it answers to everywhere afterwards: the runner field of every task result it publishes, the runner inventory, the console. It is minted here rather than chosen on the host, because a name a machine picks for itself is a name two machines can pick. Lowercase words joined by hyphens, the grammar a namespace and a pool are written in, so the same string reads correctly in a message, in a URL and in a queue name.
+         * @example runner-dmz-02
+         * @example runner-lan-01
+         */
+        "properties-runner": string;
+        /**
+         * Label
+         * @description A key=value a runner claims and a step selects on. A runner may only claim labels its join token allowed, so a machine cannot add zone=lan to itself and start receiving the steps that were kept off the internet.
+         * @example zone=dmz
+         * @example arch=amd64
+         * @example gpu=none
+         */
+        "$defs-label": string;
+        /**
+         * Architecture
+         * @description What the machine is, spelled exactly as the arch= label spells it, so that the fact and the selector never diverge. It is reported even where arch= is also claimed as a label, because a label is a permission the token granted and this is what the host actually runs: an installation whose two disagree has a mislabelled machine, and reading both is the only way to find it. No set of values is fixed, since an architecture the engine can build a static agent for is an architecture a runner may report.
+         * @example amd64
+         * @example arm64
+         */
+        architecture: string;
+        /**
+         * Agent version
+         * @description The version of the agent on this host. Every repository of the installation carries the same version at the same moment, so one string answers what the machine is running, and the API can tell an agent that matches the control plane from one left behind on a host nobody reimaged. Written as the release is tagged.
+         * @example 0.2.0
+         * @example 1.4.0
+         */
+        agent_version: string;
+        /**
+         * Containment
+         * @description What this host can prove about how a container will be contained on it, reported at join so that the decision is made before any work is dispatched rather than after a container has already started. The tier is not claimed here: hardened and sandboxed are read from these two facts together with the pool the token named, and separated is an arrangement of hosts that no runner can honestly assert about itself. The block is required because a request that said nothing would have to be read as meeting the floor, and assuming the floor is the wrong default for the one property the runner refuses to start without.. It is optional: the page enumerates what a runner sends at join and does not name it, and the floor is held by the runner's own refusal to take work on a daemon without the remapping rather than by the API at registration. Reported here so that an operator can see from the console what a fleet is actually running on.
+         * @example {
+         *       "runtime": "runc",
+         *       "userns_remap": true
+         *     }
+         * @example {
+         *       "runtime": "runsc",
+         *       "userns_remap": true
+         *     }
+         * @example {
+         *       "runtime": "runc",
+         *       "userns_remap": false
+         *     }
+         */
+        containment: {
+            /**
+             * Container runtime
+             * @description The runtime the daemon will create this runner's containers with, under the name the daemon knows it by. runc is the default the hardened tier is built on; runsc is gVisor, what a sandboxed pool runs, which intercepts system calls in a userspace kernel written in a memory-safe language and pays for it in application compatibility and per system call overhead. The value is not enumerated, because a pool may be built on a runtime this document has not heard of and the useful answer is the name the host actually reports.
+             * @example runc
+             * @example runsc
+             */
+            runtime: string;
+            /**
+             * User namespace remapping
+             * @description Whether the daemon remaps container root to an unprivileged host account, so that a process escaping the namespace is a high-numbered UID that maps to no real user. It is the floor rather than a preference: a runner finding a daemon without it refuses to take work, and an operator gets past that refusal only by setting require_userns_remap to false in /etc/agentiik/runner.toml, a file rather than a command line flag so that lifting the floor can be read back afterwards. false is therefore a value a legitimately running runner reports, and reporting it is how the inventory can name the hosts sitting below the floor instead of leaving them indistinguishable from the rest.
+             * @example true
+             * @example false
+             */
+            userns_remap: boolean;
+        };
+        /**
+         * Runner state
+         * @description What the runner will do with new work, which is a different question from whether it answers. ready pulls and accepts tasks. draining accepts none and is finishing what it holds, which is what a runner reports once a drain order or a revocation has reached it, and it keeps reporting it until tasks is empty. unhealthy accepts none because the runner took itself out of service, as it does after a few consecutive pre_task hook failures, rather than dragging its whole pool down one task at a time. The console needs all three, because a runner that answers and refuses work is present and useless, and present alone would hide that.
+         * @example ready
+         * @example draining
+         * @enum {string}
+         */
+        state: "ready" | "draining" | "unhealthy";
+        /**
+         * Concurrency ceiling
+         * @description The most tasks this host will run at once, as AGK_RUNNER_CONCURRENCY sets it. It is reported on every heartbeat rather than once at registration because it is a line in a unit file and changes when the agent restarts, and a restart is not a new registration. Read with the length of tasks it is what lets the console say six of eight rather than six, which is the difference between a busy pool and a stuck one. It is not max_concurrent_tasks, which is a namespace quota and bounds a tenant rather than a machine.
+         * @example 8
+         * @example 1
+         */
+        concurrency: number;
+        /**
+         * Runner pool and join token
+         * @description What an administrator writes down before any machine can join a fleet: the pool, and one join token issued from it. The two travel together because neither is legible alone. A pool is the unit everything else is written against, since the bus gives each one a queue or a subject of its own and a namespace is allowed to reach pools rather than hosts, and a join token is the only way a machine nobody has met proves which pool it belongs to. Two rules bind them and are left to the validator, because JSON Schema can hold a value to a constant and not to another value in the same document: the token names the pool it was issued from, and it permits no label that pool does not grant. The token half is absent whenever no token is being issued, which is what a listing of pools is: the page keeps the two acts apart, an administrator creating a pool and then issuing a token from it, and a shape demanding both would refuse a pool the documentation prints on its own.
+         * @example {
+         *       "pool": {
+         *         "name": "dmz",
+         *         "labels": [
+         *           "zone=dmz",
+         *           "arch=amd64"
+         *         ],
+         *         "namespaces": [
+         *           "finance"
+         *         ],
+         *         "resource_ceilings": {
+         *           "cpu": "4",
+         *           "memory": "8Gi",
+         *           "pids": 512
+         *         },
+         *         "containment": "hardened"
+         *       },
+         *       "join_token": {
+         *         "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+         *         "token": "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ",
+         *         "pool": "dmz",
+         *         "labels": [
+         *           "zone=dmz",
+         *           "arch=amd64"
+         *         ],
+         *         "single_use": true,
+         *         "issued_at": "2026-09-10T06:12:00Z",
+         *         "expires_at": "2026-09-10T07:12:00Z"
+         *       }
+         *     }
+         */
+        runnerPool: {
+            /**
+             * Runner pool
+             * @description A named group of runners, carrying the labels its runners may claim, the namespaces whose work it accepts and the ceiling one task may ask for on it. It exists as a thing with a name because too much is written against it for a label selector to serve: the bus gives it a queue, a namespace quota lists it, a deployment profile draws it as a box outside the failure domains, and a namespace that needs separation rather than sharing is given a pool instead of an installation of its own.
+             * @example {
+             *       "name": "dmz",
+             *       "labels": [
+             *         "zone=dmz",
+             *         "arch=amd64"
+             *       ],
+             *       "namespaces": [
+             *         "finance"
+             *       ],
+             *       "resource_ceilings": {
+             *         "cpu": "4",
+             *         "memory": "8Gi",
+             *         "pids": 512
+             *       },
+             *       "containment": "hardened"
+             *     }
+             * @example {
+             *       "name": "default",
+             *       "labels": [
+             *         "zone=lan",
+             *         "arch=amd64"
+             *       ],
+             *       "namespaces": [],
+             *       "resource_ceilings": {
+             *         "cpu": "2",
+             *         "memory": "2Gi",
+             *         "pids": 256
+             *       }
+             *     }
+             */
+            pool: {
+                /**
+                 * @description What the pool is called, and its only identity. It is the string a namespace's allowed_runner_pools quota lists and the string an agentiik_runner_pool data source reads back, so the pool carries no second identifier for the same thing: a name an administrator chose is what a person types, what a review reads back and what an installation keeps stable while hosts come and go. The grammar is the one this installation uses everywhere a name is given rather than minted, lowercase words joined by hyphens.
+                 * @example default
+                 * @example dmz
+                 * @example gpu-nvme
+                 */
+                name: string;
+                /**
+                 * @description Every label a runner of this pool may claim, and therefore everything a step's runs_on can select to reach it. The set is decided here, narrowed by a join token and checked at registration, because labels are never self-asserted: a machine cannot add zone=lan to itself and start receiving the steps that were kept off the internet. A zone is one of these labels and not a field of its own, which is what lets one deployment profile draw a pool around zone=lan with no route to the internet and another around zone=dmz behind an egress proxy while the wire learns nothing about either. A pool that grants no label is reachable only by a step that names none.
+                 * @example [
+                 *       "zone=dmz",
+                 *       "arch=amd64"
+                 *     ]
+                 * @example [
+                 *       "zone=lan",
+                 *       "arch=arm64",
+                 *       "gpu=true"
+                 *     ]
+                 */
+                labels: components["schemas"]["$defs-label"][];
+                /**
+                 * @description Which namespaces this pool accepts work from. An empty list accepts every one of them, which is what a single host installation runs with and what the runner setting spells as an empty string; a list names the only namespaces whose tasks the pool will pull, which is how a namespace is given dedicated capacity without a separate installation. It restricts the pool and grants nothing: a namespace still reaches a pool only when its own allowed_runner_pools quota lists it, so both sides have to agree before a task is ever placed here.
+                 * @example []
+                 * @example [
+                 *       "finance"
+                 *     ]
+                 * @example [
+                 *       "finance",
+                 *       "team-ops"
+                 *     ]
+                 */
+                namespaces: components["schemas"]["namespace"][];
+                /**
+                 * @description The most one task may be given on this pool, whatever its step asked for. A step writes its own cpu, memory and pids, and they are capped here and by the namespace quota before the runner creates the container, so a pool of small machines cannot be handed a step written for a large one. The ceiling sits on the pool because that is where an administrator decides it once, and it is a cap on a single task and never a total: what a host can actually hold is its own declared capacity, and a runner refuses a task that would take it past that.
+                 * @example {
+                 *       "cpu": "4",
+                 *       "memory": "8Gi",
+                 *       "pids": 512
+                 *     }
+                 * @example {
+                 *       "cpu": "2",
+                 *       "memory": "2Gi"
+                 *     }
+                 */
+                resource_ceilings: components["schemas"]["resources"];
+                /**
+                 * @description What runs the containers here. hardened is the default runtime with user-namespace remapping, so that container root maps to an unprivileged host account; sandboxed is gVisor's runsc, bought at reduced application compatibility and a higher per system call cost; separated is hosts of its own, for when the requirement is separation rather than sandboxing. The tier belongs to the pool because that is where the decision is made: a namespace running code its own owners will not vouch for is given a pool, not a keyword on a step. Absent means hardened, since every installation gets that tier always and a runner refuses a daemon without the remapping rather than starting containers whose root maps to the host's.
+                 * @default hardened
+                 * @example hardened
+                 * @example sandboxed
+                 * @example separated
+                 * @enum {string}
+                 */
+                containment: "hardened" | "sandboxed" | "separated";
+            };
+            /**
+             * Join token
+             * @description The credential an administrator issues from a pool so that one machine can join it. Registration exists to answer one question safely, how a machine nobody has met proves which pool it belongs to, and this is the whole of the answer: the runner presents the token once together with the public key it generated locally, the API checks that the labels claimed are a subset of what the token permits and refuses anything else, and what comes back is a runner identifier and a long-lived credential worth having only on that machine. The token is spent at that moment and cannot be replayed.
+             * @example {
+             *       "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+             *       "token": "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ",
+             *       "pool": "dmz",
+             *       "labels": [
+             *         "zone=dmz",
+             *         "arch=amd64"
+             *       ],
+             *       "single_use": true,
+             *       "issued_at": "2026-09-10T06:12:00Z",
+             *       "expires_at": "2026-09-10T07:12:00Z"
+             *     }
+             * @example {
+             *       "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+             *       "pool": "dmz",
+             *       "labels": [
+             *         "zone=dmz",
+             *         "arch=amd64"
+             *       ],
+             *       "single_use": true,
+             *       "issued_at": "2026-09-10T06:12:00Z",
+             *       "expires_at": "2026-09-10T07:12:00Z",
+             *       "redeemed_at": "2026-09-10T06:14:41.902Z"
+             *     }
+             */
+            join_token?: {
+                /**
+                 * @description What names this token everywhere its secret is not: a listing, the audit log, a revocation. The secret is stored hashed and shown once, so speaking about the token at all needs something else to speak with, and a ULID sorts by the moment it was issued.
+                 * @example 01M2AAZ9G62NQXFAFCXKRPJEH5
+                 */
+                id: components["schemas"]["ulid"];
+                /**
+                 * @description The secret itself, written agkjoin_ and then 256 bits of entropy, which is what an administrator copies and a runner presents to agk runner join. It appears in exactly one message, the answer to the request that created it, because it is stored hashed and shown once at creation: every other field of this object survives in a listing and this one does not. The prefix is there so that a token leaked into a log, a shell history or a repository is recognisable as a credential of this installation, which a bare random string is not.
+                 * @example agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ
+                 */
+                token?: string;
+                /**
+                 * @description The pool this token admits a machine to, by name. A token is bound to one pool and issues nothing outside it, which is what makes registration answer its question rather than ask one: the machine proves where it belongs instead of choosing where to go.
+                 * @example dmz
+                 * @example gpu-nvme
+                 */
+                pool: string;
+                /**
+                 * @description The exact set of labels a runner may claim with this token. A registration claiming anything outside it is refused, and the set is itself within what the pool grants, so one token can admit a machine to a narrower part of a pool than the pool as a whole: a host that is in the demilitarised zone but has no accelerator is joined with a token that says so. Binding the labels to the token rather than to the machine is what keeps a label an administrator's statement about where a host sits instead of the host's statement about itself.
+                 * @example [
+                 *       "zone=dmz",
+                 *       "arch=amd64"
+                 *     ]
+                 * @example [
+                 *       "zone=lan",
+                 *       "arch=arm64",
+                 *       "gpu=true"
+                 *     ]
+                 */
+                labels: components["schemas"]["$defs-label"][];
+                /**
+                 * @description Always true, and written into the message rather than left to prose because the whole exchange rests on it: the token is spent by the registration that succeeds, and anyone who reads it afterwards holds nothing. It is a constant and not a count of remaining uses, because a token good for several machines is a credential worth stealing and there is nothing it would buy that a second token does not: one machine, one token, and a reimaged host joins again.
+                 * @example true
+                 * @constant
+                 */
+                single_use: true;
+                /**
+                 * @description When the token was created, on the clock of the API that created it. It is what the expiry is read against when two clocks disagree, and what a listing of outstanding tokens is ordered by.
+                 * @example 2026-09-10T06:12:00Z
+                 */
+                issued_at: components["schemas"]["timestamp"];
+                /**
+                 * @description When the token stops being accepted, whether or not anybody used it. One hour after it was issued is the default, and it is short because the token only has to survive the minutes between an administrator copying it and a machine presenting it; an installation that needs longer says so when it issues one. It is an instant rather than a lifetime for the reason the timestamp definition gives, and it is here rather than only in an administrator's head so that a reader of the message can see a dead token without asking anyone.
+                 * @example 2026-09-10T07:12:00Z
+                 */
+                expires_at: components["schemas"]["timestamp"];
+                /**
+                 * @description When the token was spent, absent while it has not been. Present, it is the moment the runner record was created and the token became worthless. Absent and past the expiry, it is a machine that never joined, which is worth seeing rather than tidying away: either the host never arrived, or an installation was set up halfway and left.
+                 * @example 2026-09-10T06:14:41.902Z
+                 */
+                redeemed_at?: components["schemas"]["timestamp"];
+            };
+        };
     };
     responses: {
         /** @description The request is refused before it is read as one: a body that is not JSON, not UTF-8, holding a field the route does not read, a field written twice or anything after the document, or a value outside its grammar; a body sent to a route that reads none; or two credentials, a bearer token beside the session cookie or two session cookies, since a request is answered as one principal and which was meant is not the API's to guess. */
@@ -10555,6 +11458,8 @@ export interface components {
         outputName: components["schemas"]["identifier"];
         /** @description The artifact's agk:// URI, as an envelope's file names it, percent-encoded as one path segment, so that a proxy in front passes %2F undecoded. */
         artifactUri: string;
+        /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+        secret: string;
     };
     requestBodies: never;
     headers: {
@@ -13253,6 +14158,200 @@ export interface operations {
                 };
             };
             503: components["responses"]["unavailable"];
+        };
+    };
+    listSecrets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declarations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["secretList"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    readSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+                name: components["parameters"]["secret"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declaration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["secretDeclaration"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such declaration, no such namespace, or one where the caller does not hold workflow:read: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    declareSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+                name: components["parameters"]["secret"];
+            };
+            cookie?: never;
+        };
+        /** @description The store, the path, and for builtin the value. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["secretDeclare"];
+            };
+        };
+        responses: {
+            /** @description Changed: the declaration as it now stands, never the value. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["secretDeclaration"];
+                };
+            };
+            /** @description Declared: the declaration, never the value, and Location naming it. */
+            201: {
+                headers: {
+                    /** @description Where the declaration is read. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["secretDeclaration"];
+                };
+            };
+            /** @description A name the workflow file could not write, a store that is not one of the three or that this installation does not read for the namespace, a path builtin does not take or env needs, a value for a store other than builtin, an empty value, an encoding that is not utf-8 or base64, or two credentials. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, or one where the caller does not hold secret:write at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+            /** @description A value larger than 1 MiB once decoded, or a body larger than 2 MiB. */
+            413: components["responses"]["tooLarge"];
+            /** @description A value sent to an installation with no built-in store attached: nothing was written. */
+            503: components["responses"]["unavailable"];
+        };
+    };
+    removeSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+                name: components["parameters"]["secret"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such declaration, no such namespace, or one where the caller does not hold secret:write: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    listRunners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The inventory. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runnerList"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+        };
+    };
+    listRunnerPools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pools. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runnerPoolList"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. */
+            403: components["responses"]["forbidden"];
         };
     };
 }

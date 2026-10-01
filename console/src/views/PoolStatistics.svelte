@@ -6,7 +6,7 @@
   import Pane from "../components/Pane.svelte";
   import RangeBar from "../components/RangeBar.svelte";
   import { took } from "../lib/format";
-  import type { Place } from "../lib/place.svelte";
+  import { follow, type Place } from "../lib/place.svelte";
   import { declaredLost, marks, ticks, usage, type Mark, type PoolsSeries } from "../lib/pool-stats";
   import { query, Ranged } from "../lib/range.svelte";
   import type { Range } from "../lib/stats";
@@ -19,6 +19,7 @@
   let { api, place }: { api: API; place: Place } = $props();
 
   const ranged = new Ranged(() => place);
+  const inventory = { kind: "runners" as const };
   const range = $derived(ranged.range);
 
   let pools = $state<PoolsSeries | null>(null);
@@ -103,6 +104,7 @@
 
 <nav class="sub" aria-label="The installation's runners">
   <span class="mono where">installation / Runners</span>
+  <a class="tab" href={place.href(inventory)} onclick={follow(place, inventory)}>Runners and pools</a>
   <span class="tab" aria-current="page">Statistics</span>
 </nav>
 
@@ -203,12 +205,18 @@
     align-items: center;
     height: 29px;
     padding: 0 calc(var(--unit) * 5);
-    border: var(--border-hairline) solid var(--accentLine);
+    border: var(--border-hairline) solid transparent;
     border-radius: var(--radius-control);
-    background: var(--accentDim);
-    color: var(--accent);
+    color: var(--muted);
     font-size: var(--type-navigation-size);
     font-weight: 500;
+    text-decoration: none;
+  }
+
+  .tab[aria-current="page"] {
+    border-color: var(--accentLine);
+    background: var(--accentDim);
+    color: var(--accent);
   }
 
   .refused {

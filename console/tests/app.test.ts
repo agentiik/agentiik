@@ -66,3 +66,30 @@ describe("a run's steps and commit in the list", () => {
     expect(await screen.findByRole("img", { name: "No step has been reached" })).toBeTruthy();
   });
 });
+
+describe("refusing as the API does", () => {
+  // What is drawn in place of a page, with the address's own words taken out, so that two
+  // addresses are compared on what the console says of them and not on what they spell.
+  async function refusedAt(path: string, s: Scenario, named: string[]): Promise<string> {
+    open(path, s);
+    await screen.findByText("No such thing, or not yours.");
+    const drawn = document.body.innerHTML.replaceAll(/\s+/g, " ");
+    document.body.innerHTML = "";
+    return named.reduce((html, n) => html.replaceAll(n, "?"), drawn);
+  }
+
+  it("draws a run of a workflow the caller cannot read as a run that does not exist", async () => {
+    const hidden = "01JMZ8Q0HIDDENHIDDENHIDDEN";
+    const s = scenario("alice");
+    s[`GET /api/v1/runs/${hidden}`] = { status: 404, body: { error: "no such thing, or not yours" } };
+    const invisible = await refusedAt(`/finance/runs/${hidden}`, s, [hidden]);
+    const absent = await refusedAt("/finance/runs/01JMZ8ZZZZZZZZZZZZZZZZZZZZ", scenario("alice"), ["01JMZ8ZZZZZZZZZZZZZZZZZZZZ"]);
+    expect(invisible).toBe(absent);
+  });
+
+  it("draws a namespace the caller holds nothing in as one that does not exist", async () => {
+    const invisible = await refusedAt("/payroll/runs", scenario("alice"), ["payroll"]);
+    const absent = await refusedAt("/nowhere/runs", scenario("alice"), ["nowhere"]);
+    expect(invisible).toBe(absent);
+  });
+});
