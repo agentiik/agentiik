@@ -17989,6 +17989,118 @@
     "status": 200,
     "text": "steps:\n  export:\n    image: alpine:3.21\n    script:\n      - agk items > /tmp/rows.json\n    outputs: [out]\n  reconcile:\n    workflow: finance/monthly-invoicing@v2.1.0\n    needs:\n      - { step: export, port: out, as: orders }\n"
   },
+  "GET /api/v1/alice/grants": {
+    "status": 200,
+    "body": {
+      "grants": [
+        {
+          "id": "01JMZ7A0B1C2D3E4F5G6H7J8K9",
+          "principal": "alice",
+          "scope": "alice",
+          "role": "owner",
+          "granted_by": "installation",
+          "granted_at": "2026-09-27T08:50:00Z"
+        },
+        {
+          "id": "01JMZ7A2C3D4E5F6G7H8J9K0M1",
+          "principal": "group:team-finance",
+          "scope": "alice",
+          "role": "viewer",
+          "granted_by": "alice",
+          "granted_at": "2026-09-28T09:12:00Z"
+        },
+        {
+          "id": "01JMZ7A4D5E6F7G8H9J0K1M2N3",
+          "principal": "bruno",
+          "scope": "alice",
+          "role": "editor",
+          "expires_at": "2026-12-31T00:00:00Z",
+          "granted_by": "alice",
+          "granted_at": "2026-09-28T09:14:00Z"
+        },
+        {
+          "id": "01JMZ7A6E7F8G9H0J1K2M3N4P5",
+          "principal": "bruno",
+          "scope": "alice",
+          "deny": "secret:write",
+          "granted_by": "alice",
+          "granted_at": "2026-09-28T09:15:00Z"
+        },
+        {
+          "id": "01JMZ7A8F9G0H1J2K3M4N5P6Q7",
+          "principal": "alice/ci",
+          "scope": "alice",
+          "role": "operator",
+          "granted_by": "alice",
+          "granted_at": "2026-09-29T16:40:00Z"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/alice/workflows/report/grants": {
+    "status": 200,
+    "body": {
+      "grants": [
+        {
+          "id": "01JMZ7A0B1C2D3E4F5G6H7J8K9",
+          "principal": "alice",
+          "scope": "alice",
+          "role": "owner",
+          "granted_by": "installation",
+          "granted_at": "2026-09-27T08:50:00Z"
+        },
+        {
+          "id": "01JMZ7A2C3D4E5F6G7H8J9K0M1",
+          "principal": "group:team-finance",
+          "scope": "alice",
+          "role": "viewer",
+          "granted_by": "alice",
+          "granted_at": "2026-09-28T09:12:00Z"
+        },
+        {
+          "id": "01JMZ7A4D5E6F7G8H9J0K1M2N3",
+          "principal": "bruno",
+          "scope": "alice",
+          "role": "editor",
+          "expires_at": "2026-12-31T00:00:00Z",
+          "granted_by": "alice",
+          "granted_at": "2026-09-28T09:14:00Z"
+        },
+        {
+          "id": "01JMZ7A6E7F8G9H0J1K2M3N4P5",
+          "principal": "bruno",
+          "scope": "alice",
+          "deny": "secret:write",
+          "granted_by": "alice",
+          "granted_at": "2026-09-28T09:15:00Z"
+        },
+        {
+          "id": "01JMZ7A8F9G0H1J2K3M4N5P6Q7",
+          "principal": "alice/ci",
+          "scope": "alice",
+          "role": "operator",
+          "granted_by": "alice",
+          "granted_at": "2026-09-29T16:40:00Z"
+        },
+        {
+          "id": "01JMZ7B0G1H2J3K4M5N6P7Q8R9",
+          "principal": "group:team-finance",
+          "scope": "alice/report",
+          "role": "editor",
+          "granted_by": "alice",
+          "granted_at": "2026-09-29T10:02:00Z"
+        },
+        {
+          "id": "01JMZ7B2H3J4K5M6N7P8Q9R0S1",
+          "principal": "bruno",
+          "scope": "alice/report",
+          "deny": "run:read_data",
+          "granted_by": "alice",
+          "granted_at": "2026-09-29T10:03:00Z"
+        }
+      ]
+    }
+  },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f?path=schemas/customers.json": {
     "status": 200,
     "text": "{\n  \"type\": \"array\",\n  \"items\": {\n    \"$ref\": \"./customer.json\"\n  }\n}\n"
