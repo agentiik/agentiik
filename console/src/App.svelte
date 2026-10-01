@@ -9,6 +9,7 @@
   import type { View } from "./lib/route";
   import type { Session } from "./lib/session.svelte";
   import Account from "./views/Account.svelte";
+  import PoolStatistics from "./views/PoolStatistics.svelte";
   import Refused from "./views/Refused.svelte";
   import Run from "./views/Run.svelte";
   import RunDiff from "./views/RunDiff.svelte";
@@ -113,6 +114,8 @@
         <Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />
       {:else if route.kind === "users" && session.me.admin}
         <Users {api} me={session.me} />
+      {:else if route.kind === "runners" && route.tab === "statistics" && session.me.admin}
+        <PoolStatistics {api} {place} />
       {:else}
         <Refused />
       {/if}
