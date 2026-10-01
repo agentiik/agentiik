@@ -471,9 +471,11 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"api_token.revoke carol "+minted+" - done")
 
 	// dave says who he is and sets a photo, removes it and sets another, which carol, administering
-	// the installation, removes.
+	// the installation, removes; carol gives him an email address.
 	s.act("PATCH /api/v1/me", "/api/v1/me", dave, `{"given_name":"Dave","timezone":"Europe/Paris"}`, http.StatusOK,
 		"user.profile dave dave - done")
+	s.act("PATCH /api/v1/users/{login}", "/api/v1/users/dave", carol, `{"email":"dave@example.com"}`, http.StatusOK,
+		"user.update carol dave - done")
 	s.act("PUT /api/v1/me/avatar", "/api/v1/me/avatar", dave, aPhoto(t), http.StatusNoContent,
 		"user.avatar dave dave - done")
 	s.act("DELETE /api/v1/me/avatar", "/api/v1/me/avatar", dave, nil, http.StatusNoContent,

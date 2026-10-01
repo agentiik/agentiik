@@ -215,7 +215,7 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 // is a field every request carrying it is refused for.
 func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 	value := "sk_live_notreal"
-	aliceMartin, alice, paris, cleared := "Alice Martin", "Alice", "Europe/Paris", ""
+	alice, martin, paris, cleared, address := "Alice", "Martin", "Europe/Paris", "", "alice.martin@example.com"
 	for _, want := range []request{
 		&Push{
 			Entry: "agentiik.yaml", Document: []byte("kind: Workflow\n"),
@@ -260,7 +260,9 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 		}},
 		&NamespaceRecord{Name: "team-ops", Owner: "bob-martin"},
 		&Quotas{MaxRunsPerHour: 60},
-		&ProfileChange{DisplayName: &aliceMartin, GivenName: &alice, Timezone: &paris, Bio: &cleared},
+		&ProfileChange{GivenName: &alice, FamilyName: &martin, Timezone: &paris, Bio: &cleared},
+		&UserChange{Email: &address},
+		&UserChange{Email: &cleared},
 		&VariableWrite{Value: json.RawMessage(`{"hosts":["a","b"],"zone":"eu-west"}`), Visibility: "selected", Workflows: []string{"payroll"}, valued: true, values: 5},
 		&VariableWrite{Value: json.RawMessage(`null`), Visibility: "all", valued: true, values: 1},
 	} {

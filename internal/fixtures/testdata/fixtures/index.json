@@ -24,6 +24,7 @@
     "role": "../wire.schema.json",
     "permission": "../wire.schema.json",
     "namespace-record": "../wire.schema.json",
+    "namespace-variable": "../wire.schema.json",
     "auth-policy": "../wire.schema.json",
     "notification": "../wire.schema.json",
     "repository": "../wire.schema.json",
@@ -1130,6 +1131,10 @@
         {
           "file": "wire/valid/principal-user-profile.json",
           "covers": "a user who said who they are and set a photo: given and family names, a title, a location, an IANA time zone, a bio, and when the photo was last set, as GET /api/v1/me answers it once PATCH /api/v1/me and PUT /api/v1/me/avatar wrote them"
+        },
+        {
+          "file": "wire/valid/principal-user-email.json",
+          "covers": "a user an administrator gave an email address, at POST /api/v1/users or PATCH /api/v1/users/{login}, shown by the display name their given and family names make"
         }
       ],
       "invalid": [
@@ -1198,6 +1203,24 @@
           "rule": "a title is at most 128 characters, a line on a card beside the name",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#api"
+        },
+        {
+          "file": "wire/invalid/principal-user-email-two-ats.json",
+          "rule": "an email address is one @ with something on each side, and one holding two is not an address",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-user-email-with-a-space.json",
+          "rule": "an email address holds no space or control character, since no address does and it is printed at a terminal",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-user-email-255-characters.json",
+          "rule": "an email address is at most 254 characters, the longest a mail path carries once its two angle brackets are counted",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
         }
       ]
     },
@@ -1518,6 +1541,53 @@
           "rule": "a namespace's name is at most 255 characters, the most a directory or a bus subject token holds a name to",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#principals"
+        }
+      ]
+    },
+    "namespace-variable": {
+      "valid": [
+        {
+          "file": "wire/valid/namespace-variable-all.json",
+          "covers": "a variable every workflow of the namespace reads",
+          "source": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        {
+          "file": "wire/valid/namespace-variable-selected.json",
+          "covers": "a list read by the two workflows it names, sorted, a number of the list an int as it was written"
+        },
+        {
+          "file": "wire/valid/namespace-variable-aside.json",
+          "covers": "selected naming no workflow, kept aside and read by none, written last by a service account"
+        },
+        {
+          "file": "wire/valid/namespace-variable-null.json",
+          "covers": "null, a value as a file's vars may write one"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/namespace-variable-all-with-workflows.json",
+          "rule": "workflows beside all, which every workflow of the namespace reads already: a list there would say something the visibility does not.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        {
+          "file": "wire/invalid/namespace-variable-selected-without-workflows.json",
+          "rule": "selected naming no list, which the API always writes, [] for none, so that a reader never guesses whether a missing list means none or all.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        {
+          "file": "wire/invalid/namespace-variable-dotted-name.json",
+          "rule": "A name a workflow file's vars could not write: vars.ledger.url would read the url of a variable named ledger.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        {
+          "file": "wire/invalid/namespace-variable-no-value.json",
+          "rule": "A variable with no value. null is a value; nothing is not.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#namespace-variables"
         }
       ]
     },

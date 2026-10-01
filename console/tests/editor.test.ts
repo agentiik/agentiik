@@ -20,7 +20,9 @@ describe("the visual editor", () => {
     const place = open();
     await fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
     expect(place.query.get("edit")).toBe("1");
-    expect(await screen.findByText("No change")).toBeTruthy();
+    // The editor is a chunk of its own, imported when it is opened, which a machine running every
+    // file at once may take longer than a second to load.
+    expect(await screen.findByText("No change", {}, { timeout: 5000 })).toBeTruthy();
     expect(await text()).toContain("  invoice:\n    extends: .api-brick");
     await fireEvent.click(screen.getByRole("button", { name: "Stop editing" }));
     expect(place.query.get("edit")).toBeNull();

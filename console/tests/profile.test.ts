@@ -80,12 +80,14 @@ describe("the caller's profile in the console", () => {
     await fireEvent.click(await screen.findByRole("link", { name: "Your account" }));
     expect(place.route).toEqual({ kind: "account", tab: "profile" });
     const form = await screen.findByRole("form", { name: "Your profile" });
-    expect((within(form).getByRole("textbox", { name: /^Display name/ }) as HTMLInputElement).value).toBe("Alice Martin");
-    await fireEvent.input(within(form).getByRole("textbox", { name: "Family name" }), { target: { value: "Martin" } });
+    expect(within(form).queryByRole("textbox", { name: /^Display name/ })).toBeNull();
+    expect(within(form).getByText("alice.martin@example.com")).toBeTruthy();
+    expect((within(form).getByRole("textbox", { name: "Given name" }) as HTMLInputElement).value).toBe("Alice");
+    await fireEvent.input(within(form).getByRole("textbox", { name: "Family name" }), { target: { value: "Martin-Durand" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: /^Title/ }), { target: { value: "Technical lead " } });
     await fireEvent.submit(form);
     expect(await screen.findByText("Saved.")).toBeTruthy();
-    expect(asked.filter((a) => a.key === "PATCH /api/v1/me").map((a) => a.body)).toEqual([{ family_name: "Martin", title: "Technical lead" }]);
+    expect(asked.filter((a) => a.key === "PATCH /api/v1/me").map((a) => a.body)).toEqual([{ family_name: "Martin-Durand", title: "Technical lead" }]);
     expect(asked.filter((a) => a.key === "GET /api/v1/me").length).toBeGreaterThan(1);
   });
 

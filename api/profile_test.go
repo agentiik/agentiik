@@ -143,13 +143,15 @@ func (in profiles) entries(t *testing.T, action string) []string {
 func TestAUserWritesAndClearsWhatTheySayOfThemself(t *testing.T) {
 	in := someProfiles(t)
 
-	// Nothing said yet: every field empty, and no photo, which is null rather than absent.
+	// Nothing said yet but the given name she was created with: every other field empty, no
+	// email address, and no photo, which is null rather than absent.
 	before, raw := userIn(t, in.ask(t, "GET", "/api/v1/me", "alice", "", nil), true)
-	if before.GivenName != "" || before.Bio != "" || before.AvatarUpdatedAt != nil || !bytes.Contains(raw, []byte(`"avatar_updated_at":null`)) || !bytes.Contains(raw, []byte(`"bio":""`)) {
+	if before.GivenName != "Alice" || before.DisplayName != "Alice" || before.FamilyName != "" || before.Bio != "" || before.AvatarUpdatedAt != nil ||
+		!bytes.Contains(raw, []byte(`"avatar_updated_at":null`)) || !bytes.Contains(raw, []byte(`"bio":""`)) || !bytes.Contains(raw, []byte(`"email":""`)) {
 		t.Errorf("alice, having said nothing, reads as %s", raw)
 	}
 
-	w := in.patch(t, "alice", `{"display_name":"Alice Martin","given_name":"Alice","family_name":"Martin","title":"Technical lead","location":"Lyon, France","timezone":"Europe/Paris","bio":"Writes the invoicing workflows, and reviews what touches payroll."}`)
+	w := in.patch(t, "alice", `{"given_name":"Alice","family_name":"Martin","title":"Technical lead","location":"Lyon, France","timezone":"Europe/Paris","bio":"Writes the invoicing workflows, and reviews what touches payroll."}`)
 	written, _ := userIn(t, w, true)
 	want := api.User{
 		Kind: "user", Login: "alice", DisplayName: "Alice Martin", GivenName: "Alice", FamilyName: "Martin",
@@ -201,7 +203,7 @@ func TestAUserWritesAndClearsWhatTheySayOfThemself(t *testing.T) {
 
 	recorded := in.entries(t, "user.profile")
 	wantRecorded := []string{
-		`done alice alice {"fields":["display_name","given_name","family_name","title","location","timezone","bio"]}`,
+		`done alice alice {"fields":["family_name","title","location","timezone","bio"]}`,
 		`done alice alice {"fields":["location","bio"]}`,
 		`unchanged alice alice {"fields":[]}`,
 	}
@@ -211,6 +213,30 @@ func TestAUserWritesAndClearsWhatTheySayOfThemself(t *testing.T) {
 	for _, e := range recorded {
 		if strings.Contains(e, "Martin") || strings.Contains(e, "Lyon") {
 			t.Errorf("the audit log recorded what alice wrote: %s", e)
+		}
+	}
+}
+
+// A display name is the given and family names, each trimmed of the spaces at its ends and joined by
+// one space, either alone where only one is said, and the login where neither is: as the user writes
+// them, wherever a user is answered.
+func TestADisplayNameIsMadeOfTheGivenAndFamilyNames(t *testing.T) {
+	in := someProfiles(t)
+	for _, c := range []struct{ body, want string }{
+		{`{"given_name":"Alice","family_name":"Martin"}`, "Alice Martin"},
+		{`{"given_name":"  Alice ","family_name":" de la Fontaine  "}`, "Alice de la Fontaine"},
+		{`{"given_name":""}`, "de la Fontaine"},
+		{`{"family_name":"","given_name":"Alice"}`, "Alice"},
+		{`{"given_name":""}`, "alice"},
+		{`{"given_name":"   ","family_name":" "}`, "alice"},
+		{`{"given_name":"アリス"}`, "アリス"},
+	} {
+		got, _ := userIn(t, in.patch(t, "alice", c.body), true)
+		if got.DisplayName != c.want {
+			t.Errorf("after %s alice's display name is %q, want %q", c.body, got.DisplayName, c.want)
+		}
+		if listed, _ := userIn(t, in.ask(t, "GET", "/api/v1/users/alice", "carol", "", nil), false); listed.DisplayName != c.want {
+			t.Errorf("after %s an administrator reads alice's display name as %q, want %q", c.body, listed.DisplayName, c.want)
 		}
 	}
 }
@@ -237,7 +263,9 @@ func TestAProfileTheUserMayNotWriteIsRefused(t *testing.T) {
 		{"alice", `{"bio":"` + strings.Repeat("é", 281) + `"}`, http.StatusBadRequest, "bio: it is at most 280 characters and this one is 281"},
 		{"alice", `{"given_name":"` + strings.Repeat("a", 129) + `"}`, http.StatusBadRequest, "given_name: it is at most 128 characters"},
 		{"alice", `{"family_name":"` + strings.Repeat("a", 129) + `"}`, http.StatusBadRequest, "family_name: it is at most 128"},
-		{"alice", `{"display_name":""}`, http.StatusBadRequest, "display_name: a user has a display name"},
+		{"alice", `{"display_name":"Alice Martin"}`, http.StatusBadRequest, "display_name: nobody writes a display name: it is made of the given and family names"},
+		{"alice", `{"given_name":"Alice","display_name":"Alice Martin"}`, http.StatusBadRequest, "display_name: nobody writes"},
+		{"alice", `{"email":"alice@example.com"}`, http.StatusBadRequest, "email: an email address is given by an administrator"},
 		{"alice", `{}`, http.StatusBadRequest, "names nothing to change"},
 		{"alice", ``, http.StatusBadRequest, "the request body is empty"},
 		{"alice", `{"bio":null}`, http.StatusBadRequest, "bio: null says neither"},
@@ -258,6 +286,91 @@ func TestAProfileTheUserMayNotWriteIsRefused(t *testing.T) {
 	}
 	if recorded := in.entries(t, "user.profile"); len(recorded) != 1 {
 		t.Errorf("the audit log recorded %d profile changes, and one was made: %v", len(recorded), recorded)
+	}
+}
+
+// An administrator gives a user an email address, changes it and removes it, and the user and
+// administrators read it wherever the user is answered. Nothing else of a user is an administrator's
+// to change here, a name or the display name refused saying whose it is; a refusal changes nothing
+// and is not recorded, and the log names the field that changed and never the address.
+func TestAnAdministratorGivesAUserAnEmailAddress(t *testing.T) {
+	in := someProfiles(t)
+	update := func(who, login, body string) *httptest.ResponseRecorder {
+		return in.ask(t, "PATCH", "/api/v1/users/"+login, who, "application/json", []byte(body))
+	}
+
+	given, raw := userIn(t, update("carol", "alice", `{"email":"alice.martin@example.com"}`), false)
+	if given.Login != "alice" || given.Email != "alice.martin@example.com" || given.DisplayName != "Alice" || !bytes.Contains(raw, []byte(`"email":"alice.martin@example.com"`)) {
+		t.Errorf("alice given an address reads as %s", raw)
+	}
+	if got, _ := userIn(t, in.ask(t, "GET", "/api/v1/me", "alice", "", nil), true); got != given {
+		t.Errorf("alice reads herself as %+v, and her administrator as %+v", got, given)
+	}
+	if got, _ := userIn(t, in.ask(t, "GET", "/api/v1/users/alice", "carol", "", nil), false); got != given {
+		t.Errorf("GET /api/v1/users/alice answers %+v", got)
+	}
+	if bob, _ := userIn(t, in.ask(t, "GET", "/api/v1/me", "bob", "", nil), true); bob.Email != "" {
+		t.Errorf("bob, given nothing, reads as %+v", bob)
+	}
+	// The same again changes nothing; the bootstrap token, until the first administrator signs in,
+	// changes it as an administrator does; the empty string removes it.
+	if again, _ := userIn(t, update("carol", "alice", `{"email":"alice.martin@example.com"}`), false); again != given {
+		t.Errorf("the same address again left alice as %+v", again)
+	}
+	if changed, _ := userIn(t, update("bootstrap", "alice", `{"email":"a.martin@example.org"}`), false); changed.Email != "a.martin@example.org" {
+		t.Errorf("the bootstrap token changing the address left alice as %+v", changed)
+	}
+	removed, raw := userIn(t, update("carol", "alice", `{"email":""}`), false)
+	if removed.Email != "" || !bytes.Contains(raw, []byte(`"email":""`)) {
+		t.Errorf("alice's address removed reads as %s", raw)
+	}
+
+	before, _ := userIn(t, in.ask(t, "GET", "/api/v1/users/alice", "carol", "", nil), false)
+	for _, c := range []struct {
+		who, login, body string
+		status           int
+		says             string
+	}{
+		{"carol", "alice", `{"given_name":"Alicia"}`, http.StatusBadRequest, "given_name: what a user says of themself is theirs to write, at PATCH /api/v1/me"},
+		{"carol", "alice", `{"bio":"Writes nothing."}`, http.StatusBadRequest, "bio: what a user says of themself is theirs"},
+		{"carol", "alice", `{"display_name":"Alicia"}`, http.StatusBadRequest, "display_name: nobody writes a display name"},
+		{"carol", "alice", `{"admin":true}`, http.StatusBadRequest, `"admin", which is not a field`},
+		{"carol", "alice", `{}`, http.StatusBadRequest, "the request names nothing to change: email"},
+		{"carol", "alice", ``, http.StatusBadRequest, "the request body is empty"},
+		{"carol", "alice", `{"email":null}`, http.StatusBadRequest, "email: null says neither"},
+		{"carol", "alice", `{"email":"alice"}`, http.StatusBadRequest, `email: "alice" is not an email address`},
+		{"carol", "alice", `{"email":"alice @example.com"}`, http.StatusBadRequest, "email: it holds a space"},
+		{"carol", "alice", `{"email":"` + strings.Repeat("a", 243) + `@example.com"}`, http.StatusBadRequest, "at most 254 characters and this one is 255"},
+		{"carol", "nobody", `{"email":"nobody@example.com"}`, http.StatusNotFound, "no user by that login"},
+		{"carol", "Alice", `{"email":"alice@example.com"}`, http.StatusNotFound, "no user by that login"},
+		{"carol", "finance%2Fnightly", `{"email":"nightly@example.com"}`, http.StatusNotFound, ""},
+		{"alice", "alice", `{"email":"alice@example.com"}`, http.StatusForbidden, ""},
+		{"bob", "alice", `{"email":"bob@example.com"}`, http.StatusForbidden, ""},
+		{"", "alice", `{"email":"alice@example.com"}`, http.StatusUnauthorized, "no credential"},
+	} {
+		w := update(c.who, c.login, c.body)
+		if w.Code != c.status || !strings.Contains(refusalOf(w), c.says) {
+			t.Errorf("PATCH /api/v1/users/%s %.40s as %q answered %d: %s, want %d saying %q", c.login, c.body, c.who, w.Code, w.Body, c.status, c.says)
+		}
+	}
+	if after, _ := userIn(t, in.ask(t, "GET", "/api/v1/users/alice", "carol", "", nil), false); after != before {
+		t.Errorf("a refusal changed alice from %+v to %+v", before, after)
+	}
+
+	recorded := in.entries(t, "user.update")
+	wantRecorded := []string{
+		`done carol alice {"fields":["email"]}`,
+		`unchanged carol alice {"fields":[]}`,
+		`done operator alice {"fields":["email"]}`,
+		`done carol alice {"fields":["email"]}`,
+	}
+	if strings.Join(recorded, "\n") != strings.Join(wantRecorded, "\n") {
+		t.Errorf("the audit log recorded\n%s\nwant\n%s", strings.Join(recorded, "\n"), strings.Join(wantRecorded, "\n"))
+	}
+	for _, e := range recorded {
+		if strings.Contains(e, "martin") || strings.Contains(e, "@") {
+			t.Errorf("the audit log recorded the address: %s", e)
+		}
 	}
 }
 

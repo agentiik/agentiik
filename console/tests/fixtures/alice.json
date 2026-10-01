@@ -10,7 +10,10 @@
         "display_name": "Alice Martin",
         "admin": false,
         "suspended": false,
-        "created_at": "2026-09-27T08:50:00Z"
+        "created_at": "2026-09-27T08:50:00Z",
+        "email": "alice.martin@example.com",
+        "given_name": "Alice",
+        "family_name": "Martin"
       },
       "groups": [
         "group:team-finance"

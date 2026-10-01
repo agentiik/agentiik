@@ -20,7 +20,7 @@ func TestTheGrantsThatApplyAreTheOnesAskedFor(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []string{"alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: u, DisplayName: u}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: u}); err != nil {
 				return err
 			}
 		}

@@ -46,8 +46,9 @@ import (
 // namespace changes; and from v0.3.0 the identity and access events: users, their credentials, enrolment
 // links and recovery codes, the sign-ins that succeed and fail, groups and their members, service
 // accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap;
-// and from v0.4.0 the workflow repository's; from v0.6.0, a namespace's variables. Approval arrives
-// with the wait step in v0.8.0.
+// and from v0.4.0 the workflow repository's; and from v0.6.0 the profile's, what a user says of
+// themself, their photo, and what an administrator gives them, and a namespace's variables. Approval
+// arrives with the wait step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -103,6 +104,11 @@ const (
 	// administrator at DELETE /api/v1/users/{login}/avatar, with removed; never the photo.
 	UserProfile = "user.profile"
 	UserAvatar  = "user.avatar"
+	// UserUpdate is what an administrator gives a user after creating them changed, PATCH
+	// /api/v1/users/{login}: their email address, recorded with the names of the fields that
+	// changed and never what they hold, as UserProfile is, since the log is kept for good and an
+	// address is somebody's to have removed.
+	UserUpdate = "user.update"
 	// GroupCreate and GroupDelete are a group created and removed, and GroupMemberAdd and
 	// GroupMemberRemove one member put in or taken out, since a member gains or loses what the
 	// group's grants give.

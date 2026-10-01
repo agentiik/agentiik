@@ -84,21 +84,54 @@
   // The form that adds a user, in a dialog opened from the screen's head.
   let adding = $state(false);
   let login = $state("");
-  let displayName = $state("");
+  let givenName = $state("");
+  let familyName = $state("");
+  let email = $state("");
   let admin = $state(false);
 
   function add(e: SubmitEvent) {
     e.preventDefault();
     return act("add the user", async () => {
-      const body = { login: login.trim(), ...(displayName.trim() ? { display_name: displayName.trim() } : {}), ...(admin ? { admin: true } : {}) };
+      const body = {
+        login: login.trim(),
+        ...(givenName.trim() ? { given_name: givenName.trim() } : {}),
+        ...(familyName.trim() ? { family_name: familyName.trim() } : {}),
+        ...(email.trim() ? { email: email.trim() } : {}),
+        ...(admin ? { admin: true } : {}),
+      };
       const { data, error, response } = await api.POST("/api/v1/users", { body });
       if (!data) throw refusal(response, error);
       issued = { login: data.user.login, what: "enrolment", link: data.enrolment.link, expires_at: data.enrolment.expires_at };
       copied = false;
       adding = false;
       login = "";
-      displayName = "";
+      givenName = "";
+      familyName = "";
+      email = "";
       admin = false;
+      await reread();
+    });
+  }
+
+  // The email address of a user, which an administrator gives with PATCH /api/v1/users/{login}: the
+  // one thing of a user an administrator writes after creating them, the empty string removing it.
+  let addressing = $state<User | null>(null);
+  let address = $state("");
+
+  function addressOf(u: User) {
+    addressing = u;
+    address = u.email ?? "";
+    problem = null;
+  }
+
+  function give(e: SubmitEvent) {
+    e.preventDefault();
+    const u = addressing;
+    if (!u) return;
+    return act("set the email address", async () => {
+      const { data, error, response } = await api.PATCH("/api/v1/users/{login}", { params: { path: { login: u.login } }, body: { email: address.trim() } });
+      if (!data) throw refusal(response, error);
+      addressing = null;
       await reread();
     });
   }
@@ -144,7 +177,7 @@
   {/snippet}
 </AdminTabs>
 
-{#if problem && !adding}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
+{#if problem && !adding && !addressing}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if removed}{#key removed}<Notice ondismiss={() => (removed = "")}><span class="term">{removed}</span> removed.</Notice>{/key}{/if}
 
 <Dialog title={issued ? `${issued.what === "recovery" ? "Recovery code" : "Enrolment link"} for ${issued.login}` : ""} open={issued !== null} onclose={() => (issued = null)}>
@@ -170,18 +203,20 @@
     <p class="muted">Loading</p>
   {:else}
     <table>
-      <thead><tr><th>Login</th><th>Name</th><th>Standing</th><th>Created</th><th>Last signed in</th><th class="end"></th></tr></thead>
+      <thead><tr><th>Login</th><th>Name</th><th>Email</th><th>Standing</th><th>Created</th><th>Last signed in</th><th class="end"></th></tr></thead>
       <tbody>
         {#each users as u (u.login)}
           <tr>
             <td class="term nowrap"><span class="who"><Avatar name={u.display_name} src={userPhotoOf(u)} size={24} /><span class="login">{u.login}</span></span></td>
-            <td>{u.display_name}{#if u.title}<span class="muted title">{u.title}</span>{/if}</td>
+            <td class="nowrap">{u.display_name}{#if u.title}<span class="muted title">{u.title}</span>{/if}</td>
+            <td class="nowrap" class:muted={!u.email}>{u.email || "none"}</td>
             <td class="muted">
               {#if u.suspended}<span class="suspended">suspended{u.suspended_for === "no_passkey" ? " (no passkey)" : ""}</span>{:else if u.admin}administrator{:else}user{/if}
             </td>
             <td class="term muted nowrap">{#if u.created_at}<time datetime={u.created_at} title={u.created_at}>{clock(u.created_at, now)}</time>{/if}</td>
             <td class="term muted nowrap">{#if u.last_sign_in_at}<time datetime={u.last_sign_in_at} title={u.last_sign_in_at}>{clock(u.last_sign_in_at, now)}</time>{:else}never{/if}</td>
             <td class="end">
+              {#if asking !== u.login}<button class="control" disabled={working} onclick={() => addressOf(u)}>Email</button>{/if}
               {#if u.login !== own}
                 {#if asking === u.login}
                   <button class="control" onclick={() => (asking = "")}>Keep</button>
@@ -210,13 +245,37 @@
       <span>Login</span>
       <input class="term" bind:value={login} placeholder="dana" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
     </label>
+    <div class="pair">
+      <label>
+        <span>Given name</span>
+        <input bind:value={givenName} placeholder="Dana" maxlength="128" autocomplete="off" />
+      </label>
+      <label>
+        <span>Family name</span>
+        <input bind:value={familyName} placeholder="Okafor" maxlength="128" autocomplete="off" />
+      </label>
+    </div>
     <label>
-      <span>Display name</span>
-      <input bind:value={displayName} placeholder="Dana Okafor" maxlength="256" autocomplete="off" />
+      <span>Email</span>
+      <input type="email" bind:value={email} placeholder="dana@example.com" maxlength="254" autocomplete="off" />
     </label>
     <label class="check"><input type="checkbox" bind:checked={admin} />An administrator of the installation</label>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add the user</button></p>
   </form>
+</Dialog>
+
+<Dialog title="Email address" open={addressing !== null} onclose={() => (addressing = null)}>
+  {#if addressing}
+    {#if problem}<Problem explained={problem} />{/if}
+    <form onsubmit={give} aria-label="Email address">
+      <p class="term">{addressing.login}</p>
+      <label>
+        <span>Email</span>
+        <input type="email" bind:value={address} placeholder="dana@example.com" maxlength="254" autocomplete="off" />
+      </label>
+      <p><button class="control primary" disabled={working}>Save</button></p>
+    </form>
+  {/if}
 </Dialog>
 
 <style>
@@ -249,6 +308,17 @@
     background: var(--raised);
     color: var(--text);
     font-size: var(--type-control-size);
+  }
+
+  .pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: calc(var(--unit) * 5);
+  }
+
+  .pair input {
+    width: 100%;
+    min-width: 0;
   }
 
   form p {
