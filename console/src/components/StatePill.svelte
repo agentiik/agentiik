@@ -5,7 +5,9 @@
   // that spins while the console is live.
   //
   // A step's verdict and a task's state are drawn the same way, in the same words the API writes:
-  // dispatched and publishing are a task on its way, and lost is one the infrastructure lost.
+  // dispatched and publishing are a task on its way, and lost is one the infrastructure lost. So is a
+  // runner's condition: ready takes work, draining finishes what it holds, unhealthy and silent take
+  // nothing though nobody ordered them to stop, and revoked is out of service for good.
   export type State = string;
 
   let { state, live = true }: { state: State; live?: boolean } = $props();
@@ -19,6 +21,10 @@
     failed: "failed",
     timed_out: "failed",
     lost: "failed",
+    ready: "succeeded",
+    draining: "waiting",
+    unhealthy: "failed",
+    silent: "failed",
   };
   const tone = $derived(tones[state] ?? "quiet");
   const going = $derived(tone === "running");
