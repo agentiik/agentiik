@@ -159,13 +159,14 @@
 <PageHeader title="Statistics" icon="control-statistics" {place} tabs={[
   { label: "Runs", icon: "control-runs", current: tab === "runs", onclick: () => show("runs") },
   { label: "Quotas", icon: "control-settings", current: tab === "quotas", onclick: () => show("quotas") },
-]} />
+]}>
+  {#snippet actions()}
+    <button class="control" title="Export the series as CSV" onclick={() => exported("csv")}><Icon name="control-download" size={14} />CSV</button>
+    <button class="control" title="Export the series as JSON" onclick={() => exported("json")}><Icon name="control-download" size={14} />JSON</button>
+  {/snippet}
+</PageHeader>
 
-<RangeBar {ranged} bucket={series?.bucket}>
-  <span class="muted">Export the series</span>
-  <button class="control" onclick={() => exported("csv")}><Icon name="control-download" size={14} />CSV</button>
-  <button class="control" onclick={() => exported("json")}><Icon name="control-download" size={14} />JSON</button>
-</RangeBar>
+<RangeBar {ranged} bucket={series?.bucket} />
 
 {#if refused}
   <p class="refused" role="alert">The series could not be read: {refused}</p>

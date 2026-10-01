@@ -106,13 +106,14 @@
 <PageHeader title="Runners" icon="control-runners" {place} tabs={[
   { label: "Runners and pools", icon: "control-runners", to: { kind: "runners" }, current: false },
   { label: "Statistics", icon: "control-statistics", to: { kind: "runners", tab: "statistics" }, current: true },
-]} />
+]}>
+  {#snippet actions()}
+    <button class="control" title="Export the series as CSV" onclick={() => exported("csv")}><Icon name="control-download" size={14} />CSV</button>
+    <button class="control" title="Export the series as JSON" onclick={() => exported("json")}><Icon name="control-download" size={14} />JSON</button>
+  {/snippet}
+</PageHeader>
 
-<RangeBar {ranged} bucket={pools?.bucket} comparable={false}>
-  <span class="muted">Export the series</span>
-  <button class="control" onclick={() => exported("csv")}><Icon name="control-download" size={14} />CSV</button>
-  <button class="control" onclick={() => exported("json")}><Icon name="control-download" size={14} />JSON</button>
-</RangeBar>
+<RangeBar {ranged} bucket={pools?.bucket} comparable={false} />
 
 {#if refused}
   <p class="refused" role="alert">The series could not be read: {refused}</p>
