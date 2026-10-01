@@ -11,11 +11,14 @@
   import type { Session } from "./lib/session.svelte";
   import Account from "./views/Account.svelte";
   import Fleet from "./views/Fleet.svelte";
+  import Groups from "./views/Groups.svelte";
+  import Namespaces from "./views/Namespaces.svelte";
   import PoolStatistics from "./views/PoolStatistics.svelte";
   import Refused from "./views/Refused.svelte";
   import Run from "./views/Run.svelte";
   import RunDiff from "./views/RunDiff.svelte";
   import Runs from "./views/Runs.svelte";
+  import Settings from "./views/Settings.svelte";
   import Sharing from "./views/Sharing.svelte";
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
   import Statistics from "./views/Statistics.svelte";
@@ -44,7 +47,7 @@
   ];
 
   // Built so far: the views the console draws in this release. The others arrive with theirs.
-  const built = new Set<View>(["runs", "statistics", "sharing"]);
+  const built = new Set<View>(["runs", "statistics", "sharing", "settings"]);
 
   const known = $derived(namespace !== undefined && session.namespaces.some((n) => n.name === namespace));
   const shown = $derived(namespace && known ? all.filter((v) => built.has(v.view) && v.shows(namespace)) : []);
@@ -123,10 +126,10 @@
     <main class="screen">
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
         <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} />
-      {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
+      {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
         <!-- A workflow's page, the one view under workflows built so far: the API answers one the
              caller cannot read as one that does not exist, and the page says no more. -->
-        <Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} />
+        <Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} tab={route.tab} />
       {:else if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
         <Refused />
       {:else if route.kind === "namespace" && route.view === "runs" && route.run && route.against}
@@ -137,12 +140,18 @@
         <Runs {api} {place} me={session.me} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else if route.kind === "namespace" && route.view === "sharing"}
         <Sharing {api} {place} me={session.me} namespace={route.namespace} />
+      {:else if route.kind === "namespace" && route.view === "settings"}
+        <Settings {api} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "statistics"}
         <Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else if route.kind === "account"}
         <Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />
       {:else if route.kind === "users" && session.me.admin}
-        <Users {api} me={session.me} />
+        <Users {api} {place} me={session.me} />
+      {:else if route.kind === "groups" && session.me.admin}
+        <Groups {api} {place} />
+      {:else if route.kind === "namespaces" && session.me.admin}
+        <Namespaces {api} {place} changed={() => session.read()} />
       {:else if route.kind === "runners" && route.tab === undefined && session.me.admin}
         <Fleet {api} {place} namespaces={session.namespaces} {version} />
       {:else if route.kind === "runners" && route.tab === "statistics" && session.me.admin}

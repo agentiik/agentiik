@@ -76,6 +76,10 @@ var driverRefuses = []struct{ path, what string }{
 	{"github.com/segmentio/kafka-go", "a task bus client"},
 	{"github.com/redis", "a task bus client"},
 	{"github.com/go-redis", "a task bus client"},
+	// The terminal console's toolkit, which the documentation confines to cmd/agk: reached from
+	// here, agk run --local would carry a screen it never draws.
+	{"charm.land", "a terminal interface"},
+	{"github.com/charmbracelet", "a terminal interface"},
 }
 
 // driverRefusesSegment is what a package inside this module may not be called for this one

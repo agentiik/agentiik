@@ -31,7 +31,7 @@ describe("the key line", () => {
   it("names the keys of the runs view by their effect, and the console's own", async () => {
     open("/finance/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
-    expect(line()).toEqual(["↑↓ Move", "enter Open", "12 Runs, statistics", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Move", "enter Open", "123 Runs, statistics, settings", "? Every key"]);
   });
 
   it("moves the selection over the runs and opens the one selected", async () => {
@@ -89,7 +89,7 @@ describe("the inspector's keys", () => {
   it("moves between the steps and goes back to the runs", async () => {
     const { place, asked } = open(`/finance/runs/${failed}`);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
-    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from invoice", "esc All runs of finance", "12 Runs, statistics", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from invoice", "esc All runs of finance", "123 Runs, statistics, settings", "? Every key"]);
     await press("ArrowUp");
     expect(place.query.get("step")).toBe("normalize");
     await press("Escape");
