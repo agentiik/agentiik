@@ -260,6 +260,39 @@ describe("the sharing panel", () => {
     expect(await screen.findByRole("button", { name: "finance/monthly-invoicing", pressed: true })).toBeTruthy();
   });
 
+  it("names a workflow's default branch and protects it, sending only what changed", async () => {
+    const s = scenario("alice");
+    const repository = (s["GET /api/v1/alice/workflows/report"]!.body as { repository: Record<string, unknown> }).repository;
+    s["PATCH /api/v1/alice/workflows/report"] = { status: 200, body: { ...repository, protected: true } };
+    const asked: { key: string; body: unknown }[] = [];
+    const { fetcher } = installation(s);
+    const api = connect("http://stand-in/", async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.method === "PATCH") asked.push({ key: new URL(request.url).pathname, body: JSON.parse(await request.clone().text()) });
+      return fetcher(request);
+    });
+    const place = new Place({ pathname: "/alice/sharing", search: "?workflow=report", baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
+    render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
+    const form = await screen.findByRole("form", { name: "Default branch of alice/report" });
+    expect((within(form).getByRole("textbox") as HTMLInputElement).value).toBe("main");
+    const write = within(form).getByRole("button", { name: "Write it" }) as HTMLButtonElement;
+    expect(write.disabled).toBe(true);
+    await fireEvent.click(within(form).getByRole("checkbox"));
+    await fireEvent.submit(form);
+    expect(await screen.findByText(/main is the default branch, protected: pushing to it takes grant:manage/)).toBeTruthy();
+    expect(asked).toEqual([{ key: "/api/v1/alice/workflows/report", body: { protected: true } }]);
+  });
+
+  it("says what the API refused of a default branch as it said it", async () => {
+    const s = scenario("alice");
+    s["PATCH /api/v1/alice/workflows/report"] = { status: 422, body: { error: "the repository holds no branch release" } };
+    open("/alice/sharing?workflow=report", s);
+    const form = await screen.findByRole("form", { name: "Default branch of alice/report" });
+    await fireEvent.input(within(form).getByRole("textbox"), { target: { value: "release" } });
+    await fireEvent.submit(form);
+    expect(await screen.findByText("The repository holds no branch release.")).toBeTruthy();
+  });
+
   it("is offered nowhere the caller holds no grant:manage, and answered as what does not exist", async () => {
     open("/finance/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
