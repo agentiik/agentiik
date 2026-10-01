@@ -6,7 +6,8 @@
 // with a word no namespace can be named, the reserved words of the namespace grammar: me for the
 // caller's own account, runners for what an administrator runs, users for whom an administrator
 // manages. A workflow is the segment after
-// workflows, and a run the segment after runs, each as the API names it.
+// workflows, and a run the segment after runs, each as the API names it; two runs read side by side
+// are the first's address, then against and the second.
 
 export type View = "runs" | "workflows" | "statistics" | "sharing" | "settings";
 
@@ -14,7 +15,7 @@ export const views: readonly View[] = ["runs", "workflows", "statistics", "shari
 
 export type Route =
   | { kind: "landing" }
-  | { kind: "namespace"; namespace: string; view: View; workflow?: string; run?: string; tab?: string }
+  | { kind: "namespace"; namespace: string; view: View; workflow?: string; run?: string; against?: string; tab?: string }
   | { kind: "account"; tab?: string }
   | { kind: "runners"; tab?: string }
   | { kind: "users" }
@@ -56,6 +57,9 @@ export function read(pathname: string, root: string): Route {
   if (first === "runners") {
     return third === undefined ? { kind: "runners", tab: second } : { kind: "unknown", path: pathname };
   }
+  if (second === "runs" && third !== undefined && fourth === "against" && rest.length === 1) {
+    return { kind: "namespace", namespace: first, view: "runs", run: third, against: rest[0] };
+  }
   if (rest.length > 0) {
     return { kind: "unknown", path: pathname };
   }
@@ -92,6 +96,9 @@ export function address(route: Route): string {
       let path = `${e(route.namespace)}/${route.view}`;
       if (route.view === "runs" && route.run) {
         path += `/${e(route.run)}`;
+        if (route.against) {
+          path += `/against/${e(route.against)}`;
+        }
       }
       if (route.view === "workflows" && route.workflow) {
         path += `/${e(route.workflow)}`;
