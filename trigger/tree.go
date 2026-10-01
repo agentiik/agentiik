@@ -106,6 +106,10 @@ type versionTree struct {
 
 	namespace, workflow, commit string
 
+	// storage is the namespace's storage name, which its objects are kept under, read with the
+	// files.
+	storage string
+
 	files   map[string]db.TreeFile
 	trouble error
 }
@@ -118,6 +122,9 @@ func (t *versionTree) Open(name string) (fs.File, error) {
 		var listed []db.TreeFile
 		err := t.pool.In(t.ctx, t.namespace, func(ctx context.Context, ns *db.NS) error {
 			var err error
+			if t.storage, err = ns.Storage(ctx); err != nil {
+				return err
+			}
 			listed, err = ns.Tree(ctx, t.workflow, t.commit)
 			return err
 		})
@@ -138,7 +145,11 @@ func (t *versionTree) Open(name string) (fs.File, error) {
 		return nil, t.failed(name, ErrNoObjectStore)
 	}
 
-	r, err := t.objects.Open(t.ctx, artifact.Key(t.namespace, f.SHA256))
+	storage := t.storage
+	if storage == "" {
+		storage = t.namespace
+	}
+	r, err := t.objects.Open(t.ctx, artifact.Key(storage, f.SHA256))
 	if err != nil {
 		return nil, t.failed(name, err)
 	}

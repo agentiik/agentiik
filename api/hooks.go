@@ -313,7 +313,13 @@ func (s *Server) prove(r *http.Request, namespace string, hook db.Hook, auth str
 		if s.hooks == nil {
 			return proof{}, "", fmt.Errorf("api: the webhook %s %s of %s is signed with a secret, and this API holds no keyring to open it with", method, path, namespace)
 		}
-		secret, err := s.hooks.OpenHook(namespace, method, path, c.Version, c.Secret)
+		// Opened under the namespace's storage name, which it was sealed under and a rename leaves
+		// as it was.
+		sealedUnder := c.Storage
+		if sealedUnder == "" {
+			sealedUnder = namespace
+		}
+		secret, err := s.hooks.OpenHook(sealedUnder, method, path, c.Version, c.Secret)
 		if err != nil {
 			return proof{}, "", fmt.Errorf("api: the secret of the webhook %s %s of %s could not be opened: %w", method, path, namespace, err)
 		}
@@ -558,8 +564,14 @@ func (s *Server) writeHookCredential(w http.ResponseWriter, r *http.Request, who
 			return
 		}
 		write = func(ctx context.Context, ns *db.NS) error {
+			// Sealed under the namespace's storage name, the name it was created with, which a
+			// rename leaves as it was, so that the secret opens for the namespace's whole life.
+			storage, err := ns.Storage(ctx)
+			if err != nil {
+				return err
+			}
 			return ns.WriteHookSecret(ctx, over.Workflow, path, method, string(who), func(version int) (json.RawMessage, error) {
-				return s.hooks.SealHook(over.Namespace, method, path, version, key)
+				return s.hooks.SealHook(storage, method, path, version, key)
 			})
 		}
 	} else {

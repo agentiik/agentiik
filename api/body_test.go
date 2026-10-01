@@ -159,7 +159,7 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 				return []byte(`{"provider":"builtin","value":"` + strings.Repeat("A", int(l)-33) + `"}`)
 			}, 2, 6.0, 4.667},
 		// The namespace routes came after the reader, so encoding/json never read them.
-		{"a namespace of empty pools", func() request { return new(NamespaceRecord) }, smallMaxBytes,
+		{"a namespace of empty pools", func() request { return new(NamespaceCreate) }, smallMaxBytes,
 			func(l int64) []byte { return filled(`{"quotas":{"allowed_runner_pools":[`, `]}}`, l, empty) }, 0, 0, 0.141},
 		{"quotas of empty pools", func() request { return new(Quotas) }, smallMaxBytes,
 			func(l int64) []byte { return filled(`{"allowed_runner_pools":[`, `]}`, l, empty) }, 0, 0, 0.141},
@@ -254,11 +254,11 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 		&Redemption{Grant: "agkgrant_x", TaskID: "01M2Z8V1P9C4XQ7K2N4D6F8H0C", IdempotencyKey: "01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1"},
 		&Declare{Provider: "builtin", Value: &value, Encoding: "utf-8"},
 		&Declare{Provider: "env", Path: "AGK_DEV_FINANCE_BILLING"},
-		&NamespaceRecord{Name: "finance", Kind: "shared", Owner: "group:finance-leads", Quotas: &Quotas{
+		&NamespaceCreate{Name: "finance", Kind: "shared", Owner: "group:finance-leads", Quotas: &Quotas{
 			MaxConcurrentTasks: 20, MaxRunsPerHour: 500, MaxArtifactBytes: 536870912000, MaxRetentionDays: 180,
 			MaxRunDuration: "24h", AllowedRunnerPools: []string{"default", "dmz"},
 		}},
-		&NamespaceRecord{Name: "team-ops", Owner: "bob-martin"},
+		&NamespaceCreate{Name: "team-ops", Owner: "bob-martin"},
 		&Quotas{MaxRunsPerHour: 60},
 		&ProfileChange{GivenName: &alice, FamilyName: &martin, Timezone: &paris, Bio: &cleared},
 		&UserChange{Email: &address},

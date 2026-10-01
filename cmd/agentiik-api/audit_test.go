@@ -53,7 +53,7 @@ var reads = []string{
 	"GET /api/v1/runs/{run}/steps/{step}/outputs/{port}", "GET /api/v1/runs/{run}/steps/{step}/inputs/{port}",
 	"GET /api/v1/artifacts/{uri}", "GET /api/v1/{namespace}/secrets", "GET /api/v1/{namespace}/secrets/{name}",
 	"GET /api/v1/{namespace}/variables", "GET /api/v1/{namespace}/variables/{name}",
-	"GET /api/v1/namespaces", "GET /api/v1/namespaces/{namespace}", "GET /api/v1/namespaces/{namespace}/quotas",
+	"GET /api/v1/namespaces", "GET /api/v1/namespaces/{namespace}", "GET /api/v1/namespaces/{namespace}/quotas", "GET /api/v1/namespaces/{namespace}/avatar",
 	"GET /api/v1/{namespace}/grants", "GET /api/v1/{namespace}/workflows/{workflow}/grants",
 	"GET /api/v1/{namespace}/workflows/{workflow}/images", "GET /api/v1/{namespace}/workflows/{workflow}/triggers",
 	"GET /{namespace}/{repository}/info/refs",
@@ -151,7 +151,7 @@ func (s *scenario) ask(route, path string, who actor, body any, status int) *htt
 			r.Header.Set("Content-Type", "application/cloudevents+json")
 		}
 		// A photo, where the route takes one.
-		if route == "PUT /api/v1/me/avatar" {
+		if route == "PUT /api/v1/me/avatar" || route == "PUT /api/v1/namespaces/{namespace}/avatar" {
 			r.Header.Set("Content-Type", "image/png")
 		}
 	}
@@ -485,19 +485,26 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.act("DELETE /api/v1/users/{login}/avatar", "/api/v1/users/dave/avatar", carol, nil, http.StatusNoContent,
 		"user.avatar carol dave - done")
 
-	// A namespace carol owns, its quotas, and a service account of it with a token, removed with it.
+	// A namespace carol owns, its quotas, its picture set and removed, and a service account of it
+	// with a token, removed with it; then the namespace renamed, and removed by its former name.
 	s.act("POST /api/v1/namespaces", "/api/v1/namespaces", carol, `{"name":"ops","owner":"carol"}`, http.StatusCreated,
 		"grant.create carol * ops done", "namespace.create carol ops - done")
 	s.act("PUT /api/v1/namespaces/{namespace}/quotas", "/api/v1/namespaces/ops/quotas", carol, `{"max_concurrent_tasks":5}`, http.StatusOK,
 		"namespace.update carol ops - done")
+	s.act("PUT /api/v1/namespaces/{namespace}/avatar", "/api/v1/namespaces/ops/avatar", carol, aPhoto(t), http.StatusNoContent,
+		"namespace.avatar carol ops - done")
+	s.act("DELETE /api/v1/namespaces/{namespace}/avatar", "/api/v1/namespaces/ops/avatar", carol, nil, http.StatusNoContent,
+		"namespace.avatar carol ops - done")
 	s.act("POST /api/v1/service-accounts", "/api/v1/service-accounts", carol, `{"namespace":"ops","name":"deployer"}`, http.StatusCreated,
 		"service_account.create carol ops/deployer ops done")
 	w = s.ask("POST /api/v1/auth/tokens", "/api/v1/auth/tokens", carol, `{"principal":"ops/deployer"}`, http.StatusCreated)
 	s.holds("POST /api/v1/auth/tokens", "api_token.create carol "+s.answer(w)["api_token"].(map[string]any)["id"].(string)+" ops done")
 	s.act("DELETE /api/v1/service-accounts/{ns}/{name}", "/api/v1/service-accounts/ops/deployer", carol, nil, http.StatusNoContent,
 		"service_account.delete carol ops/deployer ops done")
+	s.act("PATCH /api/v1/namespaces/{namespace}", "/api/v1/namespaces/ops", carol, `{"name":"operations"}`, http.StatusOK,
+		"namespace.rename carol operations - done")
 	s.act("DELETE /api/v1/namespaces/{namespace}", "/api/v1/namespaces/ops", carol, nil, http.StatusNoContent,
-		"namespace.delete carol ops - done")
+		"namespace.delete carol operations - done")
 
 	// A group, a member put in and taken out, and the group removed.
 	s.act("POST /api/v1/groups", "/api/v1/groups", carol, `{"name":"auditors"}`, http.StatusCreated,

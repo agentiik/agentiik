@@ -195,7 +195,13 @@ func (s *Server) envelope(w http.ResponseWriter, r *http.Request, namespace, wha
 		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and an envelope is read from nowhere else")
 		return
 	}
-	e, err := artifact.GetEnvelope(r.Context(), s.objects, namespace, held.Digest, s.limits)
+	// Kept under the namespace's storage name, which every object of it is kept under.
+	storage, err := s.pool.Storage(r.Context(), namespace)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, fmt.Sprintf("the envelope of %s could not be read", what))
+		return
+	}
+	e, err := artifact.GetEnvelope(r.Context(), s.objects, storage, held.Digest, s.limits)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, fmt.Sprintf("the envelope of %s could not be read", what))
 		return

@@ -2815,7 +2815,7 @@
           "namespaces"
         ],
         "summary": "Create a namespace",
-        "description": "Creates a shared namespace with an owner and, optionally, quotas. The owner, a user or group:NAME, is required, and is given the owner role on the namespace in the same transaction, granted by the administrator, so that it can share the namespace and act in it from the start: an owner in the record alone would be refused everything in it. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Administrator only, audited as namespace.create, and the owner's grant as grant.create in the namespace.",
+        "description": "Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20, max_retention_days 90 and the other four unset. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#scopes-and-resolution"
@@ -2847,6 +2847,12 @@
                       ]
                     }
                   }
+                },
+                "own": {
+                  "summary": "a user's namespace, owned by them at the installation's defaults",
+                  "value": {
+                    "name": "team-ops"
+                  }
                 }
               }
             }
@@ -2877,7 +2883,23 @@
                           "default",
                           "dmz"
                         ]
-                      }
+                      },
+                      "former_names": [],
+                      "avatar_updated_at": null
+                    }
+                  },
+                  "own": {
+                    "summary": "a user's namespace",
+                    "value": {
+                      "name": "team-ops",
+                      "kind": "shared",
+                      "owner": "bob-martin",
+                      "quotas": {
+                        "max_concurrent_tasks": 20,
+                        "max_retention_days": 90
+                      },
+                      "former_names": [],
+                      "avatar_updated_at": null
                     }
                   }
                 }
@@ -2886,18 +2908,18 @@
           },
           "400": {
             "$ref": "#/components/responses/badRequest",
-            "description": "The body is refused: a name outside the namespace grammar or a reserved word, no owner or one outside a principal's grammar, a kind other than shared, a quota written null or outside its bounds. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well."
+            "description": "The body is refused: a name outside the namespace grammar or a reserved word, an owner outside a principal's grammar, a kind other than shared, a quota written null or outside its bounds; or the bootstrap token naming no owner, since it is nobody. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well."
           },
           "401": {
             "$ref": "#/components/responses/unauthorised"
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "The caller is not an administrator, or holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
+            "description": "A caller who does not administer the installation naming another owner than themself, or any quota; a service account, or a token narrowed by a scope, which create no namespace; or a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
           },
           "409": {
             "$ref": "#/components/responses/conflict",
-            "description": "The name is held by a namespace or a login."
+            "description": "The name is held by a namespace, as its name or as a former one, or by a login."
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
@@ -2990,7 +3012,7 @@
           "namespaces"
         ],
         "summary": "Read a namespace",
-        "description": "One namespace as GET /api/v1/namespaces lists it: its kind, its owner where it has one, and its quotas. A namespace from before v0.3.0 names no owner, since v0.2 had nobody to name. Readable by an administrator and by every principal holding a grant carrying a role in it, directly or through a group; anyone else is answered the 404 of a namespace that does not exist, so that no name can be learnt by asking. What the Terraform provider refreshes and imports a namespace with.",
+        "description": "One namespace as GET /api/v1/namespaces lists it: its kind, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. A namespace from before v0.3.0 names no owner, since v0.2 had nobody to name. A former name in the path reaches the namespace as its name does, and the record answered names it as it now stands. Readable by an administrator and by every principal holding a grant carrying a role in it, directly or through a group; anyone else is answered the 404 of a namespace that does not exist, so that no name can be learnt by asking. What the Terraform provider refreshes and imports a namespace with.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#scopes-and-resolution"
@@ -3020,7 +3042,9 @@
                           "default",
                           "dmz"
                         ]
-                      }
+                      },
+                      "former_names": [],
+                      "avatar_updated_at": "2026-10-01T09:30:00Z"
                     }
                   },
                   "upgraded": {
@@ -3031,7 +3055,25 @@
                       "quotas": {
                         "max_concurrent_tasks": 20,
                         "max_retention_days": 90
-                      }
+                      },
+                      "former_names": [],
+                      "avatar_updated_at": null
+                    }
+                  },
+                  "renamed": {
+                    "summary": "a namespace renamed from finance",
+                    "value": {
+                      "name": "accounting",
+                      "kind": "shared",
+                      "owner": "group:finance-leads",
+                      "quotas": {
+                        "max_concurrent_tasks": 20,
+                        "max_retention_days": 90
+                      },
+                      "former_names": [
+                        "finance"
+                      ],
+                      "avatar_updated_at": null
                     }
                   }
                 }
@@ -3061,7 +3103,7 @@
           "namespaces"
         ],
         "summary": "Remove a namespace",
-        "description": "Removes a namespace that holds no workflow, run, secret, stored object or service account but its built-in NS/agentiik, which goes first; one that holds any is refused, saying what it holds, since what a namespace holds is somebody's work. Its grants go with it, so that a namespace created again under the same name starts with none of the old one's, and so does its authentication policy; who granted what, and when, stays in the audit log. A user's personal namespace is refused, since it is removed with its user. Administrator only, and audited as namespace.delete.",
+        "description": "Removes a namespace that holds no workflow, run, secret, stored object or service account but its built-in NS/agentiik, which goes first; one that holds any is refused, saying what it holds, since what a namespace holds is somebody's work. Its grants go with it, so that a namespace created again under the same name starts with none of the old one's, and so do its authentication policy and its picture; who granted what, and when, stays in the audit log. Every name it held, its own and its former ones, is free once it is gone. A user's personal namespace is refused, since it is removed with its user. By its owner, whoever holds grant:manage at its scope, or an administrator, and audited as namespace.delete.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#scopes-and-resolution"
@@ -3079,15 +3121,374 @@
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "The caller is not an administrator, which is answered before the namespace is looked up; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
+            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404."
           },
           "404": {
             "$ref": "#/components/responses/notFound",
-            "description": "No such namespace, or a name no namespace can have."
+            "description": "No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers."
           },
           "409": {
             "$ref": "#/components/responses/conflict",
             "description": "The namespace holds a workflow, a run, a secret, a stored object or a service account other than NS/agentiik, the error saying what; or it is a user's personal namespace, removed with its user."
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateNamespace",
+        "tags": [
+          "namespaces"
+        ],
+        "summary": "Change a namespace's settings",
+        "description": "The namespace's settings, as a partial object: each field the body names is set and each it leaves out is kept, so that the route takes more fields as a namespace's settings grow and a client sends only what it changes. Today it takes name, which renames a shared namespace in one transaction carrying every row that names it: its workflows with their versions, refs and runs, its grants and denies, its secrets and their values, its triggers and webhooks, its quotas, its authentication policy and its picture, and its service accounts, which become NEW/NAME, the built-in one among them, keeping their tokens and their grants in every namespace; a token narrowed to it, a pool accepting it by name, an event trigger of another namespace hearing it, and who did what wherever one of its service accounts acted, follow it. Its objects and sealed values stay under the name it was created with, so nothing is copied. The name it leaves stays its own, listed in former_names: every address naming it, this route's among them, reaches the namespace, and no other namespace or login takes it until the namespace is removed. Renaming it to one of its former names takes that name back; renaming it to its own name changes nothing and is recorded as unchanged. A user's personal namespace is never renamed, since it is named after a login and a login never changes. Refused while a run of it is queued, running or waiting, since its tasks carry its name to their runners; while a move of one of its workflows to or from it waits to be carried out; and while a runner not revoked narrows itself to it by name on its host, which no rename reaches. By its owner, whoever holds grant:manage at its scope, or an administrator. Audited as namespace.rename on the installation, with from and to, the new name as its target.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#renaming-a-namespace"
+        },
+        "requestBody": {
+          "description": "What changes, each field left out kept.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/namespaceUpdate"
+              },
+              "examples": {
+                "rename": {
+                  "summary": "a rename",
+                  "value": {
+                    "name": "accounting"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The namespace's record as it now stands, under its new name, the name it left in former_names.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/namespaceRecord"
+                },
+                "examples": {
+                  "renamed": {
+                    "summary": "finance renamed accounting",
+                    "value": {
+                      "name": "accounting",
+                      "kind": "shared",
+                      "owner": "group:finance-leads",
+                      "quotas": {
+                        "max_concurrent_tasks": 20,
+                        "max_retention_days": 90
+                      },
+                      "former_names": [
+                        "finance"
+                      ],
+                      "avatar_updated_at": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The body names no setting, a field that is not one, null, or a name outside the namespace grammar. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers."
+          },
+          "409": {
+            "description": "The rename cannot be made, the error saying why: a user's personal namespace; a name a namespace, a login or a reserved word holds, or a former name of another namespace; a run of the namespace queued, running or waiting; a move of one of its workflows asked and not carried out; or a runner not revoked narrowing itself to it by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "taken": {
+                    "summary": "a name another namespace held",
+                    "value": {
+                      "error": "billing is a name namespace ledger held before it was renamed, and a name a namespace held stays its own until that namespace is removed, so that an address written with it reaches nobody else"
+                    }
+                  },
+                  "running": {
+                    "summary": "a run in flight",
+                    "value": {
+                      "error": "namespace finance has 2 runs queued, running or waiting, and their tasks carry its name to their runners, so it is renamed once they have finished"
+                    }
+                  },
+                  "personal": {
+                    "summary": "a personal namespace",
+                    "value": {
+                      "error": "namespace alice is the personal namespace of the user alice, named after their login, which never changes, and is never renamed"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
+    "/api/v1/namespaces/{ns}/avatar": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        }
+      ],
+      "get": {
+        "operationId": "getNamespaceAvatar",
+        "tags": [
+          "namespaces"
+        ],
+        "summary": "Read a namespace's picture",
+        "description": "The namespace's picture, the PNG PUT /api/v1/namespaces/{ns}/avatar stored, at most 512 by 512 pixels, read by whoever reads the namespace's record: an administrator, and every principal holding a grant carrying a role in it. Kept a day by the browser that asked and by no shared cache, since a namespace is shown to those it is shared with alone; a client asks for it with v, the record's avatar_updated_at, so that a picture set again is asked for at another address, and revalidates past the day by its tag. nosniff, so that a browser shows it as the PNG it is declared as.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/avatarVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The picture.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/privateDay"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/avatarTag"
+              },
+              "X-Content-Type-Options": {
+                "$ref": "#/components/headers/noSniff"
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "image/png"
+                },
+                "examples": {
+                  "photo": {
+                    "summary": "a PNG of at most 512 by 512 pixels",
+                    "value": "PNG\r\n\u001a\n..."
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The picture is the one the If-None-Match tag names: the client's copy is still the picture.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/avatarTag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "description": "The namespace has no picture, one never set or removed; or there is no such namespace, or one the caller cannot see, the same answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "none": {
+                    "summary": "no picture",
+                    "value": {
+                      "error": "no such namespace, or it has no picture"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "setNamespaceAvatar",
+        "tags": [
+          "namespaces"
+        ],
+        "summary": "Set a namespace's picture",
+        "description": "Sets the namespace's picture in place of any before it, held to the rules of a user's photo: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it. Set by its owner, whoever holds grant:manage at its scope, a personal namespace's user among them, or an administrator. The record's avatar_updated_at says when it was set, which a client adds to the picture's address. Audited as namespace.avatar with the size it was stored at, and never the picture.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "requestBody": {
+          "description": "The picture, a PNG or a JPEG of at most 1 MiB and 2048 by 2048 pixels.",
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "contentMediaType": "image/png"
+              },
+              "examples": {
+                "png": {
+                  "summary": "a PNG",
+                  "value": "PNG\r\n\u001a\n..."
+                }
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "contentMediaType": "image/jpeg"
+              },
+              "examples": {
+                "jpeg": {
+                  "summary": "a JPEG, its Exif among it",
+                  "value": "ÿØÿá...Exif..."
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Stored, as GET /api/v1/namespaces/{ns}/avatar answers it from now on."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "An empty body. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised",
+            "description": "No credential, or one that opens nothing."
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers."
+          },
+          "413": {
+            "description": "A picture past 1 MiB, refused before it is decoded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "too large": {
+                    "summary": "past a mebibyte",
+                    "value": {
+                      "error": "a picture is at most 1048576 bytes, a mebibyte, and this one is more: send it smaller, since it is stored at 512 by 512 pixels at most"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A Content-Type other than image/png and image/jpeg, refused before the body is read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "type": {
+                    "summary": "a picture sent as something else",
+                    "value": {
+                      "error": "a picture is sent as image/png or image/jpeg, and this request's Content-Type is \"image/gif\""
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not a PNG or a JPEG that can be read, or its header announces more than 2048 pixels a side, saying how many.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "too many pixels": {
+                    "summary": "past 2048 by 2048",
+                    "value": {
+                      "error": "the picture is 4096 by 3072 pixels, and one is at most 2048 by 2048: it is stored at 512 by 512 at most, and a larger one takes more to decode than it gives"
+                    }
+                  },
+                  "unreadable": {
+                    "summary": "not a picture",
+                    "value": {
+                      "error": "the body is not a PNG or a JPEG that can be read, and a picture is one of the two"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeNamespaceAvatar",
+        "tags": [
+          "namespaces"
+        ],
+        "summary": "Remove a namespace's picture",
+        "description": "Removes the namespace's picture, which a client draws as the namespace's initial from then on, avatar_updated_at null. Removing none is the same answer, so that a client that lost the first answer asks again with nothing to sort out. By its owner, whoever holds grant:manage at its scope, or an administrator, removing one that should not be shown. Audited as namespace.avatar with removed, and as unchanged where there was none. No body is read, and one sent is refused.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "204": {
+            "description": "Removed, or there was none."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised",
+            "description": "No credential, or one that opens nothing."
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
           }
         }
       }
@@ -11784,15 +12185,14 @@
         "title": "Namespace creation",
         "type": "object",
         "required": [
-          "name",
-          "owner"
+          "name"
         ],
         "additionalProperties": false,
-        "description": "A shared namespace to create: its name, its owner and its quotas. The record answered is the one GET /api/v1/namespaces lists.",
+        "description": "A shared namespace to create: its name and, where an administrator creates it, its owner and its quotas. The record answered is the one GET /api/v1/namespaces lists.",
         "properties": {
           "name": {
             "$ref": "wire.schema.json#/$defs/namespaceRecord/properties/name",
-            "description": "The namespace's name, the first path segment of its routes. Refused where a namespace or a login already holds it.",
+            "description": "The namespace's name, the first path segment of its routes. Refused where a namespace holds it, as its name or a former one, or a login does.",
             "examples": [
               "finance"
             ]
@@ -11806,14 +12206,14 @@
           },
           "owner": {
             "$ref": "wire.schema.json#/$defs/namespaceRecord/properties/owner",
-            "description": "Who owns it: a user or group:NAME, given the owner role on the namespace in the same transaction, so that it can share the namespace and act in it from the start. The owner is who is told when an administrator writes a grant there by the installation's power or widens their own access in it.",
+            "description": "Who owns it: a user or group:NAME, given the owner role on the namespace in the same transaction, so that it can share the namespace and act in it from the start. Left out, the caller owns it, which the bootstrap token, being nobody, cannot. Naming another owner than the caller is an administrator's. The owner is who is told when an administrator writes a grant there by the installation's power or widens their own access in it.",
             "examples": [
               "group:finance-leads"
             ]
           },
           "quotas": {
             "$ref": "wire.schema.json#/$defs/namespaceRecord/properties/quotas",
-            "description": "What it may consume. max_concurrent_tasks and max_retention_days start at 20 and 90 where left out, and the other four bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later.",
+            "description": "What it may consume, an administrator's to write. max_concurrent_tasks and max_retention_days start at 20 and 90 where left out, and the other four bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later, an administrator's as well.",
             "examples": [
               {
                 "max_concurrent_tasks": 20,
@@ -11849,6 +12249,30 @@
           {
             "name": "team-ops",
             "owner": "bob-martin"
+          },
+          {
+            "name": "research"
+          }
+        ]
+      },
+      "namespaceUpdate": {
+        "title": "Namespace settings",
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "description": "What PATCH /api/v1/namespaces/{ns} changes, as a partial object: each field named is set and each left out kept, null refused rather than read as either. It is the namespace's settings and takes more fields as they grow, each written by whoever holds grant:manage at the namespace's scope or administers the installation. The quotas are not among them: they are an administrator's alone, at PUT /api/v1/namespaces/{ns}/quotas.",
+        "properties": {
+          "name": {
+            "$ref": "wire.schema.json#/$defs/namespace",
+            "description": "The namespace's new name, on the grammar every namespace's name is written on. The name it leaves becomes a former name, still the namespace's; a name a namespace, a login or a reserved word holds, or a former name of another namespace, is refused.",
+            "examples": [
+              "accounting"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "name": "accounting"
           }
         ]
       },
@@ -19963,7 +20387,7 @@
         "name": "ns",
         "in": "path",
         "required": true,
-        "description": "The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking.",
+        "description": "The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking.",
         "schema": {
           "$ref": "wire.schema.json#/$defs/namespace"
         },
@@ -20648,7 +21072,7 @@
         "name": "v",
         "in": "query",
         "required": false,
-        "description": "Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it.",
+        "description": "Read by nobody: the avatar_updated_at of the user or the namespace whose picture it is, which a client writes here so that the picture's address changes when the picture does, and no cache answers a picture set again with the one before it.",
         "schema": {
           "type": "string"
         },

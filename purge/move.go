@@ -52,13 +52,15 @@ func (p *Purger) move(ctx context.Context, m db.Move) (bool, error) {
 	if err != nil || !objects.Ready {
 		return false, err
 	}
+	// Every key is under the namespace's storage name, the name it was created with, which a rename
+	// leaves as it was.
 	for _, digest := range objects.Digests {
-		if err := p.copied(ctx, artifact.Key(m.Namespace, digest), artifact.Key(m.Target, digest), false); err != nil {
+		if err := p.copied(ctx, artifact.Key(m.Storage, digest), artifact.Key(m.TargetStorage, digest), false); err != nil {
 			return false, err
 		}
 	}
 	for _, key := range objects.Logs {
-		to, ok := rekeyed(key, m.Namespace, m.Target)
+		to, ok := rekeyed(key, m.Storage, m.TargetStorage)
 		if !ok {
 			continue
 		}
@@ -68,8 +70,8 @@ func (p *Purger) move(ctx context.Context, m db.Move) (bool, error) {
 	}
 	for _, name := range objects.Packs {
 		for _, key := range [][2]string{
-			{store.PackKey(m.Namespace, m.Repository, name), store.PackKey(m.Target, m.Repository, name)},
-			{store.IdxKey(m.Namespace, m.Repository, name), store.IdxKey(m.Target, m.Repository, name)},
+			{store.PackKey(m.Storage, m.Repository, name), store.PackKey(m.TargetStorage, m.Repository, name)},
+			{store.IdxKey(m.Storage, m.Repository, name), store.IdxKey(m.TargetStorage, m.Repository, name)},
 		} {
 			if err := p.copied(ctx, key[0], key[1], false); err != nil {
 				return false, err
@@ -85,7 +87,7 @@ func (p *Purger) move(ctx context.Context, m db.Move) (bool, error) {
 	// move counted it there: the count keeps any collection away from it now, and the bytes
 	// under the target's key may be what the collection deleted, or never there.
 	for _, digest := range moved.MustWrite {
-		if err := p.copied(ctx, artifact.Key(m.Namespace, digest), artifact.Key(m.Target, digest), true); err != nil {
+		if err := p.copied(ctx, artifact.Key(m.Storage, digest), artifact.Key(m.TargetStorage, digest), true); err != nil {
 			return true, fmt.Errorf("purge: %s/%s moved to %s, and %s could not be written again under %s: %w", m.Namespace, m.Workflow, m.Target, digest, m.Target, err)
 		}
 	}

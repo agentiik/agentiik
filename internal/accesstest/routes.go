@@ -100,10 +100,19 @@ var Cases = []Case{
 	{Route: administer("PUT", "/api/v1/auth/policy"), Refused: true},
 	{Route: administer("PUT", "/api/v1/{namespace}/auth/policy"), Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/auth/policy", Scope: api.Namespace, Members: true}},
-	{Route: administer("POST", "/api/v1/namespaces"), Refused: true},
+	// A namespace any user creates and owns, an administrator one for another owner: a route about
+	// its caller, sent a body it refuses. Its owner, whoever holds grant:manage there, or an
+	// administrator renames it, removes it once it holds nothing, which no shared namespace of the
+	// fixture is, and sets or removes its picture, which none holds; whoever reads its record reads
+	// its picture.
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/namespaces", Own: true}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces", Scope: api.Namespace, Members: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}", Scope: api.Namespace, Members: true}},
-	{Route: administer("DELETE", "/api/v1/namespaces/{namespace}")},
+	{Route: ownerOrAdministrator("PATCH", "/api/v1/namespaces/{namespace}"), Refused: true},
+	{Route: ownerOrAdministrator("DELETE", "/api/v1/namespaces/{namespace}")},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}/avatar", Scope: api.Namespace, Members: true}},
+	{Route: ownerOrAdministrator("PUT", "/api/v1/namespaces/{namespace}/avatar"), Refused: true},
+	{Route: ownerOrAdministrator("DELETE", "/api/v1/namespaces/{namespace}/avatar")},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}/quotas", Scope: api.Namespace, Members: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/quotas", Scope: api.Namespace, Members: true}},
 	{Route: administer("PUT", "/api/v1/namespaces/{namespace}/quotas"), Refused: true},
@@ -226,6 +235,12 @@ func own(method, pattern string) Case {
 // administer is a route an administrator alone reaches: grant:manage at the installation.
 func administer(method, pattern string) api.Route {
 	return api.Route{Method: method, Pattern: pattern, Permission: api.GrantManage, Scope: api.Installation}
+}
+
+// ownerOrAdministrator is a route a namespace's owner reaches, whoever holds grant:manage at its
+// scope, and an administrator by the installation's power over every namespace.
+func ownerOrAdministrator(method, pattern string) api.Route {
+	return api.Route{Method: method, Pattern: pattern, Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true}
 }
 
 // runner is a route a runner reaches with its credential, and nobody else.

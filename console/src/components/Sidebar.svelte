@@ -26,6 +26,7 @@
     version,
     onsignout,
     ondismiss,
+    oncreate,
   }: {
     me: Me;
     namespaces: Namespace[];
@@ -39,6 +40,7 @@
     version: string;
     onsignout: () => void;
     ondismiss: (id: string) => void;
+    oncreate?: () => void;
   } = $props();
 
   const icon: Record<View, string> = { workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", variables: "control-variables", settings: "control-settings" };
@@ -71,7 +73,7 @@
   </ul>
 
   <div class="switcher">
-    <NamespaceSwitcher {namespaces} principal={me.principal} current={namespace} view={current ?? "workflows"} {place} {folded} />
+    <NamespaceSwitcher {namespaces} principal={me.principal} current={namespace} view={current ?? "workflows"} {place} {folded} {oncreate} />
   </div>
 
   {#if namespace}
