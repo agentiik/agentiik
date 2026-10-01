@@ -269,7 +269,7 @@
             edit((t) => setMaxParallel(t, step!, raw === "" ? null : Number(raw)));
           }} />
         </label>
-        <p class="row"><button class="control danger" onclick={() => edit((t) => removeStep(t, graph, step!), `${step} is removed.`)}><Icon name="control-remove" size={14} />Remove {step}</button></p>
+        <p class="row"><button class="control danger" onclick={() => edit((t) => removeStep(t, graph, step!), `${step} is removed.`)}><Icon name="control-remove" size={14} />Remove the step</button></p>
       {/if}
     </Pane>
 

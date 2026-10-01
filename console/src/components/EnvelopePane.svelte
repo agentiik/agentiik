@@ -75,7 +75,7 @@
       <span class="term name">{output ?? port}</span>
       <span class="muted">{envelope.meta.count} {envelope.meta.count === 1 ? "item" : "items"} · produced <time class="term" datetime={envelope.meta.produced_at}>{envelope.meta.produced_at}</time></span>
       <span class="spacer"></span>
-      <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy"}</button>
+      <button class="control" onclick={copy}><Icon name={copied ? "state-succeeded" : "control-copy"} size={14} />Copy</button>
       <button class="control" onclick={download}><Icon name="control-download" size={14} />Download</button>
     </div>
     {#if envelope.items.length === 0}
@@ -84,7 +84,7 @@
       <pre class="json"><code>{#each coloured as t, i (i)}<span class="t-{t.kind}">{t.text}</span>{/each}</code></pre>
       {#if drawn < envelope.items.length}
         <p>
-          <button class="control" onclick={() => (drawn += batch)}>Show {Math.min(batch, envelope.items.length - drawn)} more items</button>
+          <button class="control" onclick={() => (drawn += batch)}>Show more items</button>
           <span class="muted">{drawn} of {envelope.items.length} drawn</span>
         </p>
       {/if}

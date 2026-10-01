@@ -328,8 +328,8 @@
                     </form>
                   {:else if asking === c.id}
                     <span class="confirm">
-                      <button class="control danger" disabled={working} onclick={() => remove(c)}>Remove {c.type === "password" ? "the password" : "it"}</button>
-                      <button class="control" onclick={() => (asking = "")}>Keep it</button>
+                      <button class="control" onclick={() => (asking = "")}>Keep</button>
+                      <button class="control danger" disabled={working} onclick={() => remove(c)}><Icon name="control-remove" size={14} />Remove</button>
                     </span>
                   {:else}
                     <button class="control" onclick={() => (asking = c.id)}><Icon name="control-remove" size={14} />Remove</button>
@@ -380,7 +380,7 @@
           <p>Token for <span class="term">{issued.api_token.principal}</span>. Shown once: copy it now.</p>
           <p class="value code">{issued.token}</p>
           <p class="buttons">
-            <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy"}</button>
+            <button class="control" onclick={copy}><Icon name={copied ? "state-succeeded" : "control-copy"} size={14} />Copy</button>
             <button class="control" onclick={() => (issued = null)}>Done</button>
           </p>
         </div>
@@ -406,8 +406,8 @@
                 <td class="end">
                   {#if revoking === t.id}
                     <span class="confirm">
-                      <button class="control danger" disabled={working} onclick={() => revokeOne(t)}>Revoke it</button>
-                      <button class="control" onclick={() => (revoking = "")}>Keep it</button>
+                      <button class="control" onclick={() => (revoking = "")}>Keep</button>
+                      <button class="control danger" disabled={working} onclick={() => revokeOne(t)}>Revoke</button>
                     </span>
                   {:else}
                     <button class="control" onclick={() => (revoking = t.id)}>Revoke</button>

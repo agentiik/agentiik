@@ -112,8 +112,8 @@
               <td class="end">
                 {#if a.name !== "agentiik"}
                   {#if asking === id(a)}
-                    <button class="control danger" disabled={working} onclick={() => remove(a)}>Remove {id(a)}</button>
                     <button class="control" onclick={() => (asking = "")}>Keep</button>
+                    <button class="control danger" disabled={working} onclick={() => remove(a)}>Remove</button>
                   {:else}
                     <button class="control" disabled={working} onclick={() => (asking = id(a))}>Remove</button>
                   {/if}

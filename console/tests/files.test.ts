@@ -117,7 +117,7 @@ describe("a workflow's files", () => {
   it("run the ref shown, its name in the run form, under workflow:run", async () => {
     const sent: { path: string; body: unknown }[] = [];
     open("/finance/workflows/monthly-invoicing/files", "?ref=feature%2Fvat-rounding", scenario("alice"), sent);
-    await fireEvent.click(await screen.findByRole("button", { name: "Run feature/vat-rounding" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Run this ref" }));
     await waitFor(() => expect((document.getElementById("run-ref") as HTMLInputElement).value).toBe("feature/vat-rounding"));
   });
 
@@ -140,7 +140,7 @@ describe("a namespace's workflows", () => {
     await fireEvent.click(await screen.findByRole("button", { name: "New workflow" }));
     await fireEvent.input(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "vat-reconciliation" } });
     await fireEvent.click(screen.getByRole("checkbox"));
-    await fireEvent.click(screen.getByRole("button", { name: "Create vat-reconciliation" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(sent).toEqual([{ path: "/api/v1/alice/workflows", body: { name: "vat-reconciliation", protected: true } }]));
     await waitFor(() => expect(place.route).toEqual({ kind: "namespace", namespace: "alice", view: "workflows", workflow: "vat-reconciliation", tab: "files" }));
   });
@@ -151,7 +151,7 @@ describe("a namespace's workflows", () => {
     open("/alice/workflows", "", s);
     await fireEvent.click(await screen.findByRole("button", { name: "New workflow" }));
     await fireEvent.input(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "report" } });
-    await fireEvent.click(screen.getByRole("button", { name: "Create report" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByText(/report is already taken\./)).toBeTruthy();
   });
 });

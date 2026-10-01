@@ -156,7 +156,7 @@
       <p class="value code">{issued.link}</p>
       {#if issued.code}<p class="muted">Code: <span class="code">{issued.code}</span></p>{/if}
       <p class="buttons">
-        <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy the link"}</button>
+        <button class="control" onclick={copy}><Icon name={copied ? "state-succeeded" : "control-copy"} size={14} />Copy the link</button>
         <button class="control primary" onclick={() => (issued = null)}>Done</button>
       </p>
     </div>
@@ -184,8 +184,8 @@
             <td class="end">
               {#if u.login !== own}
                 {#if asking === u.login}
-                  <button class="control danger" disabled={working} onclick={() => remove(u)}>Remove {u.login}</button>
                   <button class="control" onclick={() => (asking = "")}>Keep</button>
+                  <button class="control danger" disabled={working} onclick={() => remove(u)}>Remove</button>
                 {:else}
                   {#if !u.last_sign_in_at}
                     <button class="control" disabled={working} onclick={() => enrol(u)}>Enrolment link</button>

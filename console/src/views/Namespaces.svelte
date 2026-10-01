@@ -167,8 +167,8 @@
             <td class="end">
               {#if n.kind === "shared"}
                 {#if asking === n.name}
-                  <button class="control danger" disabled={working} onclick={() => remove(n)}>Remove {n.name}</button>
                   <button class="control" onclick={() => (asking = "")}>Keep</button>
+                  <button class="control danger" disabled={working} onclick={() => remove(n)}>Remove</button>
                 {:else}
                   <button class="control" disabled={working} onclick={() => (asking = n.name)}>Remove</button>
                 {/if}
