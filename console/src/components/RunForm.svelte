@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { Validator } from "@cfworker/json-schema";
   import { refusal, type API } from "../api/client";
   import type { Graph } from "../lib/graph";
@@ -11,14 +12,15 @@
   // asked for, the files of the tree it names read to check it; and the ref to run, the default
   // branch's head where none is named. An input the API still refuses is pointed at as the API
   // names it. Once started, the run's inspector opens.
-  let { api, place, namespace, workflow, graph, commit, onclose }: { api: API; place: Place; namespace: string; workflow: string; graph: Graph; commit: string; onclose: () => void } = $props();
+  // ref is the one the form opens on: the files' ref where it opens from them, empty for the head.
+  let { api, place, namespace, workflow, graph, commit, ref: opensOn = "", onclose }: { api: API; place: Place; namespace: string; workflow: string; graph: Graph; commit: string; ref?: string; onclose: () => void } = $props();
 
   const declared = $derived(Object.entries(graph.inputs ?? {}));
   const fields = $derived(declared.map(([name, d]) => fieldOf(name, d as { schema: unknown; required?: boolean; default?: unknown })));
 
   let raw = $state<Record<string, string | boolean>>({});
   let errors = $state<Record<string, string[]>>({});
-  let ref = $state("");
+  let ref = $state(untrack(() => opensOn));
   let sending = $state(false);
   let refused = $state("");
   let validators = $state<Record<string, Validator | undefined>>({});
