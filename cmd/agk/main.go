@@ -53,6 +53,10 @@ type Env struct {
 	// Browse opens an address in the person's browser, for agk login. Nil opens none, and agk
 	// login prints the address for them to open.
 	Browse func(string) error
+
+	// Terminal says whether standard input and output are a terminal, for agk console. Nil says
+	// they are not, so that a test prints plain lines rather than opening a screen.
+	Terminal func() bool
 }
 
 // command is one verb of the documented table.
@@ -109,6 +113,7 @@ var commands = []command{
 	{"grants", "Shows who can do what on a namespace or a workflow, and which scope each permission comes from.", grantsVerb},
 	{"logs", "Follows the logs of a run.", logs},
 	{"status", "Shows how a run on an installation stands: its state, each step's, the envelope digests and what failed.", status},
+	{"console", "Opens the console in the terminal, full screen, over the routes the web console reads. Not on a terminal, it prints the view once as plain lines.", consoleVerb},
 	{"brick init", "Scaffolds a brick in a chosen language, with its manifest and test harness.", absent("brick init", "there are no brick templates here", "They are released from agentiik/bricks")},
 	{"brick test", "Runs the brick against a set of sample envelopes and compares against expected outputs.", brickTest},
 }
@@ -122,7 +127,7 @@ func main() {
 	code := run(ctx, Env{
 		Out: os.Stdout, Err: os.Stderr, Dir: dir,
 		Now: time.Now, Getenv: os.Getenv, Executable: os.Executable,
-		ConfigDir: os.UserConfigDir, Browse: browse,
+		ConfigDir: os.UserConfigDir, Browse: browse, Terminal: attached,
 	}, os.Args[1:])
 	stop()
 	os.Exit(code)
