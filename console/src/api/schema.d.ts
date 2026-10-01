@@ -907,6 +907,31 @@ export interface paths {
         patch: operations["updateWorkflow"];
         trace?: never;
     };
+    "/api/v1/{ns}/workflows/{name}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a run of a workflow
+         * @description The manual trigger: a run of the commit the request names, or reaches through a ref, or of the default branch's head, or while it is unborn the latest version a tree push recorded, with the workflow inputs bound against that version's declaration as agk run --local binds them and recorded as bound. Attributed to the caller, trigger_kind manual. The run is pinned to its commit whatever the ref or the branch does next. Counted against the namespace's max_runs_per_hour before it is written. Requires workflow:run.
+         */
+        post: operations["startRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/workflows/{name}/tree/{ref}": {
         parameters: {
             query?: never;
@@ -1286,6 +1311,62 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a namespace's secret declarations
+         * @description Every secret the namespace declares, each with its name, its store and the path in it where it has one, where a step is given it, and who declared it when; never a value, which no route reads. Requires workflow:read at namespace scope, which reading the workflows that name these secrets already takes; a grant on one workflow shows none.
+         */
+        get: operations["listSecrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/secrets/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+                name: components["parameters"]["secret"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read one secret declaration
+         * @description One declaration, as the list gives it, never its value. Requires workflow:read at namespace scope.
+         */
+        get: operations["readSecret"];
+        /**
+         * Declare, change or rotate one secret
+         * @description Declares the secret, or changes where its value is kept, and for builtin writes the value, sealed in the declaration's own transaction so that a store refusing it leaves the declaration as it was. One secret per request, so that two Terraform applies each declaring their own never drop each other's change. A value goes one way: no answer returns it, and rotating is writing again. env is taken only where the installation gives the namespace a prefix and the path begins with it; vault is refused until its provider arrives. Requires secret:write at namespace scope, and is audited as secret.write with the store, the path and whether a value was written, never the value.
+         */
+        put: operations["declareSecret"];
+        post?: never;
+        /**
+         * Remove one secret declaration
+         * @description Removes the declaration and, where the built-in store keeps one, its value, so that declaring the name again later does not bring back a credential somebody meant to be gone. Requires secret:write at namespace scope, and is audited as secret.delete.
+         */
+        delete: operations["removeSecret"];
         options?: never;
         head?: never;
         patch?: never;
@@ -7595,6 +7676,242 @@ export interface components {
             fetches_left?: number;
         };
         /**
+         * Start request
+         * @description What a run is asked for: the commit it runs, named or reached through a ref, or neither for the default branch's head, and the workflow inputs it is started with, bound against that version's declaration as agk run --local binds them. {} asks for the head with no input. A commit and a ref together are refused, since a run is of one commit.
+         * @example {}
+         * @example {
+         *       "ref": "main",
+         *       "inputs": {
+         *         "orders": [
+         *           {
+         *             "order": "ORD-0001",
+         *             "amount": 120.5
+         *           }
+         *         ]
+         *       }
+         *     }
+         * @example {
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+         *     }
+         */
+        startRequest: {
+            /**
+             * @description A commit that is a version of the workflow.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit?: components["schemas"]["commit"];
+            /**
+             * @description A branch or a tag by its short name or in full, or a whole commit that is a version, resolved once, when the run is asked for: the run is pinned to the commit it names then, whatever the ref does next.
+             * @example main
+             * @example refs/tags/v2.1.0
+             */
+            ref?: string;
+            /**
+             * @description The workflow inputs by name, each held to its JSON Schema, a default filling one left out, and recorded as bound. At most as many values as one envelope may carry items, and as many bytes as one envelope may weigh: a run's data belongs in an artifact. null is read as none.
+             * @example {
+             *       "orders": [
+             *         {
+             *           "order": "ORD-0001",
+             *           "amount": 120.5
+             *         }
+             *       ]
+             *     }
+             */
+            inputs?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * Run started
+         * @description The run a request started, attributed to the caller as a manual run, written and not yet begun: what happens to it is the controller's.
+         * @example {
+         *       "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+         *       "state": "queued",
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+         *     }
+         */
+        runStarted: {
+            /**
+             * @description The new run.
+             * @example 01JMZ9A2B3C4D5E6F7G8H9J0K1
+             */
+            run: components["schemas"]["ulid"];
+            /**
+             * @description Where it stands as it is written.
+             * @example queued
+             * @constant
+             */
+            state: "queued";
+            /**
+             * @description The commit it is pinned to, which a caller naming a ref, or none, did not name.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit: components["schemas"]["commit"];
+        };
+        /**
+         * Input refused
+         * @description An input the request gets wrong: the sentence agk run --local prints for it, and the input and the rule apart, so that a form can point at its field without reading the sentence.
+         * @example {
+         *       "error": "input orders: schema: /0/amount: got string, want number; run refused",
+         *       "input": "orders",
+         *       "rule": "schema"
+         *     }
+         * @example {
+         *       "error": "input orders: required: no value supplied and the input declares no default; run refused",
+         *       "input": "orders",
+         *       "rule": "required"
+         *     }
+         */
+        inputRefusal: {
+            /**
+             * @description Why, in a sentence.
+             * @example input orders: schema: /0/amount: got string, want number; run refused
+             */
+            error: string;
+            /**
+             * @description The input, by the name the request or the declaration gives it.
+             * @example orders
+             */
+            input: string;
+            /**
+             * @description The key a person finds in the workflow file: required for an input left out with no default, schema for a value its JSON Schema refuses, undeclared for a name the workflow does not declare.
+             * @example schema
+             * @enum {unknown}
+             */
+            rule: "required" | "schema" | "undeclared";
+        };
+        /**
+         * Secret declaration
+         * @description One secret as the routes answer it: its name, the store its value is kept in and where in it, and where a step is given it. Never its value, which no route reads.
+         * @example {
+         *       "name": "stripe-key",
+         *       "provider": "builtin",
+         *       "mount": "/agk/secrets/stripe-key",
+         *       "declared_by": "alice",
+         *       "declared_at": "2026-09-29T14:02:11Z"
+         *     }
+         * @example {
+         *       "name": "smtp-password",
+         *       "provider": "env",
+         *       "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+         *       "mount": "/agk/secrets/smtp-password",
+         *       "declared_by": "alice",
+         *       "declared_at": "2026-09-29T14:05:40Z"
+         *     }
+         */
+        secretDeclaration: {
+            /**
+             * @description The secret's name, as the workflow file names it.
+             * @example stripe-key
+             */
+            name: string;
+            /**
+             * @description The store its value is kept in: builtin, the encrypted store, which keeps it sealed under the namespace and the name; env, the API's own environment, for development, where the installation has opted the namespace in; or vault, which no installation reads from until its provider arrives.
+             * @example builtin
+             * @example env
+             * @enum {string}
+             */
+            provider: "builtin" | "env" | "vault";
+            /**
+             * @description Where the value sits inside its store: an environment variable's name for env, beginning with the prefix the installation gives the namespace. Absent for builtin, which keeps a value under the namespace and the name and takes no path.
+             * @example AGK_DEV_FINANCE_STRIPE_KEY
+             */
+            path?: string;
+            /**
+             * @description Where a step is given the value, as a file on tmpfs, where its brick's manifest names no mount of its own: /agk/secrets/<name>. Answered rather than stored, since it follows from the name, and answered at all because the file a brick reads is what a person looking at a declaration is usually trying to find.
+             * @example /agk/secrets/stripe-key
+             */
+            mount: string;
+            /**
+             * @description Who wrote the declaration last.
+             * @example alice
+             */
+            declared_by: components["schemas"]["actor"];
+            /**
+             * Format: date-time
+             * @description When it was written last.
+             * @example 2026-09-29T14:02:11Z
+             */
+            declared_at: string;
+        };
+        /**
+         * Secret list
+         * @description A namespace's secret declarations, by name.
+         * @example {
+         *       "secrets": [
+         *         {
+         *           "name": "stripe-key",
+         *           "provider": "builtin",
+         *           "mount": "/agk/secrets/stripe-key",
+         *           "declared_by": "alice",
+         *           "declared_at": "2026-09-29T14:02:11Z"
+         *         },
+         *         {
+         *           "name": "smtp-password",
+         *           "provider": "env",
+         *           "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+         *           "mount": "/agk/secrets/smtp-password",
+         *           "declared_by": "alice",
+         *           "declared_at": "2026-09-29T14:05:40Z"
+         *         }
+         *       ]
+         *     }
+         */
+        secretList: {
+            /**
+             * @description Every declaration of the namespace, never a value.
+             * @example [
+             *       {
+             *         "name": "stripe-key",
+             *         "provider": "builtin",
+             *         "mount": "/agk/secrets/stripe-key",
+             *         "declared_by": "alice",
+             *         "declared_at": "2026-09-29T14:02:11Z"
+             *       }
+             *     ]
+             */
+            secrets: components["schemas"]["secretDeclaration"][];
+        };
+        /**
+         * Secret declaration written
+         * @description What a PUT writes: the store a value is kept in, where in it, and for builtin the value itself, written once and returned by no answer. A PUT naming builtin without a value keeps the value stored; rotating is sending one again, never reading one first. A secret moved out of builtin, or removed, takes its stored value with it.
+         * @example {
+         *       "provider": "builtin",
+         *       "value": "sk_live_51H..."
+         *     }
+         * @example {
+         *       "provider": "builtin"
+         *     }
+         * @example {
+         *       "provider": "env",
+         *       "path": "AGK_DEV_FINANCE_SMTP_PASSWORD"
+         *     }
+         */
+        secretDeclare: {
+            /**
+             * @description The store: builtin, env where the installation has opted the namespace in, or vault, refused until its provider arrives, since nothing gives a namespace its prefix in Vault before then.
+             * @example builtin
+             * @enum {string}
+             */
+            provider: "builtin" | "env" | "vault";
+            /**
+             * @description For env, the variable the value is read from, which begins with the prefix the installation gives the namespace. Refused for builtin, which takes none.
+             * @example AGK_DEV_FINANCE_SMTP_PASSWORD
+             */
+            path?: string;
+            /**
+             * @description The value, for builtin alone, at most 1 MiB once decoded. No answer carries it, now or later, and an empty one is refused rather than taken for a PUT that keeps the old one.
+             * @example sk_live_51H...
+             */
+            value?: string;
+            /**
+             * @description How value is written: utf-8 where absent, or base64 for a value that is not text, a keystore for instance, since JSON carries no arbitrary bytes.
+             * @example base64
+             * @enum {string}
+             */
+            encoding?: "utf-8" | "base64";
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -10425,6 +10742,8 @@ export interface components {
         outputName: components["schemas"]["identifier"];
         /** @description The artifact's agk:// URI, as an envelope's file names it, percent-encoded as one path segment, so that a proxy in front passes %2F undecoded. */
         artifactUri: string;
+        /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+        secret: string;
     };
     requestBodies: never;
     headers: {
@@ -12294,6 +12613,100 @@ export interface operations {
             422: components["responses"]["unprocessable"];
         };
     };
+    startRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /** @description The commit or the ref, and the inputs; {} for the head with none. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["startRequest"];
+            };
+        };
+        responses: {
+            /** @description The run was written, queued. The Location header names it. */
+            202: {
+                headers: {
+                    /** @description The new run's address. */
+                    Location?: string;
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runStarted"];
+                };
+            };
+            /** @description A body that is not the object, no body at all, a commit and a ref together, a ref a branch and a tag both hold, or inputs that are not an object or hold more values than one envelope may carry items. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal of the workflow is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The workflow is being moved to another namespace, and nothing starts in it until the move is done. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The inputs, with the defaults the workflow declares, weigh more than one envelope may, or the body is larger than that. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description An input the version's declaration refuses, answered with the input and the rule apart; or the version is a library's, which nothing runs; or its declaration is one a push now refuses, recorded before it did. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["inputRefusal"] | components["schemas"]["error"];
+                };
+            };
+            /** @description The namespace has created as many runs in the last 60 minutes as its max_runs_per_hour allows. No run exists, so a client coming back after Retry-After is not asking for a second one. */
+            429: {
+                headers: {
+                    /** @description The whole seconds until one more run fits in the hour. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
     getWorkflowTree: {
         parameters: {
             query?: {
@@ -13029,6 +13442,150 @@ export interface operations {
                 };
             };
             503: components["responses"]["unavailable"];
+        };
+    };
+    listSecrets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declarations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["secretList"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    readSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+                name: components["parameters"]["secret"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declaration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["secretDeclaration"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such declaration, no such namespace, or one where the caller does not hold workflow:read: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    declareSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+                name: components["parameters"]["secret"];
+            };
+            cookie?: never;
+        };
+        /** @description The store, the path, and for builtin the value. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["secretDeclare"];
+            };
+        };
+        responses: {
+            /** @description Changed: the declaration as it now stands, never the value. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["secretDeclaration"];
+                };
+            };
+            /** @description Declared: the declaration, never the value, and Location naming it. */
+            201: {
+                headers: {
+                    /** @description Where the declaration is read. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["secretDeclaration"];
+                };
+            };
+            /** @description A name the workflow file could not write, a store that is not one of the three or that this installation does not read for the namespace, a path builtin does not take or env needs, a value for a store other than builtin, an empty value, an encoding that is not utf-8 or base64, or two credentials. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, or one where the caller does not hold secret:write at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+            /** @description A value larger than 1 MiB once decoded, or a body larger than 2 MiB. */
+            413: components["responses"]["tooLarge"];
+            /** @description A value sent to an installation with no built-in store attached: nothing was written. */
+            503: components["responses"]["unavailable"];
+        };
+    };
+    removeSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
+                name: components["parameters"]["secret"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such declaration, no such namespace, or one where the caller does not hold secret:write: the same answer. */
+            404: components["responses"]["notFound"];
         };
     };
 }

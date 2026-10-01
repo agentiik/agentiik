@@ -61,6 +61,10 @@
       "description": "Sharing: grants and denies at namespace and workflow scope."
     },
     {
+      "name": "secrets",
+      "description": "Where a namespace's secrets are kept, and never what they are: one declaration per secret, a value written to the built-in store and never read back."
+    },
+    {
       "name": "workflows",
       "description": "Workflow repositories, created, read, renamed, moved, protected and deleted, the tree at a ref, and the image pins and brick manifests a push is judged against. Git itself is spoken at /{ns}/{name}.git, with an API token as the password, and is git's own protocol rather than this document's."
     },
@@ -4674,6 +4678,251 @@
         }
       }
     },
+    "/api/v1/{ns}/workflows/{name}/runs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/workflow"
+        }
+      ],
+      "post": {
+        "operationId": "startRun",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Start a run of a workflow",
+        "description": "The manual trigger: a run of the commit the request names, or reaches through a ref, or of the default branch's head, or while it is unborn the latest version a tree push recorded, with the workflow inputs bound against that version's declaration as agk run --local binds them and recorded as bound. Attributed to the caller, trigger_kind manual. The run is pinned to its commit whatever the ref or the branch does next. Counted against the namespace's max_runs_per_hour before it is written. Requires workflow:run.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "requestBody": {
+          "required": true,
+          "description": "The commit or the ref, and the inputs; {} for the head with none.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/startRequest"
+              },
+              "examples": {
+                "the head": {
+                  "summary": "the default branch's head, no input",
+                  "value": {}
+                },
+                "a branch with inputs": {
+                  "summary": "a branch, resolved now, with one input",
+                  "value": {
+                    "ref": "main",
+                    "inputs": {
+                      "orders": [
+                        {
+                          "order": "ORD-0001",
+                          "amount": 120.5
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The run was written, queued. The Location header names it.",
+            "headers": {
+              "Location": {
+                "description": "The new run's address.",
+                "schema": {
+                  "type": "string",
+                  "description": "A path of the API.",
+                  "examples": [
+                    "/api/v1/finance/runs/01JMZ9A2B3C4D5E6F7G8H9J0K1"
+                  ]
+                },
+                "examples": {
+                  "the new run": {
+                    "summary": "under its namespace",
+                    "value": "/api/v1/finance/runs/01JMZ9A2B3C4D5E6F7G8H9J0K1"
+                  }
+                }
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runStarted"
+                },
+                "examples": {
+                  "started": {
+                    "summary": "a run of the head",
+                    "value": {
+                      "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+                      "state": "queued",
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A body that is not the object, no body at all, a commit and a ref together, a ref a branch and a tag both hold, or inputs that are not an object or hold more values than one envelope may carry items. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal of the workflow is a 404."
+          },
+          "404": {
+            "description": "No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no ref": {
+                    "summary": "a ref naming nothing",
+                    "value": {
+                      "error": "nightly names no branch, no tag and no version of the workflow"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The workflow is being moved to another namespace, and nothing starts in it until the move is done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "moving": {
+                    "summary": "a move under way",
+                    "value": {
+                      "error": "finance/monthly-invoicing is being moved to another namespace, and is frozen until the move is carried out: its pushes, runs, replays and changes are refused meanwhile, and it answers at its new place once it is done"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The inputs, with the defaults the workflow declares, weigh more than one envelope may, or the body is larger than that.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "too large": {
+                    "summary": "inputs past the envelope's weight",
+                    "value": {
+                      "error": "the inputs, with the defaults the workflow declares, are written in 9437184 bytes, and a run's inputs weigh at most 8388608, one envelope: a run's data belongs in an artifact"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An input the version's declaration refuses, answered with the input and the rule apart; or the version is a library's, which nothing runs; or its declaration is one a push now refuses, recorded before it did.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/inputRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/error"
+                    }
+                  ]
+                },
+                "examples": {
+                  "an input": {
+                    "summary": "a value its schema refuses",
+                    "value": {
+                      "error": "input orders: schema: /0/amount: got string, want number; run refused",
+                      "input": "orders",
+                      "rule": "schema"
+                    }
+                  },
+                  "a library": {
+                    "summary": "a fragment, which nothing runs",
+                    "value": {
+                      "error": "common at c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09 is a library: its root agentiik.yaml is written as a fragment, which other workflows include and nothing runs"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The namespace has created as many runs in the last 60 minutes as its max_runs_per_hour allows. No run exists, so a client coming back after Retry-After is not asking for a second one.",
+            "headers": {
+              "Retry-After": {
+                "description": "The whole seconds until one more run fits in the hour.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "examples": {
+                  "minutes": {
+                    "summary": "four minutes",
+                    "value": 240
+                  }
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "quota": {
+                    "summary": "max_runs_per_hour reached",
+                    "value": {
+                      "error": "namespace finance has created as many runs in the last 60 minutes as its max_runs_per_hour, 120, allows, and one more fits in 240 seconds"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no store": {
+                    "summary": "no object store",
+                    "value": {
+                      "error": "this installation has no object store attached, and an input's schema names a file of the version's tree, which is kept there"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/{ns}/workflows/{name}/tree/{ref}": {
       "parameters": [
         {
@@ -7155,6 +7404,297 @@
           },
           "503": {
             "$ref": "#/components/responses/unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/secrets": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        }
+      ],
+      "get": {
+        "operationId": "listSecrets",
+        "tags": [
+          "secrets"
+        ],
+        "summary": "List a namespace's secret declarations",
+        "description": "Every secret the namespace declares, each with its name, its store and the path in it where it has one, where a step is given it, and who declared it when; never a value, which no route reads. Requires workflow:read at namespace scope, which reading the workflows that name these secrets already takes; a grant on one workflow shows none.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#secrets"
+        },
+        "responses": {
+          "200": {
+            "description": "The declarations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/secretList"
+                },
+                "examples": {
+                  "secrets": {
+                    "summary": "a namespace's secrets",
+                    "value": {
+                      "secrets": [
+                        {
+                          "name": "stripe-key",
+                          "provider": "builtin",
+                          "mount": "/agk/secrets/stripe-key",
+                          "declared_by": "alice",
+                          "declared_at": "2026-09-29T14:02:11Z"
+                        },
+                        {
+                          "name": "smtp-password",
+                          "provider": "env",
+                          "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+                          "mount": "/agk/secrets/smtp-password",
+                          "declared_by": "alice",
+                          "declared_at": "2026-09-29T14:05:40Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer."
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/secrets/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/secret"
+        }
+      ],
+      "get": {
+        "operationId": "readSecret",
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Read one secret declaration",
+        "description": "One declaration, as the list gives it, never its value. Requires workflow:read at namespace scope.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#secrets"
+        },
+        "responses": {
+          "200": {
+            "description": "The declaration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/secretDeclaration"
+                },
+                "examples": {
+                  "builtin": {
+                    "summary": "kept in the built-in store",
+                    "value": {
+                      "name": "stripe-key",
+                      "provider": "builtin",
+                      "mount": "/agk/secrets/stripe-key",
+                      "declared_by": "alice",
+                      "declared_at": "2026-09-29T14:02:11Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such declaration, no such namespace, or one where the caller does not hold workflow:read: the same answer."
+          }
+        }
+      },
+      "put": {
+        "operationId": "declareSecret",
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Declare, change or rotate one secret",
+        "description": "Declares the secret, or changes where its value is kept, and for builtin writes the value, sealed in the declaration's own transaction so that a store refusing it leaves the declaration as it was. One secret per request, so that two Terraform applies each declaring their own never drop each other's change. A value goes one way: no answer returns it, and rotating is writing again. env is taken only where the installation gives the namespace a prefix and the path begins with it; vault is refused until its provider arrives. Requires secret:write at namespace scope, and is audited as secret.write with the store, the path and whether a value was written, never the value.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#secrets"
+        },
+        "requestBody": {
+          "description": "The store, the path, and for builtin the value.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/secretDeclare"
+              },
+              "examples": {
+                "write": {
+                  "summary": "a value written to the built-in store",
+                  "value": {
+                    "provider": "builtin",
+                    "value": "sk_live_51H..."
+                  }
+                },
+                "keep": {
+                  "summary": "the declaration changed, the value kept",
+                  "value": {
+                    "provider": "builtin"
+                  }
+                },
+                "env": {
+                  "summary": "read from the API's environment, for development",
+                  "value": {
+                    "provider": "env",
+                    "path": "AGK_DEV_FINANCE_SMTP_PASSWORD"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed: the declaration as it now stands, never the value.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/secretDeclaration"
+                },
+                "examples": {
+                  "builtin": {
+                    "summary": "kept in the built-in store",
+                    "value": {
+                      "name": "stripe-key",
+                      "provider": "builtin",
+                      "mount": "/agk/secrets/stripe-key",
+                      "declared_by": "alice",
+                      "declared_at": "2026-09-29T14:02:11Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Declared: the declaration, never the value, and Location naming it.",
+            "headers": {
+              "Location": {
+                "description": "Where the declaration is read.",
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "secret": {
+                    "summary": "the new declaration",
+                    "value": "/api/v1/finance/secrets/stripe-key"
+                  }
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/secretDeclaration"
+                },
+                "examples": {
+                  "builtin": {
+                    "summary": "kept in the built-in store",
+                    "value": {
+                      "name": "stripe-key",
+                      "provider": "builtin",
+                      "mount": "/agk/secrets/stripe-key",
+                      "declared_by": "alice",
+                      "declared_at": "2026-09-29T14:02:11Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A name the workflow file could not write, a store that is not one of the three or that this installation does not read for the namespace, a path builtin does not take or env needs, a value for a store other than builtin, an empty value, an encoding that is not utf-8 or base64, or two credentials."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, or one where the caller does not hold secret:write at namespace scope: the same answer."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge",
+            "description": "A value larger than 1 MiB once decoded, or a body larger than 2 MiB."
+          },
+          "503": {
+            "$ref": "#/components/responses/unavailable",
+            "description": "A value sent to an installation with no built-in store attached: nothing was written."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeSecret",
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Remove one secret declaration",
+        "description": "Removes the declaration and, where the built-in store keeps one, its value, so that declaring the name again later does not bring back a credential somebody meant to be gone. Requires secret:write at namespace scope, and is audited as secret.delete.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#secrets"
+        },
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such declaration, no such namespace, or one where the caller does not hold secret:write: the same answer."
           }
         }
       }
@@ -15604,6 +16144,354 @@
             ]
           }
         }
+      },
+      "startRequest": {
+        "title": "Start request",
+        "type": "object",
+        "additionalProperties": false,
+        "description": "What a run is asked for: the commit it runs, named or reached through a ref, or neither for the default branch's head, and the workflow inputs it is started with, bound against that version's declaration as agk run --local binds them. {} asks for the head with no input. A commit and a ref together are refused, since a run is of one commit.",
+        "properties": {
+          "commit": {
+            "$ref": "wire.schema.json#/$defs/commit",
+            "description": "A commit that is a version of the workflow.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A branch or a tag by its short name or in full, or a whole commit that is a version, resolved once, when the run is asked for: the run is pinned to the commit it names then, whatever the ref does next.",
+            "examples": [
+              "main",
+              "refs/tags/v2.1.0"
+            ]
+          },
+          "inputs": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "The workflow inputs by name, each held to its JSON Schema, a default filling one left out, and recorded as bound. At most as many values as one envelope may carry items, and as many bytes as one envelope may weigh: a run's data belongs in an artifact. null is read as none.",
+            "examples": [
+              {
+                "orders": [
+                  {
+                    "order": "ORD-0001",
+                    "amount": 120.5
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "examples": [
+          {},
+          {
+            "ref": "main",
+            "inputs": {
+              "orders": [
+                {
+                  "order": "ORD-0001",
+                  "amount": 120.5
+                }
+              ]
+            }
+          },
+          {
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+          }
+        ]
+      },
+      "runStarted": {
+        "title": "Run started",
+        "type": "object",
+        "required": [
+          "run",
+          "state",
+          "commit"
+        ],
+        "additionalProperties": false,
+        "description": "The run a request started, attributed to the caller as a manual run, written and not yet begun: what happens to it is the controller's.",
+        "properties": {
+          "run": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "The new run.",
+            "examples": [
+              "01JMZ9A2B3C4D5E6F7G8H9J0K1"
+            ]
+          },
+          "state": {
+            "const": "queued",
+            "description": "Where it stands as it is written.",
+            "examples": [
+              "queued"
+            ]
+          },
+          "commit": {
+            "$ref": "wire.schema.json#/$defs/commit",
+            "description": "The commit it is pinned to, which a caller naming a ref, or none, did not name.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+            "state": "queued",
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+          }
+        ]
+      },
+      "inputRefusal": {
+        "title": "Input refused",
+        "type": "object",
+        "required": [
+          "error",
+          "input",
+          "rule"
+        ],
+        "additionalProperties": false,
+        "description": "An input the request gets wrong: the sentence agk run --local prints for it, and the input and the rule apart, so that a form can point at its field without reading the sentence.",
+        "properties": {
+          "error": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Why, in a sentence.",
+            "examples": [
+              "input orders: schema: /0/amount: got string, want number; run refused"
+            ]
+          },
+          "input": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The input, by the name the request or the declaration gives it.",
+            "examples": [
+              "orders"
+            ]
+          },
+          "rule": {
+            "enum": [
+              "required",
+              "schema",
+              "undeclared"
+            ],
+            "description": "The key a person finds in the workflow file: required for an input left out with no default, schema for a value its JSON Schema refuses, undeclared for a name the workflow does not declare.",
+            "examples": [
+              "schema"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "error": "input orders: schema: /0/amount: got string, want number; run refused",
+            "input": "orders",
+            "rule": "schema"
+          },
+          {
+            "error": "input orders: required: no value supplied and the input declares no default; run refused",
+            "input": "orders",
+            "rule": "required"
+          }
+        ]
+      },
+      "secretDeclaration": {
+        "title": "Secret declaration",
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "mount",
+          "declared_by",
+          "declared_at"
+        ],
+        "additionalProperties": false,
+        "description": "One secret as the routes answer it: its name, the store its value is kept in and where in it, and where a step is given it. Never its value, which no route reads.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "maxLength": 255,
+            "description": "The secret's name, as the workflow file names it.",
+            "examples": [
+              "stripe-key"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "env",
+              "vault"
+            ],
+            "description": "The store its value is kept in: builtin, the encrypted store, which keeps it sealed under the namespace and the name; env, the API's own environment, for development, where the installation has opted the namespace in; or vault, which no installation reads from until its provider arrives.",
+            "examples": [
+              "builtin",
+              "env"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Where the value sits inside its store: an environment variable's name for env, beginning with the prefix the installation gives the namespace. Absent for builtin, which keeps a value under the namespace and the name and takes no path.",
+            "examples": [
+              "AGK_DEV_FINANCE_STRIPE_KEY"
+            ]
+          },
+          "mount": {
+            "type": "string",
+            "description": "Where a step is given the value, as a file on tmpfs, where its brick's manifest names no mount of its own: /agk/secrets/<name>. Answered rather than stored, since it follows from the name, and answered at all because the file a brick reads is what a person looking at a declaration is usually trying to find.",
+            "examples": [
+              "/agk/secrets/stripe-key"
+            ]
+          },
+          "declared_by": {
+            "$ref": "wire.schema.json#/$defs/accessGrant/properties/granted_by",
+            "description": "Who wrote the declaration last.",
+            "examples": [
+              "alice"
+            ]
+          },
+          "declared_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was written last.",
+            "examples": [
+              "2026-09-29T14:02:11Z"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "name": "stripe-key",
+            "provider": "builtin",
+            "mount": "/agk/secrets/stripe-key",
+            "declared_by": "alice",
+            "declared_at": "2026-09-29T14:02:11Z"
+          },
+          {
+            "name": "smtp-password",
+            "provider": "env",
+            "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+            "mount": "/agk/secrets/smtp-password",
+            "declared_by": "alice",
+            "declared_at": "2026-09-29T14:05:40Z"
+          }
+        ]
+      },
+      "secretList": {
+        "title": "Secret list",
+        "type": "object",
+        "required": [
+          "secrets"
+        ],
+        "additionalProperties": false,
+        "description": "A namespace's secret declarations, by name.",
+        "properties": {
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/secretDeclaration"
+            },
+            "description": "Every declaration of the namespace, never a value.",
+            "examples": [
+              [
+                {
+                  "name": "stripe-key",
+                  "provider": "builtin",
+                  "mount": "/agk/secrets/stripe-key",
+                  "declared_by": "alice",
+                  "declared_at": "2026-09-29T14:02:11Z"
+                }
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "secrets": [
+              {
+                "name": "stripe-key",
+                "provider": "builtin",
+                "mount": "/agk/secrets/stripe-key",
+                "declared_by": "alice",
+                "declared_at": "2026-09-29T14:02:11Z"
+              },
+              {
+                "name": "smtp-password",
+                "provider": "env",
+                "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+                "mount": "/agk/secrets/smtp-password",
+                "declared_by": "alice",
+                "declared_at": "2026-09-29T14:05:40Z"
+              }
+            ]
+          }
+        ]
+      },
+      "secretDeclare": {
+        "title": "Secret declaration written",
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "additionalProperties": false,
+        "description": "What a PUT writes: the store a value is kept in, where in it, and for builtin the value itself, written once and returned by no answer. A PUT naming builtin without a value keeps the value stored; rotating is sending one again, never reading one first. A secret moved out of builtin, or removed, takes its stored value with it.",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "env",
+              "vault"
+            ],
+            "description": "The store: builtin, env where the installation has opted the namespace in, or vault, refused until its provider arrives, since nothing gives a namespace its prefix in Vault before then.",
+            "examples": [
+              "builtin"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "For env, the variable the value is read from, which begins with the prefix the installation gives the namespace. Refused for builtin, which takes none.",
+            "examples": [
+              "AGK_DEV_FINANCE_SMTP_PASSWORD"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "description": "The value, for builtin alone, at most 1 MiB once decoded. No answer carries it, now or later, and an empty one is refused rather than taken for a PUT that keeps the old one.",
+            "examples": [
+              "sk_live_51H..."
+            ]
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "utf-8",
+              "base64"
+            ],
+            "description": "How value is written: utf-8 where absent, or base64 for a value that is not text, a keystore for instance, since JSON carries no arbitrary bytes.",
+            "examples": [
+              "base64"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "provider": "builtin",
+            "value": "sk_live_51H..."
+          },
+          {
+            "provider": "builtin"
+          },
+          {
+            "provider": "env",
+            "path": "AGK_DEV_FINANCE_SMTP_PASSWORD"
+          }
+        ]
       }
     },
     "parameters": {
@@ -16257,6 +17145,23 @@
           "invoices": {
             "summary": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
             "value": "agk%3A%2F%2Frun%2F01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Farchive%2Fout%2Finvoices.zip"
+          }
+        }
+      },
+      "secret": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "maxLength": 255
+        },
+        "examples": {
+          "secret": {
+            "summary": "a secret",
+            "value": "stripe-key"
           }
         }
       }
