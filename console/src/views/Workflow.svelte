@@ -123,11 +123,20 @@
     running = true;
   }
 
-  function narrow(set: Record<string, string>) {
+  function narrow(set: Record<string, string | null>) {
     const q = new URLSearchParams(place.query);
-    for (const [k, v] of Object.entries(set)) q.set(k, v);
+    for (const [k, v] of Object.entries(set)) {
+      if (v === null) q.delete(k);
+      else q.set(k, v);
+    }
     place.narrow(q);
   }
+
+  // The visual editor, under workflow:write, over the file at the head of the default branch: the
+  // address says it is open, so that Back leaves it.
+  const mayEdit = $derived(holds(me, "workflow:write", namespace, workflow));
+  const editing = $derived(place.query.get("edit") === "1" && mayEdit && (tab === undefined || tab === "graph"));
+  let editSelected = $state<string | undefined>(untrack(() => place.query.get("step") ?? undefined));
 
   // The steps in the order the graph draws them, row by row and left to right, which the keys move
   // along as a reader's eye does.
@@ -179,6 +188,9 @@
   {#snippet actions()}
     {#if detail}
       <button class="control" aria-pressed={showHistory} onclick={() => (showHistory = !showHistory)}><Icon name="control-history" size={14} />History</button>
+      {#if mayEdit && graph && detail.version && text !== null && !editing && (tab === undefined || tab === "graph")}
+        <button class="control" onclick={() => { editSelected = selected; narrow({ edit: "1" }); }}><Icon name="control-edit" size={14} />Edit</button>
+      {/if}
       {#if mayRun && graph && detail.version}
         <button class="control primary" aria-pressed={running} onclick={() => { runRef = ""; running = !running; }}><Icon name="control-run" size={14} />Run</button>
       {/if}
@@ -264,6 +276,10 @@
     <Pane title="MCP" aside="what a client of this workflow sees">
       <McpPanel {graph} {namespace} {workflow} />
     </Pane>
+  {:else if editing && graph && detail.version && text !== null}
+    {#await import("../components/Editor.svelte") then { default: Editor }}
+      <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} bind:selected={editSelected} onclose={() => narrow({ edit: null })} />
+    {/await}
   {:else if graph && laid}
     <div class="columns">
       <Pane title="Graph" aside={run ? "its last run" : "no run yet"} focused>
