@@ -180,7 +180,7 @@ describe("acting on a run", () => {
     const replay = "01JMZ9A2B3C4D5E6F7G8H9J0K1";
     s[`POST /api/v1/runs/${failed}/replay`] = { status: 202, body: { run: replay, state: "queued", commit: "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2c4e6b8d01", replay_of: failed, replay_from: "invoice" } };
     const { asked, place } = open(`/finance/runs/${failed}`, s);
-    await fireEvent.click(await screen.findByRole("button", { name: "Replay from invoice" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Replay from this step" }));
     await waitFor(() => expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "runs", run: replay }));
     expect(asked.find((a) => a.key.endsWith("/replay"))?.body).toEqual({ step: "invoice" });
   });
@@ -191,7 +191,7 @@ describe("acting on a run", () => {
     s[`POST /api/v1/runs/${failed}/replay`] = { status: 202, body: { run: "01JMZ9A2B3C4D5E6F7G8H9J0K1", state: "queued", commit: "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2c4e6b8d01", replay_of: failed } };
     const { asked } = open(`/finance/runs/${failed}`, s);
     await fireEvent.click(await screen.findByRole("button", { name: "Replay from the start" }));
-    expect(screen.queryByRole("button", { name: "Replay from invoice" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Replay from this step" })).toBeNull();
     expect(screen.getByText(/from the start only/)).toBeTruthy();
     await waitFor(() => expect(asked.find((a) => a.key.endsWith("/replay"))?.body).toEqual({}));
   });
@@ -200,7 +200,7 @@ describe("acting on a run", () => {
     const s = scenario("alice");
     s[`POST /api/v1/runs/${failed}/replay`] = { status: 409, body: { error: "a step above invoice never ended" } };
     open(`/finance/runs/${failed}`, s);
-    await fireEvent.click(await screen.findByRole("button", { name: "Replay from invoice" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Replay from this step" }));
     expect(await screen.findByText("A step above invoice never ended.")).toBeTruthy();
   });
 

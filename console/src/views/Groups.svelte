@@ -155,8 +155,8 @@
             </td>
             <td class="end">
               {#if asking === g.name}
-                <button class="control danger" disabled={working} onclick={() => remove(g)}>Remove group:{g.name}</button>
                 <button class="control" onclick={() => (asking = "")}>Keep</button>
+                <button class="control danger" disabled={working} onclick={() => remove(g)}>Remove</button>
               {:else}
                 <button class="control" disabled={working} onclick={() => (asking = g.name)}>Remove</button>
               {/if}

@@ -161,8 +161,8 @@
               {#if writes}
                 {#if asking === d.name}
                   <span class="confirm">
-                    <button class="control danger" disabled={working} onclick={() => remove(d)}>Remove it</button>
-                    <button class="control" onclick={() => (asking = "")}>Keep it</button>
+                    <button class="control" onclick={() => (asking = "")}>Keep</button>
+                    <button class="control danger" disabled={working} onclick={() => remove(d)}><Icon name="control-remove" size={14} />Remove</button>
                   </span>
                 {:else}
                   {#if d.provider === "builtin"}<button class="control" onclick={() => rotate(d)}><Icon name="control-replay" size={14} />Rotate</button>{/if}
@@ -208,7 +208,7 @@
         <label class="check"><input type="checkbox" bind:checked={base64} />Base64</label>
       {/if}
       <span class="buttons">
-        <button class="control primary" disabled={working}>{rotating ? "Update" : "Save"}</button>
+        <button class="control primary" disabled={working}>Save</button>
         {#if rotating}<button class="control" type="button" onclick={() => (rotating = "")}>Cancel</button>{/if}
       </span>
     </form>

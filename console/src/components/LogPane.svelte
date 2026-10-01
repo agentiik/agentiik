@@ -45,7 +45,7 @@
       <h4 class="term">dispatch {d.requeue + 1} of attempt {d.attempt}{#if d.requeue > 0}, handed out again{/if}</h4>
     {/if}
     {#if first > 0}
-      <button class="control" onclick={() => (drawn += batch)}>Show {Math.min(batch, first)} earlier lines</button>
+      <button class="control" onclick={() => (drawn += batch)}>Show earlier lines</button>
     {/if}
     {#if d.lines.length === 0 && d.gaps.length === 0}
       <p class="muted">{d.over ? "This dispatch wrote nothing to its log." : "Nothing written yet."}</p>

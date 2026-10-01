@@ -86,7 +86,7 @@ describe("the users, for an administrator", () => {
     const row = (await screen.findByText("carol", { selector: "td .login" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove carol" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Carol's personal namespace holds 3 workflows.")).toBeTruthy();
     const own = (await screen.findByText("dana", { selector: "td .login" })).closest("tr")!;
     expect(within(own).queryByRole("button", { name: "Remove" })).toBeNull();
@@ -129,7 +129,7 @@ describe("the groups, for an administrator", () => {
     open("/groups", s);
     const row = (await screen.findByText("group:finance-leads", { selector: "td" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove group:finance-leads" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Group:finance-leads owns finance: name another owner first.")).toBeTruthy();
   });
 });
@@ -180,7 +180,7 @@ describe("the namespaces, for an administrator", () => {
     expect(within(personal).queryByRole("button", { name: "Remove" })).toBeNull();
     const shared = screen.getByRole("button", { name: "team-ops" }).closest("tr")!;
     await fireEvent.click(within(shared).getByRole("button", { name: "Remove" }));
-    await fireEvent.click(within(shared).getByRole("button", { name: "Remove team-ops" }));
+    await fireEvent.click(within(shared).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("team-ops removed.")).toBeTruthy();
     expect(asked.filter((a) => a.key.startsWith("DELETE")).map((a) => a.key)).toEqual(["DELETE /api/v1/namespaces/team-ops"]);
   });
@@ -223,7 +223,7 @@ describe("the service accounts of the namespaces the caller owns", () => {
     const row = (await screen.findByText("alice/deploy-bot", { selector: "td" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove alice/deploy-bot" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("alice/deploy-bot removed.")).toBeTruthy();
   });
 });

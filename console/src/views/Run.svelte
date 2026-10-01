@@ -271,11 +271,11 @@
             {/if}
           {:else if mayRun && replaying && chosenStep && !run.replay_from_start_only}
             <span>Replay this run from {chosenStep}?</span>
-            <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
+            <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from this step</button>
             <button class="control" disabled={acting} onclick={() => (replaying = false)}>Keep it</button>
           {:else if mayRun}
             {#if chosenStep && !run.replay_from_start_only}
-              <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
+              <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from this step</button>
             {/if}
             <button class="control" disabled={acting} onclick={() => replay()}><Icon name="control-replay" size={14} />Replay from the start</button>
             {#if run.replay_from_start_only}

@@ -135,7 +135,7 @@ describe("what you sign in with", () => {
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
     expect(screen.getByText("This passkey signs nobody in from now on, and the sessions it opened end.")).toBeTruthy();
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove it" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Removing it would leave fewer passkeys than min_passkeys, 2.")).toBeTruthy();
     expect(asked.filter((a) => a.key === "DELETE /api/v1/me/credentials/aVBob25lUGFzc2tleQ")).toHaveLength(1);
   });
@@ -206,7 +206,7 @@ describe("what you sign in with", () => {
     open("/me", s);
     const row = (await screen.findByText("The password")).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
-    await fireEvent.click(within(row).getByRole("button", { name: "Remove the password" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByRole("button", { name: "Sign in with a passkey" })).toBeTruthy();
   });
 });
@@ -219,7 +219,7 @@ describe("API tokens", () => {
     expect(screen.getByText("its principal's full rights")).toBeTruthy();
     await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Revoke it" }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
     expect(await screen.findByText(/^Token revoked\.$/)).toBeTruthy();
     expect(asked.filter((a) => a.key === "DELETE /api/v1/auth/tokens/01M2AD1R3T5W7Y9A1C3E5G7J9N")).toHaveLength(1);
   });
