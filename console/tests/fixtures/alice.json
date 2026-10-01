@@ -18101,6 +18101,42 @@
       ]
     }
   },
+  "GET /api/v1/finance/secrets": {
+    "status": 200,
+    "body": {
+      "secrets": [
+        {
+          "name": "smtp-password",
+          "provider": "env",
+          "path": "AGK_DEV_FINANCE_SMTP_PASSWORD",
+          "mount": "/agk/secrets/smtp-password",
+          "declared_by": "bruno",
+          "declared_at": "2026-09-22T08:30:00Z"
+        },
+        {
+          "name": "stripe-key",
+          "provider": "builtin",
+          "mount": "/agk/secrets/stripe-key",
+          "declared_by": "bruno",
+          "declared_at": "2026-09-21T16:05:00Z"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/alice/secrets": {
+    "status": 200,
+    "body": {
+      "secrets": [
+        {
+          "name": "github-token",
+          "provider": "builtin",
+          "mount": "/agk/secrets/github-token",
+          "declared_by": "alice",
+          "declared_at": "2026-09-29T10:40:00Z"
+        }
+      ]
+    }
+  },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f?path=schemas/customers.json": {
     "status": 200,
     "text": "{\n  \"type\": \"array\",\n  \"items\": {\n    \"$ref\": \"./customer.json\"\n  }\n}\n"
