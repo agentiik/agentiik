@@ -56,6 +56,22 @@ func (m Model) pickedAt(x, y int) (pick, bool) {
 	return pick{}, false
 }
 
+// paneAt is the pane drawn at x, y, where the runs and a run are panes.
+func (m Model) paneAt(x, y int) (pane, bool) {
+	var picks []pick
+	m.drawn(&picks)
+	for _, p := range picks {
+		if p.kind == "pane" && p.y == y && x >= p.x0 && x < p.x1 {
+			for k, name := range paneNames {
+				if name == p.id {
+					return k, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
 // mouse does what a mouse message names, where the screen is drawn and nothing waits on an answer:
 // a prompt is answered with a key, and the wheel or a click never answers it for somebody.
 func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -77,12 +93,34 @@ func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.palette != nil {
 			return m.typingCommand(tea.KeyPressMsg{Code: map[string]rune{"up": tea.KeyUp, "down": tea.KeyDown}[key]})
 		}
+		if under, ok := m.paneAt(e.X, e.Y); ok && m.view == runView {
+			// The pane under the pointer scrolls, and the focus stays where it was.
+			focus := m.focus
+			m.focus = under
+			next, cmd := m.press(key)
+			n := next.(Model)
+			n.focus = focus
+			return n, cmd
+		}
 		return m.press(key)
+	case tea.MouseMotionMsg:
+		if m.dragging != "" {
+			return m.dragged(e.X), nil
+		}
+		return m, nil
+	case tea.MouseReleaseMsg:
+		m.dragging = ""
+		return m, nil
 	case tea.MouseClickMsg:
 		if e.Button != tea.MouseLeft {
 			return m, nil
 		}
 		p, ok := m.pickedAt(e.X, e.Y)
+		if ok && p.kind == "border" && m.palette == nil {
+			// The border follows the pointer until the button is let go.
+			m.dragging = p.id
+			return m, nil
+		}
 		now := m.o.Now()
 		double := ok && m.clicked.kind == p.kind && m.clicked.id == p.id && now.Sub(m.clickedAt) <= doubleWithin
 		m.clicked, m.clickedAt = p, now
@@ -131,8 +169,13 @@ func (m Model) clickedOn(p pick, double bool) (tea.Model, tea.Cmd) {
 	if p.kind == "tab" {
 		return m.press(p.id)
 	}
+	if under, ok := m.paneAt(p.x0, p.y); ok && m.view == runView {
+		m.focus = under
+	}
 	var cmd tea.Cmd
 	switch p.kind {
+	case "pane":
+		return m, nil
 	case "run":
 		m.selected = p.id
 	case "step":

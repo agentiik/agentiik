@@ -12,12 +12,33 @@ var colon = tea.KeyPressMsg{Code: ':', Text: ":"}
 
 // paletteLines are the palette's lines as drawn, between its frame.
 func paletteLines(m Model) []string {
-	var out []string
-	for _, l := range strings.Split(screen(m), "\n") {
-		if i := strings.Index(l, "│"); i >= 0 {
-			if j := strings.LastIndex(l, "│"); j > i {
-				out = append(out, strings.TrimSpace(l[i+len("│"):j]))
+	lines := strings.Split(screen(m), "\n")
+	// The palette's left border is the frame's character before what is typed into it.
+	left := -1
+	for _, l := range lines {
+		r := []rune(l)
+		for i := 0; i+2 < len(r); i++ {
+			if r[i] == '│' && r[i+1] == ' ' && (strings.HasPrefix(string(r[i+2:]), ": ▏") || strings.HasPrefix(string(r[i+2:]), "notifications: ") || strings.HasPrefix(string(r[i+2:]), ": ")) {
+				left = i
+				break
 			}
+		}
+		if left >= 0 {
+			break
+		}
+	}
+	var out []string
+	if left < 0 {
+		return out
+	}
+	for _, l := range lines {
+		r := []rune(l)
+		if left >= len(r) || r[left] != '│' {
+			continue
+		}
+		rest := r[left+1:]
+		if j := strings.IndexRune(string(rest), '│'); j >= 0 {
+			out = append(out, strings.TrimSpace(string(rest)[:j]))
 		}
 	}
 	return out

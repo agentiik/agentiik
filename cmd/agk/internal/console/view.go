@@ -2,6 +2,7 @@ package console
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ func (m Model) drawn(picks *[]pick) string {
 	case m.listing:
 		lines = m.keysListed(t)
 	case m.view == runView:
-		lines = m.runLines(in, body)
+		lines = m.panesLines(in, body)
 	case m.view == runnersView:
 		lines = m.runnersLines(in, body)
 	case m.view == graphView:
@@ -59,7 +60,7 @@ func (m Model) drawn(picks *[]pick) string {
 	case m.view == sharingView:
 		lines = m.sharingLines(in, body)
 	default:
-		lines = m.runsLines(in, body)
+		lines = m.panesLines(in, body)
 	}
 	for len(lines) < body {
 		lines = append(lines, t.line(false, m.width))
@@ -164,7 +165,16 @@ func (m Model) keyLine(t theme) string {
 	case m.filtering && m.view == runsView:
 		keys = [][2]string{{"type", "Filter"}, {"↑↓", "Move"}, {"enter", "Keep"}, {"esc", "Clear"}}
 	case m.view == runView:
-		keys = [][2]string{{"↑↓", "Step"}, {"[]", "Port"}, {"g", "Graph"}}
+		keys = [][2]string{{"tab", "Next pane"}}
+		switch m.focus {
+		case runsPane:
+			keys = append(keys, [2]string{"↑↓", "Move"}, [2]string{"enter", "Open"})
+		case logPane:
+			keys = append(keys, [2]string{"↑↓", "Scroll"})
+		default:
+			keys = append(keys, [2]string{"↑↓", "Step"}, [2]string{"[]", "Port"})
+		}
+		keys = append(keys, [2]string{"g", "Graph"})
 		if m.mayCancel() {
 			keys = append(keys, [2]string{"c", "Cancel run"})
 		}
@@ -214,6 +224,9 @@ func (m Model) keysListed(t theme) []string {
 	}
 	switch m.view {
 	case runView:
+		rows = append(rows, [2]string{"tab", "Move the focus to the next pane: the runs, the run, then its log; shift+tab to the one before"},
+			[2]string{"↑ ↓ in the runs", "Move the selection over the runs; enter opens the run selected beside them"},
+			[2]string{"↑ ↓ in the log", "Scroll the log back, and forward to its end"})
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"g", "The graph of the run's workflow, its state laid over it"}, [2]string{"esc", "Back to the runs"})
 		if m.mayCancel() {
 			rows = append(rows, [2]string{"c", "Cancel the run, once a prompt naming it is answered y"})
@@ -238,7 +251,7 @@ func (m Model) keysListed(t theme) []string {
 			[2]string{"/", "Filter the runs as you type: words against what is loaded, and namespace=, workflow=, state=, since= and until= asked of the installation"},
 			[2]string{"esc", "Clear the filter"})
 	}
-	rows = append(rows, [2]string{"mouse", "A click selects a row, a step, a port or a tab, a second click opens it, the wheel moves the selection; shift and drag copy, as the terminal does"})
+	rows = append(rows, [2]string{"mouse", "A click selects a row, a step, a port or a tab and focuses its pane, a second click opens it, the wheel scrolls what is under the pointer, a border between two panes is dragged to move it; shift and drag copy, as the terminal does"})
 	lines := []string{t.line(false, m.width, part{strong, "Every key of this view"}), t.line(false, m.width)}
 	for _, r := range rows {
 		lines = append(lines, t.line(false, m.width, part{plain, "  "}, part{strong, fmt.Sprintf("%-12s", r[0])}, part{plain, " " + r[1]}))
@@ -306,10 +319,26 @@ func (m Model) runsLines(t theme, height int) []string {
 	if len(failed) > 0 && m.filter == "" {
 		lines = append(lines, t.line(false, m.width, part{strong, fmt.Sprintf("Failed, %d of the last %d", len(failed), len(runs))}))
 		for _, r := range failed[:min(len(failed), 3)] {
-			t.pick(len(lines), m.width, "run", string(r.Run))
-			lines = append(lines, t.line(false, m.width, m.row(r, now)...))
+			for _, l := range m.rowLines(r, now) {
+				t.pick(len(lines), m.width, "run", string(r.Run))
+				lines = append(lines, t.line(false, m.width, l...))
+			}
 		}
 		lines = append(lines, t.line(false, m.width))
+	}
+	if m.compact() {
+		h := func(s string) []part { return []part{{quiet, s}} }
+		lines = append(lines, t.line(false, m.width, compactColumns(m.width, h("STATE"), h("WORKFLOW"), h("TOOK"))...))
+		room := (height - len(lines)) / 2
+		at := max(0, slices.IndexFunc(runs, func(r db.ListedRun) bool { return string(r.Run) == m.selected }))
+		first := min(max(0, at-room+1), max(0, len(runs)-room))
+		for i := first; i < len(runs) && i < first+room; i++ {
+			for _, l := range m.rowLines(runs[i], now) {
+				t.pick(len(lines), m.width, "run", string(runs[i].Run))
+				lines = append(lines, t.line(string(runs[i].Run) == m.selected, m.width, l...))
+			}
+		}
+		return lines
 	}
 	lines = append(lines, t.line(false, m.width, m.header()...))
 	room := height - len(lines)
@@ -327,10 +356,44 @@ func (m Model) runsLines(t theme, height int) []string {
 	return lines
 }
 
+// compact says whether the runs are a pane too narrow for their columns, beside a run: each is
+// then two lines, its state, workflow and duration, and below them its identifier, trigger,
+// principal and start.
+func (m Model) compact() bool { return m.width < 64 }
+
+// rowLines is one run as the list draws it: one line, or two where the runs are compact, its
+// identifier by its first twelve characters, trigger, principal and start below its state,
+// workflow and duration.
+func (m Model) rowLines(r db.ListedRun, now time.Time) [][]part {
+	if !m.compact() {
+		return [][]part{m.row(r, now)}
+	}
+	// Twelve characters of an identifier tell two runs of one day apart.
+	id := string(r.Run)
+	about := id[:min(12, len(id))] + " · " + r.Trigger.String()
+	if r.TriggeredBy != "" {
+		about += " · " + r.TriggeredBy
+	}
+	about += " · " + clock(startOf(r), now)
+	return [][]part{
+		compactColumns(m.width, []part{{stateRole(r.State), m.mark(r.State == agk.Running)}, {plain, " " + r.State.String()}}, []part{{plain, r.Workflow}}, []part{{plain, lasted(r.RunSummary, now)}}),
+		within([]part{{plain, strings.Repeat(" ", stateWidth+1)}, {muted, about}}, m.width),
+	}
+}
+
+// compactColumns are a compact run's first line: its state, its workflow taking what is left, and
+// its duration against the right edge.
+func compactColumns(width int, state, workflow, took []part) []part {
+	return laid([]cell{{state, stateWidth, false}, {workflow, 0, false}, {took, tookWidth, true}}, 1, width)
+}
+
 // wide says whether the window has room for every column: a run's identifier in full, its
 // trigger, and who started it at length. Under 120 columns, what an 80-column window holds, the
 // list keeps the columns a run is told apart and judged by, and the workflow keeps room to be read.
-func (m Model) wide() bool { return m.width >= 120 }
+//
+// It is read of the window, the frame of the pane a view is drawn in counted back, so that the runs
+// alone in a window of 120 columns have every column as they would unframed.
+func (m Model) wide() bool { return m.width+m.framed >= 120 }
 
 // cell is one column of a row: what it holds, its width, and whether it is set against its right
 // edge, as a duration is so that a column of them lines up.

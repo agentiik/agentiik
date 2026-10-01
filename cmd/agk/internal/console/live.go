@@ -282,4 +282,4 @@ func (m Model) readSparks() []tea.Cmd {
 
 // full says whether the runs view is wide enough for a run's steps and its workflow's last runs
 // beside every other column: 160 columns, as the documentation's full width is.
-func (m Model) full() bool { return m.width >= 160 }
+func (m Model) full() bool { return m.width+m.framed >= 160 }

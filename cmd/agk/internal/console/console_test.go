@@ -271,10 +271,13 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 			t.Errorf("the top line does not say %q: %s", w, lines[0])
 		}
 	}
-	if !strings.HasPrefix(lines[1], "Failed, 1 of the last 3") || !strings.HasPrefix(lines[2], "● failed    01RUNBBBBBBBBBBBBBBBBBBBBB") {
+	if !strings.HasPrefix(lines[1], "╭─ Runs every namespace · 3 runs ─") || !strings.HasSuffix(lines[23-1], "╯") {
+		t.Errorf("the runs are not a pane, framed and named:\n%s", s)
+	}
+	if !strings.HasPrefix(inside(lines[2]), "Failed, 1 of the last 3") || !strings.HasPrefix(inside(lines[3]), "● failed    01RUNBBBBBBBBBBBBBBBBBBBBB") {
 		t.Errorf("the failed run is not lifted above the list:\n%s", s)
 	}
-	if !strings.HasPrefix(lines[4], "STATE       RUN") {
+	if !strings.HasPrefix(inside(lines[5]), "STATE       RUN") {
 		t.Errorf("the list has no header where it starts:\n%s", s)
 	}
 	for _, w := range []string{"⠋ running   01RUNAAAAAAAAAAAAAAAAAAAAA finance/monthly-invoicing", "1m 52s", "● succeeded 01RUNCCCCCCCCCCCCCCCCCCCCC finance/nightly-export"} {
@@ -354,7 +357,17 @@ func TestQuestionMarkListsEveryKey(t *testing.T) {
 	}
 }
 
-// Opened on a run, the console reads that run alone and starts on it.
+// inside is a line of a pane without its frame.
+func inside(line string) string {
+	line = strings.TrimPrefix(line, "│ ")
+	if i := strings.LastIndex(line, " │"); i >= 0 {
+		line = line[:i]
+	}
+	return line
+}
+
+// Opened on a run, the console starts on it, the runs folded above it in a window under 120 columns
+// and read for the line they are folded to.
 func TestAConsoleOpenedOnARunStartsOnIt(t *testing.T) {
 	in := &installation{run: db.RunDetail{RunSummary: db.RunSummary{Namespace: "finance", Workflow: "monthly-invoicing", Run: "01RUNBBBBBBBBBBBBBBBBBBBBB", State: agk.Failed}}}
 	m := opened(t, in, Options{Run: "01RUNBBBBBBBBBBBBBBBBBBBBB", Namespace: "finance"}, 100, 30)
@@ -364,11 +377,8 @@ func TestAConsoleOpenedOnARunStartsOnIt(t *testing.T) {
 	if !strings.Contains(strings.Split(screen(m), "\n")[0], "finance") {
 		t.Errorf("the top line does not name the namespace: %s", strings.Split(screen(m), "\n")[0])
 	}
-	for _, a := range in.asked {
-		// The runs of its workflow are read for its sparkline, and the runs view's list is not.
-		if strings.HasPrefix(a, "/api/v1/runs?limit=100") {
-			t.Errorf("a console opened on a run read the runs too: %v", in.asked)
-		}
+	if !slices.Contains(in.asked, "/api/v1/runs?limit=100&namespace=finance") || !strings.HasPrefix(strings.Split(screen(m), "\n")[1], "▸ Runs  ") {
+		t.Errorf("a console opened on a run does not fold the runs above it, having read %v:\n%s", in.asked, screen(m))
 	}
 }
 
@@ -401,7 +411,7 @@ func TestANarrowWindowCutsRatherThanWraps(t *testing.T) {
 	if !strings.Contains(s, "01RUNAAAAAA… ") || strings.Contains(s, "01RUNAAAAAAAAAAAAAAAAAAAAA") {
 		t.Errorf("a run's identifier at 80 columns is not cut to twelve:\n%s", s)
 	}
-	if !strings.Contains(s, "finance/a-workflow-whose-n… ") || strings.Contains(s, "past-any-column") {
+	if !strings.Contains(s, "finance/a-workflow-who… ") || strings.Contains(s, "past-any-column") {
 		t.Errorf("a long workflow is not cut:\n%s", s)
 	}
 	for i, l := range strings.Split(s, "\n") {

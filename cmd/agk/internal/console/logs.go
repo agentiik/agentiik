@@ -3,6 +3,7 @@ package console
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"sync"
 
@@ -194,6 +195,10 @@ func (m Model) logLines(t theme, step string, height int) []string {
 	case b.over:
 		header = append(header, part{muted, "  read to its end"})
 	}
+	back := min(m.scrolledBack(), max(0, len(b.lines)-(height-1)))
+	if back > 0 {
+		header = append(header, part{muted, fmt.Sprintf("  %d lines back", back)})
+	}
 	lines := []string{t.line(false, m.width, within(header, m.width)...)}
 	if len(b.lines) == 0 {
 		said := "Waiting for the log."
@@ -202,7 +207,8 @@ func (m Model) logLines(t theme, step string, height int) []string {
 		}
 		return append(lines, t.line(false, m.width, part{quiet, said}))
 	}
-	shown := b.lines[max(0, len(b.lines)-(height-1)):]
+	end := len(b.lines) - back
+	shown := b.lines[max(0, end-(height-1)):end]
 	for _, l := range shown {
 		r := plain
 		if l.said {

@@ -156,6 +156,18 @@ type Model struct {
 	clicked   pick
 	clickedAt time.Time
 
+	// The panes': the one in focus, where a border was dragged and the one being dragged, and how
+	// far the log of logBackOf is scrolled back from its end.
+	focus     pane
+	split     split
+	dragging  string
+	logBack   int
+	logBackOf string
+
+	// framed is how many columns the frame of the pane a view is drawn in takes, which the view's
+	// widths count back: four inside a pane, none for a view that is the whole window.
+	framed int
+
 	// The workflows view's: the workflows the runs read name, the one chosen, and what was read of
 	// each beyond its row. graphOf is the workflow whose graph is shown with no run laid over it.
 	flows       []flowRow
@@ -235,7 +247,7 @@ func New(ctx context.Context, o Options) Model {
 		m.settled = true
 	}
 	if o.Run != "" {
-		m.view, m.selected = runView, o.Run
+		m.view, m.selected, m.focus = runView, o.Run, runPane
 	}
 	return m
 }
@@ -254,6 +266,8 @@ type (
 	runRead struct {
 		run *db.RunDetail
 		err error
+		// want is the run asked for, so that a read of a run since left for another is dropped.
+		want string
 	}
 	// again asks for what is shown to be read again, once Every has passed since the last read.
 	again struct {
@@ -299,15 +313,26 @@ func (m Model) readShown() tea.Cmd {
 		return m.readWorkflowNamed(m.graphOf)
 	}
 	if m.view == runView || m.view == graphView {
-		run := m.selected
-		return func() tea.Msg {
+		// The run open, which the runs' pane beside it moves the selection away from.
+		run := m.openRun()
+		read := func() tea.Msg {
 			var d db.RunDetail
 			if err := m.o.Read(m.ctx, "/api/v1/runs/"+url.PathEscape(run), &d); err != nil {
-				return runRead{err: err}
+				return runRead{err: err, want: run}
 			}
-			return runRead{run: &d}
+			return runRead{run: &d, want: run}
 		}
+		if m.view == runView {
+			// The runs' pane is beside the run, or folded above it, and kept live as it is alone.
+			return tea.Batch(read, m.readRuns())
+		}
+		return read
 	}
+	return m.readRuns()
+}
+
+// readRuns reads the runs the runs' pane lists, with the filter's terms.
+func (m Model) readRuns() tea.Cmd {
 	path := "/api/v1/runs?limit=100"
 	// A namespace the filter names is the one asked for, in place of the one the console opened on.
 	terms := parse(m.terms)
@@ -404,7 +429,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m, toasts = m.runsEnded(m.runs, msg.runs)
 			m.unanswered, m.filterRefused, m.runs, m.read = "", "", msg.runs, true
-			if shown := m.shownRuns(); !slices.ContainsFunc(shown, func(r db.ListedRun) bool { return string(r.Run) == m.selected }) && len(shown) > 0 {
+			// A run being opened is named by the selection until it is read, which a list that
+			// does not hold it leaves alone.
+			opening := m.view == runView && m.run == nil
+			if shown := m.shownRuns(); !opening && !slices.ContainsFunc(shown, func(r db.ListedRun) bool { return string(r.Run) == m.selected }) && len(shown) > 0 {
 				m.selected = string(shown[0].Run)
 			}
 		}
@@ -418,6 +446,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.sparks[msg.key] = msg
 	case runRead:
+		if msg.want != "" && msg.want != m.openRun() {
+			return m, nil
+		}
 		if msg.err != nil {
 			if m.run == nil {
 				m.runFailed = said(msg.err)
@@ -439,7 +470,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.graphFor, m.graph, m.graphFailed = workflowKey(m.run), nil, ""
 			cmds = append(cmds, m.readWorkflow())
 		}
-		if (m.view == runView || m.view == graphView) && (m.run == nil || !m.run.State.Terminal()) {
+		// A run is read again while it goes on, and the runs beside it always.
+		if m.view == runView || m.view == graphView && (m.run == nil || !m.run.State.Terminal()) {
 			cmds = append(cmds, m.later())
 		}
 		if m.view == runView && m.me.Admin && m.runners == nil {
@@ -696,6 +728,9 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.view == runView {
+		if next, cmd, done := m.panePress(key); done {
+			return next, cmd
+		}
 		switch key {
 		case "esc":
 			return m.showing(runsView)
@@ -770,9 +805,10 @@ func (m Model) showing(v view) (tea.Model, tea.Cmd) {
 	}
 	ofRun := func(v view) bool { return v == runView || v == graphView }
 	if ofRun(m.view) && !ofRun(v) {
-		m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
-		m.asking, m.acted, m.problem = notAsking, "", ""
-		m.recent, m.recentFor = nil, ""
+		m = m.forgetRun()
+	}
+	if v == runView && m.view != runView {
+		m.focus = runPane
 	}
 	if v != graphView {
 		m.graphOf = ""
@@ -790,6 +826,22 @@ func (m Model) showing(v view) (tea.Model, tea.Cmd) {
 		m.terms = m.filter
 	}
 	return m, m.readShown()
+}
+
+// openRun is the run open, or being opened: the one read, and the selection until it is.
+func (m Model) openRun() string {
+	if m.run != nil {
+		return string(m.run.Run)
+	}
+	return m.selected
+}
+
+// forgetRun forgets the run open, which is read again once opened again.
+func (m Model) forgetRun() Model {
+	m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
+	m.asking, m.acted, m.problem = notAsking, "", ""
+	m.recent, m.recentFor = nil, ""
+	return m
 }
 
 // moved is the run before or after the one selected, the first where none is, and the one
