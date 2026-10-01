@@ -4,8 +4,8 @@
 //
 // A namespace is the first segment of most of them, as it is of the API's routes. The others begin
 // with a word no namespace can be named, the reserved words of the namespace grammar: me for the
-// caller's own account, runners for what an administrator runs, users for whom an administrator
-// manages. A workflow is the segment after
+// caller's own account, runners for what an administrator runs, users, groups and namespaces for whom
+// and what an administrator manages. A workflow is the segment after
 // workflows, and a run the segment after runs, each as the API names it; two runs read side by side
 // are the first's address, then against and the second.
 
@@ -19,6 +19,8 @@ export type Route =
   | { kind: "account"; tab?: string }
   | { kind: "runners"; tab?: string }
   | { kind: "users" }
+  | { kind: "groups" }
+  | { kind: "namespaces" }
   | { kind: "unknown"; path: string };
 
 // segmentsOf is the path of an address after the console's root, the <base> the page was served with,
@@ -51,8 +53,8 @@ export function read(pathname: string, root: string): Route {
   if (first === "me") {
     return third === undefined ? { kind: "account", tab: second } : { kind: "unknown", path: pathname };
   }
-  if (first === "users") {
-    return second === undefined ? { kind: "users" } : { kind: "unknown", path: pathname };
+  if (first === "users" || first === "groups" || first === "namespaces") {
+    return second === undefined ? { kind: first } : { kind: "unknown", path: pathname };
   }
   if (first === "runners") {
     return third === undefined ? { kind: "runners", tab: second } : { kind: "unknown", path: pathname };
@@ -89,7 +91,9 @@ export function address(route: Route): string {
     case "runners":
       return route.tab ? `runners/${e(route.tab)}` : "runners";
     case "users":
-      return "users";
+    case "groups":
+    case "namespaces":
+      return route.kind;
     case "unknown":
       return "./";
     case "namespace": {

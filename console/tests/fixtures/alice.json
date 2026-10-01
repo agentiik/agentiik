@@ -17940,5 +17940,26 @@
   "GET /api/v1/team-ops/workflows/nightly/tree/7e5d3c1b9a8f6e4d2c0b9a7f5e3d1c0b8a6f4e2d?path=agentiik.yaml": {
     "status": 200,
     "text": "steps:\n  export:\n    image: alpine:3.21\n    script:\n      - agk items > /tmp/rows.json\n    outputs: [out]\n  reconcile:\n    workflow: finance/monthly-invoicing@v2.1.0\n    needs:\n      - { step: export, port: out, as: orders }\n"
+  },
+  "GET /api/v1/service-accounts": {
+    "status": 200,
+    "body": {
+      "service_accounts": [
+        {
+          "kind": "service_account",
+          "namespace": "alice",
+          "name": "agentiik",
+          "created_by": "installation",
+          "created_at": "2026-09-20T08:05:00Z"
+        },
+        {
+          "kind": "service_account",
+          "namespace": "alice",
+          "name": "deploy-bot",
+          "created_by": "alice",
+          "created_at": "2026-09-27T09:00:00Z"
+        }
+      ]
+    }
   }
 }
