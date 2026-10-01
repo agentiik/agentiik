@@ -4,6 +4,7 @@
   import Avatar from "../components/Avatar.svelte";
   import { localTime, photoOf } from "../lib/profile";
   import Icon from "../components/Icon.svelte";
+  import InstallationActivity from "../components/InstallationActivity.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import { added, boundsOf, dayOf, failures, grid, lastWeek, months, said, shades, together, total, weeks, yearOf, type RunsSeries, type Square } from "../lib/activity";
@@ -166,6 +167,10 @@
     {#if me.user?.bio}<p class="bio">{me.user.bio}</p>{/if}
   </div>
 </header>
+
+{#if me.admin}
+  <div class="installation"><InstallationActivity {api} /></div>
+{/if}
 
 <!-- Drawn at their size before the series answer, each value said once they have. -->
 <ul class="figures" aria-label="The last seven days">
@@ -335,6 +340,10 @@
     border: var(--border-hairline) solid var(--line);
     border-radius: var(--radius-chip);
     font-size: 12.5px;
+  }
+
+  .installation {
+    margin: 0 0 calc(var(--unit) * 9);
   }
 
   /* Four figures in a row of cards, as a profile's counts are on the forges people know. */

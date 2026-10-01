@@ -14,7 +14,7 @@
 </script>
 
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import uPlot from "uplot";
   import "uplot/dist/uPlot.min.css";
 
@@ -82,14 +82,15 @@
     return since.map((s) => Date.parse(s) / 1000 + width / 2);
   }
 
-  // What each series draws: its values, or for a stack, the sum of it and every series under it. A
-  // dashed series, the span before, is drawn behind the stack and not on it.
+  // What each series draws: its values, or for a stack, the sum of it and every series under it. Only
+  // columns stack: a line, the span before dashed or another count beside the columns, is drawn over
+  // the stack and not on it.
   function drawn(): (number | null)[][] {
     if (!stacked) return series.map((s) => s.values);
     const sums: (number | null)[][] = [];
     let under: number[] = since.map(() => 0);
     for (const s of series) {
-      if (s.dashed) {
+      if (s.dashed || s.kind !== "bars") {
         sums.push(s.values);
         continue;
       }
@@ -124,13 +125,25 @@
     return `${from} to ${to} UTC`;
   }
 
-  function build(el: HTMLDivElement): uPlot {
+  // A stack is drawn from its top down, so that each series covers the part of the one above it
+  // that is not its own.
+  const ordered = () => (stacked ? [...series.keys()].reverse() : [...series.keys()]);
+
+  // dataOf is what uPlot draws: the buckets' middles, then each series in the order drawn.
+  function dataOf(): uPlot.AlignedData {
     const ys = drawn();
+    return [x(), ...ordered().map((i) => ys[i]!)];
+  }
+
+  // shapeOf is what a chart is built for, beside its numbers: its series and how each is drawn. New
+  // numbers in the same shape are drawn in place, as a live chart's are each time it is read; a new
+  // shape builds the chart again.
+  const shapeOf = () => `${stacked} ${height} ${series.map((s) => `${s.label}/${s.kind}/${s.tone}/${s.dashed ?? false}`).join(" ")}`;
+
+  function build(el: HTMLDivElement): uPlot {
     const bars = uPlot.paths.bars!({ size: [0.7, 60] });
     const stepped = uPlot.paths.stepped!({ align: 1 });
-    // A stack is drawn from its top down, so that each series covers the part of the one above it
-    // that is not its own.
-    const order = stacked ? [...series.keys()].reverse() : [...series.keys()];
+    const order = ordered();
     const opts: uPlot.Options = {
       width: el.clientWidth || 600,
       height,
@@ -206,39 +219,55 @@
         ],
       },
     };
-    const data: uPlot.AlignedData = [x(), ...order.map((i) => ys[i]!)];
-    return new uPlot(opts, data, el);
+    return new uPlot(opts, dataOf(), el);
   }
+
+  let plot: uPlot | undefined;
+  let built = "";
+  let rebuild = () => {};
+
+  // New numbers, read again on a live chart, are drawn into the chart there is.
+  $effect(() => {
+    void [series, since, width, limit];
+    untrack(() => {
+      if (!plot) return;
+      if (shapeOf() !== built) rebuild();
+      else plot.setData(dataOf());
+    });
+  });
 
   onMount(() => {
     if (!holder) return;
     const el = holder;
-    let plot = build(el);
+    plot = build(el);
+    built = shapeOf();
     let down = 0;
 
     // A click with no drag opens the runs of the bucket under the pointer.
     const pressed = (e: MouseEvent) => (down = e.clientX);
     const released = (e: MouseEvent) => {
-      if (Math.abs(e.clientX - down) < 4 && plot.cursor.idx !== null && plot.cursor.idx !== undefined) {
+      if (Math.abs(e.clientX - down) < 4 && plot?.cursor.idx !== null && plot?.cursor.idx !== undefined) {
         onpick?.(plot.cursor.idx);
       }
     };
     const twice = () => onback?.();
     const listen = () => {
-      plot.over.addEventListener("mousedown", pressed);
-      plot.over.addEventListener("mouseup", released);
-      plot.over.addEventListener("dblclick", twice);
+      plot?.over.addEventListener("mousedown", pressed);
+      plot?.over.addEventListener("mouseup", released);
+      plot?.over.addEventListener("dblclick", twice);
     };
     listen();
 
     // Drawn again at the new size when the page is, and in the new ground's colours when it changes.
-    const resized = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height }));
+    const resized = new ResizeObserver(() => plot?.setSize({ width: el.clientWidth, height }));
     resized.observe(el);
     const redraw = () => {
-      plot.destroy();
+      plot?.destroy();
       plot = build(el);
+      built = shapeOf();
       listen();
     };
+    rebuild = redraw;
     const system = matchMedia("(prefers-color-scheme: dark)");
     system.addEventListener("change", redraw);
     const ground = new MutationObserver(redraw);
@@ -248,7 +277,8 @@
       resized.disconnect();
       system.removeEventListener("change", redraw);
       ground.disconnect();
-      plot.destroy();
+      plot?.destroy();
+      plot = undefined;
     };
   });
 

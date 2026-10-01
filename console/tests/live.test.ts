@@ -101,6 +101,20 @@ describe("the console, live", () => {
     await waitFor(() => expect(count(asked, "GET /api/v1/me")).toBe(3));
   });
 
+  it("reads the installation's activity again on an administrator's home when a run changes anywhere, at most every two seconds", async () => {
+    const asked = open("/", "dana");
+    await screen.findByText("reconnecting");
+    await waitFor(() => expect(count(asked, "GET /api/v1/stats/activity")).toBe(1));
+    const s = opened();
+    // Opening reads everything again, two seconds after the first read at the soonest.
+    await waitFor(() => expect(count(asked, "GET /api/v1/stats/activity")).toBe(2), { timeout: 4000 });
+    s.say({ kind: "activity" });
+    s.say({ kind: "activity" });
+    await waitFor(() => expect(count(asked, "GET /api/v1/stats/activity")).toBe(3), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(count(asked, "GET /api/v1/stats/activity")).toBe(3);
+  }, 15000);
+
   it("reads the runners again when one changes, to an administrator", async () => {
     const asked = open("/runners", "dana");
     await screen.findByText("reconnecting");

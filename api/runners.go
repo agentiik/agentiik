@@ -174,7 +174,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 	// And the administrator's half: the inventory, which is the installation's rather than a
 	// runner's ("A user never learns which host executed a task beyond its runner name and
 	// labels"), the pools, the tokens that let a machine into one, and the two orders that take
-	// one out of service.
+	// one out of service; and the statistics of the pools and of the installation's activity.
 	admin := Needs{Permission: GrantManage, Scope: Installation}
 	for _, r := range []struct {
 		method  string
@@ -188,6 +188,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		{"POST", "/api/v1/runners/{runner}/drain", s.drain},
 		{"POST", "/api/v1/runners/{runner}/revoke", s.revoke},
 		{"GET", "/api/v1/stats/pools", s.poolStatistics},
+		{"GET", "/api/v1/stats/activity", s.activityStatistics},
 	} {
 		if err := rt.Handle(r.method, r.pattern, admin, r.handler); err != nil {
 			return nil, err

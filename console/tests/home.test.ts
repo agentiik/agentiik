@@ -63,9 +63,9 @@ describe("a year of activity", () => {
   });
 });
 
-function open(search = "") {
+function open(search = "", who: "alice" | "dana" = "alice") {
   const asked: string[] = [];
-  const api = connect("http://stand-in/", answering(scenario("alice"), asked));
+  const api = connect("http://stand-in/", answering(scenario(who), asked));
   const place = new Place({ pathname: "/", search, baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
   render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
   return { asked, place };
@@ -135,6 +135,27 @@ describe("the home", () => {
     expect(place.query.get("day")).toBe("2026-09-24");
     await fireEvent.keyDown(window, { key: "Escape" });
     expect(place.query.get("day")).toBeNull();
+  });
+
+  it("shows an administrator what the installation is doing, the last hour a minute at a time", async () => {
+    const { asked } = open("", "dana");
+    const installation = await screen.findByRole("region", { name: "Server activity" });
+    await within(installation).findByText("121 runs in the last hour");
+    const now = within(installation).getByRole("list", { name: "Now" });
+    const figure = (label: string) => within(now).getByText(label).parentElement!.textContent;
+    expect(figure("Runs running")).toBe("Runs running7");
+    expect(figure("Tasks running")).toBe("Tasks running17 / 24");
+    expect(figure("Runners ready")).toBe("Runners ready3 / 4");
+    expect(within(installation).getByRole("figure")).toBeTruthy();
+    const q = new URL(`http://x${asked.find((a) => a.startsWith("GET /api/v1/stats/activity"))!.slice(4)}`).searchParams;
+    expect([q.get("from"), q.get("to"), q.get("bucket")]).toEqual(["2026-10-01T05:03:00.000Z", "2026-10-01T06:03:00.000Z", "1m"]);
+  });
+
+  it("shows a user who administers nothing no figure of the installation", async () => {
+    const { asked } = open();
+    await screen.findByRole("region", { name: "Activity" });
+    expect(screen.queryByRole("region", { name: "Server activity" })).toBeNull();
+    expect(asked.some((a) => a.startsWith("GET /api/v1/stats/activity"))).toBe(false);
   });
 
   it("shades by the runs that failed where asked", async () => {

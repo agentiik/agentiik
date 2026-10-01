@@ -347,10 +347,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 // declared: a new escape is a line somebody adds here, not a habit that spreads.
 func TestEveryEscapeIsNamed(t *testing.T) {
 	declared := map[string]bool{}
-	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, EventDelivery, SchemaUpgrade} {
+	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, InstallationActivity, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, EventDelivery, SchemaUpgrade} {
 		declared[string(r)] = true
 	}
-	if len(declared) != 16 {
+	if len(declared) != 17 {
 		t.Fatalf("two reasons share a string: %v", declared)
 	}
 
