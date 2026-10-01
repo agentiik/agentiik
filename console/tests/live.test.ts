@@ -74,13 +74,14 @@ describe("the live connection", () => {
 });
 
 describe("the console, live", () => {
-  it("reads the runs again when one of the namespace's changes, and not for another namespace's", async () => {
-    const asked = open("/finance/runs");
+  it("reads a workflow's runs again when one of them changes, and not for another workflow's or namespace's", async () => {
+    const asked = open("/finance/workflows/monthly-invoicing/runs");
     await connecting();
     await waitFor(() => expect(count(asked, "GET /api/v1/runs")).toBe(1));
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/runs")).toBe(2));
     s.say({ kind: "run", namespace: "team-ops", workflow: "monthly-invoicing", run: "01JMZ8W4K2R7AAAAAAAAAAAAAB" });
+    s.say({ kind: "run", namespace: "finance", workflow: "ledger-export", run: "01JMZ8W4K2R7AAAAAAAAAAAAAC" });
     await new Promise((r) => setTimeout(r, 400));
     expect(count(asked, "GET /api/v1/runs")).toBe(2);
     s.say({ kind: "run", namespace: "finance", workflow: "monthly-invoicing", run: "01JMZ8W4K2R7AAAAAAAAAAAAAA" });
@@ -88,7 +89,7 @@ describe("the console, live", () => {
   });
 
   it("reads who it is signed in as again when the caller's notifications change", async () => {
-    const asked = open("/finance/runs");
+    const asked = open("/finance/workflows/monthly-invoicing/runs");
     await connecting();
     const s = opened();
     await waitFor(() => expect(count(asked, "GET /api/v1/me")).toBe(2));

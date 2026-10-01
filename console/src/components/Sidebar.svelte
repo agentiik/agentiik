@@ -41,7 +41,7 @@
     ondismiss: (id: string) => void;
   } = $props();
 
-  const icon: Record<View, string> = { runs: "control-runs", workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", settings: "control-settings" };
+  const icon: Record<View, string> = { workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", settings: "control-settings" };
   const home = { kind: "landing" as const };
   const admin = [
     { kind: "runners" as const, label: "Runners", icon: "control-runners" },
@@ -71,7 +71,7 @@
   </ul>
 
   <div class="switcher">
-    <NamespaceSwitcher {namespaces} principal={me.principal} current={namespace} view={current ?? "runs"} {place} {folded} />
+    <NamespaceSwitcher {namespaces} principal={me.principal} current={namespace} view={current ?? "workflows"} {place} {folded} />
   </div>
 
   {#if namespace}
