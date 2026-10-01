@@ -349,7 +349,7 @@
   .pick input {
     width: 220px;
     min-width: 0;
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 4);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
@@ -458,7 +458,7 @@
     overflow: auto;
     background: var(--sunken);
     font-size: 12.5px;
-    line-height: 1.6;
+    --leading: 1.6;
     list-style: none;
   }
 

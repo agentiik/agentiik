@@ -120,7 +120,7 @@
     flex: 1;
     flex-direction: column;
     min-width: 0;
-    line-height: 1.25;
+    --leading: 1.25;
   }
 
   .name {

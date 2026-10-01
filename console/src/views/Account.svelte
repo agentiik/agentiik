@@ -486,7 +486,7 @@
 
   td {
     padding: calc(var(--unit) * 3);
-    border-top: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
     vertical-align: middle;
   }
 
@@ -501,7 +501,7 @@
   }
 
   tr.asked td {
-    border-top: none;
+    box-shadow: none;
     padding-top: 0;
     text-align: right;
   }
@@ -534,7 +534,7 @@
 
   input:not([type="checkbox"]),
   select {
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 3);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);

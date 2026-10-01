@@ -2,8 +2,9 @@ name: console
 
 # The web console, built and tested on its own: the client generated from openapi.json, regenerated
 # here and compared with the one committed so that the two never differ; its types and components;
-# its tests on recorded answers of the API; and its build, which package console then has the API
-# accept, as agentiik-api would carry it, and which api's test of every shipped file reads for mail.
+# its tests on recorded answers of the API; its build, which package console then has the API
+# accept, as agentiik-api would carry it, and which api's test of every shipped file reads for mail;
+# and its screens, drawn in a browser and measured.
 
 on:
   push:
@@ -31,6 +32,9 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
+      # The screen tests draw the build in Chromium, the version @playwright/test pins, and measure it.
+      - name: the screens line up
+        run: npx playwright install --with-deps chromium && npm run screens
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

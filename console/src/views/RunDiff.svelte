@@ -306,7 +306,7 @@
   th,
   td {
     padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     text-align: left;
     vertical-align: middle;
   }
@@ -367,7 +367,7 @@
     background: var(--sunken);
     font-family: var(--type-identifier-font);
     font-size: 12px;
-    line-height: 1.55;
+    --leading: 1.55;
   }
 
   .t-key {

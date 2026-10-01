@@ -250,7 +250,7 @@
   }
 
   .chip {
-    height: 29px;
+    height: var(--control-height);
     white-space: nowrap;
     padding: 0 calc(var(--unit) * 6);
     border: var(--border-hairline) solid var(--lineStrong);
@@ -277,7 +277,7 @@
 
   .select select {
     appearance: none;
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 14) 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
@@ -297,7 +297,7 @@
     display: inline-flex;
     align-items: center;
     gap: calc(var(--unit) * 3);
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 3) 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid var(--accentLine);
     border-radius: var(--radius-control);
@@ -332,16 +332,16 @@
 
   .track {
     position: relative;
-    width: 29px;
-    height: 17px;
+    width: 30px;
+    height: 18px;
     border-radius: var(--radius-round);
     background: var(--lineStrong);
   }
 
   .knob {
     position: absolute;
-    top: 2.5px;
-    left: 2.5px;
+    top: 3px;
+    left: 3px;
     width: 12px;
     height: 12px;
     border-radius: var(--radius-round);
@@ -354,7 +354,7 @@
   }
 
   .live input:checked + .track .knob {
-    left: 14.5px;
+    left: 15px;
   }
 
   .live input:focus-visible + .track {
@@ -421,7 +421,7 @@
   th {
     height: var(--row-header);
     padding: 0 calc(var(--unit) * 5);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     color: var(--faint);
     font-size: var(--type-columnHead-size);
     font-weight: var(--type-columnHead-weight);
@@ -433,7 +433,7 @@
   td {
     height: var(--row-body);
     padding: 0 calc(var(--unit) * 5);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     font-size: var(--type-identifier-size-max);
     white-space: nowrap;
   }
@@ -444,7 +444,7 @@
   }
 
   tbody tr.chosen td:first-child {
-    box-shadow: inset 3px 0 0 var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent), inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
   }
 
   .number {

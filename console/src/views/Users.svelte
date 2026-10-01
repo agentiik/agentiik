@@ -281,7 +281,7 @@
 
   td {
     padding: calc(var(--unit) * 3);
-    border-top: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
   }
 
   .nowrap {

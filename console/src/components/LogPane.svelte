@@ -85,8 +85,8 @@
   }
 
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: var(--running);
   }
@@ -111,7 +111,7 @@
     background: var(--sunken);
     font-family: var(--type-identifier-font);
     font-size: 12px;
-    line-height: 1.55;
+    --leading: 1.55;
     white-space: pre-wrap;
     word-break: break-all;
   }

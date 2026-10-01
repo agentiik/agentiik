@@ -223,7 +223,7 @@
   th,
   td {
     padding: calc(var(--unit) * 2) calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     text-align: left;
   }
 
@@ -321,7 +321,7 @@
   }
 
   .readout {
-    min-height: 1.4em;
+    min-height: 1lh;
     margin: calc(var(--unit) * 5) 0 0;
     font-size: var(--type-control-size);
   }

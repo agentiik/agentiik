@@ -233,10 +233,10 @@
         {#if week.scale.levels.length === 0}
           <p class="muted">No attempt of {step?.step ?? "a step"} ended over the range.</p>
         {:else}
-          <table class="heat" aria-label="The p50 duration of {step?.step} by weekday and hour, in UTC">
+          <table class="heat tiled" aria-label="The p50 duration of {step?.step} by weekday and hour, in UTC">
             <thead>
               <tr>
-                <th scope="col"><span class="unseen">Weekday</span></th>
+                <th scope="col" class="day"><span class="unseen">Weekday</span></th>
                 {#each Array.from({ length: 24 }, (_, h) => h) as h (h)}<th scope="col" class="hour term">{h % 3 === 0 ? String(h).padStart(2, "0") : ""}<span class="unseen">{h % 3 === 0 ? "" : String(h).padStart(2, "0")}</span></th>{/each}
               </tr>
             </thead>
@@ -297,7 +297,7 @@
 
   .select select {
     appearance: none;
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 14) 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
@@ -403,22 +403,28 @@
     font-size: var(--type-control-size);
   }
 
+  /* The spacing between cells is taken back at the edges, so that the weekdays start where the pane's
+     title does. */
   .heat {
-    width: 100%;
+    width: calc(100% + 4px);
+    margin: 0 -2px;
     border-collapse: separate;
     border-spacing: 2px;
     table-layout: fixed;
   }
 
   .heat th {
+    padding: 0;
     color: var(--faint);
     font-size: 10px;
     font-weight: 400;
     text-align: left;
   }
 
+  /* The table lays its columns out from its first row, so the weekdays' width is set on the head's
+     first cell too, wide enough for the widest of them. */
   .heat .day {
-    width: 34px;
+    width: 40px;
     font-size: var(--type-control-size);
   }
 
@@ -477,7 +483,7 @@
   .readout {
     display: flex;
     gap: calc(var(--unit) * 7);
-    min-height: 1.4em;
+    min-height: 1lh;
     margin: calc(var(--unit) * 3) 0 0;
     font-size: var(--type-control-size);
   }

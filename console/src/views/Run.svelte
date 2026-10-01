@@ -564,8 +564,8 @@
   }
 
   .path .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: var(--radius-round);
     background: var(--faint);
   }
@@ -723,7 +723,7 @@
     background: var(--sunken);
     font-family: var(--type-identifier-font);
     font-size: 12px;
-    line-height: 1.55;
+    --leading: 1.55;
   }
 
   .t-key {
@@ -781,7 +781,7 @@
   th {
     height: var(--row-header);
     padding: 0 calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     color: var(--faint);
     font-size: var(--type-columnHead-size);
     font-weight: var(--type-columnHead-weight);
@@ -793,7 +793,7 @@
   td {
     height: 36px;
     padding: 0 calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     font-size: var(--type-identifier-size-min);
     white-space: nowrap;
   }
@@ -808,7 +808,7 @@
   }
 
   .tasks tr.chosen td:first-child {
-    box-shadow: inset 3px 0 0 var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent), inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
   }
 
   .number {
