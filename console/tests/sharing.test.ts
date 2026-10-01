@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -239,6 +239,25 @@ describe("the sharing panel", () => {
     open("/alice/sharing");
     const pane = await screen.findByRole("region", { name: "What sharing never exposes" });
     expect(within(pane).getAllByRole("listitem")).toHaveLength(4);
+  });
+
+  it("is offered from a workflow's page to whoever may share that workflow, and opens its grants", async () => {
+    open("/finance/workflows/monthly-invoicing");
+    const plain = await screen.findByRole("navigation", { name: "finance/monthly-invoicing" });
+    expect(within(plain).queryByRole("link", { name: "Sharing" })).toBeNull();
+    cleanup();
+
+    const s = scenario("alice");
+    const permissions = (s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> }).permissions;
+    permissions["finance/monthly-invoicing"] = [...permissions["finance"]!, "grant:manage"];
+    const { place } = open("/finance/workflows/monthly-invoicing", s);
+    const nav = await screen.findByRole("navigation", { name: "finance/monthly-invoicing" });
+    const tab = within(nav).getByRole("link", { name: "Sharing" });
+    expect(tab.getAttribute("href")).toBe("/finance/sharing?workflow=monthly-invoicing");
+    await fireEvent.click(tab);
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "sharing" });
+    expect(place.query.get("workflow")).toBe("monthly-invoicing");
+    expect(await screen.findByRole("button", { name: "finance/monthly-invoicing", pressed: true })).toBeTruthy();
   });
 
   it("is offered nowhere the caller holds no grant:manage, and answered as what does not exist", async () => {
