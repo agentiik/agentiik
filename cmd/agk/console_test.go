@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -201,5 +202,38 @@ func TestAThemeThatIsNeitherLightNorDarkIsRefused(t *testing.T) {
 	}
 	if len(s.asked) != 0 {
 		t.Errorf("a theme refused asked the installation %v", s.asked)
+	}
+}
+
+// agk console cancels and replays with the command line's own request, a 202 its answer and
+// anything else refused as the installation says it.
+func TestTheConsoleAsksOfARunAsAgkDoes(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, r.Method+" "+r.URL.Path+" "+string(body))
+		switch r.URL.Path {
+		case "/api/v1/runs/" + aRun + "/cancel":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"error":"the run is not over, and a run is replayed once it is"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	at := remote{base: srv.URL, token: "the-token"}
+
+	if err := at.ask(t.Context(), "POST", "/api/v1/runs/"+aRun+"/cancel", nil, nil); err != nil {
+		t.Errorf("a cancel answered 202 is %v", err)
+	}
+	var started struct {
+		Run string `json:"run"`
+	}
+	err := at.ask(t.Context(), "POST", "/api/v1/runs/"+aRun+"/replay", map[string]string{"step": "invoice"}, &started)
+	if err == nil || !strings.Contains(err.Error(), "the run is not over, and a run is replayed once it is") {
+		t.Errorf("a refused replay is %v", err)
+	}
+	if len(bodies) != 2 || bodies[0] != "POST /api/v1/runs/"+aRun+"/cancel " || bodies[1] != "POST /api/v1/runs/"+aRun+`/replay {"step":"invoice"}` {
+		t.Errorf("the requests sent were %q", bodies)
 	}
 }

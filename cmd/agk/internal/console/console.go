@@ -39,6 +39,9 @@ type Options struct {
 	// Follow follows a step's log as agk logs does, and is nil where no log is to be shown.
 	Follow Follower
 
+	// Send sends what cancels or replays a run, and is nil where the console only reads.
+	Send Sender
+
 	// Every is how often what is shown is read again, so that a run going on is seen going: five
 	// seconds where it is not set, as the web console reads its runs and a run until it ends.
 	Every time.Duration
@@ -106,6 +109,12 @@ type Model struct {
 	// logs are the logs of the steps chosen, by run and step, and follow the one followed now.
 	logs   map[string]logBook
 	follow *following
+
+	// asking is the prompt open over the run, and acted and problem what the last thing asked of
+	// it came to: done, or refused and why.
+	asking  asking
+	acted   string
+	problem string
 
 	// The runners view's: the pools and the runners as last read, and the runner chosen.
 	pools       []api.Pool
@@ -299,6 +308,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.readChosen())
 		return m, tea.Batch(cmds...)
+	case cancelled:
+		return m.cancelledRun(msg)
+	case replayed:
+		return m.replayedRun(msg)
 	case logRead:
 		return m.kept(msg)
 	case logEnded:
@@ -359,6 +372,12 @@ func movedStep(run *db.RunDetail, step string, by int) string {
 
 // press does what a key names in the view shown.
 func (m Model) press(key string) (tea.Model, tea.Cmd) {
+	if m.asking != notAsking {
+		if key == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m.answer(key)
+	}
 	if m.listing {
 		if key == "?" || key == "esc" {
 			m.listing = false
@@ -414,6 +433,14 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 				m, follow = m.followChosen(true)
 				return m, tea.Batch(m.readChosen(), follow)
 			}
+		case "c":
+			if m.mayCancel() {
+				m.asking = askingCancel
+			}
+		case "p":
+			if m.mayReplay() {
+				m.asking = askingReplay
+			}
 		case "[", "]":
 			if m.run != nil {
 				n := len(portsOf(summaryOf(m.run, m.step)))
@@ -446,6 +473,7 @@ func (m Model) showing(v view) (tea.Model, tea.Cmd) {
 	if m.view == runView {
 		m = m.unfollow()
 		m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
+		m.asking, m.acted, m.problem = notAsking, "", ""
 	}
 	m.view = v
 	m.shown++
