@@ -4,8 +4,9 @@
 // from a scenario of recorded answers. No controller, runner or database is behind it.
 //
 // A scenario is a JSON file under tests/fixtures mapping "METHOD /path" or "METHOD /path?query" to
-// {"status": 200, "body": ...}. A route it does not hold is answered as the API answers what the
-// caller may not see: 404, no such thing, or not yours.
+// {"status": 200, "body": ...}, or {"status": 200, "text": ...} for bytes such as a file of a tree. A
+// route it does not hold is answered as the API answers what the caller may not see: 404, no such
+// thing, or not yours.
 //
 //     node tests/serve.js tests/fixtures/alice.json [port] [path]
 
@@ -60,6 +61,11 @@ export function serve({ scenario, port = 0, prefix = "/" }) {
       state.asked.push(`${req.method} ${path}${url.search}`);
       const recorded = state.scenario[`${req.method} ${path}${url.search}`] ?? state.scenario[`${req.method} ${path}`];
       const answer = recorded ?? { status: 404, body: { error: "no such thing, or not yours" } };
+      if (answer.text !== undefined) {
+        res.writeHead(answer.status, { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" });
+        res.end(answer.text);
+        return;
+      }
       res.writeHead(answer.status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(answer.body === undefined ? "" : JSON.stringify(answer.body));
       return;

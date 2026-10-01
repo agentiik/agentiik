@@ -197,7 +197,12 @@
       <div class="head">
         <StatePill state={run.state} live={!reader.ended} />
         <span class="mono id">{run.run}</span>
-        <span class="mono name">{run.workflow}</span>
+        {#if holds(me, "workflow:read", run.namespace, run.workflow)}
+          {@const page = { kind: "namespace" as const, namespace: run.namespace, view: "workflows" as const, workflow: run.workflow }}
+          <a class="mono name" href={place.href(page)} onclick={follow(place, page)}>{run.workflow}</a>
+        {:else}
+          <span class="mono name">{run.workflow}</span>
+        {/if}
         <span class="muted">
           <span class="mono">{run.trigger_kind}</span>
           · created <time class="mono" datetime={run.created_at} title={run.created_at}>{clock(run.created_at, now)}</time>
@@ -467,6 +472,16 @@
 
   .name {
     font-weight: 600;
+  }
+
+  a.name {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  a.name:hover {
+    color: var(--accent);
+    text-decoration: underline;
   }
 
   .back {

@@ -15,6 +15,7 @@
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
   import Statistics from "./views/Statistics.svelte";
   import Users from "./views/Users.svelte";
+  import Workflow from "./views/Workflow.svelte";
 
   // The console: who it is signed in as, the top bar, the screen the address names, and the key line.
   let { api, session, place, version, passkeys }: { api: API; session: Session; place: Place; version: string; passkeys: Passkeys } = $props();
@@ -88,12 +89,16 @@
       ondismiss={(id) => session.dismiss(id)}
     />
     <main class="screen">
-      {#if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
+      {#if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
+        <!-- A workflow's page, the one view under workflows built so far: the API answers one the
+             caller cannot read as one that does not exist, and the page says no more. -->
+        <Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} />
+      {:else if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
         <Refused />
       {:else if route.kind === "namespace" && route.view === "runs" && route.run}
         <Run {api} {place} me={session.me} namespace={route.namespace} id={route.run} />
       {:else if route.kind === "namespace" && route.view === "runs"}
-        <Runs {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
+        <Runs {api} {place} me={session.me} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else if route.kind === "namespace" && route.view === "statistics"}
         <Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else if route.kind === "account"}

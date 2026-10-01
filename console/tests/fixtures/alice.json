@@ -2456,5 +2456,538 @@
         ]
       }
     }
+  },
+  "GET /api/v1/finance/workflows/monthly-invoicing": {
+    "status": 200,
+    "body": {
+      "repository": {
+        "namespace": "finance",
+        "name": "monthly-invoicing",
+        "default_branch": "main",
+        "protected": true,
+        "labels": {
+          "domain": "billing"
+        },
+        "created_at": "2026-09-20T09:00:00Z",
+        "head": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+        "clone_url": "https://agentiik.example.com/finance/monthly-invoicing.git"
+      },
+      "version": {
+        "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+        "parent": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+        "author": "alice",
+        "created_at": "2026-09-28T10:12:00Z",
+        "source": "git"
+      },
+      "graph": {
+        "workflow": "monthly-invoicing",
+        "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+        "includes": [
+          {
+            "path": "common-bricks.yaml"
+          }
+        ],
+        "inputs": {
+          "orders": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "required": true
+          },
+          "customers": {
+            "schema": {
+              "type": "array"
+            },
+            "required": false,
+            "default": []
+          }
+        },
+        "outputs": {
+          "invoices": {
+            "from": {
+              "step": "archive",
+              "port": "ok"
+            },
+            "retain": {
+              "for": "90d"
+            }
+          },
+          "errors": {
+            "from": {
+              "step": "invoice",
+              "port": "error"
+            },
+            "retain": {
+              "for": "7d",
+              "fetches": 3
+            }
+          }
+        },
+        "on": {
+          "schedule": [
+            {
+              "cron": "0 6 1 * *",
+              "timezone": "Europe/Paris"
+            }
+          ],
+          "webhook": [
+            {
+              "path": "invoicing/rerun",
+              "method": "POST",
+              "auth": "hmac",
+              "response": "async"
+            }
+          ]
+        },
+        "vars": {
+          "currency": "EUR"
+        },
+        "secrets": [
+          "billing"
+        ],
+        "concurrency": {
+          "group": "monthly-invoicing",
+          "cancel_in_progress": false
+        },
+        "timeout": "6h",
+        "retain": "7d",
+        "order": [
+          "normalize",
+          "invoice",
+          "archive"
+        ],
+        "steps": {
+          "normalize": {
+            "kind": "brick",
+            "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+            "brick": {
+              "name": "normalize-orders",
+              "version": "1.4.0"
+            },
+            "inputs": {
+              "orders": "${{ workflow.inputs.orders }}",
+              "customers": "${{ workflow.inputs.customers }}"
+            },
+            "outputs": [
+              "ok",
+              "rejected"
+            ],
+            "params": {
+              "currency": "${{ vars.currency }}"
+            },
+            "timeout": "2m",
+            "idempotent": true
+          },
+          "invoice": {
+            "kind": "brick",
+            "image": "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
+            "brick": {
+              "name": "invoice",
+              "version": "3.2.1"
+            },
+            "needs": [
+              {
+                "step": "normalize",
+                "port": "ok",
+                "as": "in"
+              }
+            ],
+            "outputs": [
+              "out",
+              "error"
+            ],
+            "if": "${{ inputs.in.count > 0 }}",
+            "strategy": {
+              "fan_out": "item",
+              "max_parallel": 8
+            },
+            "retry": {
+              "max": 3,
+              "on": [
+                "transient"
+              ],
+              "backoff": {
+                "type": "exponential",
+                "base": "10s",
+                "max": "2m"
+              }
+            },
+            "params": {
+              "endpoint": "https://vat.example.com/v2",
+              "rounding": "per_line"
+            },
+            "secrets": [
+              "billing"
+            ],
+            "network": "egress",
+            "egress": {
+              "allow": [
+                "vat.example.com:443"
+              ]
+            },
+            "timeout": "10m",
+            "idempotent": true,
+            "extends": [
+              ".api-brick"
+            ]
+          },
+          "archive": {
+            "kind": "brick",
+            "image": "ghcr.io/acme/agk-archive@sha256:c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+            "brick": {
+              "name": "archive",
+              "version": "0.9.0"
+            },
+            "needs": [
+              {
+                "step": "invoice",
+                "port": "out",
+                "as": "invoices"
+              },
+              {
+                "step": "normalize",
+                "port": "rejected",
+                "as": "rejected"
+              }
+            ],
+            "outputs": [
+              "ok"
+            ],
+            "cache": true,
+            "idempotent": true
+          }
+        }
+      },
+      "history": [
+        {
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "parent": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+          "author": {
+            "name": "Alice Martin",
+            "email": "alice@example.com"
+          },
+          "authored_at": "2026-09-28T10:05:00+02:00",
+          "subject": "Round VAT per line rather than per invoice",
+          "version": {
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            "parent": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+            "author": "alice",
+            "created_at": "2026-09-28T10:12:00Z",
+            "source": "git"
+          }
+        },
+        {
+          "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+          "parent": "9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f",
+          "author": {
+            "name": "Alice Martin",
+            "email": "alice@example.com"
+          },
+          "authored_at": "2026-09-28T09:40:00+02:00",
+          "subject": "Split the rounding out of the charge step"
+        },
+        {
+          "commit": "9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f",
+          "parent": "1f3d5e7a9c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f",
+          "author": {
+            "name": "Bruno Petit",
+            "email": "bruno@example.com"
+          },
+          "authored_at": "2026-09-27T16:22:00+02:00",
+          "subject": "Archive what normalize rejected beside the invoices",
+          "version": {
+            "commit": "9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f",
+            "parent": "1f3d5e7a9c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f",
+            "author": "bruno",
+            "created_at": "2026-09-27T14:25:00Z",
+            "source": "git"
+          }
+        }
+      ]
+    }
+  },
+  "GET /api/v1/finance/workflows/monthly-invoicing/tree/a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f?path=agentiik.yaml": {
+    "status": 200,
+    "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_line\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    merge: wait_all\n    cache: true\n    outputs: [ok]\n"
+  },
+  "GET /api/v1/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A": {
+    "status": 200,
+    "body": {
+      "namespace": "finance",
+      "run": "01JMZ8W4K2R7QX6T1N3P5V7Y9A",
+      "workflow": "monthly-invoicing",
+      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+      "state": "running",
+      "trigger_kind": "schedule",
+      "triggered_by": "finance/agentiik",
+      "created_at": "2026-09-30T06:00:12Z",
+      "started_at": "2026-09-30T06:00:12Z",
+      "replay_from_start_only": false,
+      "steps": [
+        {
+          "step": "normalize",
+          "verdict": "succeeded",
+          "attempts": 1,
+          "started_at": "2026-09-30T06:00:12Z",
+          "finished_at": "2026-09-30T06:00:13Z",
+          "ports": {
+            "ok": {
+              "digest": "sha256:6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a",
+              "size": 87210,
+              "items": 211
+            },
+            "rejected": {
+              "digest": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+              "size": 1200,
+              "items": 3
+            }
+          },
+          "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+          "output_ports": [
+            "ok",
+            "rejected"
+          ]
+        },
+        {
+          "step": "invoice",
+          "verdict": "running",
+          "attempts": 1,
+          "started_at": "2026-09-30T06:00:14Z",
+          "image": "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
+          "input_ports": [
+            "in"
+          ],
+          "output_ports": [
+            "out",
+            "error"
+          ]
+        },
+        {
+          "step": "archive",
+          "verdict": "pending",
+          "attempts": 0,
+          "image": "ghcr.io/acme/agk-archive@sha256:c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+          "input_ports": [
+            "invoices",
+            "rejected"
+          ],
+          "output_ports": [
+            "ok"
+          ]
+        }
+      ],
+      "tasks": [
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/normalize/1",
+          "step": "normalize",
+          "state": "succeeded",
+          "attempt": 1,
+          "runner": "runner-dmz-02",
+          "exit_code": 0,
+          "started_at": "2026-09-30T06:00:12Z",
+          "finished_at": "2026-09-30T06:00:13Z"
+        },
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/invoice/1/1/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 1,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "started_at": "2026-09-30T06:00:16Z",
+          "exit_code": 0,
+          "finished_at": "2026-09-30T06:01:49Z"
+        },
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/invoice/1/2/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 2,
+            "of": 8
+          },
+          "runner": "runner-dmz-01",
+          "started_at": "2026-09-30T06:00:17Z",
+          "exit_code": 0,
+          "finished_at": "2026-09-30T06:01:56Z"
+        },
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/invoice/1/3/8",
+          "step": "invoice",
+          "state": "succeeded",
+          "attempt": 1,
+          "shard": {
+            "index": 3,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "started_at": "2026-09-30T06:00:18Z",
+          "exit_code": 0,
+          "finished_at": "2026-09-30T06:02:03Z"
+        },
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/invoice/1/4/8",
+          "step": "invoice",
+          "state": "running",
+          "attempt": 1,
+          "shard": {
+            "index": 4,
+            "of": 8
+          },
+          "runner": "runner-dmz-01",
+          "started_at": "2026-09-30T06:00:19Z"
+        },
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/invoice/1/5/8",
+          "step": "invoice",
+          "state": "running",
+          "attempt": 1,
+          "shard": {
+            "index": 5,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "started_at": "2026-09-30T06:00:20Z"
+        },
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/invoice/1/6/8",
+          "step": "invoice",
+          "state": "running",
+          "attempt": 1,
+          "shard": {
+            "index": 6,
+            "of": 8
+          },
+          "runner": "runner-dmz-01",
+          "started_at": "2026-09-30T06:00:21Z"
+        },
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/invoice/1/7/8",
+          "step": "invoice",
+          "state": "running",
+          "attempt": 1,
+          "shard": {
+            "index": 7,
+            "of": 8
+          },
+          "runner": "runner-dmz-02",
+          "started_at": "2026-09-30T06:00:22Z"
+        },
+        {
+          "task": "01JMZ8W4K2R7QX6T1N3P5V7Y9A/invoice/1/8/8",
+          "step": "invoice",
+          "state": "running",
+          "attempt": 1,
+          "shard": {
+            "index": 8,
+            "of": 8
+          },
+          "runner": "runner-dmz-01",
+          "started_at": "2026-09-30T06:00:23Z"
+        }
+      ],
+      "artifacts": []
+    }
+  },
+  "GET /api/v1/team-ops/workflows/nightly": {
+    "status": 200,
+    "body": {
+      "repository": {
+        "namespace": "team-ops",
+        "name": "nightly",
+        "default_branch": "main",
+        "protected": false,
+        "created_at": "2026-09-21T09:00:00Z",
+        "head": "7e5d3c1b9a8f6e4d2c0b9a7f5e3d1c0b8a6f4e2d",
+        "clone_url": "https://agentiik.example.com/team-ops/nightly.git",
+        "labels": {}
+      },
+      "version": {
+        "commit": "7e5d3c1b9a8f6e4d2c0b9a7f5e3d1c0b8a6f4e2d",
+        "author": "carol",
+        "created_at": "2026-09-29T08:00:00Z",
+        "source": "git"
+      },
+      "graph": {
+        "workflow": "nightly",
+        "commit": "7e5d3c1b9a8f6e4d2c0b9a7f5e3d1c0b8a6f4e2d",
+        "includes": [],
+        "on": {
+          "schedule": [
+            {
+              "cron": "30 2 * * *",
+              "timezone": "UTC",
+              "jitter": "5m"
+            }
+          ],
+          "event": [
+            {
+              "type": "run.failed",
+              "source": "team-ops/deploy",
+              "namespace": "team-ops"
+            }
+          ]
+        },
+        "order": [
+          "export",
+          "reconcile"
+        ],
+        "steps": {
+          "export": {
+            "kind": "script",
+            "image": "alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704",
+            "outputs": [
+              "out"
+            ],
+            "before_script": [
+              "apk add --no-cache jq"
+            ],
+            "script": [
+              "agk items > /tmp/rows.json",
+              "jq -c '.[]' /tmp/rows.json | wc -l >&2",
+              "agk emit out --from /tmp/rows.json"
+            ],
+            "after_script": [
+              "rm -f /tmp/rows.json"
+            ],
+            "shell": [
+              "/bin/sh",
+              "-e"
+            ],
+            "idempotent": true
+          },
+          "reconcile": {
+            "kind": "workflow",
+            "workflow": {
+              "workflow": "finance/monthly-invoicing",
+              "ref": "v2.1.0"
+            },
+            "needs": [
+              {
+                "step": "export",
+                "port": "out",
+                "as": "orders"
+              }
+            ],
+            "outputs": [
+              "invoices"
+            ],
+            "idempotent": true
+          }
+        }
+      },
+      "history": []
+    }
+  },
+  "GET /api/v1/team-ops/workflows/nightly/tree/7e5d3c1b9a8f6e4d2c0b9a7f5e3d1c0b8a6f4e2d?path=agentiik.yaml": {
+    "status": 200,
+    "text": "steps:\n  export:\n    image: alpine:3.21\n    script:\n      - agk items > /tmp/rows.json\n    outputs: [out]\n  reconcile:\n    workflow: finance/monthly-invoicing@v2.1.0\n    needs:\n      - { step: export, port: out, as: orders }\n"
   }
 }
