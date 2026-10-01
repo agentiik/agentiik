@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
 	"testing"
@@ -56,10 +55,13 @@ func TestLinesDateARunNotStartedByItsCreation(t *testing.T) {
 
 // installation is what the console reads, standing in for the command line's Reader.
 type installation struct {
-	runs    []db.ListedRun
-	run     db.RunDetail
-	failing error
-	asked   []string
+	runs      []db.ListedRun
+	run       db.RunDetail
+	me        *principal
+	runners   []runner
+	envelopes map[string]any
+	failing   error
+	asked     []string
 }
 
 func (in *installation) read(_ context.Context, path string, out any) error {
@@ -70,9 +72,23 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 	var answer any
 	switch {
 	case path == "/api/v1/me":
-		answer = map[string]string{"principal": "alice"}
+		answer = principal{Principal: "alice", Permissions: map[string][]string{"finance": {"run:read"}}}
+		if in.me != nil {
+			answer = *in.me
+		}
+	case path == "/api/v1/runners":
+		if in.me == nil || !in.me.Admin {
+			return errors.New("no such thing, or not yours")
+		}
+		answer = map[string]any{"runners": in.runners}
 	case strings.HasPrefix(path, "/api/v1/runs?"):
 		answer = map[string]any{"runs": in.runs}
+	case strings.Contains(path, "/steps/"):
+		e, ok := in.envelopes[path]
+		if !ok {
+			return errors.New("no such thing, or not yours")
+		}
+		answer = e
 	case strings.HasPrefix(path, "/api/v1/runs/"):
 		answer = in.run
 	default:
@@ -106,7 +122,6 @@ func opened(t *testing.T, in *installation, o Options, width, height int) Model 
 	if o.Installation == "" {
 		o.Installation = "agentiik.example.com"
 	}
-	o.Describe = func(w io.Writer, d db.RunDetail, _ time.Time) { fmt.Fprintf(w, "run %s: %s\n", d.Run, d.State) }
 	n := New(t.Context(), o)
 	n.tick = func(time.Duration, func(time.Time) tea.Msg) tea.Cmd { return nil }
 	var m tea.Model = n
@@ -239,13 +254,13 @@ func TestTheKeysMoveOpenAndGoBack(t *testing.T) {
 	}
 	in.run = db.RunDetail{RunSummary: in.runs[1].RunSummary}
 	m = press(t, m, enter)
-	if m.view != runView || !strings.Contains(screen(m), "run 01RUNBBBBBBBBBBBBBBBBBBBBB: failed") {
+	if m.view != runView || !strings.Contains(screen(m), "Run 01RUNBBBBBBBBBBBBBBBBBBBBB  finance/monthly-invoicing@") {
 		t.Fatalf("enter does not open the run selected:\n%s", screen(m))
 	}
 	if in.asked[len(in.asked)-1] != "/api/v1/runs/01RUNBBBBBBBBBBBBBBBBBBBBB" {
 		t.Errorf("opening a run asked for %s", in.asked[len(in.asked)-1])
 	}
-	if !strings.HasSuffix(strings.TrimRight(screen(m), " "), "esc Runs   q Quit   ? Every key") {
+	if !strings.HasSuffix(strings.TrimRight(screen(m), " "), "↑↓ Step   [] Port   esc Runs   q Quit   ? Every key") {
 		t.Errorf("the run view's key line is wrong:\n%s", screen(m))
 	}
 	m = press(t, m, esc)
@@ -272,9 +287,9 @@ func TestQuestionMarkListsEveryKey(t *testing.T) {
 
 // Opened on a run, the console reads that run alone and starts on it.
 func TestAConsoleOpenedOnARunStartsOnIt(t *testing.T) {
-	in := &installation{run: db.RunDetail{RunSummary: db.RunSummary{Run: "01RUNBBBBBBBBBBBBBBBBBBBBB", State: agk.Failed}}}
+	in := &installation{run: db.RunDetail{RunSummary: db.RunSummary{Namespace: "finance", Workflow: "monthly-invoicing", Run: "01RUNBBBBBBBBBBBBBBBBBBBBB", State: agk.Failed}}}
 	m := opened(t, in, Options{Run: "01RUNBBBBBBBBBBBBBBBBBBBBB", Namespace: "finance"}, 100, 30)
-	if m.view != runView || !strings.Contains(screen(m), "run 01RUNBBBBBBBBBBBBBBBBBBBBB: failed") {
+	if m.view != runView || !strings.Contains(screen(m), "Run 01RUNBBBBBBBBBBBBBBBBBBBBB  finance/monthly-invoicing@") {
 		t.Errorf("a console opened on a run shows:\n%s", screen(m))
 	}
 	if !strings.Contains(strings.Split(screen(m), "\n")[0], "finance") {
