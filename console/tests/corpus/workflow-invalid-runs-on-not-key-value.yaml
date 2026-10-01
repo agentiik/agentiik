@@ -1,0 +1,17 @@
+# invalid: A runner selector that is not a label. Selectors are written as
+#   key=value, because that is what a runner's labels are.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    runs_on: [dmz]
+    outputs: [out]

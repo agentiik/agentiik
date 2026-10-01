@@ -1,0 +1,28 @@
+# invalid: A key join that does not say what it matches items on. Without it,
+#   unmatched items cannot be told from matched ones.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#merge-strategies
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: reconciliation
+  namespace: finance
+
+steps:
+  fetch-ledger:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    outputs: [out]
+
+  fetch-bank:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    outputs: [out]
+
+  match:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    needs:
+      - { step: fetch-ledger, port: out, as: in }
+      - { step: fetch-bank,   port: out, as: in }
+    merge: { join: {} }
+    outputs: [out, unmatched]

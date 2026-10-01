@@ -1,0 +1,22 @@
+# invalid: An extends naming a block whose name does not start with a dot.
+#   Only a hidden block can be extended, and a hidden block is exactly a name
+#   that starts with a dot and is never executed.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: regional-vat
+  namespace: finance
+
+.api-brick:
+  timeout: 2m
+  network: egress
+
+steps:
+  check-vat:
+    extends: api-brick
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    outputs: [out]

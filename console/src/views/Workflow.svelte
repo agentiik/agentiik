@@ -184,7 +184,7 @@
           <li><Icon name="trigger-schedule" size={14} /><span class="mono">{t.cron}</span>{#if t.timezone}<span class="muted">{t.timezone}</span>{/if}{#if t.jitter}<span class="muted">jitter {t.jitter}</span>{/if}{#if t.catch_up !== undefined}<span class="muted">catch_up {String(t.catch_up)}</span>{/if}</li>
         {/each}
         {#each on.webhook as t, i (i)}
-          <li><Icon name="trigger-webhook" size={14} /><span class="mono">{t.method ?? "POST"} /hooks/{namespace}/{t.path}</span><span class="muted">auth {authOf(t)}, response {t.response ?? "async"}</span></li>
+          <li><Icon name="trigger-webhook" size={14} /><span class="mono">{t.method ?? "POST"} /hooks/{namespace}{t.path}</span><span class="muted">auth {authOf(t)}, response {t.response ?? "async"}</span></li>
         {/each}
         {#each on.event as t, i (i)}
           <li><Icon name="trigger-event" size={14} /><span class="mono">{t.type}</span>{#if t.source}<span class="muted">from <span class="mono">{t.source}</span></span>{/if}{#if t.namespace}<span class="muted">in <span class="mono">{t.namespace}</span></span>{/if}{#if t.filter}<span class="muted" title={t.filter}>filtered</span>{/if}</li>

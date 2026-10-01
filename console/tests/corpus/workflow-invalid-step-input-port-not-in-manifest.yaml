@@ -1,0 +1,25 @@
+# invalid: A step feeding an input port nobody declares. The runner mounts one
+#   directory per port the brick declares, and there is no directory for a
+#   port the manifest never named.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#brick-manifest
+# paired with: brick/valid/normalize.yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+inputs:
+  suppliers:
+    schema: { $ref: "./schemas/supplier.json" }
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    # the manifest of this image declares the input ports orders and customers
+    inputs:
+      suppliers: ${{ workflow.inputs.suppliers }}
+    outputs: [ok, rejected]

@@ -5,6 +5,7 @@
   import { clock } from "../lib/format";
   import type { Place } from "../lib/place.svelte";
   import { binary, changes, folders, foldersOf, hunks, lineDiff, shownUpTo, sizeOf, type Change, type Entry, type Node } from "../lib/tree";
+  import type { Problem } from "../lib/workflow-check";
   import Icon from "./Icon.svelte";
 
   // A workflow's repository as one ref holds it: its files as folders, and the file chosen in
@@ -113,6 +114,23 @@
     });
   });
   const lines = $derived(content && "text" in content ? content.text.replace(/\n$/, "").split("\n") : []);
+
+  // The entry point held to workflow.schema.json as it is read, each problem on its line. The check
+  // and the schema are loaded the first time a file is checked, so that a page that reads no
+  // workflow file never downloads them.
+  let problems = $state<Problem[] | null>(null);
+  $effect(() => {
+    const c = content;
+    const path = entry?.path;
+    problems = null;
+    if (!c || !("text" in c) || path !== "agentiik.yaml") return;
+    const text = c.text;
+    untrack(async () => {
+      const [{ YamlTree }, { check }] = await Promise.all([import("../lib/yaml-tree"), import("../lib/workflow-check")]);
+      if (content === c) problems = check(new YamlTree(text));
+    });
+  });
+  const wrong = $derived(new Set((problems ?? []).map((p) => p.line)));
 
   // Compared: what changed from the ref compared with to the ref shown, and the file chosen among
   // them read on both sides.
@@ -272,8 +290,20 @@
         {:else if "not" in content}
           <p class="muted">Not drawn: {content.not}.</p>
         {:else}
+          {#if problems}
+            <div class="checked" role="status">
+              {#if problems.length === 0}
+                <p class="good"><Icon name="state-succeeded" size={14} />Valid against <span class="mono">workflow.schema.json</span></p>
+              {:else}
+                <p class="bad"><Icon name="state-failed" size={14} />{problems.length} problem{problems.length === 1 ? "" : "s"} against <span class="mono">workflow.schema.json</span></p>
+                <ul>
+                  {#each problems as p, i (i)}<li><span class="mono faint">line {p.line}</span>{#if p.at}<span class="mono">{p.at}</span>{/if}<span>{p.message}</span></li>{/each}
+                </ul>
+              {/if}
+            </div>
+          {/if}
           <ol class="file mono" aria-label="{entry.path} at {ref}">
-            {#each lines as line, i (i)}<li><span class="number">{i + 1}</span><span class="text">{line}</span></li>{/each}
+            {#each lines as line, i (i)}<li class:wrong={wrong.has(i + 1)}><span class="number">{i + 1}</span><span class="text">{line}</span></li>{/each}
           </ol>
         {/if}
       </section>
@@ -457,6 +487,43 @@
   .text {
     padding-right: calc(var(--unit) * 6);
     white-space: pre;
+  }
+
+  .file li.wrong {
+    border-left: 2px solid var(--failed);
+    background: var(--failedFill);
+  }
+
+  .checked {
+    padding: calc(var(--unit) * 4) calc(var(--unit) * 6);
+    border-bottom: var(--border-hairline) solid var(--line);
+    font-size: var(--type-control-size);
+  }
+
+  .checked p {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--unit) * 3);
+    margin: 0;
+  }
+
+  .checked .good {
+    color: var(--succeeded);
+  }
+
+  .checked .bad {
+    color: var(--failed);
+  }
+
+  .checked ul {
+    margin-top: calc(var(--unit) * 3);
+  }
+
+  .checked li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--unit) * 4);
+    padding: 2px 0;
   }
 
   .commit {

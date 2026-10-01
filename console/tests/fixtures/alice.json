@@ -17507,7 +17507,7 @@
           ],
           "webhook": [
             {
-              "path": "invoicing/rerun",
+              "path": "/invoicing/rerun",
               "method": "POST",
               "auth": "hmac",
               "response": "async"
@@ -17710,7 +17710,7 @@
   },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f?path=agentiik.yaml": {
     "status": 200,
-    "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_line\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    merge: wait_all\n    cache: true\n    outputs: [ok]\n"
+    "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - path: ./common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: /invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_line\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    merge: wait_all\n    cache: true\n    outputs: [ok]\n"
   },
   "GET /api/v1/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A": {
     "status": 200,
@@ -18161,8 +18161,8 @@
         {
           "path": "agentiik.yaml",
           "mode": "0644",
-          "size": 1419,
-          "sha256": "2ab3a7a68811307d0606555f6650f8b6400c69e68ba71c5e641524582cc8b092"
+          "size": 1428,
+          "sha256": "ff93ffcd111c3d9230f8ec540cde75ee6cd8d90430b10a216ccc5b73c48fcfdf"
         },
         {
           "path": "assets/logo.png",
@@ -18205,8 +18205,8 @@
         {
           "path": "agentiik.yaml",
           "mode": "0644",
-          "size": 1419,
-          "sha256": "2ab3a7a68811307d0606555f6650f8b6400c69e68ba71c5e641524582cc8b092"
+          "size": 1428,
+          "sha256": "ff93ffcd111c3d9230f8ec540cde75ee6cd8d90430b10a216ccc5b73c48fcfdf"
         },
         {
           "path": "assets/logo.png",
@@ -18249,8 +18249,8 @@
         {
           "path": "agentiik.yaml",
           "mode": "0644",
-          "size": 1402,
-          "sha256": "fbf63f8998c040435c277f757b9482beaf547451e998e84616a9bddb9861685d"
+          "size": 1411,
+          "sha256": "81f5dd8fda8cf393ab059d520868b903ae7a28657c8772639f741f4b78987c72"
         },
         {
           "path": "assets/logo.png",
@@ -18287,8 +18287,8 @@
         {
           "path": "agentiik.yaml",
           "mode": "0644",
-          "size": 1438,
-          "sha256": "49cf558513f1de486bfaeb00a9b4e5a200b73b7eec63d0060c6b701a7e391759"
+          "size": 1447,
+          "sha256": "5fe85c6f937413e75b4ffebd2b5c6bcfe238da7dc14b9df5a69c4fe61e9d8f8c"
         },
         {
           "path": "assets/logo.png",
@@ -18337,7 +18337,7 @@
   },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f?path=agentiik.yaml": {
     "status": 200,
-    "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_invoice\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    cache: true\n    outputs: [ok]\n"
+    "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - path: ./common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: /invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_invoice\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    cache: true\n    outputs: [ok]\n"
   },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f?path=assets%2Flogo.png": {
     "status": 200,
@@ -18357,7 +18357,7 @@
   },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/c4e6a8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2?path=agentiik.yaml": {
     "status": 200,
-    "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_line\n      vat_scale: 4\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    merge: wait_all\n    cache: true\n    outputs: [ok]\n"
+    "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - path: ./common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: /invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_line\n      vat_scale: 4\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    merge: wait_all\n    cache: true\n    outputs: [ok]\n"
   },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/c4e6a8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2?path=assets%2Flogo.png": {
     "status": 200,
@@ -18407,5 +18407,53 @@
       },
       "history": []
     }
+  },
+  "GET /api/v1/finance/workflows/monthly-invoicing/tree/try-retries": {
+    "status": 200,
+    "body": {
+      "commit": "d1e3f5a7b9c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8",
+      "entries": [
+        {
+          "path": "agentiik.yaml",
+          "mode": "0644",
+          "size": 1443,
+          "sha256": "5f155660d6979fbaba4bdb6028032ebbd1ecaab28e153b2d274b61077bc3ff1d"
+        },
+        {
+          "path": "assets/logo.png",
+          "mode": "0644",
+          "size": 17,
+          "sha256": "14463a37223c31053d306ff9a17d58d7c3fc742e0b2d4e82b235af44f742256f"
+        },
+        {
+          "path": "common-bricks.yaml",
+          "mode": "0644",
+          "size": 99,
+          "sha256": "bf9c714dbe2f2f6756af8ed86cbb762aedffbbec7885f4bcb921369c37d76994"
+        },
+        {
+          "path": "schemas/customer.json",
+          "mode": "0644",
+          "size": 160,
+          "sha256": "0d126e784c816ddc5067d642776867622900414a9c9f498c69b5a6dd76e3f736"
+        },
+        {
+          "path": "schemas/customers.json",
+          "mode": "0644",
+          "size": 70,
+          "sha256": "75b0fc59454eb888d4f36101afb580f949129f4d182385f11b92bd6eff88e6ed"
+        },
+        {
+          "path": "scripts/normalize.py",
+          "mode": "0755",
+          "size": 210,
+          "sha256": "603fa55ce48eb880e08d0f50c4b9ab396c35efc155019a49fc56b9aad27dae5b"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/finance/workflows/monthly-invoicing/tree/d1e3f5a7b9c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8?path=agentiik.yaml": {
+    "status": 200,
+    "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - path: ./common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: /invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_line\n    retries: 3\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    merge: wait_all\n    cache: true\n    outputs: [ok]\n"
   }
 }
