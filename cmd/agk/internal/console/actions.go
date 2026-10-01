@@ -119,6 +119,7 @@ func (m Model) replayedRun(msg replayed) (tea.Model, tea.Cmd) {
 	m = m.unfollow()
 	m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
 	m.acted, m.problem = "", ""
+	m.recent, m.recentFor = nil, ""
 	m.selected, m.view = msg.run, runView
 	m.shown++
 	return m, m.readShown()

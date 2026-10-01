@@ -17,6 +17,12 @@ require (
 	// is enforced by the compiler rather than by a guard, and it carries the escaped
 	// identifier syntax that gives inputs.in.count a spelling at all.
 	cel.dev/cel-go v0.32.0
+	// Bubbles, Charm's components for Bubble Tea, used by package cmd/agk/internal/console alone,
+	// for the reasons given below for Bubble Tea and Lip Gloss and inside the same boundary: the
+	// spinner that turns beside what is going on, where the documentation names Bubbles beside
+	// them as what the screen is drawn with. Its spinner is driven by the console's own clock,
+	// which stops it once nothing is going on.
+	charm.land/bubbles/v2 v2.2.1
 	// Bubble Tea and Lip Gloss, used by package cmd/agk/internal/console alone, which draws agk
 	// console. A terminal interface worth using needs a renderer that redraws only what changed, a
 	// layout engine that measures and joins styled blocks, and input handling that decodes keys,
@@ -142,7 +148,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
-	github.com/mattn/go-runewidth v0.0.24 // indirect
+	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect

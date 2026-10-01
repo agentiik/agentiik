@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -286,7 +287,7 @@ func (m Model) header() []part {
 func (m Model) row(r db.ListedRun, now time.Time) []part {
 	p := func(s string) []part { return []part{{plain, s}} }
 	return m.columns(
-		[]part{{stateRole(r.State), "●"}, {plain, " " + r.State.String()}},
+		[]part{{stateRole(r.State), m.mark(r.State == agk.Running)}, {plain, " " + r.State.String()}},
 		[]part{{muted, string(r.Run)}},
 		p(r.Namespace+"/"+r.Workflow), p(r.Trigger.String()), p(clock(startOf(r), now)), p(lasted(r.RunSummary, now)), p(r.TriggeredBy))
 }

@@ -2,6 +2,7 @@ package console
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,7 +87,7 @@ func TestARunOverIsReplayedFromTheStepChosen(t *testing.T) {
 	if len(in.sent) != 1 || in.sent[0] != `POST /api/v1/runs/`+failedRun+`/replay {"step":"invoice"}` {
 		t.Fatalf("y sent %v", in.sent)
 	}
-	if m.view != runView || m.selected != replayRun || in.asked[len(in.asked)-1] != "/api/v1/runs/"+replayRun {
+	if m.view != runView || m.selected != replayRun || !slices.Contains(in.asked, "/api/v1/runs/"+replayRun) {
 		t.Errorf("the run the replay started is not opened: %q, %v", m.selected, in.asked)
 	}
 }

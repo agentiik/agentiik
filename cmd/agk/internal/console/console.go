@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/agentiik/agentiik/api"
@@ -126,6 +127,13 @@ type Model struct {
 	acted   string
 	problem string
 
+	// spinner turns beside what is going on, while spinning says its next frame is asked for;
+	// recent is the last twenty runs of the run's workflow, read for recentFor.
+	spinner   spinner.Model
+	spinning  bool
+	recent    []db.ListedRun
+	recentFor string
+
 	// The runners view's: the pools and the runners as last read, and the runner chosen.
 	pools       []api.Pool
 	fleet       []db.Runner
@@ -161,7 +169,7 @@ func New(ctx context.Context, o Options) Model {
 	if o.Every <= 0 {
 		o.Every = 5 * time.Second
 	}
-	m := Model{ctx: ctx, o: o, tick: tea.Tick, depth: depthOf(o.Getenv)}
+	m := Model{ctx: ctx, o: o, tick: tea.Tick, depth: depthOf(o.Getenv), spinner: newSpinner()}
 	switch o.Theme {
 	case "light":
 		m.light, m.settled = true, true
@@ -266,6 +274,19 @@ func (m Model) later() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if frame, ok := msg.(spinner.TickMsg); ok {
+		return m.turned(frame)
+	}
+	next, cmd := m.update(msg)
+	n := next.(Model)
+	if !n.spinning && n.live() {
+		n.spinning = true
+		cmd = tea.Batch(cmd, n.nextFrame())
+	}
+	return n, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -325,6 +346,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var follow tea.Cmd
 		m, follow = m.followChosen(false)
 		cmds := []tea.Cmd{follow}
+		if m.run != nil && m.recentFor != string(m.run.Run) {
+			m.recentFor = string(m.run.Run)
+			cmds = append(cmds, m.readRecent())
+		}
 		if m.view == runView && (m.run == nil || !m.run.State.Terminal()) {
 			cmds = append(cmds, m.later())
 		}
@@ -333,6 +358,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.readChosen())
 		return m, tea.Batch(cmds...)
+	case recentRead:
+		if m.run != nil && msg.run == string(m.run.Run) {
+			m.recent = msg.runs
+		}
 	case cancelled:
 		return m.cancelledRun(msg)
 	case replayed:
@@ -510,6 +539,7 @@ func (m Model) showing(v view) (tea.Model, tea.Cmd) {
 		m = m.unfollow()
 		m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
 		m.asking, m.acted, m.problem = notAsking, "", ""
+		m.recent, m.recentFor = nil, ""
 	}
 	m.view = v
 	m.shown++
