@@ -367,7 +367,12 @@
               "size": 312,
               "items": 0
             }
-          }
+          },
+          "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+          "output_ports": [
+            "ok",
+            "rejected"
+          ]
         },
         {
           "step": "invoice",
@@ -386,12 +391,27 @@
               "size": 4212,
               "items": 3
             }
-          }
+          },
+          "image": "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
+          "input_ports": [
+            "in"
+          ],
+          "output_ports": [
+            "out",
+            "error"
+          ]
         },
         {
           "step": "archive",
           "verdict": "pending",
-          "attempts": 0
+          "attempts": 0,
+          "image": "ghcr.io/acme/agk-archive@sha256:c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+          "input_ports": [
+            "invoices"
+          ],
+          "output_ports": [
+            "ok"
+          ]
         }
       ],
       "tasks": [
@@ -599,7 +619,39 @@
               "size": 10412,
               "items": 27
             }
+          },
+          "params": {
+            "currency": "EUR",
+            "vat_api_key": {
+              "secret": "vat-api"
+            }
           }
+        }
+      ],
+      "artifacts": [
+        {
+          "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/error/request.json",
+          "step": "invoice",
+          "port": "error",
+          "name": "request.json",
+          "media_type": "application/json",
+          "size": 2048,
+          "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+          "status": "live",
+          "expires_at": "2026-10-07T05:42:55Z"
+        },
+        {
+          "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/ok/orders.csv",
+          "step": "normalize",
+          "port": "ok",
+          "name": "orders.csv",
+          "media_type": "text/csv",
+          "size": 120412,
+          "sha256": "9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+          "status": "collected",
+          "expires_at": "2026-10-07T05:41:12Z",
+          "retired_at": "2026-09-30T09:00:00Z",
+          "fetches_left": 0
         }
       ]
     }

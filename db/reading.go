@@ -108,6 +108,14 @@ type StepSummary struct {
 	// Ports are the envelope digests the step published, which is what the database keeps of
 	// them. Never the items.
 	Ports map[agk.Port]Envelope `json:"ports,omitempty"`
+
+	// Image, InputPorts and OutputPorts are what the version the run pinned declares of the step:
+	// the image it runs, by digest, and the ports it reads and publishes. The API reads them from
+	// that version's graph, which the database holds as the document it was built from rather than
+	// as a second copy that could disagree with it.
+	Image       string     `json:"image,omitempty"`
+	InputPorts  []agk.Port `json:"input_ports,omitempty"`
+	OutputPorts []agk.Port `json:"output_ports,omitempty"`
 }
 
 // TaskSummary is one task, which is one shard of one attempt.
@@ -137,6 +145,11 @@ type TaskSummary struct {
 	// Inputs are the envelopes the task was handed on its input ports, by digest as a step's
 	// ports are, from the grant it was dispatched with. A task never dispatched has none.
 	Inputs map[agk.Port]Envelope `json:"inputs,omitempty"`
+
+	// Params are the parameters it was dispatched with, resolved, from the same grant. An
+	// expression may carry envelope contents into them, so the API answers them under
+	// run:read_data alone, as it does a run's inputs.
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // RunDetail is a run and what became of every part of it.
@@ -174,6 +187,35 @@ type RunDetail struct {
 
 	Steps []StepSummary `json:"steps"`
 	Tasks []TaskSummary `json:"tasks"`
+
+	// Artifacts are the files the run's steps published, live or retired: "the run detail keeps
+	// showing the artifact's name, size and digest with its collection recorded", so that one
+	// fetched past its retention is told from one that never existed.
+	Artifacts []ArtifactSummary `json:"artifacts"`
+}
+
+// ArtifactSummary is one file a step published on a port, as its reference holds it: what the
+// envelope's file names, and where it stands in its retention, which the bytes behind it may
+// have outlived or not.
+type ArtifactSummary struct {
+	URI       agk.URI  `json:"uri"`
+	Step      agk.Step `json:"step"`
+	Port      agk.Port `json:"port"`
+	Name      string   `json:"name"`
+	MediaType string   `json:"media_type"`
+	Size      int64    `json:"size"`
+	// SHA256 is the sixty-four hexadecimal characters the envelope's file carries.
+	SHA256 string `json:"sha256"`
+
+	// Status is live while the artifact may be fetched, expired once its duration ran out, and
+	// collected once its fetches were spent; RetiredAt is when it stopped being live.
+	Status    string    `json:"status"`
+	ExpiresAt time.Time `json:"expires_at"`
+	RetiredAt time.Time `json:"retired_at,omitzero"`
+
+	// FetchesLeft is what remains of a fetch budget, which only a workflow output may declare,
+	// and nil where there is none.
+	FetchesLeft *int `json:"fetches_left,omitempty"`
 }
 
 // summaries reads the rows of a listing.
@@ -253,7 +295,41 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	if d.Tasks, err = n.tasks(ctx, run); err != nil {
 		return RunDetail{}, err
 	}
+	if d.Artifacts, err = n.artifacts(ctx, run); err != nil {
+		return RunDetail{}, err
+	}
 	return d, nil
+}
+
+// artifacts reads the references of a run's files, by step, port and name, never empty-handed:
+// a run that published none answers an empty list.
+func (n *NS) artifacts(ctx context.Context, run agk.RunID) ([]ArtifactSummary, error) {
+	rows, err := n.tx.Query(ctx, `
+		select step, port, name, media_type, size_bytes, digest, status, expires_at, retired_at, fetches_left
+		from artifacts where namespace = $1 and run_id = $2
+		order by step, port, name`, n.namespace, string(run))
+	if err != nil {
+		return nil, fmt.Errorf("db: the artifacts of run %s could not be read: %w", run, err)
+	}
+	defer rows.Close()
+	out := []ArtifactSummary{}
+	for rows.Next() {
+		var a ArtifactSummary
+		var step, port, digest string
+		var retired *time.Time
+		if err := rows.Scan(&step, &port, &a.Name, &a.MediaType, &a.Size, &digest, &a.Status, &a.ExpiresAt, &retired, &a.FetchesLeft); err != nil {
+			return nil, fmt.Errorf("db: an artifact of run %s could not be read: %w", run, err)
+		}
+		a.Step, a.Port = agk.Step(step), agk.Port(port)
+		a.URI = agk.URI{Run: run, Step: a.Step, Port: a.Port, Name: a.Name}
+		a.SHA256 = strings.TrimPrefix(digest, "sha256:")
+		a.ExpiresAt = a.ExpiresAt.UTC()
+		if retired != nil {
+			a.RetiredAt = retired.UTC()
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // RunInclude is one workflow include of the version a run pinned: the repository and the ref the
@@ -342,16 +418,17 @@ func (n *NS) steps(ctx context.Context, run agk.RunID) ([]StepSummary, error) {
 }
 
 func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
-	// The inputs of the grant issued last, since every grant of one row names what the one
-	// dispatch it was prepared for was handed.
+	// The inputs and the parameters of the grant issued last, since every grant of one row names
+	// what the one dispatch it was prepared for was handed.
 	rows, err := n.tx.Query(ctx, `
 		select t.idempotency_key, t.step, t.state, t.attempt, t.shard_index, t.shard_of,
 		       t.runner, t.exit_code, t.started_at, t.finished_at, t.memoised_from, coalesce(t.called_run, ''),
-		       (select g.scope->'inputs' from task_grants g
-		        where g.namespace = t.namespace and g.task_id = t.id
-		        order by g.created_at desc limit 1),
+		       g.scope->'inputs', g.scope->'params',
 		       s.envelopes_purged_at
 		from tasks t join steps s on s.namespace = t.namespace and s.run_id = t.run_id and s.step = t.step
+		left join lateral (select scope from task_grants
+		                   where namespace = t.namespace and task_id = t.id
+		                   order by created_at desc limit 1) g on true
 		where t.namespace = $1 and t.run_id = $2
 		order by t.step, t.attempt, t.shard_index nulls first, t.requeue`,
 		n.namespace, string(run))
@@ -367,13 +444,18 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		var index, of *int
 		var runner, memoised *string
 		var started, finished, purged *time.Time
-		var handed []byte
+		var handed, params []byte
 		if err := rows.Scan(&t.Task, &t.Step, &state, &t.Attempt, &index, &of,
-			&runner, &t.ExitCode, &started, &finished, &memoised, &t.Called, &handed, &purged); err != nil {
+			&runner, &t.ExitCode, &started, &finished, &memoised, &t.Called, &handed, &params, &purged); err != nil {
 			return nil, err
 		}
 		if t.Inputs, err = inputsHanded(handed, purged); err != nil {
 			return nil, fmt.Errorf("db: the inputs of task %s could not be read: %w", t.Task, err)
+		}
+		if len(params) > 0 && string(params) != "null" {
+			if err := asWritten(params, &t.Params); err != nil {
+				return nil, fmt.Errorf("db: the parameters of task %s could not be read: %w", t.Task, err)
+			}
 		}
 		if err := t.State.UnmarshalText([]byte(state)); err != nil {
 			return nil, err
