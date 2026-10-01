@@ -267,12 +267,12 @@
   }
 
   .top.blank {
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     background: var(--surface);
   }
 
   .keys.blank {
-    border-top: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
     background: var(--surface);
   }
 

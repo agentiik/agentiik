@@ -208,7 +208,7 @@
     gap: calc(var(--unit) * 5);
     height: var(--bar-top);
     padding: 0 calc(var(--padding-page) + 6px);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     background: var(--surface);
   }
 
@@ -218,7 +218,8 @@
 
   .trail ol {
     display: flex;
-    align-items: center;
+    align-items: baseline;
+    height: 1lh;
     margin: 0;
     padding: 0;
     overflow: hidden;
@@ -226,9 +227,13 @@
     white-space: nowrap;
   }
 
+  /* A separator and a name read along one line, whatever face the name is set in, and the line keeps
+     its own height, one line of the bar's text, where a name in code and one in Archivo aligned on
+     their baselines would together be a pixel taller and centre half a pixel down. */
   .trail li {
     display: inline-flex;
-    align-items: center;
+    align-items: baseline;
+    height: 1lh;
     min-width: 0;
   }
 
@@ -274,8 +279,8 @@
   }
 
   .live .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: var(--radius-round);
     background: currentColor;
   }
@@ -426,7 +431,7 @@
   }
 
   .notifications .said {
-    line-height: 1.45;
+    --leading: 1.45;
   }
 
   .notifications button {

@@ -72,7 +72,7 @@
   }
 
   .chip {
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 6);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-round);
@@ -95,7 +95,7 @@
   }
 
   input {
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 3);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);

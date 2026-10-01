@@ -354,7 +354,7 @@
 
   td {
     padding: calc(var(--unit) * 3);
-    border-top: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
     vertical-align: middle;
   }
 
@@ -454,7 +454,7 @@
 
   input,
   select {
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 3);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
@@ -523,10 +523,28 @@
     overflow-wrap: anywhere;
   }
 
+  /* Its bullets stand on the pane's edge, under the title, and its lines hang after them. */
   .never {
     margin: 0;
-    padding-left: calc(var(--unit) * 8);
+    padding: 0;
+    list-style: none;
     font-size: var(--type-control-size);
+  }
+
+  .never li {
+    position: relative;
+    padding-left: calc(var(--unit) * 8);
+  }
+
+  .never li::before {
+    content: "";
+    position: absolute;
+    top: calc((1lh - 6px) / 2);
+    left: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-round);
+    background: var(--faint);
   }
 
   .never li + li {

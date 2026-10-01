@@ -61,6 +61,12 @@ function recordedFor(scenario, method, path, search) {
   return best ?? scenario[key];
 }
 
+// scenarioNamed reads a recorded scenario of tests/fixtures by its name, as the screen tests read
+// one without reaching for the file system themselves.
+export function scenarioNamed(name) {
+  return JSON.parse(readFileSync(join(here, "fixtures", `${name}.json`), "utf8"));
+}
+
 // serve starts the stand-in and answers with its address once it listens. scenario may be changed
 // between requests by the caller, which is how a test moves the installation along.
 export function serve({ scenario, port = 0, prefix = "/" }) {

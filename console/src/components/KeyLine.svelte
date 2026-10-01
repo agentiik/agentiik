@@ -49,7 +49,7 @@
     align-items: center;
     height: var(--bar-keyLine);
     padding: 0 var(--padding-page);
-    border-top: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
     background: var(--surface);
   }
 

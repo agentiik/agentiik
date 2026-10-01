@@ -8,7 +8,8 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "test": "vitest run",
-    "generate": "openapi-typescript vendor/openapi.json --output src/api/schema.d.ts"
+    "generate": "openapi-typescript vendor/openapi.json --output src/api/schema.d.ts",
+    "screens": "playwright test"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",

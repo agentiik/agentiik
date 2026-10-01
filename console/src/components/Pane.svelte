@@ -46,14 +46,19 @@
     border-color: var(--accentLine);
   }
 
+  /* The title and what the pane counts read along one baseline, set in two sizes as they are, and the
+     line they make is centred in the row: a wrapping container centres its line with align-content,
+     where a single line would have each item centred on its own. */
   header {
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
+    align-content: center;
+    align-items: baseline;
     justify-content: space-between;
     gap: calc(var(--unit) * 6);
     min-height: 46px;
     padding: 0 var(--padding-panel) 0 calc(var(--padding-panel) + 2px);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
   }
 
   /* A pane with nothing to say above its content, a list under its screen's own head, draws no row. */
@@ -89,5 +94,35 @@
     flex: 1;
     overflow-x: auto;
     padding: var(--padding-panel) var(--padding-panel) var(--padding-panel) calc(var(--padding-panel) + 2px);
+  }
+
+  /* A table runs from one edge of its pane to the other, its hairlines and the row under the pointer
+     across the whole pane, and its outer columns keep the pane's gutter, so that the text of its first
+     column starts under the pane's title as every paragraph of the pane does. A table that scrolls
+     sideways runs out with the box it scrolls in. A grid, cells drawn apart rather than rows, keeps
+     its own edges. */
+  .body > :global(table:not(.tiled)),
+  .body > :global(.scroll),
+  .body > :global(details) > :global(table:not(.tiled)) {
+    width: calc(100% + 2 * var(--padding-panel) + 2px);
+    max-width: none;
+    margin-left: calc(-1 * (var(--padding-panel) + 2px));
+    margin-right: calc(-1 * var(--padding-panel));
+  }
+
+  .body > :global(.scroll) > :global(table) {
+    width: 100%;
+  }
+
+  .body > :global(table:not(.tiled)) :global(:is(th, td):first-child),
+  .body > :global(.scroll) :global(:is(th, td):first-child),
+  .body > :global(details) > :global(table:not(.tiled)) :global(:is(th, td):first-child) {
+    padding-left: calc(var(--padding-panel) + 2px);
+  }
+
+  .body > :global(table:not(.tiled)) :global(:is(th, td):last-child),
+  .body > :global(.scroll) :global(:is(th, td):last-child),
+  .body > :global(details) > :global(table:not(.tiled)) :global(:is(th, td):last-child) {
+    padding-right: var(--padding-panel);
   }
 </style>

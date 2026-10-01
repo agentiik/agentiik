@@ -27,7 +27,7 @@
     background: var(--accentDim);
     color: var(--accent);
     font-weight: 600;
-    line-height: 1;
+    --leading: 1;
   }
 
   img {

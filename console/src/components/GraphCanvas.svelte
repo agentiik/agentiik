@@ -279,6 +279,7 @@
 
   .head {
     display: flex;
+    align-items: baseline;
     justify-content: space-between;
     gap: calc(var(--unit) * 4);
   }
@@ -344,7 +345,7 @@
 
   .bar {
     flex: 1;
-    height: 5px;
+    height: 6px;
     margin: 0 calc(var(--unit) * 3);
     overflow: hidden;
     border-radius: var(--radius-round);

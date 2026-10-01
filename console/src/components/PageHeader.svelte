@@ -34,11 +34,11 @@
       {#each tabs as t (t.label)}
         {#if t.to}
           <a class="tab" aria-current={t.current ? "page" : undefined} href={place.href(t.to) + (t.query ?? "")} onclick={t.onclick ? (e) => { e.preventDefault(); t.onclick?.(); } : follow(place, t.to)}>
-            {#if t.icon}<Icon name={t.icon} size={15} />{/if}{t.label}{#if t.count !== undefined}<span class="badge">{t.count}</span>{/if}
+            {#if t.icon}<Icon name={t.icon} size={14} />{/if}{t.label}{#if t.count !== undefined}<span class="badge">{t.count}</span>{/if}
           </a>
         {:else}
           <button class="tab" aria-pressed={t.current} onclick={() => t.onclick?.()}>
-            {#if t.icon}<Icon name={t.icon} size={15} />{/if}{t.label}{#if t.count !== undefined}<span class="badge">{t.count}</span>{/if}
+            {#if t.icon}<Icon name={t.icon} size={14} />{/if}{t.label}{#if t.count !== undefined}<span class="badge">{t.count}</span>{/if}
           </button>
         {/if}
       {/each}

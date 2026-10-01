@@ -307,7 +307,7 @@
     font-family: var(--type-pageTitle-font);
     font-size: 22px;
     font-weight: var(--type-pageTitle-weight);
-    line-height: 1.25;
+    --leading: 1.25;
   }
 
   .who p {
@@ -385,7 +385,7 @@
   }
 
   .tab {
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid transparent;
     border-radius: var(--radius-control);
@@ -444,6 +444,9 @@
     row-gap: var(--gap);
     width: 28px;
     color: var(--faint);
+  }
+
+  .weekdays span {
     line-height: var(--square);
   }
 
@@ -587,7 +590,7 @@
   th {
     height: var(--row-header);
     padding: 0 calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     color: var(--faint);
     font-size: var(--type-columnHead-size);
     font-weight: var(--type-columnHead-weight);
@@ -599,7 +602,7 @@
   td {
     height: var(--row-body);
     padding: 0 calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     font-size: var(--type-identifier-size-max);
     white-space: nowrap;
   }
