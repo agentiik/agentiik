@@ -41,6 +41,41 @@
             "max_concurrent_tasks": 20,
             "max_retention_days": 90
           }
+        },
+        {
+          "name": "finance",
+          "kind": "shared",
+          "owner": "group:finance-leads",
+          "quotas": {
+            "max_concurrent_tasks": 20,
+            "max_retention_days": 180,
+            "allowed_runner_pools": [
+              "default",
+              "dmz"
+            ]
+          }
+        },
+        {
+          "name": "research",
+          "kind": "shared",
+          "owner": "group:research",
+          "quotas": {
+            "max_concurrent_tasks": 40,
+            "max_retention_days": 90,
+            "allowed_runner_pools": [
+              "gpu",
+              "lab"
+            ]
+          }
+        },
+        {
+          "name": "team-ops",
+          "kind": "shared",
+          "owner": "group:team-ops",
+          "quotas": {
+            "max_concurrent_tasks": 20,
+            "max_retention_days": 90
+          }
         }
       ]
     }
@@ -6491,5 +6526,265 @@
   },
   "POST /api/v1/auth/sign-out": {
     "status": 204
+  },
+  "GET /api/v1/runners": {
+    "status": 200,
+    "body": {
+      "runners": [
+        {
+          "runner": "runner-default-01",
+          "pool": "default",
+          "labels": [],
+          "cpu": 8,
+          "memory_bytes": 34359738368,
+          "disk_bytes": 214748364800,
+          "architecture": "amd64",
+          "agent_version": "0.6.0",
+          "containment": {
+            "runtime": "runc",
+            "userns_remap": true
+          },
+          "state": "ready",
+          "reported_state": "ready",
+          "concurrency": 8,
+          "joined_at": "2026-09-20T08:10:00Z",
+          "last_seen_at": "2026-09-30T06:02:28Z",
+          "rotate_by": "2026-10-20T08:10:00Z"
+        },
+        {
+          "runner": "runner-default-02",
+          "pool": "default",
+          "labels": [],
+          "cpu": 4,
+          "memory_bytes": 17179869184,
+          "disk_bytes": 107374182400,
+          "architecture": "arm64",
+          "agent_version": "0.6.0",
+          "containment": {
+            "runtime": "runc",
+            "userns_remap": true
+          },
+          "state": "ready",
+          "reported_state": "ready",
+          "concurrency": 4,
+          "joined_at": "2026-09-20T08:12:00Z",
+          "last_seen_at": "2026-09-30T06:02:24Z",
+          "rotate_by": "2026-10-20T08:12:00Z"
+        },
+        {
+          "runner": "runner-dmz-00",
+          "pool": "dmz",
+          "labels": [
+            "zone=dmz",
+            "arch=amd64"
+          ],
+          "cpu": 8,
+          "memory_bytes": 34359738368,
+          "disk_bytes": 214748364800,
+          "architecture": "amd64",
+          "agent_version": "0.5.2",
+          "containment": {
+            "runtime": "runc",
+            "userns_remap": true
+          },
+          "state": "revoked",
+          "drain_reason": "disk replaced",
+          "revoked_by": "dana",
+          "revoked_at": "2026-09-25T09:30:00Z",
+          "results_accepted_until": "2026-09-25T10:30:00Z",
+          "reported_state": "draining",
+          "concurrency": 4,
+          "joined_at": "2026-09-02T11:00:12Z",
+          "last_seen_at": "2026-09-25T10:12:31Z",
+          "rotate_by": "2026-10-02T11:00:12Z"
+        },
+        {
+          "runner": "runner-dmz-01",
+          "pool": "dmz",
+          "labels": [
+            "zone=dmz",
+            "arch=amd64"
+          ],
+          "cpu": 8,
+          "memory_bytes": 34359738368,
+          "disk_bytes": 214748364800,
+          "architecture": "amd64",
+          "agent_version": "0.6.0",
+          "containment": {
+            "runtime": "runc",
+            "userns_remap": true
+          },
+          "state": "ready",
+          "reported_state": "ready",
+          "concurrency": 4,
+          "joined_at": "2026-09-20T08:14:02Z",
+          "last_seen_at": "2026-09-30T06:02:29Z",
+          "rotate_by": "2026-10-20T08:14:02Z"
+        },
+        {
+          "runner": "runner-dmz-02",
+          "pool": "dmz",
+          "labels": [
+            "zone=dmz",
+            "arch=amd64"
+          ],
+          "cpu": 8,
+          "memory_bytes": 34359738368,
+          "disk_bytes": 214748364800,
+          "architecture": "amd64",
+          "agent_version": "0.6.0",
+          "containment": {
+            "runtime": "runc",
+            "userns_remap": true
+          },
+          "state": "ready",
+          "reported_state": "ready",
+          "concurrency": 4,
+          "joined_at": "2026-09-20T08:16:40Z",
+          "last_seen_at": "2026-09-30T06:02:26Z",
+          "rotate_by": "2026-10-20T08:16:40Z"
+        },
+        {
+          "runner": "runner-dmz-03",
+          "pool": "dmz",
+          "labels": [
+            "zone=dmz",
+            "arch=amd64"
+          ],
+          "cpu": 8,
+          "memory_bytes": 34359738368,
+          "disk_bytes": 214748364800,
+          "architecture": "amd64",
+          "agent_version": "0.6.0",
+          "containment": {
+            "runtime": "runc",
+            "userns_remap": true
+          },
+          "state": "draining",
+          "drain_reason": "kernel update",
+          "drained_by": "dana",
+          "drained_at": "2026-09-30T06:02:18Z",
+          "reported_state": "draining",
+          "concurrency": 4,
+          "joined_at": "2026-09-20T08:19:05Z",
+          "last_seen_at": "2026-09-30T06:02:27Z",
+          "rotate_by": "2026-10-20T08:19:05Z"
+        },
+        {
+          "runner": "runner-gpu-01",
+          "pool": "gpu",
+          "labels": [
+            "gpu=true"
+          ],
+          "cpu": 16,
+          "memory_bytes": 68719476736,
+          "disk_bytes": 1099511627776,
+          "architecture": "amd64",
+          "agent_version": "0.5.2",
+          "namespaces": [
+            "research"
+          ],
+          "containment": {
+            "runtime": "runsc",
+            "userns_remap": true
+          },
+          "state": "ready",
+          "reported_state": "unhealthy",
+          "concurrency": 1,
+          "joined_at": "2026-09-21T14:00:00Z",
+          "last_seen_at": "2026-09-30T06:02:21Z",
+          "rotate_by": "2026-10-21T14:00:00Z"
+        },
+        {
+          "runner": "runner-lab-01",
+          "pool": "lab",
+          "labels": [
+            "zone=lab"
+          ],
+          "cpu": 8,
+          "memory_bytes": 34359738368,
+          "disk_bytes": 536870912000,
+          "architecture": "amd64",
+          "agent_version": "0.6.0",
+          "containment": {
+            "runtime": "runc",
+            "userns_remap": true
+          },
+          "state": "ready",
+          "reported_state": "ready",
+          "concurrency": 2,
+          "joined_at": "2026-09-22T09:30:00Z",
+          "last_seen_at": "2026-09-30T06:02:22Z",
+          "rotate_by": "2026-10-22T09:30:00Z"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/runner-pools": {
+    "status": 200,
+    "body": {
+      "runner_pools": [
+        {
+          "pool": {
+            "name": "default",
+            "labels": [],
+            "namespaces": [],
+            "resource_ceilings": {},
+            "containment": "hardened"
+          }
+        },
+        {
+          "pool": {
+            "name": "dmz",
+            "labels": [
+              "zone=dmz",
+              "arch=amd64"
+            ],
+            "namespaces": [
+              "finance",
+              "team-ops"
+            ],
+            "resource_ceilings": {
+              "cpu": "4",
+              "memory": "8Gi"
+            },
+            "containment": "hardened"
+          }
+        },
+        {
+          "pool": {
+            "name": "gpu",
+            "labels": [
+              "gpu=true"
+            ],
+            "namespaces": [
+              "research"
+            ],
+            "resource_ceilings": {
+              "cpu": "16",
+              "memory": "64Gi",
+              "pids": 4096
+            },
+            "containment": "sandboxed"
+          }
+        },
+        {
+          "pool": {
+            "name": "lab",
+            "labels": [
+              "zone=lab"
+            ],
+            "namespaces": [
+              "research"
+            ],
+            "resource_ceilings": {
+              "cpu": "8",
+              "memory": "32Gi"
+            },
+            "containment": "hardened"
+          }
+        }
+      ]
+    }
   }
 }

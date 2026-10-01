@@ -11,6 +11,7 @@
   import Refused from "./Refused.svelte";
   import { clock, took } from "../lib/format";
   import { authOf, layout, triggers } from "../lib/graph";
+  import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { RunReader } from "../lib/run.svelte";
   import { blocks } from "../lib/yaml-blocks";
@@ -97,6 +98,18 @@
   }
 
   const runsOf = $derived({ kind: "namespace" as const, namespace, view: "runs" as const });
+  const sharing = $derived({ kind: "namespace" as const, namespace, view: "sharing" as const });
+  const shares = $derived(holds(me, "grant:manage", namespace, workflow));
+
+  // narrowed follows a view of the namespace narrowed to this workflow, as a plain click does and
+  // leaving every other click to the browser.
+  function narrowed(route: typeof runsOf | typeof sharing) {
+    return (e: MouseEvent) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      place.go(route, false, new URLSearchParams({ workflow }));
+    };
+  }
   const statistics = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "statistics" });
   const runRoute = $derived(run ? { kind: "namespace" as const, namespace, view: "runs" as const, run: run.run } : undefined);
   const now = Date.now();
@@ -110,8 +123,9 @@
   <nav class="sub" aria-label="{namespace}/{workflow}">
     <span class="mono where">{namespace} / {workflow}</span>
     <span class="tab" aria-current="page">Graph</span>
-    <a class="tab" href={place.href(runsOf) + `?workflow=${encodeURIComponent(workflow)}`} onclick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); place.go(runsOf, false, new URLSearchParams({ workflow })); }}>Runs</a>
+    <a class="tab" href={place.href(runsOf) + `?workflow=${encodeURIComponent(workflow)}`} onclick={narrowed(runsOf)}>Runs</a>
     <a class="tab" href={place.href(statistics)} onclick={follow(place, statistics)}>Statistics</a>
+    {#if shares}<a class="tab" href={place.href(sharing) + `?workflow=${encodeURIComponent(workflow)}`} onclick={narrowed(sharing)}>Sharing</a>{/if}
     <span class="right">
       {#if detail.version}
         <span class="version mono" title={detail.version.commit}>{detail.repository.default_branch} · {detail.version.commit.slice(0, 7)}</span>

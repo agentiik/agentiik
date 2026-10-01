@@ -1,20 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import type { API } from "./api/client";
-  import KeyLine, { type Key } from "./components/KeyLine.svelte";
+  import KeyLine from "./components/KeyLine.svelte";
   import Pane from "./components/Pane.svelte";
   import TopBar from "./components/TopBar.svelte";
+  import { Keys, provide } from "./lib/keys.svelte";
   import { holds, holdsSomewhereIn, home, inNamespace } from "./lib/permissions";
   import type { Place } from "./lib/place.svelte";
   import type { View } from "./lib/route";
   import type { Session } from "./lib/session.svelte";
   import Account from "./views/Account.svelte";
+  import Fleet from "./views/Fleet.svelte";
   import PoolStatistics from "./views/PoolStatistics.svelte";
   import Refused from "./views/Refused.svelte";
   import Run from "./views/Run.svelte";
   import RunDiff from "./views/RunDiff.svelte";
   import Runs from "./views/Runs.svelte";
   import Settings from "./views/Settings.svelte";
+  import Sharing from "./views/Sharing.svelte";
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
   import Statistics from "./views/Statistics.svelte";
   import Users from "./views/Users.svelte";
@@ -42,7 +45,7 @@
   ];
 
   // Built so far: the views the console draws in this release. The others arrive with theirs.
-  const built = new Set<View>(["runs", "statistics", "settings"]);
+  const built = new Set<View>(["runs", "statistics", "sharing", "settings"]);
 
   const known = $derived(namespace !== undefined && session.namespaces.some((n) => n.name === namespace));
   const shown = $derived(namespace && known ? all.filter((v) => built.has(v.view) && v.shows(namespace)) : []);
@@ -64,9 +67,28 @@
     }
   });
 
-  // The keys of the view, named by their effect; none yet beyond what the browser gives.
-  const keys: Key[] = [];
+  // The console's own keys, beside those of the view drawn: a digit for each view of the top bar,
+  // in its order there, as agk console numbers its views, and ? for every key of the view.
+  const keys = provide(
+    new Keys(() => [
+      ...(namespace && shown.length > 0
+        ? [
+            {
+              keys: shown.map((_, i) => String(i + 1)),
+              effect: shown.map((v, i) => (i === 0 ? v.label : v.label.toLowerCase())).join(", "),
+              does: (key: string) => {
+                const v = shown[Number(key) - 1];
+                if (v) place.go({ kind: "namespace", namespace, view: v.view });
+              },
+            },
+          ]
+        : []),
+      { keys: ["?"], effect: "Every key", does: () => (keys.listing = !keys.listing) },
+    ]),
+  );
 </script>
+
+<svelte:window onkeydown={(e) => session.me && session.standing === "signed-in" && keys.press(e)} />
 
 {#if session.standing === "reading"}
   <p class="reading" role="status">Reading who you are.</p>
@@ -114,6 +136,8 @@
         <Run {api} {place} me={session.me} namespace={route.namespace} id={route.run} />
       {:else if route.kind === "namespace" && route.view === "runs"}
         <Runs {api} {place} me={session.me} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
+      {:else if route.kind === "namespace" && route.view === "sharing"}
+        <Sharing {api} {place} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "settings"}
         <Settings {api} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "statistics"}
@@ -122,6 +146,8 @@
         <Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />
       {:else if route.kind === "users" && session.me.admin}
         <Users {api} me={session.me} />
+      {:else if route.kind === "runners" && route.tab === undefined && session.me.admin}
+        <Fleet {api} {place} namespaces={session.namespaces} {version} />
       {:else if route.kind === "runners" && route.tab === "statistics" && session.me.admin}
         <PoolStatistics {api} {place} />
       {:else}
