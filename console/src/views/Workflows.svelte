@@ -1,6 +1,9 @@
 <script lang="ts">
+  import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Me } from "../api/client";
+  import Dialog from "../components/Dialog.svelte";
+  import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import { clock } from "../lib/format";
@@ -35,6 +38,7 @@
   });
 
   const mayCreate = $derived(holds(me, "workflow:write", namespace));
+  let creating = $state(false);
   let name = $state("");
   let branch = $state("main");
   let protect = $state(false);
@@ -58,60 +62,52 @@
   const now = Date.now();
 </script>
 
-<div class="columns">
-  <Pane title="Workflows" aside="those the runs of {namespace} name">
-    {#if refused}
-      <p class="refused" role="alert">The runs could not be read: {refused}</p>
-    {:else if !known}
-      <p class="muted" role="status">Reading the runs of {namespace}.</p>
-    {:else}
-      <p class="muted note">The API lists no namespace's workflows, so these are the ones a run among the last 200 names. A workflow nothing has run is reached by its address, or created here.</p>
-      <table>
-        <thead><tr><th>Workflow</th><th>Latest run</th><th>Created</th></tr></thead>
-        <tbody>
-          {#each known as k (k.workflow)}
-            {@const page = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow: k.workflow }}
-            {@const run = { kind: "namespace" as const, namespace, view: "runs" as const, run: k.run }}
-            <tr>
-              <td><a class="mono" href={place.href(page)} onclick={follow(place, page)}>{k.workflow}</a></td>
-              <td><StatePill state={k.state} /> <a class="mono faint" href={place.href(run)} onclick={follow(place, run)}>{k.run}</a></td>
-              <td class="mono"><time datetime={k.created_at}>{clock(k.created_at, now)}</time></td>
-            </tr>
-          {:else}
-            <tr><td colspan="3" class="muted">No run of {namespace} yet.</td></tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  </Pane>
+<PageHeader title="Workflows" icon="control-workflows" count={known?.length} {place}>
+  {#snippet actions()}
+    {#if mayCreate}<button class="control primary" onclick={() => ((creating = true), (said = ""))}><Icon name="control-add" size={14} />New workflow</button>{/if}
+  {/snippet}
+</PageHeader>
 
-  {#if mayCreate}
-    <Pane title="New workflow" aside="an empty repository in {namespace}">
-      <form onsubmit={create}>
-        <label for="new-name"><span>Name</span><span class="muted">what agentiik.yaml's metadata.name will write</span></label>
-        <input id="new-name" class="mono" bind:value={name} required autocomplete="off" />
-        <label for="new-branch"><span>Default branch</span><span class="muted">the one a run naming no ref runs, born by the first push</span></label>
-        <input id="new-branch" class="mono" bind:value={branch} autocomplete="off" />
-        <label class="check"><input type="checkbox" bind:checked={protect} /><span>Protect it: a push to it then takes <span class="mono">grant:manage</span>, where <span class="mono">workflow:write</span> is enough otherwise</span></label>
-        {#if said}<p class="refused" role="alert">{said}</p>{/if}
-        <button class="control primary" type="submit" disabled={sending || !name.trim()}>Create {name.trim() || "the workflow"}</button>
-      </form>
-    </Pane>
+<Pane title="Named by the last 200 runs">
+  {#if refused}
+    <p class="refused" role="alert">The runs could not be read: {refused}</p>
+  {:else if !known}
+    <p class="muted" role="status">Reading the runs of {namespace}.</p>
+  {:else}
+    <table>
+      <thead><tr><th>Workflow</th><th>Latest run</th><th>Created</th></tr></thead>
+      <tbody>
+        {#each known as k (k.workflow)}
+          {@const page = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow: k.workflow }}
+          {@const run = { kind: "namespace" as const, namespace, view: "runs" as const, run: k.run }}
+          <tr>
+            <td><a class="term" href={place.href(page)} onclick={follow(place, page)}>{k.workflow}</a></td>
+            <td><StatePill state={k.state} /> <a class="code faint" href={place.href(run)} onclick={follow(place, run)}>{k.run}</a></td>
+            <td class="term"><time datetime={k.created_at}>{clock(k.created_at, now)}</time></td>
+          </tr>
+        {:else}
+          <tr><td colspan="3" class="muted">No run of {namespace} yet.</td></tr>
+        {/each}
+      </tbody>
+    </table>
   {/if}
-</div>
+</Pane>
+
+{#if mayCreate}
+  <Dialog title="New workflow in {namespace}" bind:open={creating}>
+    <form onsubmit={create} aria-label="New workflow">
+      <label for="new-name"><span>Name</span><span class="muted">what agentiik.yaml's metadata.name will write</span></label>
+      <input id="new-name" class="term" bind:value={name} required autocomplete="off" />
+      <label for="new-branch"><span>Default branch</span><span class="muted">the one a run naming no ref runs, born by the first push</span></label>
+      <input id="new-branch" class="term" bind:value={branch} autocomplete="off" />
+      <label class="check"><input type="checkbox" bind:checked={protect} /><span>Protect it: a push to it then takes <span class="term">grant:manage</span>, where <span class="term">workflow:write</span> is enough otherwise</span></label>
+      {#if said}<p class="refused" role="alert">{said}</p>{/if}
+      <button class="control primary" type="submit" disabled={sending || !name.trim()}>Create {name.trim() || "the workflow"}</button>
+    </form>
+  </Dialog>
+{/if}
 
 <style>
-  .columns {
-    display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
-    gap: calc(var(--unit) * 7);
-    align-items: start;
-  }
-
-  .note {
-    margin: 0 0 calc(var(--unit) * 5);
-    font-size: var(--type-control-size);
-  }
 
   table {
     width: 100%;

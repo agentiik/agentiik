@@ -60,7 +60,7 @@ describe("signing in from the console", () => {
   it("signs in with a password and draws the console the address names", async () => {
     const asked = open(signedOut({ "POST /api/v1/auth/login": { status: 200, body: { login: "alice", session: "full" } } }));
     await fillPassword("alice", "correct horse battery staple", "492039");
-    expect(await screen.findByText("alice", { selector: ".login" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "You, alice" })).toBeTruthy();
     expect(asked.find((a) => a.key === "POST /api/v1/auth/login")?.body).toEqual({ login: "alice", password: "correct horse battery staple", totp: "492039" });
   });
 
@@ -108,7 +108,7 @@ describe("signing in from the console", () => {
       { unavailable: "", credentials },
     );
     await fireEvent.click(await screen.findByRole("button", { name: "Sign in with a passkey" }));
-    expect(await screen.findByText("alice", { selector: ".login" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "You, alice" })).toBeTruthy();
     expect(asked.find((a) => a.key === "POST /api/v1/auth/passkey/options")?.body).toEqual({ ceremony: "assertion" });
     expect(asked.find((a) => a.key === "POST /api/v1/auth/passkey/verify")?.body).toEqual({ ceremony: "assertion", credential: answer });
     expect(new Uint8Array(handed?.publicKey?.challenge as ArrayBuffer)).toEqual(new Uint8Array(decode(options.challenge)));

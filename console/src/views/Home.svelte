@@ -1,10 +1,11 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import type { API, Me, Namespace } from "../api/client";
+  import Avatar from "../components/Avatar.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
-  import { added, boundsOf, dayOf, failures, grid, lastWeek, months, said, shades, total, weeks, yearOf, type RunsSeries, type Square } from "../lib/activity";
+  import { added, boundsOf, dayOf, failures, grid, lastWeek, months, said, shades, together, total, weeks, yearOf, type RunsSeries, type Square } from "../lib/activity";
   import { clock, took } from "../lib/format";
   import { useKeys } from "../lib/keys.svelte";
   import { holdsSomewhereIn, ordered } from "../lib/permissions";
@@ -135,13 +136,39 @@
   const lasted = (r: Run) => (r.started_at ? took(Math.max(0, (r.finished_at ? Date.parse(r.finished_at) : now) - Date.parse(r.started_at))) : "");
   const weekdays = ["Mon", "", "Wed", "", "Fri", "", ""];
   const name = $derived(me.user?.display_name ?? me.principal);
+
+  // Where the year is wider than its pane, on a phone, it opens on its latest weeks, as a calendar
+  // opens on today.
+  let yearBox = $state<HTMLDivElement | undefined>();
+  $effect(() => {
+    if (yearBox) yearBox.scrollLeft = yearBox.scrollWidth;
+  });
+
+  // The figures under the caller's name: the last seven days of every namespace read, added up.
+  const week = $derived(together(read.map((n) => series.get(n.name)).filter((s) => s !== undefined).map((s) => lastWeek(s, now))));
+  const share = $derived(week.ended ? `${Math.round((week.succeeded / week.ended) * 1000) / 10}%` : "none ended");
 </script>
 
-<h1 class="hello">{name}</h1>
+<header class="profile">
+  <Avatar {name} size={64} />
+  <div class="who">
+    <h1>{name}</h1>
+    <p class="muted"><span class="term">{me.principal}</span>{#if me.admin}<span class="role">administrator</span>{/if}</p>
+  </div>
+</header>
+
+<!-- Drawn at their size before the series answer, each value said once they have. -->
+<ul class="figures" aria-label="The last seven days">
+  <li><span class="label">Runs</span><span class="value term">{reading ? "\u00a0" : week.runs}</span><span class="faint">last 7 days</span></li>
+  <li><span class="label">Failed or timed out</span><span class="value term" class:failed={!reading && week.failures > 0}>{reading ? "\u00a0" : week.failures}</span><span class="faint">last 7 days</span></li>
+  <li><span class="label">Succeeded</span><span class="value term">{reading ? "\u00a0" : share}</span><span class="faint">of the runs that ended</span></li>
+  <li><span class="label">Namespaces</span><span class="value term">{read.length}</span><span class="faint">whose runs you read</span></li>
+</ul>
 
 <Pane title="Activity" aside={reading ? "reading" : `${yearTotal} ${by === "runs" ? (yearTotal === 1 ? "run" : "runs") : yearTotal === 1 ? "failure" : "failures"} in the last year, ${read.length} ${read.length === 1 ? "namespace" : "namespaces"}`}>
   {#if unread.length}<p class="refused">Not read: {unread.join(", ")}</p>{/if}
   <div class="year" class:failures={by === "failures"}>
+    <div class="weeks" bind:this={yearBox}>
     <div class="months" style:grid-template-columns="repeat({weeks}, var(--square))" aria-hidden="true">
       {#each labels as m (m.column)}<span style:grid-column="{m.column + 1} / span 3">{m.name}</span>{/each}
     </div>
@@ -171,6 +198,7 @@
         {/each}
       </div>
     </div>
+    </div>
     <div class="legend">
       <div class="by" role="group" aria-label="What shades the squares">
         <button class="tab" aria-pressed={by === "runs"} onclick={() => shadeBy("runs")}>Runs</button>
@@ -195,12 +223,12 @@
             {#each ofDay.runs as r (r.run)}
               <tr>
                 <td><StatePill state={r.state} /></td>
-                <td class="mono"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
-                <td class="mono">{r.namespace}/{r.workflow}</td>
-                <td class="mono muted">{r.trigger_kind}</td>
-                <td class="mono">{r.triggered_by}</td>
-                <td class="mono"><time datetime={r.created_at} title={r.created_at}>{r.created_at.slice(11, 19)} UTC</time></td>
-                <td class="mono number">{lasted(r)}</td>
+                <td class="code"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
+                <td class="term">{r.namespace}/{r.workflow}</td>
+                <td class="term muted">{r.trigger_kind}</td>
+                <td class="term">{r.triggered_by}</td>
+                <td class="term"><time datetime={r.created_at} title={r.created_at}>{r.created_at.slice(11, 19)} UTC</time></td>
+                <td class="term number">{lasted(r)}</td>
               </tr>
             {:else}
               <tr><td colspan="7" class="muted">No run</td></tr>
@@ -222,11 +250,11 @@
         {@const s = series.get(n.name)}
         {@const week = s ? lastWeek(s, now) : undefined}
         <li>
-          <a class="mono" href={place.href(runsOf(n.name))} onclick={follow(place, runsOf(n.name))}>{n.name}</a>
+          <a class="term" href={place.href(runsOf(n.name))} onclick={follow(place, runsOf(n.name))}>{n.name}</a>
           <span class="faint">{n.kind}</span>
           {#if week}
-            <span class="mono figure">{week.runs} {week.runs === 1 ? "run" : "runs"}</span>
-            <span class="mono figure" class:failed={week.failures > 0}>{week.failures} failed</span>
+            <span class="term figure">{week.runs} {week.runs === 1 ? "run" : "runs"}</span>
+            <span class="term figure" class:failed={week.failures > 0}>{week.failures} failed</span>
           {:else}
             <span class="faint figure">{reading ? "reading" : "not read"}</span>
           {/if}
@@ -243,10 +271,10 @@
         {#each recent as r (r.run)}
           <tr>
             <td><StatePill state={r.state} live={r.state === "running"} /></td>
-            <td class="mono"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
-            <td class="mono">{r.namespace}/{r.workflow}</td>
-            <td class="mono"><time datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
-            <td class="mono number">{lasted(r)}</td>
+            <td class="code"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
+            <td class="term">{r.namespace}/{r.workflow}</td>
+            <td class="term"><time datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
+            <td class="term number">{lasted(r)}</td>
           </tr>
         {:else}
           <tr><td colspan="5" class="muted">No run</td></tr>
@@ -257,10 +285,74 @@
 </div>
 
 <style>
-  .hello {
-    margin: 0 0 calc(var(--unit) * 6);
-    font-size: var(--type-sectionTitle-size);
+  .profile {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--unit) * 8);
+    margin: 0 0 calc(var(--unit) * 10);
+  }
+
+  .who h1 {
+    margin: 0;
+    font-family: var(--type-pageTitle-font);
+    font-size: 22px;
+    font-weight: var(--type-pageTitle-weight);
+    line-height: 1.25;
+  }
+
+  .who p {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--unit) * 4);
+    margin: calc(var(--unit) * 1) 0 0;
+  }
+
+  .role {
+    padding: 0 calc(var(--unit) * 3);
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-chip);
+    font-size: 12.5px;
+  }
+
+  /* Four figures in a row of cards, as a profile's counts are on the forges people know. */
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: calc(var(--unit) * 8);
+    margin: 0 0 calc(var(--unit) * 9);
+    padding: 0;
+    list-style: none;
+  }
+
+  .figures li {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--unit) * 1);
+    padding: calc(var(--unit) * 7) calc(var(--unit) * 8);
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-card);
+    background: var(--surface);
+  }
+
+  .figures .label {
+    color: var(--muted);
+    font-size: var(--type-control-size);
+    font-weight: 500;
+  }
+
+  .figures .value {
+    min-height: 34px;
+    font-size: 26px;
     font-weight: 600;
+    line-height: 34px;
+  }
+
+  .figures .value.failed {
+    color: var(--failed);
+  }
+
+  .figures .faint {
+    font-size: 12.5px;
   }
 
   .by {
@@ -296,8 +388,15 @@
     gap: calc(var(--unit) * 2);
     width: max-content;
     max-width: 100%;
-    overflow-x: auto;
     font-size: var(--type-identifier-size-min);
+  }
+
+  /* The weeks alone scroll where the year is wider than the pane, its legend staying in view. */
+  .weeks {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--unit) * 2);
+    overflow-x: auto;
   }
 
   .year.failures {
@@ -488,5 +587,34 @@
 
   .number {
     text-align: right;
+  }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .figures {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 759px) {
+    .profile {
+      gap: calc(var(--unit) * 6);
+    }
+
+    .figures {
+      gap: calc(var(--unit) * 5);
+    }
+
+    .figures li {
+      padding: calc(var(--unit) * 5) calc(var(--unit) * 6);
+    }
+
+    .figures .value {
+      font-size: 22px;
+    }
   }
 </style>

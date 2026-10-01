@@ -88,8 +88,7 @@
     margin-left: auto;
     padding-left: calc(var(--unit) * 9);
     color: var(--faint);
-    font-family: var(--type-identifier-font);
-    font-size: var(--type-identifier-size-min);
+    font-size: 12px;
     white-space: nowrap;
   }
 

@@ -287,7 +287,7 @@ describe("the users, for an administrator", () => {
       "/users",
       alice({ ...users, "POST /api/v1/users/bruno/recovery": { status: 201, body: { code: "AB12-CD34-EF56", link: "https://stand-in/auth/enrol#AB12-CD34-EF56", expires_at: "2026-10-01T10:00:00Z" } } }, true),
     );
-    const own = (await screen.findByText("Alice Martin")).closest("tr")!;
+    const own = (await screen.findByText("Alice Martin", { selector: "td" })).closest("tr")!;
     expect(within(own).queryByRole("button")).toBeNull();
     expect(within(own).getByText("Another administrator issues yours")).toBeTruthy();
     const bruno = screen.getByText("Bruno Petit").closest("tr")!;

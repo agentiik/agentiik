@@ -3,11 +3,13 @@
   import { refusal, type API } from "../api/client";
   import Chart, { type Series } from "../components/Chart.svelte";
   import Icon from "../components/Icon.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import RangeBar from "../components/RangeBar.svelte";
   import { band } from "../lib/exit";
   import { took } from "../lib/format";
-  import { follow, type Place } from "../lib/place.svelte";
+  import { workflowTabs } from "../lib/page";
+  import type { Place } from "../lib/place.svelte";
   import { query, Ranged } from "../lib/range.svelte";
   import { ms, type Range } from "../lib/stats";
   import { chosen, count, exitCodes, figures, heat, notSucceeded, refused, type PortsSeries, type RunsSeries, type StepsSeries } from "../lib/workflow-stats";
@@ -19,7 +21,8 @@
   // there too.
   // graph says whether the caller reads the workflow itself, which its graph takes and its series do
   // not: the tab is left out for one who reads only its runs.
-  let { api, place, namespace, workflow, graph = false }: { api: API; place: Place; namespace: string; workflow: string; graph?: boolean } = $props();
+  let { api, place, namespace, workflow, graph = false, shares = false }: { api: API; place: Place; namespace: string; workflow: string; graph?: boolean; shares?: boolean } = $props();
+  const tabs = $derived(workflowTabs(namespace, workflow, "statistics", { shares, mcp: false, go: (r, q) => place.go(r, false, q) }).filter((t) => graph || t.label !== "Graph"));
 
   const ranged = new Ranged(() => place);
   const range = $derived(ranged.range);
@@ -73,12 +76,6 @@
   }
 
   // The workflow's runs, the runs view narrowed to it, opened in place as a link of the console is.
-  function runsOf(e: MouseEvent) {
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    e.preventDefault();
-    place.go({ kind: "namespace", namespace, view: "runs" }, false, new URLSearchParams({ workflow }));
-  }
-
   // The series behind the page, one route's answer at a time, as it answered them.
   const exports = {
     runs: { label: "runs", path: "/api/v1/{ns}/stats/runs", by: undefined },
@@ -158,24 +155,19 @@
   const portsSince = $derived(ports?.steps[0]?.buckets.map((b) => b.since) ?? drawn?.since ?? []);
 </script>
 
-<nav class="sub" aria-label="{namespace}/{workflow}">
-  <span class="mono where">{namespace} / {workflow}</span>
-  {#if graph}
-    {@const page = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow }}
-    <a class="tab" href={place.href(page)} onclick={follow(place, page)}>Graph</a>
-  {/if}
-  <a class="tab" href={place.href({ kind: "namespace", namespace, view: "runs" }) + `?workflow=${encodeURIComponent(workflow)}`} onclick={runsOf}>Runs</a>
-  <span class="tab" aria-current="page">Statistics</span>
-  {#if steps && steps.steps.length > 0}
-    <label class="select step">
-      <span class="muted">Step</span>
-      <select value={step?.step} onchange={(e) => choose(e.currentTarget.value)}>
-        {#each steps.steps as s (s.step)}<option value={s.step}>{s.step}</option>{/each}
-      </select>
-      <Icon name="control-expand" size={14} />
-    </label>
-  {/if}
-</nav>
+<PageHeader title={workflow} icon="control-workflows" {place} {tabs}>
+  {#snippet actions()}
+    {#if steps && steps.steps.length > 0}
+      <label class="select step">
+        <span class="muted">Step</span>
+        <select value={step?.step} onchange={(e) => choose(e.currentTarget.value)}>
+          {#each steps.steps as s (s.step)}<option value={s.step}>{s.step}</option>{/each}
+        </select>
+        <Icon name="control-expand" size={14} />
+      </label>
+    {/if}
+  {/snippet}
+</PageHeader>
 
 <RangeBar {ranged} bucket={runs?.bucket}>
   <label class="select">
@@ -200,8 +192,8 @@
         <div class="figure">
           <dt>{f.label}</dt>
           <dd>
-            <span class="value mono">{f.value}</span>
-            {#if f.change}<span class="change mono" title="against the span before">{f.change}</span>{/if}
+            <span class="value term">{f.value}</span>
+            {#if f.change}<span class="change term" title="against the span before">{f.change}</span>{/if}
           </dd>
           <dd class="aside muted">{f.aside}</dd>
         </div>
@@ -221,10 +213,10 @@
             {#each codes as c (c.code)}
               {@const b = c.code === null ? null : band(c.code)}
               <li title={b ? b.handling : "lost with its runner, or stopped before a container reported a code"}>
-                <span class="mono code">{c.code ?? "lost"}</span>
+                <span class="term code">{c.code ?? "lost"}</span>
                 <span class="muted meaning">{b ? b.name : "no exit code"}</span>
                 <span class="bar {b ? b.tone : 'quiet'}" style:width="{(c.attempts / most) * 100}%"></span>
-                <span class="mono">{count(c.attempts)}</span>
+                <span class="term">{count(c.attempts)}</span>
               </li>
             {/each}
           </ul>
@@ -245,7 +237,7 @@
             <thead>
               <tr>
                 <th scope="col"><span class="unseen">Weekday</span></th>
-                {#each Array.from({ length: 24 }, (_, h) => h) as h (h)}<th scope="col" class="hour mono">{h % 3 === 0 ? String(h).padStart(2, "0") : ""}<span class="unseen">{h % 3 === 0 ? "" : String(h).padStart(2, "0")}</span></th>{/each}
+                {#each Array.from({ length: 24 }, (_, h) => h) as h (h)}<th scope="col" class="hour term">{h % 3 === 0 ? String(h).padStart(2, "0") : ""}<span class="unseen">{h % 3 === 0 ? "" : String(h).padStart(2, "0")}</span></th>{/each}
               </tr>
             </thead>
             <tbody>
@@ -267,15 +259,15 @@
           </table>
           <div class="legend">
             {#each week.scale.levels as low, i (i)}
-              <span><span class="swatch level-{week.scale.levels.length === 1 ? 5 : i + 1}"></span><span class="mono">{i === week.scale.levels.length - 1 && i > 0 ? `≥ ${took(low)}` : took(low)}</span></span>
+              <span><span class="swatch level-{week.scale.levels.length === 1 ? 5 : i + 1}"></span><span class="term">{i === week.scale.levels.length - 1 && i > 0 ? `≥ ${took(low)}` : took(low)}</span></span>
             {/each}
             <span><span class="swatch level-0"></span>no run</span>
           </div>
           <p class="readout" aria-live="polite">
             {#if pointed}
               {@const p50 = week.at(pointed.day + 1, pointed.hour)}
-              <span class="mono">{days[pointed.day]} {String(pointed.hour).padStart(2, "0")}:00 to {String(pointed.hour + 1).padStart(2, "0")}:00 UTC</span>
-              <span>p50 <span class="mono">{p50 === undefined ? "no run" : took(p50)}</span></span>
+              <span class="term">{days[pointed.day]} {String(pointed.hour).padStart(2, "0")}:00 to {String(pointed.hour + 1).padStart(2, "0")}:00 UTC</span>
+              <span>p50 <span class="term">{p50 === undefined ? "no run" : took(p50)}</span></span>
             {/if}
           </p>
         {/if}
@@ -292,36 +284,6 @@
 {/if}
 
 <style>
-  .sub {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 2);
-    margin: calc(var(--unit) * -3) 0 calc(var(--unit) * 7);
-  }
-
-  .where {
-    margin-right: calc(var(--unit) * 6);
-    font-weight: 600;
-  }
-
-  .tab {
-    display: inline-flex;
-    align-items: center;
-    height: 29px;
-    padding: 0 calc(var(--unit) * 5);
-    border: var(--border-hairline) solid transparent;
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: var(--type-navigation-size);
-    font-weight: 500;
-    text-decoration: none;
-  }
-
-  .tab[aria-current="page"] {
-    border-color: var(--accentLine);
-    background: var(--accentDim);
-    color: var(--accent);
-  }
 
   .select {
     position: relative;
@@ -330,6 +292,7 @@
     gap: calc(var(--unit) * 4);
     color: var(--muted);
     font-size: var(--type-control-size);
+    white-space: nowrap;
   }
 
   .select select {
@@ -517,5 +480,22 @@
     min-height: 1.4em;
     margin: calc(var(--unit) * 3) 0 0;
     font-size: var(--type-control-size);
+  }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 759px) {
+    .codes li {
+      grid-template-columns: 44px minmax(0, 1fr) 40px;
+    }
+
+    .codes .meaning {
+      display: none;
+    }
   }
 </style>

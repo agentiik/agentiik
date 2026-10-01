@@ -19,7 +19,7 @@ function open(path: string, s: Scenario = scenario("alice")) {
 describe("the console", () => {
   it("opens on the caller's home, every namespace together, and stays there", async () => {
     const { place } = open("/");
-    await screen.findByText("alice", { selector: ".login" });
+    await screen.findByRole("button", { name: "You, alice" });
     expect(await screen.findByRole("region", { name: "Activity" })).toBeTruthy();
     expect(place.route).toEqual({ kind: "landing" });
   });

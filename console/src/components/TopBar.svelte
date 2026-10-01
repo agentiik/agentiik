@@ -1,36 +1,32 @@
 <script lang="ts">
-  import type { Me, Namespace } from "../api/client";
+  import type { Me } from "../api/client";
   import { follow, type Place } from "../lib/place.svelte";
-  import type { View } from "../lib/route";
+  import type { Route } from "../lib/route";
   import { said } from "../lib/notifications";
   import { apply, chosen, type Ground } from "../lib/theme";
+  import Avatar from "./Avatar.svelte";
   import Icon from "./Icon.svelte";
-  import NamespaceSwitcher from "./NamespaceSwitcher.svelte";
   import Popover from "./Popover.svelte";
 
-  // The top bar: the mark, the namespace switcher, the views the caller may open in that namespace,
-  // then whether the installation answers, the caller's notifications and the caller. There is no
-  // sidebar, so that the panes below take the window's width, as in agk console.
+  // The bar above the screen: where the screen is, as a trail of links back up to the home, then
+  // whether the installation answers, the caller's notifications and the caller. The views themselves
+  // are the sidebar's, so that nothing here moves with the namespace or the screen.
   let {
     me,
-    namespaces,
-    namespace,
-    view,
-    shown,
+    route,
     answering,
     place,
     onsignout,
     ondismiss,
+    onmenu,
   }: {
     me: Me;
-    namespaces: Namespace[];
-    namespace: string | undefined;
-    view: View | undefined;
-    shown: { view: View; label: string }[];
+    route: Route;
     answering: boolean;
     place: Place;
     onsignout: () => void;
     ondismiss: (id: string) => void;
+    onmenu?: () => void;
   } = $props();
 
   let ground = $state<Ground>(chosen(globalThis.localStorage));
@@ -40,35 +36,69 @@
     apply(document.documentElement, globalThis.localStorage, g);
   }
 
-  const initial = $derived((me.user?.display_name ?? me.principal).trim().charAt(0).toUpperCase());
-  const home = { kind: "landing" as const };
+  const labels: Record<string, string> = { runs: "Runs", workflows: "Workflows", statistics: "Statistics", sharing: "Sharing", settings: "Settings" };
+  const tabs: Record<string, string> = { files: "Files", statistics: "Statistics", mcp: "MCP", graph: "Graph", credentials: "Sign-in methods", tokens: "API tokens", "service-accounts": "Service accounts" };
+
+  // The trail: each step a link but the last, which is where the screen is.
+  const trail = $derived.by((): { label: string; to?: Route; code?: boolean }[] => {
+    const r = route;
+    switch (r.kind) {
+      case "landing":
+        return [{ label: "Home" }];
+      case "account":
+        return [{ label: "Your account", to: r.tab ? { kind: "account" } : undefined }, ...(r.tab ? [{ label: tabs[r.tab] ?? r.tab }] : [])];
+      case "runners":
+        return [{ label: "Runners", to: r.tab ? { kind: "runners" } : undefined }, ...(r.tab ? [{ label: "Statistics" }] : [])];
+      case "users":
+        return [{ label: "Users" }];
+      case "groups":
+        return [{ label: "Groups" }];
+      case "namespaces":
+        return [{ label: "Namespaces" }];
+      case "unknown":
+        return [{ label: "Nothing here" }];
+      case "namespace": {
+        const out: { label: string; to?: Route; code?: boolean }[] = [{ label: r.namespace, to: { kind: "namespace", namespace: r.namespace, view: "runs" } }];
+        const deeper = r.workflow !== undefined || r.run !== undefined;
+        out.push({ label: labels[r.view] ?? r.view, to: deeper ? { kind: "namespace", namespace: r.namespace, view: r.view } : undefined });
+        if (r.workflow) {
+          out.push({ label: r.workflow, to: r.tab ? { kind: "namespace", namespace: r.namespace, view: "workflows", workflow: r.workflow } : undefined });
+          if (r.tab) out.push({ label: tabs[r.tab] ?? r.tab });
+        }
+        if (r.run) {
+          out.push({ label: r.run, code: true, to: r.against ? { kind: "namespace", namespace: r.namespace, view: "runs", run: r.run } : undefined });
+          if (r.against) out.push({ label: `against ${r.against}`, code: true });
+        }
+        return out;
+      }
+    }
+  });
+
+  const name = $derived(me.user?.display_name ?? me.principal);
 </script>
 
 <header class="bar">
-  <a class="brand" href={place.href(home)} onclick={follow(place, home)} aria-label="Agentiik, your home">
-    <svg viewBox="0 0 16 14" aria-hidden="true"
-      ><rect x="0" y="0" width="16" height="4" rx="1" /><g opacity="0.62"><rect x="0" y="6" width="7" height="4" rx="1" /><rect x="9" y="6" width="7" height="4" rx="1" /></g><g
-        opacity="0.3"><rect x="0" y="12" width="16" height="2" rx="1" /></g
-      ></svg>
-    <span class="wordmark">agentiik</span>
-  </a>
-
-  {#if namespaces.length > 0 || namespace}
-    <NamespaceSwitcher {namespaces} principal={me.principal} current={namespace} view={view ?? "runs"} {place} every={place.route.kind === "landing"} />
+  {#if onmenu}
+    <button class="menu-button" aria-label="Open the navigation" onclick={onmenu}><Icon name="control-sidebar" size={18} /></button>
   {/if}
-
-  {#if namespace}
-    <nav class="views" aria-label="Views">
-      {#each shown as item (item.view)}
-        {@const route = { kind: "namespace" as const, namespace, view: item.view }}
-        <a class="view" class:open={item.view === view} aria-current={item.view === view ? "page" : undefined} href={place.href(route)} onclick={follow(place, route)}>{item.label}</a>
+  <nav class="trail" aria-label="Where you are">
+    <ol>
+      {#each trail as step, i (i)}
+        <li>
+          {#if i > 0}<span class="sep" aria-hidden="true">/</span>{/if}
+          {#if step.to}
+            <a class:code={step.code} href={place.href(step.to)} onclick={follow(place, step.to)}>{step.label}</a>
+          {:else}
+            <span class="here" class:code={step.code} aria-current="page">{step.label}</span>
+          {/if}
+        </li>
       {/each}
-    </nav>
-  {/if}
+    </ol>
+  </nav>
 
   <div class="end">
     <span class="live" class:lost={!answering} role="status">
-      <span class="dot" aria-hidden="true"></span>{answering ? "live" : "not answering"}
+      <span class="dot" aria-hidden="true"></span><span class="word">{answering ? "live" : "not answering"}</span>
     </span>
 
     <Popover label={me.notifications.length === 0 ? "Notifications, none" : `Notifications, ${me.notifications.length}`} align="end" width={340}>
@@ -86,7 +116,7 @@
             {#each me.notifications as notice (notice.id)}
               <li>
                 <span class="said">{said(notice)}</span>
-                <time class="faint mono" datetime={notice.at}>{notice.at}</time>
+                <time class="faint term" datetime={notice.at}>{notice.at}</time>
                 <button class="control" onclick={() => ondismiss(notice.id)}>Dismiss</button>
               </li>
             {/each}
@@ -98,19 +128,15 @@
     <Popover label="You, {me.principal}" align="end" width={240}>
       {#snippet button()}
         <span class="who">
-          <span class="avatar" aria-hidden="true">{initial}</span>
-          <span class="login">{me.principal}</span>
+          <Avatar {name} size={24} />
+          <span class="login">{name}</span>
           <Icon name="control-expand" size={14} />
         </span>
       {/snippet}
       {#snippet children(close)}
         <div class="menu">
-          {#if me.user}<p class="name">{me.user.display_name}</p>{/if}
+          <p class="name">{name}<span class="faint">{me.principal}</span></p>
           <a class="entry" href={place.href({ kind: "account" })} onclick={(e) => { follow(place, { kind: "account" })(e); close(); }}>Your account</a>
-          {#if me.admin}
-            <a class="entry" href={place.href({ kind: "users" })} onclick={(e) => { follow(place, { kind: "users" })(e); close(); }}>Users, groups and namespaces</a>
-            <a class="entry" href={place.href({ kind: "runners" })} onclick={(e) => { follow(place, { kind: "runners" })(e); close(); }}>Runners and pools</a>
-          {/if}
           <fieldset class="ground">
             <legend>Ground</legend>
             {#each [["system", "System"], ["light", "Light"], ["dark", "Dark"]] as [value, label] (value)}
@@ -125,70 +151,107 @@
 </header>
 
 <style>
+  .menu-button {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-left: calc(var(--unit) * -3);
+    border: none;
+    border-radius: var(--radius-control);
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .menu-button:hover {
+    background: var(--raised);
+  }
+
+  /* On a phone the trail keeps where the screen is and drops the way back up, which the drawer gives,
+     the installation's state keeps its dot, and the caller their face. */
+  @media (max-width: 759px) {
+    .bar {
+      padding: 0 16px;
+    }
+
+    .trail li:not(:last-child) {
+      display: none;
+    }
+
+    .trail li:last-child .sep {
+      display: none;
+    }
+
+    .live .word {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .who .login {
+      display: none;
+    }
+  }
+
   .bar {
     display: flex;
     align-items: center;
     gap: calc(var(--unit) * 5);
     height: var(--bar-top);
-    padding: 0 var(--padding-page);
+    padding: 0 calc(var(--padding-page) + 6px);
     border-bottom: var(--border-hairline) solid var(--line);
     background: var(--surface);
   }
 
-  .brand {
-    display: inline-flex;
-    align-items: center;
-    gap: calc(var(--unit) * 4);
-    margin-right: calc(var(--unit) * 4);
-    color: var(--text);
+  .trail {
+    min-width: 0;
   }
 
-  .brand:hover {
-    text-decoration: none;
-  }
-
-  .brand svg {
-    width: 18px;
-    height: 16px;
-    fill: var(--accent);
-  }
-
-  .wordmark {
-    font-family: var(--type-wordmark-font);
-    font-size: var(--type-wordmark-size);
-    font-weight: var(--type-wordmark-weight);
-    letter-spacing: var(--type-wordmark-tracking);
-    text-transform: var(--type-wordmark-case);
-  }
-
-  .views {
+  .trail ol {
     display: flex;
-    gap: calc(var(--unit) * 2);
+    align-items: center;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    list-style: none;
+    white-space: nowrap;
   }
 
-  .view {
+  .trail li {
     display: inline-flex;
     align-items: center;
-    height: 29px;
-    padding: 0 calc(var(--unit) * 5);
-    border: var(--border-hairline) solid transparent;
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-family: var(--type-navigation-font);
+    min-width: 0;
+  }
+
+  .trail a,
+  .here {
+    overflow: hidden;
     font-size: var(--type-navigation-size);
-    font-weight: var(--type-navigation-weightActive);
+    text-overflow: ellipsis;
   }
 
-  .view:hover {
+  .trail a {
+    color: var(--muted);
+  }
+
+  .trail a:hover {
     color: var(--text);
-    text-decoration: none;
   }
 
-  .view.open {
-    border-color: var(--lineStrong);
-    background: var(--raised);
+  .here {
     color: var(--text);
     font-weight: 600;
+  }
+
+  .sep {
+    margin: 0 calc(var(--unit) * 4);
+    color: var(--faint);
   }
 
   .end {
@@ -247,25 +310,11 @@
     color: var(--muted);
   }
 
-  .avatar {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border: var(--border-hairline) solid var(--accentLine);
-    border-radius: var(--radius-round);
-    background: var(--accentDim);
-    color: var(--accent);
-    font-size: 11.5px;
-    font-weight: 600;
-  }
 
   .login {
     color: var(--text);
-    font-family: var(--type-identifier-font);
-    font-size: var(--type-identifier-size-max);
-    font-weight: 600;
+    font-size: var(--type-name-size);
+    font-weight: 500;
   }
 
   .menu {
@@ -274,8 +323,15 @@
   }
 
   .name {
+    display: flex;
+    flex-direction: column;
     margin: calc(var(--unit) * 2) calc(var(--unit) * 4) calc(var(--unit) * 3);
-    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .name .faint {
+    font-size: 12px;
+    font-weight: 400;
   }
 
   .entry {

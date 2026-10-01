@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeader from "../components/PageHeader.svelte";
   import type { API, Me } from "../api/client";
   import Pane from "../components/Pane.svelte";
   import SharingPanel from "../components/SharingPanel.svelte";
@@ -32,17 +33,19 @@
   let typed = $state("");
 </script>
 
+<PageHeader title="Sharing" icon="control-share" {place} />
+
 <div class="bar" role="group" aria-label="Scope">
   {#if atNamespace}
-    <button class="chip mono" aria-pressed={workflow === undefined} onclick={() => open(undefined)}>{namespace}</button>
+    <button class="chip term" aria-pressed={workflow === undefined} onclick={() => open(undefined)}>{namespace}</button>
   {/if}
   {#each managed as wf (wf)}
-    <button class="chip mono" aria-pressed={workflow === wf} onclick={() => open(wf)}>{namespace}/{wf}</button>
+    <button class="chip term" aria-pressed={workflow === wf} onclick={() => open(wf)}>{namespace}/{wf}</button>
   {/each}
   {#if atNamespace}
     <form class="named" onsubmit={(e) => { e.preventDefault(); if (typed.trim()) open(typed.trim()); }}>
       <label class="unseen" for="sharing-workflow">A workflow of {namespace}</label>
-      <input id="sharing-workflow" class="mono" bind:value={typed} placeholder="a workflow of {namespace}" />
+      <input id="sharing-workflow" class="term" bind:value={typed} placeholder="a workflow of {namespace}" />
       <button class="control" disabled={typed.trim() === ""}>Open its grants</button>
     </form>
   {/if}

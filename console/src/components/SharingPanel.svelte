@@ -5,6 +5,7 @@
   import BranchProtection from "./BranchProtection.svelte";
   import Icon from "./Icon.svelte";
   import Pane from "./Pane.svelte";
+  import Notice from "./Notice.svelte";
 
   // The sharing panel of a namespace or of one workflow of it: "who holds what, where each
   // permission comes from, what one person can actually do. One control adds, expires or denies."
@@ -151,16 +152,19 @@
   const placeholders = $derived<Record<Kind, string>>({ user: "login", group: "group name", "service account": `${namespace}/name` });
 </script>
 
-{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
-{#if said}<p class="said" role="status">{said}</p>{/if}
+{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
+<!-- Drawn once the grants are read, every pane at once, so that none is pushed down as the grants
+     above it arrive. -->
+{#if grants === null && !unread}
+  <p class="muted" role="status">Reading the grants.</p>
+{:else}
 <div class="columns">
   <div class="stack">
     <Pane title="Grants" aside={grants ? `${grants.length} on ${here}` : here}>
-      {#if unread}
+      {#if unread || grants === null}
         <p class="problem" role="alert">The grants could not be read: {unread}</p>
-      {:else if grants === null}
-        <p class="muted">Reading the grants.</p>
       {:else}
         <div class="scroll">
           <table>
@@ -168,13 +172,13 @@
             <tbody>
               {#each grants as g (g.id)}
                 <tr class:deny={g.deny !== undefined}>
-                  <td><span class="kind muted">{kindOf(g.principal)}</span> <span class="mono nowrap">{g.principal.replace(/^group:/, "")}</span></td>
+                  <td><span class="kind muted">{kindOf(g.principal)}</span> <span class="term nowrap">{g.principal.replace(/^group:/, "")}</span></td>
                   <td>
-                    {#if g.deny}<span class="chip deny mono">deny {g.deny}</span>{:else}<span class="chip mono">{g.role}</span>{/if}
+                    {#if g.deny}<span class="chip deny term">deny {g.deny}</span>{:else}<span class="chip term">{g.role}</span>{/if}
                   </td>
-                  <td class="mono nowrap">{g.scope}{#if inherited(g)}<span class="muted inherited">inherited</span>{/if}</td>
-                  <td class="mono muted nowrap">{#if g.expires_at}<time datetime={g.expires_at} title={g.expires_at}>{day(g.expires_at)}</time>{:else}never{/if}</td>
-                  <td class="muted nowrap"><span class="mono">{g.granted_by}</span> <time class="mono" datetime={g.granted_at} title={g.granted_at}>{g.granted_at.slice(0, 10)}</time></td>
+                  <td class="term nowrap">{g.scope}{#if inherited(g)}<span class="muted inherited">inherited</span>{/if}</td>
+                  <td class="term muted nowrap">{#if g.expires_at}<time datetime={g.expires_at} title={g.expires_at}>{day(g.expires_at)}</time>{:else}never{/if}</td>
+                  <td class="muted nowrap"><span class="term">{g.granted_by}</span> <time class="term" datetime={g.granted_at} title={g.granted_at}>{g.granted_at.slice(0, 10)}</time></td>
                   <td class="end">
                     {#if inherited(g)}
                       <span class="muted">on {namespace}</span>
@@ -202,7 +206,7 @@
               <select bind:value={kind} aria-label="What the principal is">
                 {#each kinds as k (k)}<option value={k}>{k}</option>{/each}
               </select>
-              <input class="mono" bind:value={name} placeholder={placeholders[kind]} aria-label="Who" required />
+              <input class="term" bind:value={name} placeholder={placeholders[kind]} aria-label="Who" required />
             </span>
           </label>
           <label>
@@ -218,7 +222,7 @@
           </label>
           <label>
             <span>Expires</span>
-            <input class="mono" bind:value={until} placeholder="never, 30d or 2027-01-01" />
+            <input class="term" bind:value={until} placeholder="never, 30d or 2027-01-01" />
           </label>
           <button class="control primary" disabled={working || name.trim() === ""}>{isDeny ? `Deny ${what}` : `Grant ${what}`}</button>
         </form>
@@ -233,7 +237,7 @@
         <tbody>
           {#each roles as r (r.role)}
             <tr>
-              <td class="mono">{r.role}</td>
+              <td class="term">{r.role}</td>
               {#each columns as c (c.name)}
                 {@const yes = r.columns.includes(c.name)}
                 <td class="mark" class:yes class:lack={r.role === "operator" && c.name === "read"}>{yes ? "yes" : "no"}</td>
@@ -243,10 +247,10 @@
         </tbody>
       </table>
       <p class="muted note">
-        {#each columns as c, i (c.name)}<span class="mono">{c.name}</span> {c.permissions.join(", ")}{i < columns.length - 1 ? "; " : "."}{/each}
+        {#each columns as c, i (c.name)}<span class="term">{c.name}</span> {c.permissions.join(", ")}{i < columns.length - 1 ? "; " : "."}{/each}
       </p>
       <p class="note">
-        <span class="mono">operator</span> holds no <span class="mono">workflow:read</span>: it runs a workflow and follows its runs, <span class="mono">run:read</span>, without reading the queries, endpoints and rules inside it. Someone who needs both holds both roles.
+        <span class="term">operator</span> holds no <span class="term">workflow:read</span>: it runs a workflow and follows its runs, <span class="term">run:read</span>, without reading the queries, endpoints and rules inside it. Someone who needs both holds both roles.
       </p>
     </Pane>
   </div>
@@ -266,8 +270,8 @@
         <ul class="lines" aria-label="Effective permissions of {whom} on {here}">
           {#each lines as l (l.permission)}
             <li class:held={l.held} class:taken={l.takes.length > 0}>
-              <span class="sign mono" aria-hidden="true">{l.takes.length > 0 ? "−" : l.held ? "+" : " "}</span>
-              <span class="mono">{l.permission}</span>
+              <span class="sign term" aria-hidden="true">{l.takes.length > 0 ? "−" : l.held ? "+" : " "}</span>
+              <span class="term">{l.permission}</span>
               <span class="from muted">
                 {#if l.takes.length > 0}
                   denied: {l.takes.map(source).join("; ")}{#if l.gives.length > 0}, over {l.gives.map(source).join("; ")}{/if}
@@ -298,6 +302,7 @@
     </Pane>
   </div>
 </div>
+{/if}
 
 <style>
   .columns {
@@ -321,14 +326,15 @@
 
   .stack {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: calc(var(--unit) * 8);
+    min-width: 0;
   }
 
   .problem {
     color: var(--failed);
   }
 
-  .said,
   .problem {
     margin: 0 0 calc(var(--unit) * 6);
   }
@@ -429,6 +435,7 @@
 
   .pair input {
     flex: 1;
+    min-width: 0;
   }
 
   .pair select {
@@ -524,5 +531,12 @@
 
   .never li + li {
     margin-top: calc(var(--unit) * 3);
+  }
+
+  /* On a phone the fields of a grant go one above the other. */
+  @media (max-width: 759px) {
+    .add {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

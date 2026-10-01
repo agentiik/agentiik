@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import type { API, Me } from "../api/client";
   import CompareWith from "../components/CompareWith.svelte";
@@ -227,29 +228,35 @@
   });
 </script>
 
+<PageHeader title={id} icon="control-runs" code {place}>
+  {#snippet subtitle()}
+    {#if run && here}
+      <span class="subtitle"><StatePill state={run.state} live={!reader.ended} />
+        {#if holds(me, "workflow:read", run.namespace, run.workflow)}
+          {@const page = { kind: "namespace" as const, namespace: run.namespace, view: "workflows" as const, workflow: run.workflow }}
+          <a class="name" href={place.href(page)} onclick={follow(place, page)}>{run.workflow}</a>
+        {:else}
+          <span class="name">{run.workflow}</span>
+        {/if}
+        <span class="code faint">{run.commit.slice(0, 7)}</span></span>
+    {/if}
+  {/snippet}
+</PageHeader>
+
 {#if reader.missing || (run && !here)}
   <Refused />
 {:else if reader.refused}
   <Pane title="Run"><p class="refused" role="alert">The run could not be read: {reader.refused}</p></Pane>
 {:else if run}
   <div class="inspector">
-    <Pane title="Run" aside="{run.namespace}/{run.workflow}@{run.commit.slice(0, 7)}">
+    <Pane title="Run">
       <div class="head">
-        <StatePill state={run.state} live={!reader.ended} />
-        <span class="mono id">{run.run}</span>
-        {#if holds(me, "workflow:read", run.namespace, run.workflow)}
-          {@const page = { kind: "namespace" as const, namespace: run.namespace, view: "workflows" as const, workflow: run.workflow }}
-          <a class="mono name" href={place.href(page)} onclick={follow(place, page)}>{run.workflow}</a>
-        {:else}
-          <span class="mono name">{run.workflow}</span>
-        {/if}
         <span class="muted">
-          <span class="mono">{run.trigger_kind}</span>
-          · created <time class="mono" datetime={run.created_at} title={run.created_at}>{clock(run.created_at, now)}</time>
-          {#if run.started_at}· took <span class="mono">{lasted(run.started_at, run.finished_at)}</span>{/if}
-          · by <span class="mono">{run.triggered_by}</span>
+          <span class="term">{run.trigger_kind}</span>
+          · created <time class="term" datetime={run.created_at} title={run.created_at}>{clock(run.created_at, now)}</time>
+          {#if run.started_at}· took <span class="term">{lasted(run.started_at, run.finished_at)}</span>{/if}
+          · by <span class="term">{run.triggered_by}</span>
         </span>
-        <a class="back" href={place.href(runs)} onclick={follow(place, runs)}>All runs of {namespace}</a>
       </div>
       {#if mayRun || reader.ended}
         <div class="actions">
@@ -282,11 +289,11 @@
       {/if}
       {#if run.reason}<p class="reason">{run.reason}</p>{/if}
       {#if run.replay_of}
-        <p class="muted">Replays <span class="mono">{run.replay_of}</span>{#if run.replay_from}&nbsp;from <span class="mono">{run.replay_from}</span>{/if}.</p>
+        <p class="muted">Replays <span class="code">{run.replay_of}</span>{#if run.replay_from}&nbsp;from <span class="term">{run.replay_from}</span>{/if}.</p>
       {/if}
       <ol class="path" aria-label="Steps in order">
         {#each run.steps as s (s.step)}
-          <li class={s.verdict}><span class="dot" aria-hidden="true"></span><span class="mono">{s.step}</span></li>
+          <li class={s.verdict}><span class="dot" aria-hidden="true"></span><span class="term">{s.step}</span></li>
         {/each}
       </ol>
     </Pane>
@@ -299,8 +306,8 @@
             <li>
               <button class="step" class:chosen={s.step === chosenStep} aria-pressed={s.step === chosenStep} onclick={() => choose({ step: s.step })}>
                 <StatePill state={s.verdict} live={!reader.ended} />
-                <span class="mono name">{s.step}</span>
-                <span class="mono muted took">{lasted(s.started_at, s.finished_at)}</span>
+                <span class="term name">{s.step}</span>
+                <span class="term muted took">{lasted(s.started_at, s.finished_at)}</span>
                 <span class="sub muted">
                   {#if s.verdict === "pending" && s.attempts === 0}
                     not reached
@@ -325,15 +332,15 @@
               {#each Object.entries(run.outputs) as [name, out] (name)}
                 {@const held = run.artifacts.filter((a) => a.step === out.step && a.port === out.port)}
                 <tr class:chosen={name === output}>
-                  <td class="mono">
+                  <td class="term">
                     {#if readsData}
                       <button class="link" aria-pressed={name === output} onclick={() => choose({ output: name })}>{name}</button>
                     {:else}
                       {name}
                     {/if}
                   </td>
-                  <td class="mono muted">{out.step}.{out.port}</td>
-                  <td class="number mono">{out.count}</td>
+                  <td class="term muted">{out.step}.{out.port}</td>
+                  <td class="number term">{out.count}</td>
                   <td class="muted">{#if held.length === 0}none{:else}{held.length} · {retention(held[0]!, now)}{/if}</td>
                 </tr>
               {/each}
@@ -347,7 +354,7 @@
           {#if task?.exit_code !== undefined}
             {@const meaning = band(task.exit_code)}
             <p class="exit {meaning.tone}">
-              <strong class="mono">exit {task.exit_code}</strong>
+              <strong class="code">exit {task.exit_code}</strong>
               <span>{meaning.name}: {meaning.handling}</span>
             </p>
           {/if}
@@ -355,13 +362,13 @@
           <dl class="header">
             {#if step.image}
               <dt>Image</dt>
-              <dd class="mono" title={step.image}>{shortImage(step.image)}</dd>
+              <dd class="code" title={step.image}>{shortImage(step.image)}</dd>
             {/if}
             {#if task}
               <dt>Task</dt>
-              <dd class="mono">attempt {task.attempt}{#if task.shard}&nbsp;· shard {task.shard.index} of {task.shard.of}{/if}</dd>
+              <dd class="term">attempt {task.attempt}{#if task.shard}&nbsp;· shard {task.shard.index} of {task.shard.of}{/if}</dd>
               <dt>Runner</dt>
-              <dd class="mono">{task.runner ?? (task.memoised_from ? `none, a cache hit of ${task.memoised_from}` : task.called ? `none, it called ${task.called}` : "not held yet")}</dd>
+              <dd class="term">{task.runner ?? (task.memoised_from ? `none, a cache hit of ${task.memoised_from}` : task.called ? `none, it called ${task.called}` : "not held yet")}</dd>
             {/if}
           </dl>
           {#if readsData && task?.params && Object.keys(task.params).length > 0}
@@ -380,15 +387,15 @@
             <tbody>
               {#each tasks as t (t.task)}
                 <tr class:chosen={t.task === task?.task} onclick={() => choose({ step: step.step, task: t.task })}>
-                  <td class="mono">
+                  <td class="term">
                     <button class="link" onclick={(e) => { e.stopPropagation(); choose({ step: step.step, task: t.task }); }}>
                       {t.shard ? `${t.shard.index}/${t.shard.of} · ` : ""}attempt {t.attempt}
                     </button>
                   </td>
                   <td><StatePill state={t.state} live={!reader.ended} /></td>
-                  <td class="mono muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : "")}</td>
-                  <td class="number mono">{t.exit_code ?? ""}</td>
-                  <td class="number mono">{lasted(t.started_at, t.finished_at)}</td>
+                  <td class="term muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : "")}</td>
+                  <td class="number code">{t.exit_code ?? ""}</td>
+                  <td class="number term">{lasted(t.started_at, t.finished_at)}</td>
                 </tr>
               {:else}
                 <tr><td colspan="5" class="muted empty">No task of this step has been created.</td></tr>
@@ -412,11 +419,11 @@
                   <tbody>
                     {#each files as f (f.uri)}
                       <tr class={f.status}>
-                        <td class="mono">{f.name}</td>
-                        <td class="mono muted port {f.port}">{f.port}</td>
-                        <td class="mono muted">{f.media_type}</td>
-                        <td class="number mono">{bytes(f.size)}</td>
-                        <td class="mono muted" title={f.sha256}>{f.sha256.slice(0, 12)}</td>
+                        <td class="term">{f.name}</td>
+                        <td class="term muted port {f.port}">{f.port}</td>
+                        <td class="term muted">{f.media_type}</td>
+                        <td class="number term">{bytes(f.size)}</td>
+                        <td class="code muted" title={f.sha256}>{f.sha256.slice(0, 12)}</td>
                         <td class="muted">{retention(f, now)}</td>
                         <td class="end">
                           {#if readsData && f.status === "live"}
@@ -447,7 +454,7 @@
                   {#each portNames as name (name)}
                     {@const e = ports[name]}
                     <tr class:chosen={readsData && e && name === port}>
-                      <td class="mono name port {name}">
+                      <td class="term name port {name}">
                         {#if readsData && e}
                           <button class="link" aria-pressed={name === port} onclick={() => choose({ pane: tab, port: name })}>{name}</button>
                         {:else}
@@ -455,9 +462,9 @@
                         {/if}
                       </td>
                       {#if e}
-                        <td class="number mono">{e.items}</td>
-                        <td class="number mono">{bytes(e.size)}</td>
-                        <td class="mono muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
+                        <td class="number term">{e.items}</td>
+                        <td class="number term">{bytes(e.size)}</td>
+                        <td class="code muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
                       {:else}
                         <td colspan="3" class="muted">{tab === "output" ? "published when the step ends" : task ? "not handed to the task chosen" : "handed once a task is dispatched"}</td>
                       {/if}
@@ -860,5 +867,23 @@
 
   .refused {
     color: var(--failed);
+  }
+
+  .subtitle {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--unit) * 5);
+  }
+
+  .subtitle .name {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

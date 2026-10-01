@@ -116,10 +116,10 @@ describe("the runners and pools", () => {
     expect(place.query.get("pool")).toBeNull();
   });
 
-  it("are reached from the menu, and offered to nobody else", async () => {
+  it("are reached from the sidebar, and offered to nobody else", async () => {
     const place = open("dana", "/dana/runs");
-    await fireEvent.click(await screen.findByRole("button", { name: /You, dana/ }));
-    await fireEvent.click(screen.getByRole("link", { name: "Runners and pools" }));
+    const installation = await screen.findByRole("list", { name: "Installation" });
+    await fireEvent.click(within(installation).getByRole("link", { name: "Runners" }));
     expect(place.route).toEqual({ kind: "runners" });
     expect(await screen.findByRole("region", { name: "Pools" })).toBeTruthy();
     cleanup();

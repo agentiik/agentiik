@@ -3,12 +3,15 @@
   import type { API } from "./api/client";
   import KeyLine from "./components/KeyLine.svelte";
   import Pane from "./components/Pane.svelte";
+  import Sidebar from "./components/Sidebar.svelte";
   import TopBar from "./components/TopBar.svelte";
+  import { Viewport } from "./lib/viewport.svelte";
   import { Keys, provide } from "./lib/keys.svelte";
   import { holds, holdsSomewhereIn, inNamespace } from "./lib/permissions";
   import type { Place } from "./lib/place.svelte";
   import type { View } from "./lib/route";
   import type { Session } from "./lib/session.svelte";
+  import { firstNamespace, fold, folded as wasFolded, keepNamespace, lastNamespace } from "./lib/shell";
   import Account from "./views/Account.svelte";
   import Fleet from "./views/Fleet.svelte";
   import Groups from "./views/Groups.svelte";
@@ -38,6 +41,43 @@
   const route = $derived(place.route);
   const namespace = $derived(route.kind === "namespace" ? route.namespace : undefined);
 
+  // The namespace whose views the sidebar lists: the one the screen is in, or else the one last
+  // opened, or else the caller's own, so that the sidebar keeps its entries on the home and the account.
+  let remembered = $state(lastNamespace(globalThis.localStorage));
+  $effect(() => {
+    if (namespace && session.namespaces.some((n) => n.name === namespace)) {
+      keepNamespace(globalThis.localStorage, namespace);
+      remembered = namespace;
+    }
+  });
+  // A namespace the caller cannot read is never listed, so that an address naming one draws the same
+  // sidebar as one naming nothing.
+  const context = $derived(
+    namespace && session.namespaces.some((n) => n.name === namespace)
+      ? namespace
+      : remembered && session.namespaces.some((n) => n.name === remembered)
+        ? remembered
+        : session.me
+          ? firstNamespace(session.me, session.namespaces)
+          : undefined,
+  );
+  let sidebarFolded = $state(wasFolded(globalThis.localStorage));
+  function foldSidebar(value: boolean) {
+    sidebarFolded = value;
+    fold(globalThis.localStorage, value);
+  }
+
+  // The frame as the window's width lays it out (lib/viewport): the sidebar folded under 1100px
+  // whatever its reader chose, and under 760px a drawer, whole, opened from the top bar and closed
+  // again by the screen it leads to, by esc or by a click beside it.
+  const viewport = new Viewport();
+  const folded = $derived(!viewport.narrow && (viewport.compact || sidebarFolded));
+  let drawer = $state(false);
+  $effect(() => {
+    void route;
+    drawer = false;
+  });
+
   // The views of a namespace, each shown to a caller who holds what reading it takes there, and to no
   // other: a view the caller cannot use is left out of the bar rather than drawn disabled.
   const all: { view: View; label: string; shows: (ns: string) => boolean }[] = [
@@ -53,6 +93,7 @@
 
   const known = $derived(namespace !== undefined && session.namespaces.some((n) => n.name === namespace));
   const shown = $derived(namespace && known ? all.filter((v) => built.has(v.view) && v.shows(namespace)) : []);
+  const listed = $derived(context ? all.filter((v) => built.has(v.view) && v.shows(context)) : []);
 
   // A workflow's own statistics, the one page of a workflow built so far, open to whoever reads runs
   // somewhere in its namespace: the series answer a workflow the caller cannot read as one that does
@@ -82,10 +123,25 @@
   );
 </script>
 
-<svelte:window onkeydown={(e) => session.me && session.standing === "signed-in" && keys.press(e)} />
+<svelte:window
+  onkeydown={(e) => {
+    if (drawer && e.key === "Escape") {
+      drawer = false;
+      e.preventDefault();
+      return;
+    }
+    if (session.me && session.standing === "signed-in") keys.press(e);
+  }}
+/>
 
 {#if session.standing === "reading"}
-  <p class="reading" role="status">Reading who you are.</p>
+  <!-- The frame is drawn while the session is read, empty, so that nothing moves when it fills. -->
+  <div class="frame" class:folded class:narrow={viewport.narrow}>
+    <div class="side blank" aria-hidden="true"></div>
+    <div class="top blank" aria-hidden="true"></div>
+    <main class="screen" aria-busy="true"></main>
+    <div class="keys blank" aria-hidden="true"></div>
+  </div>
 {:else if session.standing === "signed-out"}
   <SignIn {api} {session} {passkeys} />
 {:else if session.standing === "enrol-only"}
@@ -103,21 +159,20 @@
     </Pane>
   </main>
 {:else if session.me}
-  <div class="frame">
-    <TopBar
-      me={session.me}
-      namespaces={session.namespaces}
-      {namespace}
-      view={route.kind === "namespace" ? route.view : undefined}
-      {shown}
-      answering={session.answering}
-      {place}
-      onsignout={() => session.signOut()}
-      ondismiss={(id) => session.dismiss(id)}
-    />
+  <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer}>
+    <div class="side" inert={viewport.narrow && !drawer}>
+      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} />
+    </div>
+    {#if viewport.narrow && drawer}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="scrim" onclick={() => (drawer = false)}></div>
+    {/if}
+    <div class="top">
+      <TopBar me={session.me} {route} answering={session.answering} {place} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
+    </div>
     <main class="screen">
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
-        <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} />
+        <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} shares={holds(session.me, "grant:manage", route.namespace, route.workflow)} />
       {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
         <!-- A workflow's page: the API answers one the
              caller cannot read as one that does not exist, and the page says no more. -->
@@ -135,7 +190,7 @@
       {:else if route.kind === "namespace" && route.view === "sharing"}
         <Sharing {api} {place} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "settings"}
-        <Settings {api} me={session.me} namespace={route.namespace} />
+        <Settings {api} {place} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "statistics"}
         <Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else if route.kind === "landing"}
@@ -156,26 +211,115 @@
         <Refused />
       {/if}
     </main>
-    <KeyLine {keys} {version} />
+    <div class="keys"><KeyLine {keys} {version} /></div>
   </div>
 {/if}
 
 <style>
   .frame {
     display: grid;
-    grid-template-rows: var(--bar-top) 1fr var(--bar-keyLine);
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    grid-template-rows: var(--bar-top) minmax(0, 1fr) var(--bar-keyLine);
+    grid-template-areas: "side top" "side screen" "side keys";
     height: 100%;
+  }
+
+  .frame.folded {
+    grid-template-columns: var(--sidebar-collapsed) minmax(0, 1fr);
+  }
+
+  .side {
+    grid-area: side;
+    min-height: 0;
+  }
+
+  .top {
+    grid-area: top;
+  }
+
+  .keys {
+    grid-area: keys;
+  }
+
+  .frame > .screen {
+    grid-area: screen;
+  }
+
+  .side.blank {
+    border-right: var(--border-hairline) solid var(--line);
+    background: var(--surface);
+  }
+
+  .top.blank {
+    border-bottom: var(--border-hairline) solid var(--line);
+    background: var(--surface);
+  }
+
+  .keys.blank {
+    border-top: var(--border-hairline) solid var(--line);
+    background: var(--surface);
   }
 
   .screen {
     min-height: 0;
-    padding: calc(var(--padding-page) + 6px) var(--padding-page) var(--padding-page);
+    padding: calc(var(--padding-page) + 6px) calc(var(--padding-page) + 6px) calc(var(--padding-page) + 12px);
     overflow: auto;
+    scrollbar-gutter: stable;
   }
 
   .alone {
     max-width: 480px;
     margin: 18vh auto 0;
+  }
+
+  /* Under 760px the screen takes the window's whole width, the sidebar opens over it as a drawer, and
+     the key line is not drawn, since the keys it names are a keyboard's. */
+  .frame.narrow {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--bar-top) minmax(0, 1fr);
+    grid-template-areas: "top" "screen";
+  }
+
+  .frame.narrow .keys {
+    display: none;
+  }
+
+  .frame.narrow .side {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.18s ease;
+  }
+
+  .frame.narrow.drawn .side {
+    transform: none;
+    box-shadow: 0 0 32px rgb(0 0 0 / 0.25);
+  }
+
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+
+  @media (max-width: 759px) {
+    .screen {
+      padding: 16px 16px 24px;
+    }
+
+    .alone {
+      margin: 10vh 16px 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .frame.narrow .side {
+      transition: none;
+    }
   }
 
   .alone p {
@@ -185,11 +329,5 @@
 
   .alone p:last-child {
     margin-bottom: 0;
-  }
-
-  .reading {
-    margin: 18vh auto 0;
-    color: var(--muted);
-    text-align: center;
   }
 </style>

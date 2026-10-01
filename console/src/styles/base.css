@@ -26,7 +26,6 @@ body {
 
 #console {
   height: 100%;
-  min-width: var(--window-min);
 }
 
 button,
@@ -51,8 +50,19 @@ a:hover {
   outline-offset: 1px;
 }
 
-.mono {
+/* A name or a figure: a namespace, a workflow, a login, a time, a count. It stays Archivo, the
+   face of everything a person reads, with figures of one width so that a column of them lines up. */
+.term {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Code: what a person copies, diffs or matches against a log, a run identifier, a commit, a digest,
+   an image, a cron expression, YAML and logs. It alone is monospaced, since a screen of names set in
+   a monospace reads as a terminal, which the web console is not. */
+.code {
   font-family: var(--type-identifier-font);
+  font-size: var(--type-identifier-size-max);
+  font-variant-ligatures: none;
 }
 
 .muted {
@@ -119,4 +129,44 @@ kbd {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
+}
+
+/* A field and a choice, drawn alike on every screen rather than as each browser draws its own: the
+   raised surface, a hairline that darkens under the pointer and turns to the accent with the focus.
+   :where keeps them at no weight, so that a screen styling one of its own still does. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"]), select, textarea) {
+  min-height: 32px;
+  padding: 0 calc(var(--unit) * 5);
+  border: var(--border-hairline) solid var(--lineStrong);
+  border-radius: var(--radius-control);
+  background-color: var(--raised);
+  color: var(--text);
+  font-size: var(--type-control-size);
+}
+
+:where(textarea) {
+  padding: calc(var(--unit) * 4) calc(var(--unit) * 5);
+}
+
+:where(select) {
+  padding-right: calc(var(--unit) * 3);
+  cursor: pointer;
+}
+
+:where(input, select, textarea):hover {
+  border-color: var(--faint);
+}
+
+:where(input, select, textarea):focus-visible {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--faint);
+}
+
+:where(input[type="checkbox"], input[type="radio"]) {
+  accent-color: var(--accent);
 }

@@ -67,6 +67,9 @@ export class RunList {
   // exhausted is whether the last page read held fewer runs than asked for, so that no more is kept.
   exhausted = $state(false);
   refused = $state("");
+  // settled is whether a first read has answered, so that what counts the runs is drawn once there is
+  // something to count, rather than saying none and then moving down under the rows as they come.
+  settled = $state(false);
 
   readonly #api: API;
   readonly #namespace: string;
@@ -115,6 +118,7 @@ export class RunList {
       }
     } finally {
       this.reading = false;
+      this.settled = true;
     }
   }
 

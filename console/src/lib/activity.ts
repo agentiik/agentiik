@@ -135,16 +135,26 @@ export function boundsOf(dayKey: string): { since: string; until: string } {
 }
 
 // lastWeek is a namespace's runs and failures over the seven days ending today, from its series.
-export function lastWeek(s: RunsSeries, now: number): { runs: number; failures: number } {
+export function lastWeek(s: RunsSeries, now: number): Week {
   const from = Math.floor(now / day) * day - 6 * day;
-  let runs = 0;
-  let failed = 0;
+  const out = { runs: 0, failures: 0, succeeded: 0, ended: 0 };
   for (const b of s.buckets) {
     if (Date.parse(b.since) < from) continue;
-    runs += total(b.runs);
-    failed += failures(b.runs);
+    out.runs += total(b.runs);
+    out.failures += failures(b.runs);
+    out.succeeded += b.runs.succeeded;
+    out.ended += b.runs.succeeded + b.runs.failed + b.runs.cancelled + b.runs.timed_out;
   }
-  return { runs, failures: failed };
+  return out;
+}
+
+// Week is what a namespace did over the last seven days: its runs, those that went wrong, and of
+// those that ended, how many succeeded, which the home's figures add up across namespaces.
+export type Week = { runs: number; failures: number; succeeded: number; ended: number };
+
+// together is the weeks of several namespaces added up.
+export function together(weeks: readonly Week[]): Week {
+  return weeks.reduce((a, w) => ({ runs: a.runs + w.runs, failures: a.failures + w.failures, succeeded: a.succeeded + w.succeeded, ended: a.ended + w.ended }), { runs: 0, failures: 0, succeeded: 0, ended: 0 });
 }
 
 // said is a day's count in words, for its square's title.
