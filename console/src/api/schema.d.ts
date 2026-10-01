@@ -1516,6 +1516,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/{runner}/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner, by the identifier the API minted at its join. */
+                runner: components["parameters"]["runner"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drain a runner
+         * @description Orders a runner to take nothing new and finish what it holds, from its next heartbeat, which answers drain: true with the reason; its results are accepted as usual and it stays up, so that a host can be taken down for maintenance without losing work. A runner already draining is answered as it stands, the order recorded as having changed nothing. Requires grant:manage at installation scope, audited as runner.drain with the reason, in the transaction of the order.
+         */
+        post: operations["drainRunner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{runner}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner, by the identifier the API minted at its join. */
+                runner: components["parameters"]["runner"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a runner
+         * @description Orders a runner out: it takes nothing new from its next heartbeat, its results are accepted until the end of its grace, revocation_grace after the order, and its credential is refused everywhere after that, so that revoking a credential never destroys work already done. Its record stays for the audit log, and a host it ran on joins again as a new runner. A runner already revoked is answered as it stands, so that revoking it again gives it no more time. Requires grant:manage at installation scope, audited as runner.revoke with the reason and the end of the grace, in the transaction of the order.
+         */
+        post: operations["revokeRunner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runner-pools": {
         parameters: {
             query?: never;
@@ -1529,7 +1575,34 @@ export interface paths {
          */
         get: operations["listRunnerPools"];
         put?: never;
-        post?: never;
+        /**
+         * Create a runner pool
+         * @description A pool with its labels, the namespaces it accepts and the ceilings of one task on it, the first thing an administrator writes before any machine can join. Its labels, namespaces and resource_ceilings are written even when empty, each then meaning the widest thing, so that a pool open to every namespace is one somebody said so of; containment left out is hardened, the one tier this release gives. The pool's consumer on the bus is created in the same step, and a bus that refuses it answers 503 with no pool created, so that a pool never exists with nowhere for its runners to pull from. Administrator only, audited as runner_pool.create with the pool as it was created.
+         */
+        post: operations["createRunnerPool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner-pools/{pool}/join-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner pool, by its name, its only identity. */
+                pool: components["parameters"]["pool"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a join token
+         * @description A join token of the pool: single use, an hour unless asked otherwise and never more than a day, only for labels the pool carries, and shown once, in this answer and nowhere else. A machine trades it for a runner's identity with agk-runner join, or agk-runner serve given it in AGK_RUNNER_JOIN_TOKEN. Issuing one is how a runner is added, and, with agk-runner join --replace on the same host, how a runner's labels are changed: it joins again as a new runner, and the one it replaces stays registered until it is revoked. Administrator only, audited as join_token.issue by its identifier, never by the token.
+         */
+        post: operations["issueJoinToken"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8990,6 +9063,58 @@ export interface components {
             bio?: components["schemas"]["bio"];
         };
         /**
+         * Join token request
+         * @description What a join token is asked for with: the labels the machine it is meant for may claim, every one of them a label its pool carries, and how long the administrator needs to get it there. Both may be left out: a token permitting no label, which is what a runner of the pool default claims, and the default life of an hour.
+         * @example {
+         *       "labels": [
+         *         "zone=dmz",
+         *         "arch=amd64"
+         *       ]
+         *     }
+         * @example {}
+         * @example {
+         *       "labels": [
+         *         "zone=lab"
+         *       ],
+         *       "expires_in_seconds": 900
+         *     }
+         */
+        joinTokenRequest: {
+            /**
+             * @description The labels a runner joining with the token may claim, a subset of its pool's: a label reaches a machine only where an administrator wrote it on a pool first, and a token narrows that further to the one machine it is meant for.
+             * @example [
+             *       "zone=dmz",
+             *       "arch=amd64"
+             *     ]
+             * @example []
+             */
+            labels?: components["schemas"]["$defs-label"][];
+            /**
+             * @description How long the token lives, at most a day, an hour where it is left out: a join token only has to survive the minutes between an administrator copying it and a machine presenting it.
+             * @example 3600
+             * @example 900
+             */
+            expires_in_seconds?: number;
+        };
+        /**
+         * Runner order
+         * @description An administrator's order to a runner, drain or revoke, and why: the reason is handed to the runner at its next heartbeat, which writes it to its own log, since whoever owns the machine is rarely whoever gave the order.
+         * @example {
+         *       "reason": "kernel update"
+         *     }
+         * @example {
+         *       "reason": "disk replaced"
+         *     }
+         */
+        runnerOrder: {
+            /**
+             * @description Why, in one line of at most 256 characters: one line of a journal, which is where the runner writes it, and short enough for the console to show beside the runner.
+             * @example kernel update
+             * @example disk replaced
+             */
+            reason: string;
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -12261,6 +12386,10 @@ export interface components {
         secret: string;
         /** @description Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it. */
         avatarVersion: string;
+        /** @description The runner pool, by its name, its only identity. */
+        pool: components["schemas"]["name"];
+        /** @description The runner, by the identifier the API minted at its join. */
+        runner: components["schemas"]["properties-runner"];
     };
     requestBodies: never;
     headers: {
@@ -15485,6 +15614,80 @@ export interface operations {
             403: components["responses"]["forbidden"];
         };
     };
+    drainRunner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner, by the identifier the API minted at its join. */
+                runner: components["parameters"]["runner"];
+            };
+            cookie?: never;
+        };
+        /** @description Why, handed to the runner at its next heartbeat. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["runnerOrder"];
+            };
+        };
+        responses: {
+            /** @description The runner as GET /api/v1/runners lists it, with the order it now carries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runner"];
+                };
+            };
+            /** @description The reason is refused: none, longer than 256 characters, or holding a line break or another control character. A request carrying two credentials is refused as well. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description No runner of that identifier: the caller is an administrator already, so this names the runner rather than hiding the route. */
+            404: components["responses"]["notFound"];
+            /** @description The runner is revoked, which already takes nothing new: a drain would only undo part of that, and a revocation is not undone. */
+            409: components["responses"]["conflict"];
+            413: components["responses"]["tooLarge"];
+        };
+    };
+    revokeRunner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner, by the identifier the API minted at its join. */
+                runner: components["parameters"]["runner"];
+            };
+            cookie?: never;
+        };
+        /** @description Why, handed to the runner at its next heartbeat. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["runnerOrder"];
+            };
+        };
+        responses: {
+            /** @description The runner as GET /api/v1/runners lists it, with the order it now carries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runner"];
+                };
+            };
+            /** @description The reason is refused: none, longer than 256 characters, or holding a line break or another control character. A request carrying two credentials is refused as well. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description No runner of that identifier: the caller is an administrator already, so this names the runner rather than hiding the route. */
+            404: components["responses"]["notFound"];
+            413: components["responses"]["tooLarge"];
+        };
+    };
     listRunnerPools: {
         parameters: {
             query?: never;
@@ -15508,6 +15711,77 @@ export interface operations {
             401: components["responses"]["unauthorised"];
             /** @description The caller is not an administrator, or holds a session that may only enrol. */
             403: components["responses"]["forbidden"];
+        };
+    };
+    createRunnerPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The pool, without a join token, which is issued from a pool that exists. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["runnerPool"];
+            };
+        };
+        responses: {
+            /** @description The pool as it was created, its tier written. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runnerPool"];
+                };
+            };
+            /** @description The pool is refused: a name outside the grammar or longer than 255 characters, a label that is not key=value, a namespace outside its grammar, an entry written twice, a list or the ceilings left out, a ceiling outside its grammar or null, disk named as a ceiling, a tier other than hardened, or a join token written with it. A request carrying two credentials is refused as well. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description A pool of that name exists already, and a pool's name is its only identity. */
+            409: components["responses"]["conflict"];
+            413: components["responses"]["tooLarge"];
+            /** @description The bus could not make the pool's queue ready, and no pool was created. */
+            503: components["responses"]["unavailable"];
+        };
+    };
+    issueJoinToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner pool, by its name, its only identity. */
+                pool: components["parameters"]["pool"];
+            };
+            cookie?: never;
+        };
+        /** @description The labels the token permits and how long it lives, either left out. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["joinTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The pool the token was issued from, and the token, its secret written this once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runnerPool"];
+                };
+            };
+            /** @description The request is refused: a label written twice, a label the pool does not carry, or a life longer than a day. A request carrying two credentials is refused as well. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description No runner pool of that name: the caller is an administrator already, so this names the pool rather than hiding the route. */
+            404: components["responses"]["notFound"];
+            413: components["responses"]["tooLarge"];
         };
     };
 }

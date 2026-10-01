@@ -67,3 +67,27 @@ export function capacity(r: Runner): string {
   const whole = (n: number) => bytes(n).replace(/\.0 /, " ");
   return `${r.cpu} vCPU · ${whole(r.memory_bytes)} · ${whole(r.disk_bytes)} disk · ${r.architecture}`;
 }
+
+// A label a pool grants and a runner claims, key=value, as wire.schema.json writes it.
+export const labelPattern = /^[a-z0-9]+(?:[._-][a-z0-9]+)*=[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$/;
+
+// labelsOf reads the labels written in one field, apart at commas or spaces, each once, in the order
+// written.
+export function labelsOf(text: string): string[] {
+  return [...new Set(text.split(/[\s,]+/).filter((l) => l !== ""))];
+}
+
+// joinCommand is what an administrator runs on a host to make it a runner of the pool a join token
+// was issued from, as root (#registering-a-runner): the API it joins, the token, the labels it
+// claims where it claims any, and --replace for a host that has joined before, which joins as a new
+// runner and leaves the old one registered until it is revoked.
+export function joinCommand(api: string, token: string, labels: string[], replace = false): string {
+  return ["agk-runner join", `--api ${api}`, `--token ${token}`, ...(labels.length ? [`--labels ${labels.join(",")}`] : []), ...(replace ? ["--replace"] : [])].join(" ");
+}
+
+// joinEnvironment is the same, for a runner its environment configures at every start, as a Compose
+// file does: serve joins by itself with the token, and joins again as a new runner wherever the
+// labels differ from those it joined with, so it needs no --replace.
+export function joinEnvironment(api: string, token: string, labels: string[]): string {
+  return [`AGK_API=${api}`, `AGK_RUNNER_JOIN_TOKEN=${token}`, ...(labels.length ? [`AGK_RUNNER_LABELS=${labels.join(",")}`] : [])].join("\n");
+}
