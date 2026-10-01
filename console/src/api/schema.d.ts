@@ -1006,6 +1006,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask a run to cancel
+         * @description Asks the controller to end the run: it cancels the pending tasks and sends SIGTERM to the running containers, then SIGKILL after their grace. The API writes the request and wakes the controller, and answers that it was asked, the same whether the run is going or has ended, since how it stands is what run:read guards and this route asks workflow:run on the run's workflow alone. Asking again is asking once. Takes no body. Audited, a request about a run that had ended included.
+         */
+        post: operations["cancelRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay a run
+         * @description Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only or a step above never ended.
+         */
+        post: operations["replayRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{id}/steps/{step}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+                /** @description A step of the run, by the name the workflow file gives it. */
+                step: components["parameters"]["runStep"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Follow a step's log
+         * @description The logs of the step's dispatches as server-sent events, history then live: each dispatch whole, one after the other in the order they were made, until the step's log is over. Each data line is one JSON object. dispatch begins a dispatch's log, with task_id, idempotency_key, attempt, shard and requeue; line is one line of it, with task_id, line, at and text, secrets masked before it was written; gap is lines that cannot be read back, with task_id, first_line, lines and reason; dispatch_end lets go of a dispatch, with task_id, lines, truncated and final; end says the step's log is over, with its verdict. A line, a gap and a dispatch carry an id a reconnect names in Last-Event-ID. A comment is sent every 15 seconds the stream is otherwise silent. Requires run:read on the run's workflow, asked again every 30 seconds while the stream is open.
+         */
+        get: operations["followStepLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{id}/steps/{step}/outputs/{port}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+                /** @description A step of the run, by the name the workflow file gives it. */
+                step: components["parameters"]["runStep"];
+                /** @description A port of the step, by the name its brick declares. */
+                port: components["parameters"]["runPort"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read what a step published on a port
+         * @description The envelope the step published on the port: what a downstream step was handed, and what a workflow output is a view of. Envelope contents, so it requires run:read_data on the run's workflow; the run answers its digest to run:read.
+         */
+        get: operations["getStepOutput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{id}/steps/{step}/inputs/{port}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+                /** @description A step of the run, by the name the workflow file gives it. */
+                step: components["parameters"]["runStep"];
+                /** @description A port of the step, by the name its brick declares. */
+                port: components["parameters"]["runPort"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read what a dispatch of a step was handed on a port
+         * @description The envelope one dispatch of the step was handed on the input port, what its container read under /agk/in: the attempt the query names or the last one dispatched, and the shard it names. It is what the task's grant named, not what the run would hand it now. Requires run:read_data on the run's workflow.
+         */
+        get: operations["getStepInput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/stats/runs": {
         parameters: {
             query?: never;
@@ -6819,6 +6944,74 @@ export interface components {
             tasks: components["schemas"]["taskSummary"][];
         };
         /**
+         * Run asked
+         * @description That a cancellation was asked of a run, and which: never how the run stands, which run:read guards and this route does not.
+         * @example {
+         *       "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+         *     }
+         */
+        runAsked: {
+            /**
+             * @description The run asked to cancel.
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A
+             */
+            run: components["schemas"]["ulid"];
+        };
+        /**
+         * Replay request
+         * @description Where a replay starts: a step, reusing every step above it, or the start where no step is named.
+         * @example {
+         *       "step": "invoice"
+         *     }
+         * @example {}
+         */
+        replayRequest: {
+            /**
+             * @description The step the replay runs from. The steps it reads from, directly or through others, are reused, their verdicts and envelopes taken from the run replayed. Left out, the replay runs from the start and reuses nothing.
+             * @example invoice
+             */
+            step?: components["schemas"]["identifier"];
+        };
+        /**
+         * Replay started
+         * @description The run a replay started, a new run of the commit the one replayed pinned, over the inputs it was started with, attributed to whoever asked.
+         * @example {
+         *       "run": "01JMZ9A2B3C4D5E6F7G8H9J0K1",
+         *       "state": "queued",
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "replay_of": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+         *       "replay_from": "invoice"
+         *     }
+         */
+        replayStarted: {
+            /**
+             * @description The new run.
+             * @example 01JMZ9A2B3C4D5E6F7G8H9J0K1
+             */
+            run: components["schemas"]["ulid"];
+            /**
+             * @description Where it stands as it is written.
+             * @example queued
+             * @constant
+             */
+            state: "queued";
+            /**
+             * @description The commit it runs, the one the run replayed pinned.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit: components["schemas"]["commit"];
+            /**
+             * @description The run it replays.
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A
+             */
+            replay_of: components["schemas"]["ulid"];
+            /**
+             * @description The step it replays from. Absent for a replay from the start.
+             * @example invoice
+             */
+            replay_from?: components["schemas"]["identifier"];
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -9029,6 +9222,376 @@ export interface components {
              */
             of: number;
         };
+        /**
+         * Identifier
+         * @description A name given in the workflow file and carried here unchanged: a step or a port. It is the same grammar the workflow file writes and the brick manifest declares, because this document is where that name actually travels: a port name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space, and is at most 255 characters, the most a directory or a file name holds. A port is written at most 250 in the workflow file and the manifest, since it becomes the file <name>.json, and taken here up to 255, since the engine carries one of 251 to 255 until v0.4.0 refuses it where it is written, as the documentation says.
+         * @example normalize
+         * @example out
+         * @example ok
+         * @example error
+         */
+        "$defs-identifier": string;
+        /**
+         * Attached file
+         * @description One artifact attached to an item: a file produced by a step, held in the object store, addressed by its SHA-256 digest and referenced by URI. The reference is what travels in the envelope; the bytes reach the next container as a mounted path.
+         * @example {
+         *       "name": "purchase-order.pdf",
+         *       "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
+         *       "media_type": "application/pdf",
+         *       "size": 481233,
+         *       "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+         *     }
+         */
+        file: {
+            /**
+             * @description What the artifact is called on this port, and the last segment of its URI. It is the name the consuming container finds under its input mount, and the name the run detail keeps showing after the artifact has expired or been collected.
+             * @example purchase-order.pdf
+             */
+            name: string;
+            /**
+             * Format: uri
+             * @description Where the artifact is addressed from, in the logical form agk://run/<run>/<step>/<port>/<name>. The logical URI resolves to the physical key sha256/<digest>, so two steps producing identical bytes store one copy and a replay that recomputes the same content writes nothing. Deduplication is scoped per namespace, and the URI is never handed to the consuming container, which sees a mounted path instead.
+             * @example agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf
+             */
+            uri: string;
+            /**
+             * @description What the bytes are, as an IANA media type. A consumer decides how to read the file from this rather than from the ending of its name, and a brick that emits several kinds of artifact on one port is legible because of it.
+             * @example application/pdf
+             * @example application/json
+             * @example text/csv
+             */
+            media_type: string;
+            /**
+             * @description How many bytes the artifact holds. It lets a consumer decide before it fetches, and it is what the run detail shows beside the name and the digest once the artifact itself is gone. The engine setting artifact_max_bytes caps what may be written and is not a bound on this field.
+             * @example 481233
+             * @example 1284
+             */
+            size: number;
+            /**
+             * @description The SHA-256 digest of the artifact's bytes, which is also its address: this is the <digest> the physical key sha256/<digest> is built from. A consumer checks its transfer against it, and the engine recognises content it already holds by it, which is how a replay avoids rewriting what it recomputed identically. It is written out in full, sixty-four lowercase hexadecimal characters: the documentation elides the middle of a digest for the page, and that elision is typography rather than a value.
+             * @example c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b
+             */
+            sha256: string;
+        };
+        /**
+         * Envelope metadata
+         * @description Identifies one batch on one port: the run, the step and the port it left by, the attempt that produced it, how many items it holds and when it was published. A task is self-contained and a runner never sees the graph it came from, so this travels with the data instead of being looked up.
+         * @example {
+         *       "run_id": "01JMZ8W4K2R7Q0E3N5T9ZQ4XKB",
+         *       "step": "normalize",
+         *       "port": "ok",
+         *       "attempt": 1,
+         *       "count": 2,
+         *       "produced_at": "2026-09-10T06:00:12.418Z"
+         *     }
+         */
+        meta: {
+            /**
+             * @description The run that produced the envelope, carried as the run's ULID. It is what ties the batch to the run detail, to the logs and to the artifact URIs, whose first path segment is this same value.
+             * @example 01JMZ8W4K2R7Q0E3N5T9ZQ4XKB
+             */
+            run_id: string;
+            /**
+             * @description The step that emitted the envelope, under the identifier the workflow gave it. Reading it is how a consumer, a replay or an incident tells apart two batches that reached the same port from different places in the graph.
+             * @example normalize
+             * @example invoice
+             * @example archive
+             */
+            step: components["schemas"]["$defs-identifier"];
+            /**
+             * @description The output port the envelope left by. A step declares several ports so that a rejected item takes a different path from an accepted one, and the port name is what says which of those paths this batch took. The names are the brick's own, so no set of values is fixed here.
+             * @example out
+             * @example ok
+             * @example error
+             */
+            port: components["schemas"]["$defs-identifier"];
+            /**
+             * @description Which attempt of the step produced this batch, counting from 1. A retried step publishes again, so the attempt number is what separates the batch that was kept from the ones that failed before it.
+             * @example 1
+             * @example 2
+             */
+            attempt: number;
+            /**
+             * @description How many items the envelope holds. The controller schedules on port metadata rather than on payloads, and this is the number exposed to expressions as inputs.<port>.count and steps.<id>.outputs.<port>.count, so a condition can weigh a batch without its contents ever being loaded.
+             * @example 0
+             * @example 1
+             * @example 2
+             */
+            count: number;
+            /**
+             * Format: date-time
+             * @description When the emitting step ended and the envelope was published, as an RFC 3339 timestamp. It orders batches across retries and replays without depending on the order in which they were stored.
+             * @example 2026-09-10T06:00:12.418Z
+             */
+            produced_at: string;
+        };
+        /**
+         * Item
+         * @description A single element of an envelope, carrying an identifier, a data object and a list of attached files. The item is the unit a fan-out shards on, a join matches on and a downstream port either accepts or rejects, which is why it holds its own identity rather than being known by its rank.
+         * @example {
+         *       "id": "01JMZ8W4K7A1B2C3D4E5",
+         *       "data": {
+         *         "customer_id": "C-1042",
+         *         "total": 1290.5,
+         *         "currency": "EUR"
+         *       },
+         *       "files": []
+         *     }
+         */
+        item: {
+            /**
+             * @description Identifies the item. It is what a shard, a replay and a run inspector use to speak about the same element after the batch has been split, concatenated or reordered, so it stays with the item instead of being its position in the list.
+             * @example 01JMZ8W4K7A1B2C3D4E5
+             * @example 01JMZ8W4K7A1B2C3D4E6
+             */
+            id: string;
+            /**
+             * @description The item's JSON payload, and the default channel between two bricks. Its shape belongs to the port, declared by the schema the brick manifest gives that port, so the envelope says only that it is an object. A value heavier than inline_max_bytes does not belong here: it is written as an artifact and referenced from files, which is what keeps the channel readable, diffable and replayable.
+             * @example {
+             *       "customer_id": "C-1042",
+             *       "total": 1290.5,
+             *       "currency": "EUR"
+             *     }
+             * @example {}
+             */
+            data: Record<string, never>;
+            /**
+             * @description The artifacts attached to the item. This is where a payload too heavy to travel inline arrives, and where a brick that produces documents rather than fields puts them. The consuming container receives each one as a read-only mount under /agk/in/<port>/ and never a store URL. An item with nothing attached carries an empty list.
+             * @example []
+             * @example [
+             *       {
+             *         "name": "purchase-order.pdf",
+             *         "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
+             *         "media_type": "application/pdf",
+             *         "size": 481233,
+             *         "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+             *       }
+             *     ]
+             */
+            files: components["schemas"]["file"][];
+        };
+        /**
+         * Envelope
+         * @description The JSON object { meta, items } that travels along a port. A port carries exactly one envelope, published once when the emitting step ends, so one document describes the whole of what a step hands to the next: metadata saying where the batch came from, and the items themselves. A step split into shards has its shard envelopes concatenated port by port before publication, and a port that is declared but never written publishes an empty envelope, which is not an error. The engine settings inline_max_bytes, envelope_max_bytes and max_items bound what may travel; they are limits applied by the runner to a serialised envelope and not properties of its shape, so they are not expressed here.
+         * @example {
+         *       "meta": {
+         *         "run_id": "01JMZ8W4K2R7Q0E3N5T9ZQ4XKB",
+         *         "step": "normalize",
+         *         "port": "ok",
+         *         "attempt": 1,
+         *         "count": 2,
+         *         "produced_at": "2026-09-10T06:00:12.418Z"
+         *       },
+         *       "items": [
+         *         {
+         *           "id": "01JMZ8W4K7A1B2C3D4E5",
+         *           "data": {
+         *             "customer_id": "C-1042",
+         *             "total": 1290.5,
+         *             "currency": "EUR"
+         *           },
+         *           "files": []
+         *         },
+         *         {
+         *           "id": "01JMZ8W4K7A1B2C3D4E6",
+         *           "data": {
+         *             "customer_id": "C-1043",
+         *             "total": 88,
+         *             "currency": "EUR"
+         *           },
+         *           "files": [
+         *             {
+         *               "name": "purchase-order.pdf",
+         *               "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
+         *               "media_type": "application/pdf",
+         *               "size": 481233,
+         *               "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+         *             }
+         *           ]
+         *         }
+         *       ]
+         *     }
+         */
+        "envelope.schema": {
+            /**
+             * @description Where the batch came from and how large it is. Metadata is what the controller and the console read to schedule, to display and to test a condition; the contents of the items are behind the run:read_data permission, which is why the count lives here rather than being found by reading the payload.
+             * @example {
+             *       "run_id": "01JMZ8W4K2R7Q0E3N5T9ZQ4XKB",
+             *       "step": "normalize",
+             *       "port": "ok",
+             *       "attempt": 1,
+             *       "count": 2,
+             *       "produced_at": "2026-09-10T06:00:12.418Z"
+             *     }
+             */
+            meta: components["schemas"]["meta"];
+            /**
+             * @description The batch itself, in order. Order is part of the contract: wait_all concatenates items in edge declaration order and zip pairs them by rank, so a consumer may depend on where an item sits. An empty array is a legitimate envelope, and is what a port never written by the container publishes, as does every port of a step whose if condition was false.
+             * @example []
+             * @example [
+             *       {
+             *         "id": "01JMZ8W4K7A1B2C3D4E5",
+             *         "data": {
+             *           "customer_id": "C-1042",
+             *           "total": 1290.5,
+             *           "currency": "EUR"
+             *         },
+             *         "files": []
+             *       }
+             *     ]
+             */
+            items: components["schemas"]["item"][];
+            $defs: {
+                /**
+                 * Identifier
+                 * @description A name given in the workflow file and carried here unchanged: a step or a port. It is the same grammar the workflow file writes and the brick manifest declares, because this document is where that name actually travels: a port name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space, and is at most 255 characters, the most a directory or a file name holds. A port is written at most 250 in the workflow file and the manifest, since it becomes the file <name>.json, and taken here up to 255, since the engine carries one of 251 to 255 until v0.4.0 refuses it where it is written, as the documentation says.
+                 * @example normalize
+                 * @example out
+                 * @example ok
+                 * @example error
+                 */
+                identifier: string;
+                /**
+                 * Envelope metadata
+                 * @description Identifies one batch on one port: the run, the step and the port it left by, the attempt that produced it, how many items it holds and when it was published. A task is self-contained and a runner never sees the graph it came from, so this travels with the data instead of being looked up.
+                 * @example {
+                 *       "run_id": "01JMZ8W4K2R7Q0E3N5T9ZQ4XKB",
+                 *       "step": "normalize",
+                 *       "port": "ok",
+                 *       "attempt": 1,
+                 *       "count": 2,
+                 *       "produced_at": "2026-09-10T06:00:12.418Z"
+                 *     }
+                 */
+                meta: {
+                    /**
+                     * @description The run that produced the envelope, carried as the run's ULID. It is what ties the batch to the run detail, to the logs and to the artifact URIs, whose first path segment is this same value.
+                     * @example 01JMZ8W4K2R7Q0E3N5T9ZQ4XKB
+                     */
+                    run_id: string;
+                    /**
+                     * @description The step that emitted the envelope, under the identifier the workflow gave it. Reading it is how a consumer, a replay or an incident tells apart two batches that reached the same port from different places in the graph.
+                     * @example normalize
+                     * @example invoice
+                     * @example archive
+                     */
+                    step: components["schemas"]["$defs-identifier"];
+                    /**
+                     * @description The output port the envelope left by. A step declares several ports so that a rejected item takes a different path from an accepted one, and the port name is what says which of those paths this batch took. The names are the brick's own, so no set of values is fixed here.
+                     * @example out
+                     * @example ok
+                     * @example error
+                     */
+                    port: components["schemas"]["$defs-identifier"];
+                    /**
+                     * @description Which attempt of the step produced this batch, counting from 1. A retried step publishes again, so the attempt number is what separates the batch that was kept from the ones that failed before it.
+                     * @example 1
+                     * @example 2
+                     */
+                    attempt: number;
+                    /**
+                     * @description How many items the envelope holds. The controller schedules on port metadata rather than on payloads, and this is the number exposed to expressions as inputs.<port>.count and steps.<id>.outputs.<port>.count, so a condition can weigh a batch without its contents ever being loaded.
+                     * @example 0
+                     * @example 1
+                     * @example 2
+                     */
+                    count: number;
+                    /**
+                     * Format: date-time
+                     * @description When the emitting step ended and the envelope was published, as an RFC 3339 timestamp. It orders batches across retries and replays without depending on the order in which they were stored.
+                     * @example 2026-09-10T06:00:12.418Z
+                     */
+                    produced_at: string;
+                };
+                /**
+                 * Item
+                 * @description A single element of an envelope, carrying an identifier, a data object and a list of attached files. The item is the unit a fan-out shards on, a join matches on and a downstream port either accepts or rejects, which is why it holds its own identity rather than being known by its rank.
+                 * @example {
+                 *       "id": "01JMZ8W4K7A1B2C3D4E5",
+                 *       "data": {
+                 *         "customer_id": "C-1042",
+                 *         "total": 1290.5,
+                 *         "currency": "EUR"
+                 *       },
+                 *       "files": []
+                 *     }
+                 */
+                item: {
+                    /**
+                     * @description Identifies the item. It is what a shard, a replay and a run inspector use to speak about the same element after the batch has been split, concatenated or reordered, so it stays with the item instead of being its position in the list.
+                     * @example 01JMZ8W4K7A1B2C3D4E5
+                     * @example 01JMZ8W4K7A1B2C3D4E6
+                     */
+                    id: string;
+                    /**
+                     * @description The item's JSON payload, and the default channel between two bricks. Its shape belongs to the port, declared by the schema the brick manifest gives that port, so the envelope says only that it is an object. A value heavier than inline_max_bytes does not belong here: it is written as an artifact and referenced from files, which is what keeps the channel readable, diffable and replayable.
+                     * @example {
+                     *       "customer_id": "C-1042",
+                     *       "total": 1290.5,
+                     *       "currency": "EUR"
+                     *     }
+                     * @example {}
+                     */
+                    data: Record<string, never>;
+                    /**
+                     * @description The artifacts attached to the item. This is where a payload too heavy to travel inline arrives, and where a brick that produces documents rather than fields puts them. The consuming container receives each one as a read-only mount under /agk/in/<port>/ and never a store URL. An item with nothing attached carries an empty list.
+                     * @example []
+                     * @example [
+                     *       {
+                     *         "name": "purchase-order.pdf",
+                     *         "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
+                     *         "media_type": "application/pdf",
+                     *         "size": 481233,
+                     *         "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+                     *       }
+                     *     ]
+                     */
+                    files: components["schemas"]["file"][];
+                };
+                /**
+                 * Attached file
+                 * @description One artifact attached to an item: a file produced by a step, held in the object store, addressed by its SHA-256 digest and referenced by URI. The reference is what travels in the envelope; the bytes reach the next container as a mounted path.
+                 * @example {
+                 *       "name": "purchase-order.pdf",
+                 *       "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
+                 *       "media_type": "application/pdf",
+                 *       "size": 481233,
+                 *       "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+                 *     }
+                 */
+                file: {
+                    /**
+                     * @description What the artifact is called on this port, and the last segment of its URI. It is the name the consuming container finds under its input mount, and the name the run detail keeps showing after the artifact has expired or been collected.
+                     * @example purchase-order.pdf
+                     */
+                    name: string;
+                    /**
+                     * Format: uri
+                     * @description Where the artifact is addressed from, in the logical form agk://run/<run>/<step>/<port>/<name>. The logical URI resolves to the physical key sha256/<digest>, so two steps producing identical bytes store one copy and a replay that recomputes the same content writes nothing. Deduplication is scoped per namespace, and the URI is never handed to the consuming container, which sees a mounted path instead.
+                     * @example agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf
+                     */
+                    uri: string;
+                    /**
+                     * @description What the bytes are, as an IANA media type. A consumer decides how to read the file from this rather than from the ending of its name, and a brick that emits several kinds of artifact on one port is legible because of it.
+                     * @example application/pdf
+                     * @example application/json
+                     * @example text/csv
+                     */
+                    media_type: string;
+                    /**
+                     * @description How many bytes the artifact holds. It lets a consumer decide before it fetches, and it is what the run detail shows beside the name and the digest once the artifact itself is gone. The engine setting artifact_max_bytes caps what may be written and is not a bound on this field.
+                     * @example 481233
+                     * @example 1284
+                     */
+                    size: number;
+                    /**
+                     * @description The SHA-256 digest of the artifact's bytes, which is also its address: this is the <digest> the physical key sha256/<digest> is built from. A consumer checks its transfer against it, and the engine recognises content it already holds by it, which is how a replay avoids rewriting what it recomputed identically. It is written out in full, sixty-four lowercase hexadecimal characters: the documentation elides the middle of a digest for the page, and that elision is typography rather than a value.
+                     * @example c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b
+                     */
+                    sha256: string;
+                };
+            };
+        };
     };
     responses: {
         /** @description The request is refused before it is read as one: a body that is not JSON, not UTF-8, holding a field the route does not read, a field written twice or anything after the document, or a value outside its grammar; a body sent to a route that reads none; or two credentials, a bearer token beside the session cookie or two session cookies, since a request is answered as one principal and which was meant is not the API's to guess. */
@@ -9191,6 +9754,16 @@ export interface components {
         runsLimit: number;
         /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
         runId: components["schemas"]["ulid"];
+        /** @description A step of the run, by the name the workflow file gives it. */
+        runStep: components["schemas"]["identifier"];
+        /** @description A port of the step, by the name its brick declares. */
+        runPort: components["schemas"]["identifier"];
+        /** @description Which attempt's inputs, counted from 1 as AGK_ATTEMPT is. The last attempt dispatched where left out. */
+        dispatchAttempt: number;
+        /** @description Which shard's inputs, by the index AGK_SHARD carries before its slash. A step split into shards is asked about one of them; one that was not fanned out has none. */
+        dispatchShard: number;
+        /** @description The id of the last event a stream gave, <task_id>/<seq>/<line>, which a browser's EventSource sends by itself when it reconnects: the stream resumes after it, sending the dispatch_end it had sent last where it was cut between that and what follows. */
+        lastEventId: string;
     };
     requestBodies: never;
     headers: {
@@ -11245,6 +11818,242 @@ export interface operations {
             };
             401: components["responses"]["unauthorised"];
             404: components["responses"]["notFound"];
+        };
+    };
+    cancelRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request was recorded. The Location header names the run, which GET reads under run:read. */
+            202: {
+                headers: {
+                    /** @description The run's address. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runAsked"];
+                };
+            };
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            404: components["responses"]["notFound"];
+        };
+    };
+    replayRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+            };
+            cookie?: never;
+        };
+        /** @description The step to replay from, or nothing for the start. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["replayRequest"];
+            };
+        };
+        responses: {
+            /** @description The replay was started. The Location header names the new run. */
+            202: {
+                headers: {
+                    /** @description The new run's address. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["replayStarted"];
+                };
+            };
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            404: components["responses"]["notFound"];
+            /** @description The run is not over, what its steps publish being undecided; or, from a step, the run is replayable from the start only, or a step above the one named never ended. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The run's version has no step of that name. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    followStepLog: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The id of the last event a stream gave, <task_id>/<seq>/<line>, which a browser's EventSource sends by itself when it reconnects: the stream resumes after it, sending the dispatch_end it had sent last where it was cut between that and what follows. */
+                "Last-Event-ID"?: components["parameters"]["lastEventId"];
+            };
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+                /** @description A step of the run, by the name the workflow file gives it. */
+                step: components["parameters"]["runStep"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stream. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description No such run, or not the caller's; no such step; or nothing of that name, each said as it is. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The step's logs are past the retention its workflow declared, and were deleted with it. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description No object store is attached, and a log is read from nowhere else. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    getStepOutput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+                /** @description A step of the run, by the name the workflow file gives it. */
+                step: components["parameters"]["runStep"];
+                /** @description A port of the step, by the name its brick declares. */
+                port: components["parameters"]["runPort"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The envelope, read back from the object store and held to its digest before a byte of it is answered. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["envelope.schema"];
+                };
+            };
+            401: components["responses"]["unauthorised"];
+            /** @description No such run, or not the caller's; no such step; or nothing of that name, each said as it is. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The envelope existed and its bytes were purged with the run's retention: the run still shows its digest. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            503: components["responses"]["unavailable"];
+        };
+    };
+    getStepInput: {
+        parameters: {
+            query?: {
+                /** @description Which attempt's inputs, counted from 1 as AGK_ATTEMPT is. The last attempt dispatched where left out. */
+                attempt?: components["parameters"]["dispatchAttempt"];
+                /** @description Which shard's inputs, by the index AGK_SHARD carries before its slash. A step split into shards is asked about one of them; one that was not fanned out has none. */
+                shard?: components["parameters"]["dispatchShard"];
+            };
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+                /** @description A step of the run, by the name the workflow file gives it. */
+                step: components["parameters"]["runStep"];
+                /** @description A port of the step, by the name its brick declares. */
+                port: components["parameters"]["runPort"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The envelope, read back from the object store and held to its digest before a byte of it is answered. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["envelope.schema"];
+                };
+            };
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description No such run, or not the caller's; no such step; or nothing of that name, each said as it is. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The envelope existed and its bytes were purged with the run's retention: the run still shows its digest. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            503: components["responses"]["unavailable"];
         };
     };
     getRunStatistics: {
