@@ -1,0 +1,16 @@
+{
+  "kind": "user",
+  "login": "bob-martin",
+  "display_name": "Bob Martin",
+  "email": "bob martin@example.com",
+  "admin": false,
+  "suspended": false,
+  "given_name": "Bob",
+  "family_name": "Martin",
+  "title": "",
+  "location": "",
+  "timezone": "",
+  "bio": "",
+  "avatar_updated_at": null,
+  "created_at": "2026-09-27T09:20:00Z"
+}

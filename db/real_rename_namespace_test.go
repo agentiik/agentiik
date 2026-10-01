@@ -158,7 +158,7 @@ func TestARenamedNamespaceCarriesEveryRowNamingIt(t *testing.T) {
 		t.Errorf("a namespace created under the former name was answered %v", err)
 	}
 	if err := administer(func(ctx context.Context, w *Wide) error {
-		return w.CreateUser(ctx, User{Login: "finance", DisplayName: "Finance"})
+		return w.CreateUser(ctx, User{Login: "finance", GivenName: "Finance"})
 	}); !errors.Is(err, ErrNameTaken) {
 		t.Errorf("a login taking the former name was answered %v", err)
 	}

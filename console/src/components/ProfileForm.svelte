@@ -16,7 +16,7 @@
   let { api, me, reread }: { api: API; me: Me; reread: () => Promise<void> } = $props();
 
   const user = $derived(me.user);
-  let form = $state<Profile>(untrack(() => profileOf(me.user ?? ({ display_name: "" } as never))));
+  let form = $state<Profile>(untrack(() => profileOf(me.user ?? ({} as never))));
   const before = $derived(user ? profileOf(user) : form);
   const edits = $derived(changed(before, form));
   const dirty = $derived(Object.keys(edits).length > 0);
@@ -51,7 +51,6 @@
   }
 
   const labels: Record<Field, string> = {
-    display_name: "Display name",
     given_name: "Given name",
     family_name: "Family name",
     title: "Title",
@@ -60,7 +59,6 @@
     bio: "Bio",
   };
   const hints: Partial<Record<Field, string>> = {
-    display_name: "the name people read beside your login",
     timezone: "as the IANA database names it, such as Europe/Paris",
   };
   const placeholders: Partial<Record<Field, string>> = { title: "Technical lead", location: "Lyon, France", timezone: "Europe/Paris" };
@@ -119,10 +117,16 @@
             </label>
           {/each}
         </div>
-        {#each ["display_name", "title", "location", "timezone"] as const as f (f)}
+        <!-- The address an administrator gave, shown and never written here, and never a link: the
+             console opens no mail client, as the product sends no mail. -->
+        <div class="given">
+          <span>Email</span>
+          <span class:muted={!user.email}>{user.email || "None"}</span>
+        </div>
+        {#each ["title", "location", "timezone"] as const as f (f)}
           <label>
             <span>{labels[f]}{#if hints[f]}<span class="faint hint">{hints[f]}</span>{/if}</span>
-            <input bind:value={form[f]} maxlength={longest[f]} placeholder={placeholders[f] ?? ""} required={f === "display_name"} list={f === "timezone" ? "profile-zones" : undefined} autocomplete={f === "display_name" ? "name" : "off"} />
+            <input bind:value={form[f]} maxlength={longest[f]} placeholder={placeholders[f] ?? ""} list={f === "timezone" ? "profile-zones" : undefined} autocomplete="off" />
             {#if f === "timezone" && there}<span class="faint">{there} there now</span>{/if}
           </label>
         {/each}
@@ -181,6 +185,25 @@
   label > span:first-child {
     color: var(--muted);
     font-weight: 500;
+  }
+
+  /* A value given rather than written: its label as a field's, and the value on a line of a field's
+     height, so that the form keeps its rhythm. */
+  .given {
+    display: grid;
+    gap: calc(var(--unit) * 2);
+    font-size: var(--type-control-size);
+  }
+
+  .given > span:first-child {
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .given > span:last-child {
+    display: flex;
+    align-items: center;
+    min-height: var(--control-height);
   }
 
   textarea {

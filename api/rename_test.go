@@ -106,7 +106,7 @@ func someRenaming(t *testing.T) renaming {
 	t.Helper()
 	in := someNamespaces(t)
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "frank", DisplayName: "Frank"}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "frank", GivenName: "Frank"}); err != nil {
 			return err
 		}
 		if _, err := w.CreateNamespace(ctx, db.Namespace{Name: "frank", Kind: db.NamespacePersonal, Owner: "frank"}); err != nil {

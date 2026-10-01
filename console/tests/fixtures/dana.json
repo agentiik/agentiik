@@ -10,7 +10,10 @@
         "display_name": "Dana Okafor",
         "admin": true,
         "suspended": false,
-        "created_at": "2026-09-20T08:00:00Z"
+        "created_at": "2026-09-20T08:00:00Z",
+        "email": "dana.okafor@example.com",
+        "given_name": "Dana",
+        "family_name": "Okafor"
       },
       "groups": [],
       "permissions": {
@@ -12878,7 +12881,10 @@
           "admin": false,
           "suspended": false,
           "created_at": "2026-09-20T08:05:00Z",
-          "last_sign_in_at": "2026-09-30T05:40:12Z"
+          "last_sign_in_at": "2026-09-30T05:40:12Z",
+          "email": "alice.martin@example.com",
+          "given_name": "Alice",
+          "family_name": "Martin"
         },
         {
           "kind": "user",
@@ -12886,7 +12892,9 @@
           "display_name": "Bob Martin",
           "admin": false,
           "suspended": false,
-          "created_at": "2026-09-29T16:20:00Z"
+          "created_at": "2026-09-29T16:20:00Z",
+          "given_name": "Bob",
+          "family_name": "Martin"
         },
         {
           "kind": "user",
@@ -12896,7 +12904,9 @@
           "suspended": true,
           "suspended_for": "no_passkey",
           "created_at": "2026-09-21T10:00:00Z",
-          "last_sign_in_at": "2026-09-24T09:12:40Z"
+          "last_sign_in_at": "2026-09-24T09:12:40Z",
+          "given_name": "Carol",
+          "family_name": "Diaz"
         },
         {
           "kind": "user",
@@ -12905,7 +12915,10 @@
           "admin": true,
           "suspended": false,
           "created_at": "2026-09-20T08:00:00Z",
-          "last_sign_in_at": "2026-09-30T06:00:02Z"
+          "last_sign_in_at": "2026-09-30T06:00:02Z",
+          "email": "dana.okafor@example.com",
+          "given_name": "Dana",
+          "family_name": "Okafor"
         }
       ]
     }

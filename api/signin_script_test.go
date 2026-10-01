@@ -448,12 +448,12 @@ func passwordAnswers(t *testing.T) (map[string]routeAnswer, http.Handler) {
 	}
 	if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, login := range []string{"erin", "frank", "gail"} {
-			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, db.User{Login: login}); err != nil {
 				return err
 			}
 		}
 		for _, login := range []string{"alice", "bob", "carol"} {
-			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, db.User{Login: login}); err != nil {
 				return err
 			}
 			hash, err := password.Hash(login + "'s own")

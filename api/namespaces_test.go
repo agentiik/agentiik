@@ -49,7 +49,7 @@ func someNamespaces(t *testing.T) namespaces {
 		t.Fatal(err)
 	}
 	err = in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "erin", DisplayName: "Erin"})
+		return w.CreateUser(ctx, db.User{Login: "erin", Profile: db.Profile{GivenName: "Erin"}})
 	})
 	if err != nil {
 		t.Fatal(err)

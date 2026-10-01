@@ -51,7 +51,7 @@ func somePeople(t *testing.T) people {
 	now := time.Now().UTC().Truncate(time.Second)
 	clock := func() time.Time { return now }
 	if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		for _, u := range []db.User{{Login: "carol", DisplayName: "Carol", Admin: true}, {Login: "alice", DisplayName: "Alice"}} {
+		for _, u := range []db.User{{Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true}, {Login: "alice", Profile: db.Profile{GivenName: "Alice"}}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}
@@ -183,7 +183,7 @@ func (in people) enrol(t *testing.T, login string) {
 // Each administrator it creates is handed finance, which no record names an owner of.
 func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnrol(t *testing.T) {
 	in := somePeople(t)
-	const dan = `{"login":"dan","display_name":"Dan Martin","admin":true}`
+	const dan = `{"login":"dan","given_name":"Dan","family_name":"Martin","email":"dan.martin@example.com","admin":true}`
 
 	var made api.CreatedUser
 	w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, dan, &made)
@@ -194,7 +194,8 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 		t.Errorf("a link shown once was answered with Cache-Control %q", w.Header().Get("Cache-Control"))
 	}
 	u := made.User
-	if u.Kind != "user" || u.Login != "dan" || u.DisplayName != "Dan Martin" || !u.Admin || u.Suspended || u.CreatedAt.IsZero() || !u.LastSignInAt.IsZero() {
+	if u.Kind != "user" || u.Login != "dan" || u.DisplayName != "Dan Martin" || u.GivenName != "Dan" || u.FamilyName != "Martin" || u.Email != "dan.martin@example.com" ||
+		!u.Admin || u.Suspended || u.CreatedAt.IsZero() || !u.LastSignInAt.IsZero() {
 		t.Errorf("dan was answered %+v", u)
 	}
 	if !made.Enrolment.ExpiresAt.Equal(in.now.Add(time.Hour)) {
@@ -227,16 +228,19 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 		t.Errorf("the fresh link was answered %v", err)
 	}
 
-	// Asked with another display name, or as no administrator: somebody else's login.
-	for _, other := range []string{`{"login":"dan","display_name":"Dan"}`, `{"login":"dan","display_name":"Dan Martin","admin":false}`, `{"login":"dan","admin":false}`} {
-		if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, other, nil); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "another display name or admin") {
+	// Asked with another name or email address, or as no administrator: somebody else's login.
+	for _, other := range []string{
+		`{"login":"dan","given_name":"Daniel"}`, `{"login":"dan","family_name":""}`, `{"login":"dan","email":"dan@example.org"}`,
+		`{"login":"dan","given_name":"Dan","family_name":"Martin","admin":false}`, `{"login":"dan","admin":false}`,
+	} {
+		if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, other, nil); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "another name, email address or admin") {
 			t.Errorf("dan asked for otherwise answered %d: %s", w.Code, w.Body)
 		}
 	}
 
 	// A mistyped login's link is revoked by the one made next with the bootstrap token.
 	var mistyped api.CreatedUser
-	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"dna","display_name":"Dan Martin","admin":true}`, &mistyped); w.Code != http.StatusCreated {
+	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"dna","given_name":"Dan","family_name":"Martin","admin":true}`, &mistyped); w.Code != http.StatusCreated {
 		t.Fatalf("a mistyped administrator answered %d: %s", w.Code, w.Body)
 	}
 	if _, err := in.openCode(t, second); !errors.Is(err, db.ErrNoEnrolmentCode) {
@@ -256,7 +260,7 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 
 	// A user who is not an administrator is given a new user's link, issued by operator.
 	var erin api.CreatedUser
-	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"erin","display_name":"Erin"}`, &erin); w.Code != http.StatusCreated || erin.User.Admin {
+	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"erin","given_name":"Erin"}`, &erin); w.Code != http.StatusCreated || erin.User.Admin {
 		t.Fatalf("the bootstrap token creating erin answered %d: %s", w.Code, w.Body)
 	}
 	if c, err := in.openCode(t, codeOf(t, erin.Enrolment.Link)); err != nil || c.Kind != db.EnrolmentNewUser || c.IssuedBy != "operator" {
@@ -277,13 +281,13 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 		_, err := w.EndBootstrap(ctx, in.now)
 		return err
 	})
-	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"frank","display_name":"Frank","admin":true}`, nil); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator signed in") {
+	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"frank","given_name":"Frank","admin":true}`, nil); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator signed in") {
 		t.Errorf("the ended bootstrap token creating frank answered %d: %s", w.Code, w.Body)
 	}
 	// And an administrator creates one, answered a new user's link that they issued: a first
 	// administrator's link is the bootstrap token's alone, and it has ended.
 	var frank api.CreatedUser
-	if w := in.ask(t, "POST", "/api/v1/users", in.carol, `{"login":"frank","display_name":"Frank","admin":true}`, &frank); w.Code != http.StatusCreated || !frank.User.Admin {
+	if w := in.ask(t, "POST", "/api/v1/users", in.carol, `{"login":"frank","given_name":"Frank","admin":true}`, &frank); w.Code != http.StatusCreated || !frank.User.Admin {
 		t.Fatalf("carol creating frank, an administrator, once the bootstrap ended answered %d: %s", w.Code, w.Body)
 	}
 	if c, err := in.openCode(t, codeOf(t, frank.Enrolment.Link)); err != nil || c.Kind != db.EnrolmentNewUser || c.IssuedBy != "carol" {
@@ -344,13 +348,13 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 func TestOnlyAnAdministratorAdministersUsersAndGroups(t *testing.T) {
 	in := somePeople(t)
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "bob", DisplayName: "Bob"}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "bob", Profile: db.Profile{GivenName: "Bob"}}); err != nil {
 			return err
 		}
 		return w.CreateGroup(ctx, "team-finance")
 	})
 	routes := []struct{ method, path, body string }{
-		{"POST", "/api/v1/users", `{"login":"dan","display_name":"Dan"}`},
+		{"POST", "/api/v1/users", `{"login":"dan","given_name":"Dan"}`},
 		{"GET", "/api/v1/users", ""},
 		{"GET", "/api/v1/users/bob", ""},
 		{"POST", "/api/v1/users/bob/enrolment", ""},
@@ -401,27 +405,37 @@ func TestALoginIsHeldToTheNamespaceGrammarAndItsNameSpace(t *testing.T) {
 		want  int
 		means string
 	}{
-		{`{"login":"Dan","display_name":"Dan"}`, 400, "is not a login"},
-		{`{"login":"dan_martin","display_name":"Dan"}`, 400, "is not a login"},
-		{`{"login":"-dan","display_name":"Dan"}`, 400, "is not a login"},
-		{`{"login":"","display_name":"Dan"}`, 400, "a user has a login"},
-		{`{"display_name":"Dan"}`, 400, "a user has a login"},
-		{`{"login":"` + strings.Repeat("d", 256) + `","display_name":"Dan"}`, 400, "at most 255"},
-		{`{"login":"auth","display_name":"Auth"}`, 400, "login: auth is reserved"},
-		{`{"login":"runner-pools","display_name":"Pools"}`, 400, "login: runner-pools is reserved"},
-		{`{"login":"stats","display_name":"Stats"}`, 400, "login: stats is reserved: it is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools"},
-		{`{"login":"operator","display_name":"Operator"}`, 400, "login: operator is reserved"},
-		{`{"login":"installation","display_name":"Installation"}`, 400, "login: installation is reserved"},
-		{`{"login":"finance","display_name":"Finance"}`, 409, "finance is a namespace's name"},
-		{`{"login":"alice","display_name":"Alice"}`, 200, ""},
-		{`{"login":"dan","display_name":""}`, 400, "a user has a display name"},
-		{`{"login":"dan","display_name":"   \t"}`, 400, "control character"},
-		{`{"login":"dan","display_name":"` + strings.Repeat("é", 257) + `"}`, 400, "at most 256 characters and this one is 257"},
-		{`{"login":"dan","display_name":"Dan\nMartin"}`, 400, "control character"},
-		{`{"login":"dan","display_name":"Dan\u001b[2J"}`, 400, "control character"},
-		{`{"login":"dan","display_name":"Dan","admin":"yes"}`, 400, "true or false"},
-		{`{"login":"dan","display_name":"Dan","kind":"user"}`, 400, "not a field"},
-		{`{"login":"dan","display_name":"Dan","login":"eve"}`, 400, "twice"},
+		{`{"login":"Dan","given_name":"Dan"}`, 400, "is not a login"},
+		{`{"login":"dan_martin","given_name":"Dan"}`, 400, "is not a login"},
+		{`{"login":"-dan","given_name":"Dan"}`, 400, "is not a login"},
+		{`{"login":"","given_name":"Dan"}`, 400, "a user has a login"},
+		{`{"given_name":"Dan"}`, 400, "a user has a login"},
+		{`{"login":"` + strings.Repeat("d", 256) + `","given_name":"Dan"}`, 400, "at most 255"},
+		{`{"login":"auth","given_name":"Auth"}`, 400, "login: auth is reserved"},
+		{`{"login":"runner-pools","given_name":"Pools"}`, 400, "login: runner-pools is reserved"},
+		{`{"login":"stats","given_name":"Stats"}`, 400, "login: stats is reserved: it is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools"},
+		{`{"login":"operator","given_name":"Operator"}`, 400, "login: operator is reserved"},
+		{`{"login":"installation","given_name":"Installation"}`, 400, "login: installation is reserved"},
+		{`{"login":"finance","given_name":"Finance"}`, 409, "finance is a namespace's name"},
+		{`{"login":"alice","given_name":"Alice"}`, 200, ""},
+		{`{"login":"dan","display_name":"Dan"}`, 400, "display_name: nobody writes a display name"},
+		{`{"login":"dan","display_name":""}`, 400, "display_name: nobody writes a display name"},
+		{`{"login":"dan","given_name":"   \t"}`, 400, "given_name: it holds a line break or another control character"},
+		{`{"login":"dan","given_name":"` + strings.Repeat("é", 129) + `"}`, 400, "given_name: it is at most 128 characters and this one is 129"},
+		{`{"login":"dan","family_name":"Dan\nMartin"}`, 400, "family_name: it holds a line break"},
+		{`{"login":"dan","family_name":"Dan\u001b[2J"}`, 400, "control character"},
+		{`{"login":"dan","email":"dan"}`, 400, "is not an email address, which is one @ with something on each side"},
+		{`{"login":"dan","email":"@example.com"}`, 400, "is not an email address"},
+		{`{"login":"dan","email":"dan@"}`, 400, "is not an email address"},
+		{`{"login":"dan","email":"dan@martin@example.com"}`, 400, "is not an email address"},
+		{`{"login":"dan","email":"dan martin@example.com"}`, 400, "email: it holds a space"},
+		{`{"login":"dan","email":"dan@example.com\n"}`, 400, "email: it holds a space, a line break"},
+		{`{"login":"dan","email":"dan\u00a0martin@example.com"}`, 400, "email: it holds a space"},
+		{`{"login":"dan","email":"` + strings.Repeat("d", 243) + `@example.com"}`, 400, "email: an email address is at most 254 characters and this one is 255"},
+		{`{"login":"dan","email":7}`, 400, "a number"},
+		{`{"login":"dan","given_name":"Dan","admin":"yes"}`, 400, "true or false"},
+		{`{"login":"dan","given_name":"Dan","kind":"user"}`, 400, "not a field"},
+		{`{"login":"dan","given_name":"Dan","login":"eve"}`, 400, "twice"},
 	} {
 		w := in.ask(t, "POST", "/api/v1/users", in.carol, c.body, nil)
 		if w.Code != c.want || !strings.Contains(w.Body.String(), c.means) {
@@ -429,7 +443,7 @@ func TestALoginIsHeldToTheNamespaceGrammarAndItsNameSpace(t *testing.T) {
 		}
 	}
 	// 256 characters of two bytes each is a display name, as the table counts it.
-	if w := in.ask(t, "POST", "/api/v1/users", in.carol, `{"login":"dan","display_name":"`+strings.Repeat("é", 256)+`"}`, nil); w.Code != http.StatusCreated {
+	if w := in.ask(t, "POST", "/api/v1/users", in.carol, `{"login":"dan","given_name":"`+strings.Repeat("é", 128)+`","family_name":"`+strings.Repeat("é", 128)+`","email":"`+strings.Repeat("d", 242)+`@example.com"}`, nil); w.Code != http.StatusCreated {
 		t.Errorf("a display name of 256 characters answered %d: %s", w.Code, w.Body)
 	}
 	if n := in.count(t, `select count(*) from users`); n != 3 {
@@ -461,7 +475,7 @@ func TestTheFirstAdministratorIsHandedTheNamespacesNobodyOwns(t *testing.T) {
 		}
 		return strings.Join(names, ",")
 	}
-	const dan = `{"login":"dan","display_name":"Dan Martin","admin":true}`
+	const dan = `{"login":"dan","given_name":"Dan","family_name":"Martin","admin":true}`
 	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, dan, nil); w.Code != http.StatusCreated {
 		t.Fatalf("the bootstrap token creating dan answered %d: %s", w.Code, w.Body)
 	}
@@ -493,8 +507,8 @@ func TestTheFirstAdministratorIsHandedTheNamespacesNobodyOwns(t *testing.T) {
 	}
 
 	for _, c := range []struct{ as, body, login string }{
-		{in.carol, `{"login":"erin","display_name":"Erin","admin":true}`, "erin"},
-		{in.bootstrap, `{"login":"frank","display_name":"Frank"}`, "frank"},
+		{in.carol, `{"login":"erin","given_name":"Erin","admin":true}`, "erin"},
+		{in.bootstrap, `{"login":"frank","given_name":"Frank"}`, "frank"},
 	} {
 		if w := in.ask(t, "POST", "/api/v1/users", c.as, c.body, nil); w.Code != http.StatusCreated {
 			t.Fatalf("creating %s answered %d: %s", c.login, w.Code, w.Body)
@@ -571,7 +585,7 @@ func TestAUserAndAGroupMadeBeforeTheirWordWasReservedAreServed(t *testing.T) {
 	// The table as a build before that migration held it, the users made then, and the migration.
 	in.exec(t, `create or replace function agentiik_reserved(name text) returns boolean language sql immutable as $$ select false $$`)
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "stats", DisplayName: "Stats"}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "stats", Profile: db.Profile{GivenName: "Stats"}}); err != nil {
 			return err
 		}
 		return w.CreateGroup(ctx, "stats")
@@ -590,7 +604,7 @@ func TestAUserAndAGroupMadeBeforeTheirWordWasReservedAreServed(t *testing.T) {
 		{"POST", "/api/v1/groups", `{"name":"team-stats","members":["stats"]}`, http.StatusCreated},
 		{"DELETE", "/api/v1/groups/stats", "", http.StatusNoContent},
 		{"DELETE", "/api/v1/users/stats", "", http.StatusNoContent},
-		{"POST", "/api/v1/users", `{"login":"stats","display_name":"Stats"}`, http.StatusBadRequest},
+		{"POST", "/api/v1/users", `{"login":"stats","given_name":"Stats"}`, http.StatusBadRequest},
 		{"POST", "/api/v1/groups", `{"name":"stats"}`, http.StatusBadRequest},
 	} {
 		if w := in.ask(t, c.method, c.path, in.carol, c.body, nil); w.Code != c.want {
@@ -605,7 +619,7 @@ func TestAUserAndAGroupMadeBeforeTheirWordWasReservedAreServed(t *testing.T) {
 func TestAUserIsListedReadAndGivenAFreshLink(t *testing.T) {
 	in := somePeople(t)
 	var bob api.CreatedUser
-	if w := in.ask(t, "POST", "/api/v1/users", in.carol, `{"login":"bob-martin","display_name":"Bob Martin"}`, &bob); w.Code != http.StatusCreated {
+	if w := in.ask(t, "POST", "/api/v1/users", in.carol, `{"login":"bob-martin","given_name":"Bob","family_name":"Martin"}`, &bob); w.Code != http.StatusCreated {
 		t.Fatalf("creating bob-martin answered %d: %s", w.Code, w.Body)
 	}
 	if c, err := in.openCode(t, codeOf(t, bob.Enrolment.Link)); err != nil || c.Kind != db.EnrolmentNewUser || c.IssuedBy != "carol" {
@@ -618,9 +632,12 @@ func TestAUserIsListedReadAndGivenAFreshLink(t *testing.T) {
 		t.Errorf("hana, created with her login alone, answered %d: %s", w.Code, w.Body)
 	}
 	for body, want := range map[string]int{
-		`{"login":"hana"}`: http.StatusOK, `{"login":"hana","display_name":null,"admin":null}`: http.StatusOK,
-		`{"login":"hana","display_name":"hana","admin":false}`: http.StatusOK,
-		`{"login":"hana","admin":true}`:                        http.StatusConflict, `{"login":"hana","display_name":"Hana"}`: http.StatusConflict,
+		`{"login":"hana"}`: http.StatusOK,
+		`{"login":"hana","given_name":null,"family_name":null,"email":null,"admin":null}`: http.StatusOK,
+		`{"login":"hana","given_name":"","family_name":"","email":"","admin":false}`:      http.StatusOK,
+		`{"login":"hana","admin":true}`:               http.StatusConflict,
+		`{"login":"hana","given_name":"Hana"}`:        http.StatusConflict,
+		`{"login":"hana","email":"hana@example.com"}`: http.StatusConflict,
 	} {
 		if w := in.ask(t, "POST", "/api/v1/users", in.carol, body, nil); w.Code != want {
 			t.Errorf("%s answered %d: %s", body, w.Code, w.Body)
@@ -690,7 +707,7 @@ func TestAUserIsRemovedWithWhatTheyHeldAndTheirEmptyPersonalNamespace(t *testing
 	in := somePeople(t)
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
 		for _, u := range []string{"bob", "dan", "erin"} {
-			if err := w.CreateUser(ctx, db.User{Login: u, DisplayName: u}); err != nil {
+			if err := w.CreateUser(ctx, db.User{Login: u}); err != nil {
 				return err
 			}
 		}
@@ -791,7 +808,7 @@ func TestAUserIsRemovedWithWhatTheyHeldAndTheirEmptyPersonalNamespace(t *testing
 func TestAGroupsMembershipChangesWhatItsGrantsReachAndTouchesNoGrant(t *testing.T) {
 	in := somePeople(t)
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "bob-martin", DisplayName: "Bob Martin"})
+		return w.CreateUser(ctx, db.User{Login: "bob-martin", Profile: db.Profile{GivenName: "Bob Martin"}})
 	})
 
 	var made api.Group
@@ -942,7 +959,7 @@ func TestAnActTheAuditLogRefusesLeavesNothing(t *testing.T) {
 	in := somePeople(t)
 	refuseAppends(t, in.super)
 	for _, r := range []struct{ method, path, body string }{
-		{"POST", "/api/v1/users", `{"login":"dan","display_name":"Dan"}`},
+		{"POST", "/api/v1/users", `{"login":"dan","given_name":"Dan"}`},
 		{"POST", "/api/v1/groups", `{"name":"team-ops","members":["alice"]}`},
 		{"DELETE", "/api/v1/users/alice", ""},
 	} {
@@ -977,14 +994,14 @@ func TestTheBootstrapEndingWhileARequestIsServedEndsWhatItMayDo(t *testing.T) {
 		t.Fatal(err)
 	}
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "dan", DisplayName: "Dan", Admin: true}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "dan", Profile: db.Profile{GivenName: "Dan"}, Admin: true}); err != nil {
 			return err
 		}
 		_, err := w.EndBootstrap(ctx, in.now)
 		return err
 	})
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "erin", DisplayName: "Erin"}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "erin", Profile: db.Profile{GivenName: "Erin"}}); err != nil {
 			return err
 		}
 		if err := w.CreateGroup(ctx, "old-team"); err != nil {
@@ -994,8 +1011,8 @@ func TestTheBootstrapEndingWhileARequestIsServedEndsWhatItMayDo(t *testing.T) {
 		return err
 	})
 	for _, r := range []struct{ method, path, body string }{
-		{"POST", "/api/v1/users", `{"login":"frank","display_name":"Frank"}`},
-		{"POST", "/api/v1/users", `{"login":"dan","display_name":"Dan","admin":true}`},
+		{"POST", "/api/v1/users", `{"login":"frank","given_name":"Frank"}`},
+		{"POST", "/api/v1/users", `{"login":"dan","given_name":"Dan","admin":true}`},
 		{"POST", "/api/v1/users/dan/enrolment", ""},
 		{"POST", "/api/v1/users/erin/enrolment", ""},
 		{"POST", "/api/v1/users/dan/recovery", ""},
@@ -1043,7 +1060,7 @@ func TestTwoRequestsCreatingOneUserAtOnceMakeOneUserAndOneOpenLink(t *testing.T)
 	codes := make(chan int, 2)
 	for range 2 {
 		go func() {
-			codes <- sent(t, in.h, "POST", "/api/v1/users", in.carol, `{"login":"dan","display_name":"Dan"}`).Code
+			codes <- sent(t, in.h, "POST", "/api/v1/users", in.carol, `{"login":"dan","given_name":"Dan"}`).Code
 		}()
 	}
 	watcher := dbtest.Superuser(t, in.super)
@@ -1111,7 +1128,7 @@ func waitForLocks(t *testing.T, super string, n int) error {
 func TestAnActLocksItsRowsBeforeItAppendsToTheAuditLog(t *testing.T) {
 	in := somePeople(t)
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "dan", DisplayName: "Dan"}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "dan", Profile: db.Profile{GivenName: "Dan"}}); err != nil {
 			return err
 		}
 		return w.CreateGroup(ctx, "team-finance")
@@ -1122,7 +1139,7 @@ func TestAnActLocksItsRowsBeforeItAppendsToTheAuditLog(t *testing.T) {
 		method, path, body, member string
 		want                       int
 	}{
-		{"POST", "/api/v1/users", `{"login":"alice","display_name":"Alice"}`, "alice", http.StatusOK},
+		{"POST", "/api/v1/users", `{"login":"alice","given_name":"Alice"}`, "alice", http.StatusOK},
 		{"DELETE", "/api/v1/users/dan", "", "dan", http.StatusNoContent},
 	} {
 		answered := make(chan *httptest.ResponseRecorder, 1)
@@ -1177,8 +1194,8 @@ func TestTheLastAdministratorWhoCanSignInIsNotRemoved(t *testing.T) {
 	in := somePeople(t)
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
 		for _, u := range []db.User{
-			{Login: "dan", DisplayName: "Dan", Admin: true}, {Login: "erin", DisplayName: "Erin", Admin: true},
-			{Login: "frank", DisplayName: "Frank", Admin: true, Suspended: true}, {Login: "gina", DisplayName: "Gina", Admin: true},
+			{Login: "dan", Profile: db.Profile{GivenName: "Dan"}, Admin: true}, {Login: "erin", Profile: db.Profile{GivenName: "Erin"}, Admin: true},
+			{Login: "frank", Profile: db.Profile{GivenName: "Frank"}, Admin: true, Suspended: true}, {Login: "gina", Profile: db.Profile{GivenName: "Gina"}, Admin: true},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
@@ -1260,7 +1277,7 @@ func TestAnActOfTheBootstrapTokenWaitsForTheEnrolmentThatEndsIt(t *testing.T) {
 			return err
 		}
 		go func() {
-			answered <- sent(t, in.h, "POST", "/api/v1/users", in.bootstrap, `{"login":"erin","display_name":"Erin"}`)
+			answered <- sent(t, in.h, "POST", "/api/v1/users", in.bootstrap, `{"login":"erin","given_name":"Erin"}`)
 		}()
 		return in.waitForLocks(t, 1)
 	})

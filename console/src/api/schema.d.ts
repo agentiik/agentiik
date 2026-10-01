@@ -461,7 +461,7 @@ export interface paths {
         head?: never;
         /**
          * Change what the caller says of themself
-         * @description Changes the caller's display name and profile as the body names them: given_name, family_name, title, location, timezone and bio, each set to what the body holds, the empty string clearing it, and each the body leaves out kept. The display name is never cleared, since a user always has one. Set by the user alone, and by no administrator: a profile is what a person tells the people they work with about themself, and one somebody else could rewrite would put words in their mouth. The bootstrap token and a service account have no profile, and are refused saying so; a token narrowed by a scope keeps only the permissions it names, and saying who its holder is to everybody who reads their name is none of them. Each field is one line holding no control character, since it is shown in a console and printed at a terminal: at most 128 characters, the display name 256 and the bio 280. timezone is a name of the IANA database, which a client turns an instant into the user's own hours with; Local, the server's own zone, names no place and is refused. The user's row is held while the change is merged into it, so that two changes at once each keep what the other wrote. Answers who the caller is, as GET /api/v1/me does. Audited as user.profile with the names of the fields that changed and never what they hold, since the log is kept for good and what a person wrote about themself is theirs to take back; unchanged where none did.
+         * @description Changes the caller's profile as the body names it: given_name, family_name, title, location, timezone and bio, each set to what the body holds, the empty string clearing it, and each the body leaves out kept. The display name is made of the given and family names, the login where neither is said, and written by nobody, so display_name is refused; so is email, which an administrator gives at PATCH /api/v1/users/{login} and the user does not change. Set by the user alone, and by no administrator: a profile is what a person tells the people they work with about themself, and one somebody else could rewrite would put words in their mouth. The bootstrap token and a service account have no profile, and are refused saying so; a token narrowed by a scope keeps only the permissions it names, and saying who its holder is to everybody who reads their name is none of them. Each field is one line holding no control character, since it is shown in a console and printed at a terminal: at most 128 characters, and the bio 280. timezone is a name of the IANA database, which a client turns an instant into the user's own hours with; Local, the server's own zone, names no place and is refused. The user's row is held while the change is merged into it, so that two changes at once each keep what the other wrote. Answers who the caller is, as GET /api/v1/me does. Audited as user.profile with the names of the fields that changed and never what they hold, since the log is kept for good and what a person wrote about themself is theirs to take back; unchanged where none did.
          */
         patch: operations["updateMe"];
         trace?: never;
@@ -624,13 +624,13 @@ export interface paths {
         };
         /**
          * List users
-         * @description Every user of the installation, by login, with whether each is an administrator, whether it is suspended and, where the policy suspended it, why, when each was created and last signed in, and what each says of themself and when their photo was last set; never a credential, and never a photo. Administrator only.
+         * @description Every user of the installation, by login, with their display name and the email address an administrator gave them, whether each is an administrator, whether it is suspended and, where the policy suspended it, why, when each was created and last signed in, and what each says of themself and when their photo was last set; never a credential, and never a photo. Administrator only.
          */
         get: operations["listUsers"];
         put?: never;
         /**
          * Create a user
-         * @description Creates a user from a login, a display name, the login where none is given, and admin where it is an administrator, holding no credential, answered 201 with an enrolment link shown once, single use and good for an hour. Asked again for a user who has not enrolled, with nothing said otherwise than was recorded, it answers 200 with a fresh link and revokes the one before, a field left out keeping what is recorded, so that a link that lapsed unused locks nobody out: agk user create LOGIN, run again with nothing more, answers the fresh link it is run again for. Administrator only, and the bootstrap token's until the first administrator has signed in: an administrator it creates gets a first administrator's link, which revokes every first administrator's link still open, and anybody else a new user's. An administrator the bootstrap token creates is also given, in the same act, the owner role on every namespace whose record names no owner, which the token owned in effect, each audited as grant.create by operator in its namespace, so that the first administrator owns the installation's namespaces with nothing shared by hand; a repeat gives nothing twice. The login is refused where a namespace holds it, and operator, installation and the reserved words by its grammar. Audited as user.create, recorded unchanged for a repeat, and the link as enrolment.issue.
+         * @description Creates a user from a login, the given and family names their display name is made of, the login standing for both where neither is given, an email address for the people they work with to reach them at, which nothing sends anything to, and admin where it is an administrator, holding no credential, answered 201 with an enrolment link shown once, single use and good for an hour. Asked again for a user who has not enrolled, with nothing said otherwise than was recorded, it answers 200 with a fresh link and revokes the one before, a field left out keeping what is recorded, so that a link that lapsed unused locks nobody out: agk user create LOGIN, run again with nothing more, answers the fresh link it is run again for. Administrator only, and the bootstrap token's until the first administrator has signed in: an administrator it creates gets a first administrator's link, which revokes every first administrator's link still open, and anybody else a new user's. An administrator the bootstrap token creates is also given, in the same act, the owner role on every namespace whose record names no owner, which the token owned in effect, each audited as grant.create by operator in its namespace, so that the first administrator owns the installation's namespaces with nothing shared by hand; a repeat gives nothing twice. The login is refused where a namespace holds it, and operator, installation and the reserved words by its grammar; display_name is refused, since nobody writes it. Audited as user.create, recorded unchanged for a repeat, and the link as enrolment.issue.
          */
         post: operations["createUser"];
         delete?: never;
@@ -651,7 +651,7 @@ export interface paths {
         };
         /**
          * Read a user
-         * @description One user: login, display name, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.
+         * @description One user: login, display name, the email address an administrator gave them, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.
          */
         get: operations["getUser"];
         put?: never;
@@ -663,7 +663,11 @@ export interface paths {
         delete: operations["deleteUser"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change what an administrator gives a user
+         * @description Changes what an administrator gives a user after creating them, as the body names it: email, set to what the body holds, the empty string removing it, and kept where the body leaves it out. The address is for the people the user works with to reach them at, read wherever the user is answered, and nothing sends anything to it: the product signs nobody in, enrols nobody and recovers no account by mail. It is held as at the creation: one @ with something on each side, no space or control character, and at most 254 characters. Nothing else of a user is the administrator's to change here: the given and family names and the rest of the profile are the user's own, written at PATCH /api/v1/me, and display_name is made of the names and written by nobody, each refused saying so. The user's row is held while the change is merged into it, and the answer is the user as GET /api/v1/users/{login} answers them. Administrator only, and the bootstrap token's until the first administrator has signed in. Audited as user.update with the names of the fields that changed and never what they hold, since the log is kept for good and an address is somebody's to have removed; unchanged where none did.
+         */
+        patch: operations["updateUser"];
         trace?: never;
     };
     "/api/v1/users/{login}/avatar": {
@@ -2652,6 +2656,7 @@ export interface components {
          *         "kind": "user",
          *         "login": "alice",
          *         "display_name": "Alice Martin",
+         *         "email": "alice.martin@example.com",
          *         "admin": true,
          *         "suspended": false,
          *         "given_name": "Alice",
@@ -2756,6 +2761,7 @@ export interface components {
              *       "kind": "user",
              *       "login": "alice",
              *       "display_name": "Alice Martin",
+             *       "email": "alice.martin@example.com",
              *       "admin": true,
              *       "suspended": false,
              *       "given_name": "Alice",
@@ -3190,15 +3196,18 @@ export interface components {
         };
         /**
          * User creation
-         * @description A user to create, as agk user create sends it: what it was given and nothing more, so that the same command run again asks for the same user.
+         * @description A user to create, as agk user create sends it: what it was given and nothing more, so that the same command run again asks for the same user. The display name is not among it: it is made of the given and family names.
          * @example {
          *       "login": "alice",
-         *       "display_name": "Alice Martin",
+         *       "given_name": "Alice",
+         *       "family_name": "Martin",
+         *       "email": "alice.martin@example.com",
          *       "admin": true
          *     }
          * @example {
          *       "login": "bob-martin",
-         *       "display_name": "Bob Martin"
+         *       "given_name": "Bob",
+         *       "family_name": "Martin"
          *     }
          * @example {
          *       "login": "carol"
@@ -3211,15 +3220,43 @@ export interface components {
              */
             login: components["schemas"]["namespace"];
             /**
-             * @description The name people read in the console and in the sharing panel: one line of at most 256 characters, holding no control character, since it is shown in a console and printed at a terminal. Left out, a user created is given their login, and a user asked for again keeps what is recorded.
-             * @example Alice Martin
+             * @description The name the user is called by, which with the family name makes the name people read. Left out, a user created has none, and is shown by their login while they say neither name, and a user asked for again keeps what is recorded. The user writes it once signed in.
+             * @example Alice
              */
-            display_name?: components["schemas"]["display_name"];
+            given_name?: components["schemas"]["given_name"];
+            /**
+             * @description The user's family name, the second half of the name people read. Left out, a user created has none, and a user asked for again keeps what is recorded. The user writes it once signed in.
+             * @example Martin
+             */
+            family_name?: components["schemas"]["family_name"];
+            /**
+             * @description An address for the people the user works with to reach them at, which nothing sends anything to. Left out, a user created has none, and a user asked for again keeps what is recorded. An administrator changes it later at PATCH /api/v1/users/{login}.
+             * @example alice.martin@example.com
+             */
+            email?: components["schemas"]["email"];
             /**
              * @description true for a platform administrator, as agk user create --admin asks. Left out, a user created is not one, and a user asked for again keeps what is recorded.
              * @example true
              */
             admin?: components["schemas"]["admin"];
+        };
+        /**
+         * User change
+         * @description What an administrator changes of a user after creating them, and nothing else: the email address, set to what the field holds, the empty string removing it, and kept where it is left out. Null is refused rather than read as either. The names and the rest of the profile are the user's, and the display name nobody's.
+         * @example {
+         *       "email": "bob.martin@example.com"
+         *     }
+         * @example {
+         *       "email": ""
+         *     }
+         */
+        userUpdate: {
+            /**
+             * @description The address the people the user works with reach them at, which nothing sends anything to; the empty string removes it.
+             * @example bob.martin@example.com
+             * @example
+             */
+            email?: components["schemas"]["email"];
         };
         /**
          * Enrolment link
@@ -3249,10 +3286,11 @@ export interface components {
          *         "kind": "user",
          *         "login": "alice",
          *         "display_name": "Alice Martin",
+         *         "email": "alice.martin@example.com",
          *         "admin": true,
          *         "suspended": false,
-         *         "given_name": "",
-         *         "family_name": "",
+         *         "given_name": "Alice",
+         *         "family_name": "Martin",
          *         "title": "",
          *         "location": "",
          *         "timezone": "",
@@ -3273,10 +3311,11 @@ export interface components {
              *       "kind": "user",
              *       "login": "alice",
              *       "display_name": "Alice Martin",
+             *       "email": "alice.martin@example.com",
              *       "admin": true,
              *       "suspended": false,
-             *       "given_name": "",
-             *       "family_name": "",
+             *       "given_name": "Alice",
+             *       "family_name": "Martin",
              *       "title": "",
              *       "location": "",
              *       "timezone": "",
@@ -3330,10 +3369,11 @@ export interface components {
          *           "kind": "user",
          *           "login": "alice",
          *           "display_name": "Alice Martin",
+         *           "email": "alice.martin@example.com",
          *           "admin": true,
          *           "suspended": false,
-         *           "given_name": "",
-         *           "family_name": "",
+         *           "given_name": "Alice",
+         *           "family_name": "Martin",
          *           "title": "",
          *           "location": "",
          *           "timezone": "",
@@ -3345,10 +3385,11 @@ export interface components {
          *           "kind": "user",
          *           "login": "bob-martin",
          *           "display_name": "Bob Martin",
+         *           "email": "bob.martin@example.com",
          *           "admin": false,
          *           "suspended": false,
-         *           "given_name": "",
-         *           "family_name": "",
+         *           "given_name": "Bob",
+         *           "family_name": "Martin",
          *           "title": "",
          *           "location": "",
          *           "timezone": "",
@@ -3367,10 +3408,11 @@ export interface components {
              *         "kind": "user",
              *         "login": "alice",
              *         "display_name": "Alice Martin",
+             *         "email": "alice.martin@example.com",
              *         "admin": true,
              *         "suspended": false,
-             *         "given_name": "",
-             *         "family_name": "",
+             *         "given_name": "Alice",
+             *         "family_name": "Martin",
              *         "title": "",
              *         "location": "",
              *         "timezone": "",
@@ -3382,10 +3424,11 @@ export interface components {
              *         "kind": "user",
              *         "login": "bob-martin",
              *         "display_name": "Bob Martin",
+             *         "email": "bob.martin@example.com",
              *         "admin": false,
              *         "suspended": false,
-             *         "given_name": "",
-             *         "family_name": "",
+             *         "given_name": "Bob",
+             *         "family_name": "Martin",
              *         "title": "",
              *         "location": "",
              *         "timezone": "",
@@ -9004,7 +9047,7 @@ export interface components {
         };
         /**
          * Profile change
-         * @description What changes of the caller's display name and profile, and nothing else: a field left out keeps what is recorded, and the empty string clears a field, the display name excepted, which a user always has. Null is refused rather than read as either, since a client could have meant both.
+         * @description What changes of the caller's profile, and nothing else: a field left out keeps what is recorded, and the empty string clears a field. Null is refused rather than read as either, since a client could have meant both. The display name is not among it, being made of the given and family names, and neither is the email address, which an administrator gives.
          * @example {
          *       "given_name": "Alice",
          *       "family_name": "Martin",
@@ -9016,23 +9059,19 @@ export interface components {
          *       "location": ""
          *     }
          * @example {
-         *       "display_name": "Alice Martin"
+         *       "given_name": "Alice",
+         *       "family_name": "Martin"
          *     }
          */
         profileUpdate: {
             /**
-             * @description The name people read in the console and in the sharing panel, never cleared.
-             * @example Alice Martin
-             */
-            display_name?: components["schemas"]["display_name"];
-            /**
-             * @description The name the user is called by; the empty string clears it.
+             * @description The name the user is called by, the first half of their display name; the empty string clears it.
              * @example Alice
              * @example
              */
             given_name?: components["schemas"]["given_name"];
             /**
-             * @description The user's family name; the empty string clears it.
+             * @description The user's family name, the second half of their display name; the empty string clears it.
              * @example Martin
              * @example
              */
@@ -9538,11 +9577,12 @@ export interface components {
         actor: components["schemas"]["principalRef"] | "operator" | "installation";
         /**
          * User
-         * @description A local account: a login, a display name and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, and when their photo was last set, null where they hold none: set by the user alone, and answered wherever a user is, so that every client draws a person the same way.
+         * @description A local account: a login and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, the display name made of their given and family names, the email address an administrator gave them, and when their photo was last set, null where they hold none: answered wherever a user is, so that every client draws a person the same way.
          * @example {
          *       "kind": "user",
          *       "login": "alice",
          *       "display_name": "Alice Martin",
+         *       "email": "alice.martin@example.com",
          *       "admin": false,
          *       "suspended": false,
          *       "given_name": "Alice",
@@ -9558,11 +9598,12 @@ export interface components {
          *       "kind": "user",
          *       "login": "dave",
          *       "display_name": "Dave Moreau",
+         *       "email": "",
          *       "admin": false,
          *       "suspended": true,
          *       "suspended_for": "no_passkey",
-         *       "given_name": "",
-         *       "family_name": "",
+         *       "given_name": "Dave",
+         *       "family_name": "Moreau",
          *       "title": "",
          *       "location": "",
          *       "timezone": "",
@@ -9585,11 +9626,18 @@ export interface components {
              */
             login: components["schemas"]["namespace"];
             /**
-             * @description The name a person reads in the console and in the sharing panel: one line holding no control character, since it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Free text otherwise, because it is shown and never matched against: everything that decides access reads the login.
+             * @description The name a person reads in the console, in the sharing panel and at a terminal, which nobody writes: the user's given name and family name, each trimmed of the spaces at its ends and joined by one space, either alone where only one is said, and the login where neither is. Made as the user is read rather than kept beside the names, so that it never says otherwise than they do; a request writing it is refused. At most 257 characters, two names of 128 and the space between them, and one line holding no control character, since neither name holds one: it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Everything that decides access reads the login.
              * @example Alice Martin
-             * @example Bob
+             * @example Martin
+             * @example carol
              */
             display_name: string;
+            /**
+             * @description The email address an administrator gave the user, at POST /api/v1/users or PATCH /api/v1/users/{login}, and the empty string where none was given: for the people who read the record to reach them by, and for nothing else. The product sends no mail, and never signs anybody in, enrols them or recovers their account by mail, since a link sent to a mailbox would put the account back behind it. It is the administrator's to give and not the user's to change, since nothing proves an address. Held loosely: one @ with something on each side, no space or control character, and at most 254 characters, the longest address a mail path carries once its two angle brackets are counted; whether it reaches anybody is something only sending to it would tell. Read by the user, at GET /api/v1/me, and by administrators.
+             * @example alice.martin@example.com
+             * @example
+             */
+            email?: string;
             /**
              * @description Whether the user is a platform administrator, who manages users, groups, namespaces, quotas, runners and runner policies. It grants no run:read_data anywhere: reading another namespace's payloads still means granting oneself access first, which is audited and told to the namespace's owner.
              * @default false
@@ -9611,13 +9659,13 @@ export interface components {
              */
             suspended_for?: "no_passkey";
             /**
-             * @description The name the user is called by, set by the user at PATCH /api/v1/me, and the empty string where they have not said it. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
+             * @description The name the user is called by, set by the user at PATCH /api/v1/me or by an administrator creating them, and the empty string where neither has said it. The display name is made of it and the family name. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
              * @example Alice
              * @example
              */
             given_name?: string;
             /**
-             * @description The user's family name, set by the user, and the empty string where they have not said it. One line of at most 128 characters holding no control character.
+             * @description The user's family name, set by the user or by an administrator creating them, and the empty string where neither has said it: the second half of the display name. One line of at most 128 characters holding no control character.
              * @example Martin
              * @example
              */
@@ -9908,19 +9956,13 @@ export interface components {
             login?: components["schemas"]["namespace"];
         } & (unknown & unknown & unknown);
         /**
-         * @description The name a person reads in the console and in the sharing panel: one line holding no control character, since it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Free text otherwise, because it is shown and never matched against: everything that decides access reads the login.
-         * @example Alice Martin
-         * @example Bob
-         */
-        display_name: string;
-        /**
-         * @description The name the user is called by, set by the user at PATCH /api/v1/me, and the empty string where they have not said it. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
+         * @description The name the user is called by, set by the user at PATCH /api/v1/me or by an administrator creating them, and the empty string where neither has said it. The display name is made of it and the family name. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
          * @example Alice
          * @example
          */
         given_name: string;
         /**
-         * @description The user's family name, set by the user, and the empty string where they have not said it. One line of at most 128 characters holding no control character.
+         * @description The user's family name, set by the user or by an administrator creating them, and the empty string where neither has said it: the second half of the display name. One line of at most 128 characters holding no control character.
          * @example Martin
          * @example
          */
@@ -10099,6 +10141,12 @@ export interface components {
              */
             auth_policy?: components["schemas"]["authPolicy"];
         };
+        /**
+         * @description The email address an administrator gave the user, at POST /api/v1/users or PATCH /api/v1/users/{login}, and the empty string where none was given: for the people who read the record to reach them by, and for nothing else. The product sends no mail, and never signs anybody in, enrols them or recovers their account by mail, since a link sent to a mailbox would put the account back behind it. It is the administrator's to give and not the user's to change, since nothing proves an address. Held loosely: one @ with something on each side, no space or control character, and at most 254 characters, the longest address a mail path carries once its two angle brackets are counted; whether it reaches anybody is something only sending to it would tell. Read by the user, at GET /api/v1/me, and by administrators.
+         * @example alice.martin@example.com
+         * @example
+         */
+        email: string;
         /**
          * @description Whether the user is a platform administrator, who manages users, groups, namespaces, quotas, runners and runner policies. It grants no run:read_data anywhere: reading another namespace's payloads still means granting oneself access first, which is audited and told to the namespace's owner.
          * @default false
@@ -13296,7 +13344,7 @@ export interface operations {
                     "application/json": components["schemas"]["me"];
                 };
             };
-            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, a field null, written twice or not a string, a field past its length or holding a line break or another control character, an empty display name, or a time zone the IANA database does not hold, named, or Local. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, a field null, written twice or not a string, a field past its length or holding a line break or another control character, or a time zone the IANA database does not hold, named, or Local; display_name, which is made of the given and family names, or email, which an administrator gives, each refused saying so. Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             /** @description No credential, or one that opens nothing, a user removed since their credential was read among them. */
             401: components["responses"]["unauthorised"];
@@ -13742,12 +13790,12 @@ export interface operations {
                     "application/json": components["schemas"]["createdUser"];
                 };
             };
-            /** @description The body is refused: a login outside the namespace grammar, a reserved word, operator or installation; or a display name empty, over 256 characters, or holding a line break or another control character. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
+            /** @description The body is refused: a login outside the namespace grammar, a reserved word, operator or installation; a given or family name over 128 characters or holding a line break or another control character; an email address that is not one @ with something on each side, holds a space or a control character, or is over 254 characters; or display_name, which is made of the names and written by nobody. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
             /** @description The caller is not an administrator, and not the bootstrap token before the first administrator has signed in; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
             403: components["responses"]["forbidden"];
-            /** @description The login is held by a namespace, by a user who has enrolled, by one created with another display name or admin than this request says, or by one another request created at the same moment. */
+            /** @description The login is held by a namespace, by a user who has enrolled, by one created with another name, email address or admin than this request says, or by one another request created at the same moment. */
             409: components["responses"]["conflict"];
             413: components["responses"]["tooLarge"];
         };
@@ -13810,6 +13858,42 @@ export interface operations {
             404: components["responses"]["notFound"];
             /** @description Another namespace's record names the user as owner, the error naming it; their personal namespace holds something, saying what; or they are the last administrator who can sign in. */
             409: components["responses"]["conflict"];
+            413: components["responses"]["tooLarge"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user, by login. */
+                login: components["parameters"]["login"];
+            };
+            cookie?: never;
+        };
+        /** @description What changes. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["userUpdate"];
+            };
+        };
+        responses: {
+            /** @description Written: the user, as GET /api/v1/users/{login} answers them. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["user"];
+                };
+            };
+            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, email null or not a string, or an address that is not one @ with something on each side, holds a space or a control character, or is over 254 characters; a name or another field of the profile, which is the user's, or display_name, which nobody writes, each refused saying so. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, and not the bootstrap token before the first administrator has signed in; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
+            403: components["responses"]["forbidden"];
+            /** @description No user by that login, or a login no user can have. */
+            404: components["responses"]["notFound"];
             413: components["responses"]["tooLarge"];
         };
     };

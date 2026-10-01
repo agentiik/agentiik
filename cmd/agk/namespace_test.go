@@ -43,7 +43,7 @@ func aNamespaceInstallation(t *testing.T) namespaceInstallation {
 	}
 	var in namespaceInstallation
 	err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		for _, u := range []db.User{{Login: "carol", DisplayName: "Carol", Admin: true}, {Login: "alice", DisplayName: "Alice"}} {
+		for _, u := range []db.User{{Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true}, {Login: "alice", Profile: db.Profile{GivenName: "Alice"}}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}

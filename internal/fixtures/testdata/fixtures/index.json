@@ -1130,6 +1130,10 @@
         {
           "file": "wire/valid/principal-user-profile.json",
           "covers": "a user who said who they are and set a photo: given and family names, a title, a location, an IANA time zone, a bio, and when the photo was last set, as GET /api/v1/me answers it once PATCH /api/v1/me and PUT /api/v1/me/avatar wrote them"
+        },
+        {
+          "file": "wire/valid/principal-user-email.json",
+          "covers": "a user an administrator gave an email address, at POST /api/v1/users or PATCH /api/v1/users/{login}, shown by the display name their given and family names make"
         }
       ],
       "invalid": [
@@ -1198,6 +1202,24 @@
           "rule": "a title is at most 128 characters, a line on a card beside the name",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#api"
+        },
+        {
+          "file": "wire/invalid/principal-user-email-two-ats.json",
+          "rule": "an email address is one @ with something on each side, and one holding two is not an address",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-user-email-with-a-space.json",
+          "rule": "an email address holds no space or control character, since no address does and it is printed at a terminal",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-user-email-255-characters.json",
+          "rule": "an email address is at most 254 characters, the longest a mail path carries once its two angle brackets are counted",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
         }
       ]
     },

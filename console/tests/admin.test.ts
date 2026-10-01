@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -72,11 +72,33 @@ describe("the users, for an administrator", () => {
     await fireEvent.click(await screen.findByRole("button", { name: "Add a user" }));
     const form = screen.getByRole("form", { name: "Add a user" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Login" }), { target: { value: "erin" } });
-    await fireEvent.input(within(form).getByRole("textbox", { name: "Display name" }), { target: { value: "Erin Lowe" } });
+    await fireEvent.input(within(form).getByRole("textbox", { name: "Given name" }), { target: { value: "Erin " } });
+    await fireEvent.input(within(form).getByRole("textbox", { name: "Family name" }), { target: { value: "Lowe" } });
+    await fireEvent.input(within(form).getByRole("textbox", { name: "Email" }), { target: { value: "erin.lowe@example.com" } });
     await fireEvent.submit(form);
     expect(await screen.findByText("https://agentiik.example.com/auth/enrol#code=agkenrol_x")).toBeTruthy();
-    expect(sent(asked, "POST /api/v1/users")).toEqual([{ login: "erin", display_name: "Erin Lowe" }]);
+    expect(sent(asked, "POST /api/v1/users")).toEqual([{ login: "erin", given_name: "Erin", family_name: "Lowe", email: "erin.lowe@example.com" }]);
     expect(asked.filter((a) => a.key === "GET /api/v1/users")).toHaveLength(2);
+  });
+
+  it("gives a user an email address, and removes it with an empty one", async () => {
+    const s = scenario("dana");
+    s["PATCH /api/v1/users/carol"] = { status: 200, body: { kind: "user", login: "carol", display_name: "Carol Diaz", email: "carol@example.com", admin: false, suspended: false } };
+    const { asked } = open("/users", s);
+    const row = (await screen.findByText("carol", { selector: "td .login" })).closest("tr")!;
+    await fireEvent.click(within(row).getByRole("button", { name: "Email" }));
+    const form = screen.getByRole("form", { name: "Email address" });
+    await fireEvent.input(within(form).getByRole("textbox", { name: "Email" }), { target: { value: " carol@example.com" } });
+    await fireEvent.submit(form);
+    await waitFor(() => expect(sent(asked, "PATCH /api/v1/users/carol")).toEqual([{ email: "carol@example.com" }]));
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Email address" })).toBeNull());
+    const button = within(row).getByRole("button", { name: "Email" }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    await fireEvent.click(button);
+    const again = screen.getByRole("form", { name: "Email address" });
+    await fireEvent.input(within(again).getByRole("textbox", { name: "Email" }), { target: { value: "" } });
+    await fireEvent.submit(again);
+    await waitFor(() => expect(sent(asked, "PATCH /api/v1/users/carol")).toEqual([{ email: "carol@example.com" }, { email: "" }]));
   });
 
   it("removes a user on a second click, and says what the API refused as it said it", async () => {
