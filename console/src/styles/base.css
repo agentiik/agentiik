@@ -7,10 +7,19 @@
   box-sizing: border-box;
 }
 
+/* The page scrolls as a document, the window's own scrollbar moving it, and never inside a box drawn
+   to the window's height: the wheel, the keys, the browser's find and its restored position all move
+   the document, and a box that scrolls in its place answers some of them and not others. The gutter
+   is kept whether or not the page is taller than the window, so that nothing shifts sideways when it
+   becomes so. */
+html {
+  scrollbar-gutter: stable;
+}
+
 html,
 body {
   margin: 0;
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
@@ -43,7 +52,7 @@ body * {
 }
 
 #console {
-  height: 100%;
+  min-height: 100dvh;
 }
 
 button,
@@ -91,11 +100,14 @@ a:hover {
   color: var(--faint);
 }
 
-/* What a screen reader reads and a sighted reader does not need written out. */
+/* What a screen reader reads and a sighted reader does not need written out. Its pixel is drawn back
+   over where it would start, so that one at the foot of the page makes the page no taller. */
 .unseen {
   position: absolute;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;

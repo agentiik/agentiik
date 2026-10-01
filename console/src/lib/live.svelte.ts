@@ -39,7 +39,7 @@ const settle = 200;
 const refused = 1008;
 
 export class Live {
-  // open is whether the connection is open, which the top bar says.
+  // open is whether the connection is open.
   open = $state(false);
 
   readonly #url: string;

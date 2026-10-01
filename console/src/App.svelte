@@ -174,14 +174,14 @@
 {:else if session.me}
   <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer}>
     <div class="side" inert={viewport.narrow && !drawer}>
-      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} />
+      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} />
     </div>
     {#if viewport.narrow && drawer}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="scrim" onclick={() => (drawer = false)}></div>
     {/if}
     <main class="screen">
-      <TopBar me={session.me} {route} answering={session.answering} live={live.open} {place} ondismiss={(id) => session.dismiss(id)} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
+      <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
         <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} shares={holds(session.me, "grant:manage", route.namespace, route.workflow)} />
       {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
@@ -230,18 +230,21 @@
   .frame {
     display: grid;
     grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
     grid-template-areas: "side screen";
-    height: 100%;
+    min-height: 100dvh;
   }
 
   .frame.folded {
     grid-template-columns: var(--sidebar-collapsed) minmax(0, 1fr);
   }
 
+  /* The sidebar stays in the window as the page scrolls under it, and scrolls on its own where the
+     window is shorter than its list. */
   .side {
+    position: sticky;
+    top: 0;
     grid-area: side;
-    min-height: 0;
+    height: 100dvh;
   }
 
   .frame > .screen {
@@ -254,10 +257,8 @@
   }
 
   .screen {
-    min-height: 0;
+    min-width: 0;
     padding: calc(var(--padding-page) + 6px) calc(var(--padding-page) + 6px) calc(var(--padding-page) + 12px);
-    overflow: auto;
-    scrollbar-gutter: stable;
   }
 
   /* A screen whose last block takes the height the window has left, a workflow's graph beside its
