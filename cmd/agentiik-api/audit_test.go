@@ -52,6 +52,7 @@ var reads = []string{
 	"GET /api/v1/runs/{run}/steps/{step}/logs", "GET /api/v1/runs/{run}/outputs/{name}",
 	"GET /api/v1/runs/{run}/steps/{step}/outputs/{port}", "GET /api/v1/runs/{run}/steps/{step}/inputs/{port}",
 	"GET /api/v1/artifacts/{uri}", "GET /api/v1/{namespace}/secrets", "GET /api/v1/{namespace}/secrets/{name}",
+	"GET /api/v1/{namespace}/variables", "GET /api/v1/{namespace}/variables/{name}",
 	"GET /api/v1/namespaces", "GET /api/v1/namespaces/{namespace}", "GET /api/v1/namespaces/{namespace}/quotas",
 	"GET /api/v1/{namespace}/grants", "GET /api/v1/{namespace}/workflows/{workflow}/grants",
 	"GET /api/v1/{namespace}/workflows/{workflow}/images", "GET /api/v1/{namespace}/workflows/{workflow}/triggers",
@@ -554,6 +555,15 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"secret.write carol billing finance done")
 	s.act("DELETE /api/v1/{namespace}/secrets/{name}", "/api/v1/finance/secrets/billing", carol, nil, http.StatusNoContent,
 		"secret.delete carol billing finance done")
+	// A namespace's variable set, as variable.write, set again, and removed, as variable.delete.
+	s.act("PUT /api/v1/{namespace}/variables/{name}", "/api/v1/finance/variables/ledger_url", carol,
+		api.VariableWrite{Value: []byte(`"https://ledger.example.com/api"`), Visibility: "all"}, http.StatusCreated,
+		"variable.write carol ledger_url finance done")
+	s.act("PUT /api/v1/{namespace}/variables/{name}", "/api/v1/finance/variables/ledger_url", carol,
+		api.VariableWrite{Value: []byte(`[7, 14]`), Visibility: "selected", Workflows: []string{"monthly-invoicing"}}, http.StatusOK,
+		"variable.write carol ledger_url finance done")
+	s.act("DELETE /api/v1/{namespace}/variables/{name}", "/api/v1/finance/variables/ledger_url", carol, nil, http.StatusNoContent,
+		"variable.delete carol ledger_url finance done")
 	// A version declaring a webhook and an event trigger pushed to a repository no git push has
 	// given a branch, which arms both, as trigger.arm; the webhook's secret written, as
 	// webhook_credential.write; a request it signs and an event published into the namespace, each

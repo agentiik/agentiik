@@ -174,6 +174,20 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 			func(l int64) []byte {
 				return filled(`{"credential":{`, `}}`, l, func(i int) string { return named(i) + `:0` })
 			}, 0, 0, 0.084},
+		// And a namespace's variables, which came after them all.
+		{"a variable of empty objects", func() request { return new(VariableWrite) }, variableMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"visibility":"all","value":[`, `]}`, l, func(int) string { return `{}` })
+			},
+			0, 0, 0.668},
+		{"a variable of one long string", func() request { return new(VariableWrite) }, variableMaxBytes,
+			func(l int64) []byte {
+				return []byte(`{"visibility":"all","value":"` + strings.Repeat("A", int(l)-32) + `"}`)
+			}, 0, 0, 0.668},
+		{"a variable of empty workflows", func() request { return new(VariableWrite) }, variableMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"visibility":"selected","value":0,"workflows":[`, `]}`, l, empty)
+			}, 0, 0, 0.725},
 	} {
 		body := c.body(c.limit)
 		if int64(len(body)) > c.limit || int64(len(body)) < c.limit-64 {
@@ -247,6 +261,8 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 		&NamespaceRecord{Name: "team-ops", Owner: "bob-martin"},
 		&Quotas{MaxRunsPerHour: 60},
 		&ProfileChange{DisplayName: &aliceMartin, GivenName: &alice, Timezone: &paris, Bio: &cleared},
+		&VariableWrite{Value: json.RawMessage(`{"hosts":["a","b"],"zone":"eu-west"}`), Visibility: "selected", Workflows: []string{"payroll"}, valued: true, values: 5},
+		&VariableWrite{Value: json.RawMessage(`null`), Visibility: "all", valued: true, values: 1},
 	} {
 		encoded, err := json.Marshal(want)
 		if err != nil {

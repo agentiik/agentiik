@@ -64,6 +64,11 @@ type NewRun struct {
 	// Context is what fired the run, frozen on it, and empty where nothing did.
 	Context TriggerContext
 
+	// NamespaceVars are the namespace's variables the run reads, frozen on it: those shown to its
+	// workflow whose names its file does not write, read in the transaction that creates it, or
+	// for a replay those the run it replays read. Empty is none, and is written as nothing.
+	NamespaceVars map[string]any
+
 	// Caller is the step whose call started the run, for a run of trigger kind workflow, and
 	// Depth how deep in a chain of calls it is: its caller's, and one.
 	Caller *Caller
@@ -173,17 +178,25 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 			return fmt.Errorf("db: the trigger context of run %s: %w", r.ID, err)
 		}
 	}
+	// Null where it read none, as every run from before v0.6.0 reads, so that the two are one
+	// answer to whoever reads the row.
+	var vars any
+	if len(r.NamespaceVars) > 0 {
+		if vars, err = json.Marshal(r.NamespaceVars); err != nil {
+			return fmt.Errorf("db: the namespace variables of run %s: %w", r.ID, err)
+		}
+	}
 	var caller Caller
 	if r.Caller != nil {
 		caller = *r.Caller
 	}
 	if _, err := n.tx.Exec(ctx,
 		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs, replay_of, replay_from, trigger_context,
-		                   caller_run, caller_step, caller_task, depth)
-		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		                   caller_run, caller_step, caller_task, depth, namespace_vars)
+		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		n.namespace, string(r.ID), r.Workflow, r.Commit,
 		r.Trigger.String(), nilIfEmpty(by), inputs, nilIfEmpty(string(r.ReplayOf)), nilIfEmpty(string(r.ReplayFrom)), context,
-		nilIfEmpty(string(caller.Run)), nilIfEmpty(string(caller.Step)), nilIfEmpty(string(caller.Task)), r.Depth); err != nil {
+		nilIfEmpty(string(caller.Run)), nilIfEmpty(string(caller.Step)), nilIfEmpty(string(caller.Task)), r.Depth, vars); err != nil {
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) && pg.ConstraintName == "runs_caller_task" {
 			return ErrCalledAlready
@@ -394,6 +407,11 @@ type Evaluation struct {
 	// Context is what fired the run, frozen on it, which the evaluator is started with.
 	Context TriggerContext
 
+	// NamespaceVars are the namespace's variables the run read when it was created, which the
+	// evaluator is started with under the file's own. Read only while nothing has decided the run,
+	// since the document carries the vars it was started with from then on, and nil otherwise.
+	NamespaceVars map[string]any
+
 	// TriggeredBy is who the run is attributed to, as a grant names a principal, and empty where
 	// the row names nobody. It is who the controller asks about before it lets the run in, since
 	// "authorisation is re-evaluated when a run is created".
@@ -436,18 +454,18 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	// pgx would read a text column into an int by refusing it, and a state whose name the
 	// database holds is exactly the case UnmarshalText exists for.
 	var state, trigger string
-	var inputs, context []byte
+	var inputs, context, vars []byte
 	var wake, cancel *time.Time
 	err := w.tx.QueryRow(ctx,
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
 		        cancel_requested_at, xmin::text, created_at,
 		        coalesce((select n.max_run_duration from namespaces n where n.name = runs.namespace), ''),
 		        coalesce(triggered_by, ''), coalesce(replay_of, ''), coalesce(replay_from, ''), trigger_context,
-		        coalesce(caller_run, ''), depth
+		        coalesce(caller_run, ''), depth, case when evaluation is null then namespace_vars end
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
 			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt, &e.MaxRunDuration,
-			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom, &context, &e.CallerRun, &e.Depth)
+			&e.TriggeredBy, &e.ReplayOf, &e.ReplayFrom, &context, &e.CallerRun, &e.Depth, &vars)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -468,6 +486,11 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	if len(context) > 0 {
 		if err := asWritten(context, &e.Context); err != nil {
 			return Evaluation{}, fmt.Errorf("db: the trigger context of run %s could not be read: %w", run, err)
+		}
+	}
+	if len(vars) > 0 {
+		if err := asWritten(vars, &e.NamespaceVars); err != nil {
+			return Evaluation{}, fmt.Errorf("db: the namespace variables of run %s could not be read: %w", run, err)
 		}
 	}
 	if wake != nil {

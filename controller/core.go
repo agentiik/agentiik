@@ -635,8 +635,11 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		// queued is waiting on, is the concurrency group's and arrives with it; until
 		// then a run starts the moment the controller reaches it.
 		//
-		// The vars are the workflow's own, as agk run --local starts a run with them:
-		// there are no namespace variables to merge in yet.
+		// The vars are the workflow's own laid over the namespace's variables the run kept
+		// when it was created, a name both write taking the file's value, so that this pass,
+		// a controller taking the run over and a replay read what the run read rather than
+		// what is true now. The document carries them from the first decision on. A run that
+		// kept none reads the file's own, as agk run --local starts a run with them.
 		//
 		// A replay from a step starts with the steps above it as the run it replays left them.
 		var reuse map[agk.Step]graph.StepState
@@ -654,7 +657,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger, TriggeredBy: e.TriggeredBy,
 		}, graph.Options{
-			Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound, Reuse: reuse,
+			Inputs: e.Inputs, Vars: g.Workflow().Vars.Over(e.NamespaceVars), Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound, Reuse: reuse,
 			// What fired the run, as it was frozen on the run when it was created: "the trigger
 			// root" and "the event root", which the state carries from here on.
 			Trigger: e.Context.Trigger, Event: e.Context.Event,
