@@ -1,0 +1,31 @@
+# invalid: A tool whose input is a workflow input carrying no schema. A tool
+#   has to publish an inputSchema, so the input it maps has to have one.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    required: true
+
+mcp:
+  name: invoicing
+  tools:
+    - name: create_invoice
+      description: Issue one invoice for a customer.
+      input:
+        from: { input: orders }
+      mode: sync
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]

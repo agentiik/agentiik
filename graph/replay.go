@@ -34,6 +34,20 @@ func (g *Graph) Upstream(name agk.Step) []agk.Step {
 	return slices.DeleteFunc(g.Order(), func(s agk.Step) bool { return !above[s] })
 }
 
+// Reusable says whether a replay from a step below it may reuse a step that ended with verdict in
+// a run that ended in run. A step not over has nothing to reuse, and nor has one its run's ending
+// cancelled: a run cancelled or timed out ends every step under way as cancelled, and reusing one
+// would start a replay whose step below it is skipped on a barrier that never lifts, a run that
+// ends succeeded having done nothing it was asked for. A step a merge: first cancelled in such a
+// run is refused with them, since nothing tells the two apart once the run has ended, and the
+// replay from the start, or from the step above it, is still there to be asked for.
+func Reusable(verdict agk.Verdict, run agk.RunState) bool {
+	if !verdict.Terminal() {
+		return false
+	}
+	return verdict != agk.VerdictCancelled || (run != agk.Cancelled && run != agk.TimedOut)
+}
+
 // Reused is the state a replay starts a step it reuses in: the verdict, the published envelopes
 // and when, of the run it replays, stamped as the new run's own, since a step's inputs are
 // concatenated from what its edges carry and one batch names one run. It carries no shard: no task

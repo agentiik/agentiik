@@ -556,6 +556,54 @@ type Beaten struct {
 	Cancel []agk.TaskID
 }
 
+// Silence is the shortest gap between two heartbeats of a runner written down as a silence: two
+// intervals, the first a person reading the chart of the pools would call a gap. See migration 0065.
+const Silence = 2 * HeartbeatInterval
+
+// capacityOf is what a runner offers: the tasks it runs at once while the installation has it
+// ready and it reports itself ready, and nothing otherwise, since a slot nobody may be handed is no
+// capacity.
+func capacityOf(state, reported string, concurrency int64) int64 {
+	if state != "ready" || reported != "ready" {
+		return 0
+	}
+	return concurrency
+}
+
+// heard writes what a heartbeat at at settles for the chart of the pools: the silence since the one
+// before, where it lasted Silence or more, and what the runner offers, where it differs from what
+// was written last. The rows older than the longest any namespace keeps its runs are let go first,
+// since a series reaches back no further.
+func (w *Wide) heard(ctx context.Context, runner string, before *time.Time, at time.Time, capacity int64) error {
+	for _, stmt := range []string{
+		`delete from runner_silences where runner = $1
+		   and ended < now() - (select make_interval(days => coalesce(max(max_retention_days), 90)) from namespaces)`,
+		`delete from runner_capacity c where runner = $1
+		   and at < now() - (select make_interval(days => coalesce(max(max_retention_days), 90)) from namespaces)
+		   and exists (select 1 from runner_capacity l where l.runner = c.runner and l.at > c.at)`,
+	} {
+		if _, err := w.tx.Exec(ctx, stmt, runner); err != nil {
+			return fmt.Errorf("db: the runner's history past the longest retention could not be let go: %w", err)
+		}
+	}
+	if before != nil && at.Sub(*before) >= Silence {
+		if _, err := w.tx.Exec(ctx,
+			`insert into runner_silences (runner, began, ended) values ($1, $2, $3) on conflict do nothing`,
+			runner, *before, at); err != nil {
+			return fmt.Errorf("db: the silence before this heartbeat could not be written: %w", err)
+		}
+	}
+	if _, err := w.tx.Exec(ctx,
+		`insert into runner_capacity (runner, at, capacity)
+		 select $1, $2, $3
+		 where coalesce((select capacity from runner_capacity where runner = $1 order by at desc limit 1), -1) <> $3
+		 on conflict do nothing`,
+		runner, at, capacity); err != nil {
+		return fmt.Errorf("db: what the runner offers could not be written: %w", err)
+	}
+	return nil
+}
+
 // Beat records that a runner is there and what it says of itself, and answers what it is to stop.
 //
 // "A runner posts one heartbeat every 10 seconds to the API, listing the idempotency keys it
@@ -581,6 +629,13 @@ func (w *Wide) Beat(ctx context.Context, runner string, b Beating, at time.Time)
 		return Beaten{}, fmt.Errorf("db: a runner that runs anything runs one task or more at once, and not %d", b.Concurrency)
 	}
 
+	// The heartbeat before this one, under the row's lock, for the silence between them.
+	var before *time.Time
+	if err := w.tx.QueryRow(ctx,
+		`select last_heartbeat_at from runners where id = $1 for no key update`, runner).Scan(&before); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Beaten{}, fmt.Errorf("db: the heartbeat before this one could not be read: %w", err)
+	}
+
 	// A revoked runner is heard until its grace ends, and its heartbeat keeps its tasks from
 	// being declared lost until then, so that what it finishes inside the grace is still
 	// taken. From that instant it is heard no more, and three intervals later the sweep finds
@@ -595,6 +650,10 @@ func (w *Wide) Beat(ctx context.Context, runner string, b Beating, at time.Time)
 	}
 	if err != nil {
 		return Beaten{}, fmt.Errorf("db: the heartbeat could not be recorded: %w", err)
+	}
+
+	if err := w.heard(ctx, runner, before, at, capacityOf(r.State, b.State, b.Concurrency)); err != nil {
+		return Beaten{}, err
 	}
 
 	beaten := Beaten{Runner: r, Cancel: []agk.TaskID{}}

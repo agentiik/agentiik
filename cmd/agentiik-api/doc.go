@@ -76,8 +76,8 @@
 // # health
 //
 // health exits 0 where the API serving in the same container, or on the same host, answers, and 1
-// where it does not, saying why: a health check a Compose file runs in the API's image, which has
-// no shell and nothing else to run one with. It reads AGK_LISTEN, AGK_PROXY_URL and whether
+// where it does not, saying why: a health check a Compose file runs in the API's container, which
+// has no shell and nothing else to run one with. It reads AGK_LISTEN, AGK_PROXY_URL and whether
 // AGK_TLS_CERT_FILE is set, and asks for the root where serve listens, on the loopback where serve
 // listens on every interface, over TLS where serve speaks it, without verifying the certificate,
 // for up to five seconds. Any answer is ready, since serve answers nothing until the database, the
@@ -215,7 +215,9 @@
 //
 // # What it ships as
 //
-// A static binary, CGO_ENABLED=0, and an image, build/api.Dockerfile, holding that same file and
-// the certificates it verifies the database and the bus with, run as a user that is not root, with
-// serve as its default verb. static_test.go builds both and checks each property on what was built.
+// A static binary, CGO_ENABLED=0, and an image, ghcr.io/agentiik/agentiik from
+// build/agentiik.Dockerfile, holding that same file beside the controller's and the certificates
+// they verify the database and the bus with, run as a user that is not root, with agentiik-api serve
+// as its default command and agentiik-controller given as the command of the controller's
+// container. static_test.go builds both and checks each property on what was built.
 package main

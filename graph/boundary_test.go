@@ -90,6 +90,10 @@ var refusedByName = []struct {
 	{path: "github.com/mattn/go-sqlite3", what: "a database driver"},
 	{path: "modernc.org/sqlite", what: "a database driver"},
 	{path: "go.mongodb.org", what: "a database driver"},
+	// The terminal console's toolkit, which the documentation confines to cmd/agk: reached from
+	// here, agk run --local would carry a screen it never draws.
+	{path: "charm.land", what: "a terminal interface"},
+	{path: "github.com/charmbracelet", what: "a terminal interface"},
 }
 
 // refusedSegment is what a package inside this module may not be called for the

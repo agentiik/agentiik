@@ -700,3 +700,15 @@ func TestAnExitCodeIsRecordedWhereOneWasGiven(t *testing.T) {
 }
 
 func ptr(i int) *int { return &i }
+
+// A further attempt waiting out its backoff is ready when the backoff ends, which is what its queue
+// wait is counted from; any other task is ready when its row is written, which the database says.
+func TestARetryIsReadyWhenItsBackoffEnds(t *testing.T) {
+	ends := time.Date(2026, 9, 10, 6, 41, 39, 0, time.UTC)
+	if got := taskOf(decidedRun, "normalize", graph.ShardState{Task: agk.TaskPending, Attempt: 2, NextAttemptAt: ends}).ReadyAt; !got.Equal(ends) {
+		t.Errorf("an attempt waiting until %s is ready at %s", ends, got)
+	}
+	if got := taskOf(decidedRun, "normalize", graph.ShardState{Task: agk.TaskPending, Attempt: 1}).ReadyAt; !got.IsZero() {
+		t.Errorf("an attempt with nothing to wait out is ready at %s rather than when it is written", got)
+	}
+}

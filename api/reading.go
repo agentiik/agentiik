@@ -59,19 +59,42 @@ func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, w
 	if !storable(namespace) || !storable(workflow) {
 		// No namespace or workflow is named with bytes PostgreSQL cannot hold, so the
 		// filter names nothing, and nothing is what it lists.
-		write(w, http.StatusOK, map[string]any{"runs": []db.RunSummary{}})
+		write(w, http.StatusOK, map[string]any{"runs": []db.ListedRun{}})
 		return
 	}
 
-	var workflows []db.Workflow
+	readable, ok := s.readable(w, r, namespace, workflow, "the runs could not be read")
+	if !ok {
+		return
+	}
+
+	var runs []db.ListedRun
 	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		workflows, err = wide.Workflows(ctx, namespace, workflow)
+		runs, err = wide.Runs(ctx, readable, q)
 		return err
 	})
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the runs could not be read")
 		return
+	}
+	write(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+// readable are the workflows a listing across namespaces answers about: those of namespace, or of
+// every namespace where it is empty, narrowed to workflow where one is named, that the caller holds
+// the route's permission on. Where they could not be read or the authorizer could not be asked, it
+// answers the refusal itself, with unread as what could not be read, and false.
+func (s *Server) readable(w http.ResponseWriter, r *http.Request, namespace, workflow, unread string) ([]db.Workflow, bool) {
+	var workflows []db.Workflow
+	err := s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		workflows, err = wide.Workflows(ctx, namespace, workflow)
+		return err
+	})
+	if err != nil {
+		fail(w, http.StatusInternalServerError, unread)
+		return nil, false
 	}
 	// Asked outside the transaction that found them, since an authorizer may read the database
 	// itself, and a request holding one connection while it waits for another is how a pool runs
@@ -83,7 +106,7 @@ func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, w
 	allowed, err := HoldsEach(r)(r.Context(), targets)
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
-		return
+		return nil, false
 	}
 	readable := make([]db.Workflow, 0, len(workflows))
 	for i, wf := range workflows {
@@ -91,18 +114,7 @@ func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, w
 			readable = append(readable, wf)
 		}
 	}
-
-	var runs []db.RunSummary
-	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
-		var err error
-		runs, err = wide.Runs(ctx, readable, q)
-		return err
-	})
-	if err != nil {
-		fail(w, http.StatusInternalServerError, "the runs could not be read")
-		return
-	}
-	write(w, http.StatusOK, map[string]any{"runs": runs})
+	return readable, true
 }
 
 // runQuery reads what a listing across namespaces is narrowed by, besides the namespace and the

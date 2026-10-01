@@ -88,9 +88,13 @@ func TestATermPurgesWhatHasRunOut(t *testing.T) {
 	c := config.Controller{Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour}
 	ctx, stop := context.WithCancel(t.Context())
 	ended := make(chan error, 1)
+	// A pass skips a run another transaction holds and leaves it to the next pass, and the
+	// controller takes up the run this test started at the start of its term: so the purges pass
+	// often here, and the test waits on the term rather than on the interval an installation runs.
+	purges := purger(pool, c.Objects, ctl, tm, counts, logger(&log))
+	purges.Every = 100 * time.Millisecond
 	go func() {
-		ended <- lead(ctx, ctl, tm, queue, options(c, queue, versionsOf(t, pool)), nil, nil,
-			purger(pool, c.Objects, ctl, tm, counts, logger(&log)), nil, logger(&log))
+		ended <- lead(ctx, ctl, tm, queue, options(c, queue, versionsOf(t, pool)), nil, nil, purges, nil, logger(&log))
 	}()
 
 	eventually(t, 20*time.Second, "the term retiring the artifact past its retain", func() bool {

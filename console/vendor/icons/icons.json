@@ -1,0 +1,60 @@
+{
+  "state": [
+    "queued",
+    "running",
+    "waiting",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "skipped"
+  ],
+  "port": [
+    "in",
+    "out",
+    "rejected",
+    "error",
+    "unmatched"
+  ],
+  "trigger": [
+    "manual",
+    "schedule",
+    "webhook",
+    "event",
+    "mcp",
+    "terraform",
+    "workflow"
+  ],
+  "control": [
+    "add",
+    "back",
+    "cancel",
+    "close",
+    "collapse",
+    "copy",
+    "diff",
+    "download",
+    "edit",
+    "expand",
+    "export",
+    "filter",
+    "fit",
+    "format",
+    "history",
+    "live",
+    "more",
+    "next",
+    "notifications",
+    "open",
+    "passkey",
+    "remove",
+    "replay",
+    "run",
+    "search",
+    "settings",
+    "share",
+    "signout",
+    "zoom_in",
+    "zoom_out"
+  ]
+}

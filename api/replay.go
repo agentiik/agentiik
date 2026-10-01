@@ -9,6 +9,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/trigger"
 )
 
@@ -86,13 +87,13 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, who Principal, o
 			fail(w, http.StatusConflict, fmt.Sprintf("run %s is replayable from the start only: an input of a step it could restart from has expired, and a replay from a step reuses what the steps above it produced", of))
 			return
 		}
-		ended := map[agk.Step]bool{}
+		finished := map[agk.Step]bool{}
 		for _, st := range d.Steps {
-			ended[st.Step] = st.Verdict.Terminal()
+			finished[st.Step] = graph.Reusable(st.Verdict, d.State)
 		}
 		for _, up := range g.Upstream(from) {
-			if !ended[up] {
-				fail(w, http.StatusConflict, fmt.Sprintf("step %s, above %s, never ended in run %s, so there is nothing of it to reuse: replay from the start", up, from, of))
+			if !finished[up] {
+				fail(w, http.StatusConflict, fmt.Sprintf("step %s, above %s, did not finish in run %s, so there is nothing of it to reuse: replay from the start", up, from, of))
 				return
 			}
 		}

@@ -72,3 +72,27 @@ func TestAReplayReusesTheStepsAStepReadsFrom(t *testing.T) {
 		}
 	}
 }
+
+// A replay reuses a step that finished, and none its run's ending cancelled: such a step published
+// nothing, and the step below it would be skipped on a barrier that never lifts.
+func TestAStepItsRunsEndingCancelledIsNotReused(t *testing.T) {
+	for _, c := range []struct {
+		verdict agk.Verdict
+		run     agk.RunState
+		want    bool
+	}{
+		{agk.VerdictSucceeded, agk.Succeeded, true},
+		{agk.VerdictSucceeded, agk.Cancelled, true},
+		{agk.VerdictFailed, agk.Failed, true},
+		{agk.VerdictSkipped, agk.TimedOut, true},
+		{agk.VerdictCancelled, agk.Succeeded, true},
+		{agk.VerdictCancelled, agk.Cancelled, false},
+		{agk.VerdictCancelled, agk.TimedOut, false},
+		{agk.VerdictRunning, agk.Cancelled, false},
+		{agk.VerdictPending, agk.Failed, false},
+	} {
+		if got := Reusable(c.verdict, c.run); got != c.want {
+			t.Errorf("a step %s in a run %s is reusable: %t, want %t", c.verdict, c.run, got, c.want)
+		}
+	}
+}

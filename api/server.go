@@ -24,6 +24,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/repo/store"
 	"github.com/agentiik/agentiik/trigger"
 	"github.com/agentiik/agentiik/version"
@@ -227,6 +228,19 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		if err := rt.HandleAcross("GET", pattern, Across{Permission: RunRead}, s.across); err != nil {
 			return nil, err
 		}
+	}
+	// A namespace's runs as series count what its listing lists, and are asked about each workflow
+	// the same way: an aggregate over runs discloses the runs.
+	if err := rt.HandleAcross("GET", "/api/v1/{namespace}/stats/runs", Across{Permission: RunRead}, s.runStatistics); err != nil {
+		return nil, err
+	}
+	// And one workflow's steps and what they published, the workflow named in the query and asked
+	// about the same way.
+	if err := rt.HandleAcross("GET", "/api/v1/{namespace}/stats/steps", Across{Permission: RunRead}, s.stepStatistics); err != nil {
+		return nil, err
+	}
+	if err := rt.HandleAcross("GET", "/api/v1/{namespace}/stats/ports", Across{Permission: RunRead}, s.portStatistics); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -1060,8 +1074,42 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 	}
 	if !seeing {
 		detail.Inputs = nil
+		for i := range detail.Tasks {
+			detail.Tasks[i].Params = nil
+		}
+	}
+	// What the version the run pinned declares of each step, from the graph the store keeps of
+	// it. A version that can no longer be built leaves them out rather than the run unread.
+	if s.versions != nil {
+		if g, err := s.versions.Graph(r.Context(), over.Namespace, detail.Workflow, detail.Commit); err == nil {
+			declared(&detail, g)
+		}
 	}
 	write(w, http.StatusOK, detail)
+}
+
+// declared writes onto each step of a run what its version declares of it: the image it runs, by
+// digest, none for a workflow step, which runs no container; the input ports its edges and its
+// inputs keyword feed, sorted; and its output ports, in the order the file writes them.
+func declared(d *db.RunDetail, g *graph.Graph) {
+	for i, st := range d.Steps {
+		step, ok := g.Step(st.Step)
+		if !ok {
+			continue
+		}
+		if step.Call == nil {
+			d.Steps[i].Image = step.Image
+		}
+		in := map[agk.Port]bool{}
+		for _, e := range step.Needs {
+			in[e.As] = true
+		}
+		for p := range step.Inputs {
+			in[p] = true
+		}
+		d.Steps[i].InputPorts = slices.Sorted(maps.Keys(in))
+		d.Steps[i].OutputPorts = slices.Clone(step.Outputs)
+	}
 }
 
 // cancel asks for a run to be cancelled, and answers that it was asked.

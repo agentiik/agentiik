@@ -54,6 +54,15 @@ func TestARunPastTheRunsAnHourIsAnswered429WithRetryAfter(t *testing.T) {
 	if runs != 1 {
 		t.Errorf("finance holds %d runs after one was refused", runs)
 	}
+	// And the refusal is counted, for the chart of the namespace against its quotas, though the
+	// request was refused.
+	var refused int
+	if err := conn.QueryRow(t.Context(), `select coalesce(sum(refused), 0) from run_refusals where namespace = 'finance'`).Scan(&refused); err != nil {
+		t.Fatal(err)
+	}
+	if refused != 1 {
+		t.Errorf("finance counts %d runs refused after one was", refused)
+	}
 
 	// Another namespace's quota is not team-ops' own.
 	if w, _ := call(t, h, "PUT", "/api/v1/team-ops/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPushOf(t, named(workflowDocument, "team-ops", "monthly-invoicing"))); w.Code != http.StatusOK {

@@ -3,16 +3,16 @@
 // of github.com/agentiik/deploy starts it, with nothing faked between them.
 //
 //	PostgreSQL          postgres:18-alpine, reached on its socket alone
-//	init                agentiik-api init from the API's image, as root, on a volume per service:
+//	init                agentiik-api init from the agentiik image, as root, on a volume per service:
 //	                    the certificate, the keys, the bus identity and nats.conf, the migration,
 //	                    the namespace, the bootstrap token's hash, in the database, and a join
 //	                    token of the pool default
 //	the bus             nats:2-alpine, on the nats.conf init wrote, on the host's network
-//	the API             agentiik-api serve from its image, behind a TLS terminator the test runs,
+//	the API             agentiik-api serve from the agentiik image, behind a TLS terminator the test runs,
 //	                    which is AGK_PROXY_URL and the installation's public URL; agentiik-api health
 //	                    says when it is ready, as the Compose file's health check does
-//	the controller      agentiik-controller from its image, sharing the API's objects volume, which
-//	                    no runner sees, and its bus volume read only, where the API renews the
+//	the controller      agentiik-controller from the agentiik image, sharing the API's objects volume,
+//	                    which no runner sees, and its bus volume read only, where the API renews the
 //	                    control plane's credential
 //	the registry        registry:2 on the installation's network, holding the fixture bricks by
 //	                    digest

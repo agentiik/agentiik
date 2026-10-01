@@ -261,6 +261,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// The events published into a namespace and remembered for a day: its own, as the
 		// deliveries its webhooks took are.
 		"event_deliveries": true,
+		// The runs a namespace was refused for its quota, which its own chart draws beside those
+		// it created.
+		"run_refusals": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -293,6 +296,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// agk login's code is a sign-in on its way to a token, before any namespace is in
 		// question.
 		"exchange_codes": true,
+		// A runner's silences and what it offered over time are the installation's, as the
+		// runner is, and read by administrators alone.
+		"runner_silences": true, "runner_capacity": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)

@@ -93,19 +93,27 @@ func TestACancellationAskedForOnTheRunStopsWhatItHolds(t *testing.T) {
 		t.Errorf("cancelling stopped %v", stopped)
 	}
 
-	// Every task of the run reads cancelled, the namespace holds nothing for it, and the
-	// message still on the queue starts nothing.
-	var tasks []db.TaskSummary
+	// Every task of the run reads cancelled, and every step under way with it, the namespace
+	// holds nothing for it, and the message still on the queue starts nothing.
+	var detail db.RunDetail
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
-		d, err := ns.RunDetail(ctx, decidedRun)
-		tasks = d.Tasks
+		var err error
+		detail, err = ns.RunDetail(ctx, decidedRun)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, task := range tasks {
+	for _, task := range detail.Tasks {
 		if task.State != agk.TaskCancelled {
 			t.Errorf("%s reads %s in a cancelled run", task.Task, task.State)
+		}
+	}
+	if len(detail.Steps) != 2 {
+		t.Fatalf("the run reads %d steps", len(detail.Steps))
+	}
+	for _, step := range detail.Steps {
+		if step.Verdict != agk.VerdictCancelled || step.FinishedAt.IsZero() {
+			t.Errorf("step %s reads %s, finished at %v, and a step under way is cancelled with its run", step.Step, step.Verdict, step.FinishedAt)
 		}
 	}
 	var free int

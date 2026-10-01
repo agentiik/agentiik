@@ -30,8 +30,8 @@ func ended(t *testing.T, super, run string, succeeded ...string) {
 // "POST /api/v1/runs/{id}/replay: Replays from a named step, reusing everything upstream." A replay
 // is a new run of the commit the run it replays pinned, over its inputs, naming the run and the
 // step; it is recorded as run.trigger; and it is refused while the run goes on, from a step the
-// version does not have, from a step above which something never ended, and from any step once the
-// run is replayable from the start only.
+// version does not have, from a step above which something never ended or was cancelled with its
+// run, and from any step once the run is replayable from the start only.
 func TestARunIsReplayedFromAStep(t *testing.T) {
 	o := withOneRun(t)
 	h := o.servedTo(t, everything{who: "admin"})
@@ -81,6 +81,16 @@ func TestARunIsReplayedFromAStep(t *testing.T) {
 	}
 	if w, _ := call(t, h, "POST", replay, "admin", api.Replay{Step: "archive"}); w.Code != http.StatusConflict {
 		t.Errorf("a replay from a step whose step above never ended answered %d: %s", w.Code, w.Body)
+	}
+	// Nor from below a step the run's ending cancelled, which published nothing to reuse.
+	if _, err := conn.Exec(t.Context(), `update steps set state = 'cancelled', started_at = now(), finished_at = now() where run_id = $1 and step = 'normalize'`, o.run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(t.Context(), `update runs set state = 'cancelled' where id = $1`, o.run); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := call(t, h, "POST", replay, "admin", api.Replay{Step: "archive"}); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "step normalize, above archive, did not finish") {
+		t.Errorf("a replay from a step whose step above was cancelled with its run answered %d: %s", w.Code, w.Body)
 	}
 	ended(t, o.super, o.run, "normalize")
 	if _, err := conn.Exec(t.Context(), `update runs set replay_from_start_only = true where id = $1`, o.run); err != nil {

@@ -811,7 +811,7 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 // controller resolves a commit to a tree", and a runner that named its own would reach every
 // version in the namespace.
 func scopeOf(t graph.Task, inputs map[agk.Port]InputRef) db.GrantScope {
-	scope := db.GrantScope{Run: t.Run, Step: t.Step, Workflow: t.Workflow, Commit: t.Commit}
+	scope := db.GrantScope{Run: t.Run, Step: t.Step, Workflow: t.Workflow, Commit: t.Commit, Params: t.Params}
 	ports := make([]agk.Port, 0, len(inputs))
 	for port := range inputs {
 		ports = append(ports, port)
@@ -910,6 +910,10 @@ func taskOf(run agk.RunID, step agk.Step, sh graph.ShardState) db.TaskRow {
 		FinishedAt:   sh.FinishedAt,
 		MemoisedFrom: sh.MemoisedFrom,
 		CalledRun:    sh.Called,
+
+		// A further attempt is ready once its backoff has passed, and not when it was decided:
+		// the backoff is the step's retry policy, which the queue wait read from this is not.
+		ReadyAt: sh.NextAttemptAt,
 	}
 	// A code is written for every ending that carries one. The evaluator reads a code only for a
 	// task that succeeded or failed, since a stop and not the code decided the verdict of one

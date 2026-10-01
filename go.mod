@@ -17,6 +17,22 @@ require (
 	// is enforced by the compiler rather than by a guard, and it carries the escaped
 	// identifier syntax that gives inputs.in.count a spelling at all.
 	cel.dev/cel-go v0.32.0
+	// Bubble Tea and Lip Gloss, used by package cmd/agk/internal/console alone, which draws agk
+	// console. A terminal interface worth using needs a renderer that redraws only what changed, a
+	// layout engine that measures and joins styled blocks, and input handling that decodes keys,
+	// the mouse, resizes and the terminal's answers about itself. The standard library has none of
+	// the three, and golang.org/x/term gives a raw mode and a window size, not a screen; written
+	// here, they would be a terminal toolkit of the project's own to maintain, where Bubble Tea is
+	// the one Go's terminal applications are built and kept up on. They stay inside cmd/agk: the
+	// tests that hold packages graph and driver to no server, no bus and no database refuse them any
+	// Charm package too, so that agk run --local stays the code path it was.
+	charm.land/bubbletea/v2 v2.0.10
+	charm.land/lipgloss/v2 v2.0.6
+	// Charm's colour profiles, used by package cmd/agk/internal/console alone and already here as a
+	// dependency of the two above: the type Bubble Tea takes the terminal's depth in, which the
+	// console reads from NO_COLOR, COLORTERM and TERM as the documentation's table does and hands
+	// it, so that the renderer neither converts a colour the console chose nor guesses again.
+	github.com/charmbracelet/colorprofile v0.4.3
 	// YAML 1.2, used to read the two documents of the language: the workflow entry point
 	// in package graph and the brick manifest in package brick. The version of YAML is
 	// the reason for the choice rather than the API. A YAML 1.1 parser reads the bare key
@@ -113,14 +129,26 @@ require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
+	github.com/charmbracelet/x/ansi v0.11.8 // indirect
+	github.com/charmbracelet/x/term v0.2.2 // indirect
+	github.com/charmbracelet/x/termios v0.1.1 // indirect
+	github.com/charmbracelet/x/windows v0.2.2 // indirect
+	github.com/clipperhouse/displaywidth v0.11.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.20.0 // indirect
+	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
+	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
+	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
+	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
 	golang.org/x/sync v0.23.0 // indirect

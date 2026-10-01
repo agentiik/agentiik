@@ -1,0 +1,14 @@
+-- When a task could first be handed out, for the queue wait the statistics read: "the queue wait of
+-- their tasks, from creation to dispatch", the time a task waited for a slot under
+-- max_concurrent_tasks, a fan-out's max_parallel or a pool's capacity before it went out.
+--
+-- A task's row is written when the evaluator first holds it, pending, which is its creation; an
+-- attempt that waits out a retry's backoff first is ready when the backoff ends rather than when it
+-- was decided, since the backoff is the step's policy and not a wait for room. The creation is the
+-- database's clock at the insert, and a backoff's end the controller's, which writes dispatched_at
+-- too: the two agree as far as the hosts keep time, and a wait a skew reads below zero is counted as
+-- none. Written once, when the row is inserted, and never moved.
+--
+-- Null for the tasks written before this release, which no series counts a wait for: nothing
+-- recorded when they became ready, and a guess would be a number nobody measured.
+alter table tasks add column ready_at timestamptz;

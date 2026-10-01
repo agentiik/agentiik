@@ -113,11 +113,14 @@
 //
 // # What it ships as
 //
-// A static binary, CGO_ENABLED=0, and an image, build/controller.Dockerfile, holding that same
-// file, the certificates it verifies the database and the bus with, and an empty
-// /var/lib/agentiik/objects for the object store's volume, run as a user that is not root and owns
-// that directory. static_test.go builds both and checks each property on what was built rather
-// than on the flags passed.
+// A static binary, CGO_ENABLED=0, and an image, ghcr.io/agentiik/agentiik from
+// build/agentiik.Dockerfile, holding that same file beside the API's, the certificates it verifies
+// the database and the bus with, and an empty /var/lib/agentiik/objects for the object store's
+// volume, run as a user that is not root and owns that directory. The image runs the API unless its
+// command is agentiik-controller, which is how an installation starts this program: a container of
+// its own, which never mounts the master key the API reads. static_test.go builds the binary and
+// checks it on what was built rather than on the flags passed; cmd/agentiik-api's builds the image
+// and runs this program in it.
 //
 // The controller writes in the object store's directory as well as reading it, since it puts every
 // task's inputs there and deletes what the purges and the collection let go of, so internal/config
