@@ -293,7 +293,10 @@
     margin-top: calc(var(--unit) * 12);
   }
 
+  /* A table scrolls sideways inside its pane, and holds what it places absolutely, the header read
+     out to screen readers alone among them, so that nothing of it widens the page. */
   .scroll {
+    position: relative;
     overflow-x: auto;
   }
 
