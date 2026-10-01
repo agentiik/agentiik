@@ -18174,6 +18174,256 @@
       ]
     }
   },
+  "GET /api/v1/alice/workflows/report": {
+    "status": 200,
+    "body": {
+      "repository": {
+        "namespace": "alice",
+        "name": "report",
+        "default_branch": "main",
+        "protected": false,
+        "labels": {},
+        "created_at": "2026-09-20T09:00:00Z",
+        "head": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+        "clone_url": "https://agentiik.example.com/alice/report.git"
+      },
+      "version": {
+        "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+        "parent": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+        "author": "alice",
+        "created_at": "2026-09-28T10:12:00Z",
+        "source": "git"
+      },
+      "graph": {
+        "workflow": "monthly-invoicing",
+        "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+        "includes": [
+          {
+            "path": "common-bricks.yaml"
+          }
+        ],
+        "inputs": {
+          "orders": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "required": true
+          },
+          "customers": {
+            "schema": {
+              "type": "array"
+            },
+            "required": false,
+            "default": []
+          }
+        },
+        "outputs": {
+          "invoices": {
+            "from": {
+              "step": "archive",
+              "port": "ok"
+            },
+            "retain": {
+              "for": "90d"
+            }
+          },
+          "errors": {
+            "from": {
+              "step": "invoice",
+              "port": "error"
+            },
+            "retain": {
+              "for": "7d",
+              "fetches": 3
+            }
+          }
+        },
+        "on": {
+          "schedule": [
+            {
+              "cron": "0 6 1 * *",
+              "timezone": "Europe/Paris"
+            }
+          ],
+          "webhook": [
+            {
+              "path": "invoicing/rerun",
+              "method": "POST",
+              "auth": "hmac",
+              "response": "async"
+            }
+          ]
+        },
+        "vars": {
+          "currency": "EUR"
+        },
+        "secrets": [
+          "billing"
+        ],
+        "concurrency": {
+          "group": "monthly-invoicing",
+          "cancel_in_progress": false
+        },
+        "timeout": "6h",
+        "retain": "7d",
+        "order": [
+          "normalize",
+          "invoice",
+          "archive"
+        ],
+        "steps": {
+          "normalize": {
+            "kind": "brick",
+            "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+            "brick": {
+              "name": "normalize-orders",
+              "version": "1.4.0"
+            },
+            "inputs": {
+              "orders": "${{ workflow.inputs.orders }}",
+              "customers": "${{ workflow.inputs.customers }}"
+            },
+            "outputs": [
+              "ok",
+              "rejected"
+            ],
+            "params": {
+              "currency": "${{ vars.currency }}"
+            },
+            "timeout": "2m",
+            "idempotent": true
+          },
+          "invoice": {
+            "kind": "brick",
+            "image": "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
+            "brick": {
+              "name": "invoice",
+              "version": "3.2.1"
+            },
+            "needs": [
+              {
+                "step": "normalize",
+                "port": "ok",
+                "as": "in"
+              }
+            ],
+            "outputs": [
+              "out",
+              "error"
+            ],
+            "if": "${{ inputs.in.count > 0 }}",
+            "strategy": {
+              "fan_out": "item",
+              "max_parallel": 8
+            },
+            "retry": {
+              "max": 3,
+              "on": [
+                "transient"
+              ],
+              "backoff": {
+                "type": "exponential",
+                "base": "10s",
+                "max": "2m"
+              }
+            },
+            "params": {
+              "endpoint": "https://vat.example.com/v2",
+              "rounding": "per_line"
+            },
+            "secrets": [
+              "billing"
+            ],
+            "network": "egress",
+            "egress": {
+              "allow": [
+                "vat.example.com:443"
+              ]
+            },
+            "timeout": "10m",
+            "idempotent": true,
+            "extends": [
+              ".api-brick"
+            ]
+          },
+          "archive": {
+            "kind": "brick",
+            "image": "ghcr.io/acme/agk-archive@sha256:c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+            "brick": {
+              "name": "archive",
+              "version": "0.9.0"
+            },
+            "needs": [
+              {
+                "step": "invoice",
+                "port": "out",
+                "as": "invoices"
+              },
+              {
+                "step": "normalize",
+                "port": "rejected",
+                "as": "rejected"
+              }
+            ],
+            "outputs": [
+              "ok"
+            ],
+            "cache": true,
+            "idempotent": true
+          }
+        }
+      },
+      "history": [
+        {
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "parent": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+          "author": {
+            "name": "Alice Martin",
+            "email": "alice@example.com"
+          },
+          "authored_at": "2026-09-28T10:05:00+02:00",
+          "subject": "Round VAT per line rather than per invoice",
+          "version": {
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            "parent": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+            "author": "alice",
+            "created_at": "2026-09-28T10:12:00Z",
+            "source": "git"
+          }
+        },
+        {
+          "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+          "parent": "9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f",
+          "author": {
+            "name": "Alice Martin",
+            "email": "alice@example.com"
+          },
+          "authored_at": "2026-09-28T09:40:00+02:00",
+          "subject": "Split the rounding out of the charge step"
+        },
+        {
+          "commit": "9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f",
+          "parent": "1f3d5e7a9c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f",
+          "author": {
+            "name": "Bruno Petit",
+            "email": "bruno@example.com"
+          },
+          "authored_at": "2026-09-27T16:22:00+02:00",
+          "subject": "Archive what normalize rejected beside the invoices",
+          "version": {
+            "commit": "9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f",
+            "parent": "1f3d5e7a9c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f",
+            "author": "bruno",
+            "created_at": "2026-09-27T14:25:00Z",
+            "source": "git"
+          }
+        }
+      ]
+    }
+  },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/main": {
     "status": 200,
     "body": {
