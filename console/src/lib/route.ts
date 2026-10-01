@@ -4,7 +4,8 @@
 //
 // A namespace is the first segment of most of them, as it is of the API's routes. The others begin
 // with a word no namespace can be named, the reserved words of the namespace grammar: me for the
-// caller's own account, runners for what an administrator runs. A workflow is the segment after
+// caller's own account, runners for what an administrator runs, users for whom an administrator
+// manages. A workflow is the segment after
 // workflows, and a run the segment after runs, each as the API names it.
 
 export type View = "runs" | "workflows" | "statistics" | "sharing" | "settings";
@@ -16,6 +17,7 @@ export type Route =
   | { kind: "namespace"; namespace: string; view: View; workflow?: string; run?: string; tab?: string }
   | { kind: "account"; tab?: string }
   | { kind: "runners"; tab?: string }
+  | { kind: "users" }
   | { kind: "unknown"; path: string };
 
 // segmentsOf is the path of an address after the console's root, the <base> the page was served with,
@@ -48,6 +50,9 @@ export function read(pathname: string, root: string): Route {
   if (first === "me") {
     return third === undefined ? { kind: "account", tab: second } : { kind: "unknown", path: pathname };
   }
+  if (first === "users") {
+    return second === undefined ? { kind: "users" } : { kind: "unknown", path: pathname };
+  }
   if (first === "runners") {
     return third === undefined ? { kind: "runners", tab: second } : { kind: "unknown", path: pathname };
   }
@@ -79,6 +84,8 @@ export function address(route: Route): string {
       return route.tab ? `me/${e(route.tab)}` : "me";
     case "runners":
       return route.tab ? `runners/${e(route.tab)}` : "runners";
+    case "users":
+      return "users";
     case "unknown":
       return "./";
     case "namespace": {

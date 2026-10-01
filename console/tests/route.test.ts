@@ -5,7 +5,7 @@ describe("an address", () => {
   const root = "/prefix/";
 
   it("names the screen it opens, and is written back the same", () => {
-    for (const path of ["finance/runs", "finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A", "finance/workflows/monthly-invoicing/statistics", "finance/sharing", "me/tokens", "runners"]) {
+    for (const path of ["finance/runs", "finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A", "finance/workflows/monthly-invoicing/statistics", "finance/sharing", "me/tokens", "runners", "users"]) {
       expect(address(read(root + path, root))).toBe(path);
     }
   });
@@ -25,9 +25,11 @@ describe("an address", () => {
     expect(read(root + "finance/%E0%A4%A", root).kind).toBe("unknown");
   });
 
-  it("reads me and runners as the console's own, since no namespace may be named either", () => {
+  it("reads me, runners and users as the console's own, since no namespace may be named any of them", () => {
     expect(read(root + "me", root)).toEqual({ kind: "account", tab: undefined });
     expect(read(root + "runners/statistics", root)).toEqual({ kind: "runners", tab: "statistics" });
+    expect(read(root + "users", root)).toEqual({ kind: "users" });
+    expect(read(root + "users/alice", root).kind).toBe("unknown");
   });
 
   it("escapes what it names", () => {

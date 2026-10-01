@@ -108,6 +108,7 @@
           {#if me.user}<p class="name">{me.user.display_name}</p>{/if}
           <a class="entry" href={place.href({ kind: "account" })} onclick={(e) => { follow(place, { kind: "account" })(e); close(); }}>Your account</a>
           {#if me.admin}
+            <a class="entry" href={place.href({ kind: "users" })} onclick={(e) => { follow(place, { kind: "users" })(e); close(); }}>Users</a>
             <a class="entry" href={place.href({ kind: "runners" })} onclick={(e) => { follow(place, { kind: "runners" })(e); close(); }}>Runners and pools</a>
           {/if}
           <fieldset class="ground">
