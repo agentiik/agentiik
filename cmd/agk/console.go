@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"time"
 
 	"github.com/agentiik/agentiik/cmd/agk/internal/console"
 	"github.com/agentiik/agentiik/db"
@@ -85,7 +83,6 @@ func consoleVerb(ctx context.Context, e Env, args []string) int {
 		Run:          run,
 		Read:         at.getJSON,
 		Now:          e.now,
-		Describe:     func(w io.Writer, d db.RunDetail, now time.Time) { describe(w, d, now, false) },
 		Getenv:       e.getenv,
 		Theme:        theme,
 	})

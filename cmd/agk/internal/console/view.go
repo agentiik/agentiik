@@ -40,7 +40,7 @@ func (m Model) screen() string {
 	case m.listing:
 		lines = m.keysListed(t)
 	case m.view == runView:
-		lines = m.runLines(t)
+		lines = m.runLines(t, body)
 	default:
 		lines = m.runsLines(t, body)
 	}
@@ -63,8 +63,8 @@ func (m Model) topLine(t theme) string {
 		where = "every namespace"
 	}
 	rest := "  " + m.o.Installation + "  " + where
-	if m.principal != "" {
-		rest += "  " + m.principal
+	if m.me.Principal != "" {
+		rest += "  " + m.me.Principal
 	}
 	left := []part{{strong, "agentiik"}, {muted, rest}}
 	right := []part{{succeededText, "●"}, {plain, " live"}}
@@ -81,7 +81,7 @@ func (m Model) keyLine(t theme) string {
 	case m.listing:
 		keys = [][2]string{{"esc", "Close"}, {"q", "Quit"}}
 	case m.view == runView:
-		keys = [][2]string{{"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
+		keys = [][2]string{{"↑↓", "Step"}, {"[]", "Port"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
 	default:
 		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"q", "Quit"}, {"?", "Every key"}}
 	}
@@ -99,7 +99,7 @@ func (m Model) keyLine(t theme) string {
 func (m Model) keysListed(t theme) []string {
 	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}}
 	if m.view == runView {
-		rows = append(rows, [2]string{"esc", "Back to the runs"})
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"esc", "Back to the runs"})
 	} else {
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"})
 	}
@@ -241,25 +241,6 @@ func (m Model) columns(state, run, workflow, trigger, started, took, by []part) 
 		}
 	}
 	return parts
-}
-
-// runLines is the run view: how the run stands, in agk status's words, until the inspector draws
-// it (#609).
-func (m Model) runLines(t theme) []string {
-	head := t.line(false, m.width, part{strong, "Run " + m.selected})
-	switch {
-	case m.runFailed != "":
-		return []string{head, t.line(false, m.width), t.line(false, m.width, part{failedText, "The run could not be read: " + m.runFailed})}
-	case !m.runRead:
-		return []string{head, t.line(false, m.width), t.line(false, m.width, part{quiet, "Reading the run."})}
-	}
-	var b strings.Builder
-	m.o.Describe(&b, *m.run, m.o.Now())
-	lines := []string{head, t.line(false, m.width)}
-	for _, l := range strings.Split(strings.TrimRight(b.String(), "\n"), "\n") {
-		lines = append(lines, t.line(false, m.width, within([]part{{plain, l}}, m.width)...))
-	}
-	return lines
 }
 
 // widthOf is how many columns parts take.
