@@ -251,22 +251,22 @@
         <!-- Drawn at their size before the series answer, each value said once they have. -->
         <ul class="cards" aria-label="Counts">
           <li>
-            <span class="head"><span>Runs</span><Icon name="control-runs" size={16} /></span>
+            <span class="label">Runs</span>
             <span class="value term">{reading ? "\u00a0" : week.runs}</span>
             <span class="caption">last 7 days</span>
           </li>
           <li>
-            <span class="head"><span>Failed</span><Icon name="state-failed" size={16} /></span>
+            <span class="label">Failed</span>
             <span class="value term" class:failed={!reading && week.failures > 0}>{reading ? "\u00a0" : week.failures}</span>
             <span class="caption">last 7 days</span>
           </li>
           <li>
-            <span class="head"><span>Running</span><Icon name="state-running" size={16} /></span>
+            <span class="label">Running</span>
             <span class="value term">{running.length}</span>
             <span class="caption">now</span>
           </li>
           <li>
-            <span class="head"><span>Awaiting approval</span><Icon name="state-waiting" size={16} /></span>
+            <span class="label">Awaiting approval</span>
             <span class="value term" class:waiting={waiting.length > 0}>{waiting.length}</span>
             <span class="caption">now</span>
           </li>
@@ -282,7 +282,7 @@
               </div>
             {/snippet}
             {#if attention.length === 0}
-              <p class="clear"><span class="tick"><Icon name="state-succeeded" size={24} /></span><strong>Nothing needs your attention.</strong></p>
+              <p class="clear"><span class="tick"><Icon name="state-succeeded" size={20} /></span><strong>Nothing needs your attention.</strong></p>
             {:else}
               <ul class="feed" aria-label="Runs that need your attention">
                 {#each attention.slice(0, 10) as r (r.run)}{@render item(r, clock(r.created_at, now))}{/each}
@@ -548,40 +548,37 @@
     }
   }
 
-  /* Four counts, each a card with its name and icon in a band over its value. */
+  /* Four counts on one strip, told apart by hairlines rather than by four boxes: a figure is read by
+     its size and its name, and colour is kept for a state that asks for the caller, a failure or an
+     approval waited on. The hairlines are the strip's own ground showing between the counts, so that
+     they follow the counts however they wrap. */
   .cards {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: calc(var(--unit) * 6);
+    gap: var(--border-hairline);
     margin: 0;
     padding: 0;
+    overflow: hidden;
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-card);
+    background: var(--line);
     list-style: none;
   }
 
   .cards li {
     display: flex;
     flex-direction: column;
-    overflow: hidden;
-    border: var(--border-hairline) solid var(--line);
-    border-radius: var(--radius-card);
+    padding: calc(var(--unit) * 5) calc(var(--unit) * 6);
     background: var(--surface);
   }
 
-  .cards .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: calc(var(--unit) * 3);
-    height: 36px;
-    padding: 0 calc(var(--unit) * 6);
-    background: var(--sunken);
+  .cards .label {
     color: var(--muted);
     font-size: var(--type-control-size);
     font-weight: 500;
   }
 
   .cards .value {
-    padding: calc(var(--unit) * 4) calc(var(--unit) * 6) 0;
     font-size: 28px;
     font-weight: 600;
     line-height: 36px;
@@ -596,7 +593,6 @@
   }
 
   .cards .caption {
-    padding: 0 calc(var(--unit) * 6) calc(var(--unit) * 5);
     color: var(--faint);
     font-size: 12.5px;
   }
@@ -615,11 +611,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 48px;
-    height: 48px;
-    border: 2px solid var(--text);
+    width: 40px;
+    height: 40px;
     border-radius: var(--radius-round);
-    background: color-mix(in srgb, var(--succeeded) 22%, var(--surface));
+    background: color-mix(in srgb, var(--succeeded) 16%, var(--surface));
     color: var(--succeeded);
   }
 
