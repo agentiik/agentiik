@@ -972,7 +972,7 @@ export interface paths {
         };
         /**
          * List runs
-         * @description The runs of every workflow the caller holds run:read on, over its namespace or itself, newest first, each with its namespace, its trigger_kind and its triggered_by: where the console's runs view and a phone open. Every workflow it could list is asked about as one question, a namespace the caller holds nothing in included, so that a listing is no way of learning which namespaces and workflows exist, by what it answers or by how long it takes. Also served within one namespace as GET /api/v1/{ns}/runs, which reads the namespace from its path and no namespace from its query.
+         * @description The runs of every workflow the caller holds run:read on, over its namespace or itself, newest first, each with its namespace, its trigger_kind and its triggered_by, and from v0.6.0 its steps in the order they started with their verdicts and times, which the console draws as a strip: where the console's runs view and a phone open. Every workflow it could list is asked about as one question, a namespace the caller holds nothing in included, so that a listing is no way of learning which namespaces and workflows exist, by what it answers or by how long it takes. Also served within one namespace as GET /api/v1/{ns}/runs, which reads the namespace from its path and no namespace from its query.
          */
         get: operations["listRuns"];
         put?: never;
@@ -1143,7 +1143,7 @@ export interface paths {
         };
         /**
          * Read a namespace's runs as series
-         * @description Per bucket, the runs of the namespace's workflows by state, the p50, p95 and p99 of their duration and of their tasks' queue wait, and the attempts retried by exit code; with histogram, their durations over the range in bins. Counts only the workflows the caller holds run:read on, as GET /api/v1/runs lists them, and never asks run:read_data: a series carries counts, durations and exit codes, never an item. Computed from the run and task records rather than kept apart, so a range reaches back as far as the namespace keeps its runs, and no further.
+         * @description Per bucket, the runs of the namespace's workflows by state, the p50, p95 and p99 of their duration and of their tasks' queue wait, and the attempts retried by exit code, and the same over the whole range under overall; with histogram, their durations over the range in bins. Counts only the workflows the caller holds run:read on, as GET /api/v1/runs lists them, and never asks run:read_data: a series carries counts, durations and exit codes, never an item. Computed from the run and task records rather than kept apart, so a range reaches back as far as the namespace keeps its runs, and no further.
          */
         get: operations["getRunStatistics"];
         put?: never;
@@ -1166,7 +1166,7 @@ export interface paths {
         };
         /**
          * Read a workflow's steps as series
-         * @description Per step of one workflow, per bucket: the percentiles of its duration, its attempts and exit codes, and a fan-out's items a minute; with by=hour, its p50 by weekday and hour over the range. Requires run:read on the workflow.
+         * @description Per step of one workflow, per bucket: the percentiles of its duration, its attempts and exit codes, and a fan-out's items a minute, and the same over the whole range under overall; with by=hour, its p50 by weekday and hour over the range. Requires run:read on the workflow.
          */
         get: operations["getStepStatistics"];
         put?: never;
@@ -4672,7 +4672,36 @@ export interface components {
          *           },
          *           "retries": []
          *         }
-         *       ]
+         *       ],
+         *       "overall": {
+         *         "since": "2026-09-30T06:00:00Z",
+         *         "until": "2026-09-30T07:59:59.999999999Z",
+         *         "runs": {
+         *           "queued": 0,
+         *           "running": 1,
+         *           "waiting": 0,
+         *           "succeeded": 20,
+         *           "failed": 1,
+         *           "cancelled": 0,
+         *           "timed_out": 0
+         *         },
+         *         "duration_ms": {
+         *           "p50": 215000,
+         *           "p95": 298000,
+         *           "p99": 308000
+         *         },
+         *         "queue_wait_ms": {
+         *           "p50": 400,
+         *           "p95": 1800,
+         *           "p99": 2500
+         *         },
+         *         "retries": [
+         *           {
+         *             "exit_code": 108,
+         *             "attempts": 3
+         *           }
+         *         ]
+         *       }
          *     }
          * @example {
          *       "from": "2026-09-30T06:00:00Z",
@@ -4722,7 +4751,36 @@ export interface components {
          *           },
          *           "retries": []
          *         }
-         *       ]
+         *       ],
+         *       "overall": {
+         *         "since": "2026-09-30T06:00:00Z",
+         *         "until": "2026-09-30T07:59:59.999999999Z",
+         *         "runs": {
+         *           "queued": 0,
+         *           "running": 0,
+         *           "waiting": 0,
+         *           "succeeded": 11,
+         *           "failed": 1,
+         *           "cancelled": 0,
+         *           "timed_out": 0
+         *         },
+         *         "duration_ms": {
+         *           "p50": 222000,
+         *           "p95": 301000,
+         *           "p99": 309000
+         *         },
+         *         "queue_wait_ms": {
+         *           "p50": 420,
+         *           "p95": 1900,
+         *           "p99": 2600
+         *         },
+         *         "retries": [
+         *           {
+         *             "exit_code": 108,
+         *             "attempts": 3
+         *           }
+         *         ]
+         *       }
          *     }
          * @example {
          *       "from": "2026-09-30T06:00:00Z",
@@ -4784,6 +4842,35 @@ export interface components {
          *           "retries": []
          *         }
          *       ],
+         *       "overall": {
+         *         "since": "2026-09-30T06:00:00Z",
+         *         "until": "2026-09-30T07:59:59.999999999Z",
+         *         "runs": {
+         *           "queued": 0,
+         *           "running": 1,
+         *           "waiting": 0,
+         *           "succeeded": 20,
+         *           "failed": 1,
+         *           "cancelled": 0,
+         *           "timed_out": 0
+         *         },
+         *         "duration_ms": {
+         *           "p50": 215000,
+         *           "p95": 298000,
+         *           "p99": 308000
+         *         },
+         *         "queue_wait_ms": {
+         *           "p50": 400,
+         *           "p95": 1800,
+         *           "p99": 2500
+         *         },
+         *         "retries": [
+         *           {
+         *             "exit_code": 108,
+         *             "attempts": 3
+         *           }
+         *         ]
+         *       },
          *       "histogram": [
          *         {
          *           "from_ms": 180000,
@@ -4863,7 +4950,36 @@ export interface components {
          *               }
          *             ]
          *           }
-         *         ]
+         *         ],
+         *         "overall": {
+         *           "since": "2026-09-30T04:00:00Z",
+         *           "until": "2026-09-30T05:59:59.999999999Z",
+         *           "runs": {
+         *             "queued": 0,
+         *             "running": 0,
+         *             "waiting": 0,
+         *             "succeeded": 22,
+         *             "failed": 0,
+         *             "cancelled": 0,
+         *             "timed_out": 1
+         *           },
+         *           "duration_ms": {
+         *             "p50": 226000,
+         *             "p95": 297000,
+         *             "p99": 2870000
+         *           },
+         *           "queue_wait_ms": {
+         *             "p50": 420,
+         *             "p95": 2000,
+         *             "p99": 2300
+         *           },
+         *           "retries": [
+         *             {
+         *               "exit_code": null,
+         *               "attempts": 1
+         *             }
+         *           ]
+         *         }
          *       }
          *     }
          */
@@ -4948,6 +5064,39 @@ export interface components {
              *     ]
              */
             buckets: components["schemas"]["statsRunsBucket"][];
+            /**
+             * @description The range as one bucket, from the first bucket's since to the last one's until: what its runs came to together, which a figure beside the charts reads. Its counts are the buckets' summed, and its percentiles are taken over the whole range rather than combined from the buckets', which percentiles do not combine into, so a client could not work them out.
+             * @example {
+             *       "since": "2026-09-30T06:00:00Z",
+             *       "until": "2026-09-30T07:59:59.999999999Z",
+             *       "runs": {
+             *         "queued": 0,
+             *         "running": 1,
+             *         "waiting": 0,
+             *         "succeeded": 20,
+             *         "failed": 1,
+             *         "cancelled": 0,
+             *         "timed_out": 0
+             *       },
+             *       "duration_ms": {
+             *         "p50": 215000,
+             *         "p95": 298000,
+             *         "p99": 308000
+             *       },
+             *       "queue_wait_ms": {
+             *         "p50": 400,
+             *         "p95": 1800,
+             *         "p99": 2500
+             *       },
+             *       "retries": [
+             *         {
+             *           "exit_code": 108,
+             *           "attempts": 3
+             *         }
+             *       ]
+             *     }
+             */
+            overall: components["schemas"]["statsRunsBucket"];
             /**
              * @description The durations of the runs that ended over the range, in the bins histogram asked for, shortest first; fewer where the runs are fewer than the bins, and empty where none has ended. Present where histogram was asked for.
              * @example [
@@ -5050,7 +5199,36 @@ export interface components {
              *             }
              *           ]
              *         }
-             *       ]
+             *       ],
+             *       "overall": {
+             *         "since": "2026-09-30T04:00:00Z",
+             *         "until": "2026-09-30T05:59:59.999999999Z",
+             *         "runs": {
+             *           "queued": 0,
+             *           "running": 0,
+             *           "waiting": 0,
+             *           "succeeded": 22,
+             *           "failed": 0,
+             *           "cancelled": 0,
+             *           "timed_out": 1
+             *         },
+             *         "duration_ms": {
+             *           "p50": 226000,
+             *           "p95": 297000,
+             *           "p99": 2870000
+             *         },
+             *         "queue_wait_ms": {
+             *           "p50": 420,
+             *           "p95": 2000,
+             *           "p99": 2300
+             *         },
+             *         "retries": [
+             *           {
+             *             "exit_code": null,
+             *             "attempts": 1
+             *           }
+             *         ]
+             *       }
              *     }
              */
             previous?: {
@@ -5123,6 +5301,39 @@ export interface components {
                  *     ]
                  */
                 buckets: components["schemas"]["statsRunsBucket"][];
+                /**
+                 * @description The span before as one bucket, as overall is the range's: what a figure's change is worked out against.
+                 * @example {
+                 *       "since": "2026-09-30T04:00:00Z",
+                 *       "until": "2026-09-30T05:59:59.999999999Z",
+                 *       "runs": {
+                 *         "queued": 0,
+                 *         "running": 0,
+                 *         "waiting": 0,
+                 *         "succeeded": 22,
+                 *         "failed": 0,
+                 *         "cancelled": 0,
+                 *         "timed_out": 1
+                 *       },
+                 *       "duration_ms": {
+                 *         "p50": 226000,
+                 *         "p95": 297000,
+                 *         "p99": 2870000
+                 *       },
+                 *       "queue_wait_ms": {
+                 *         "p50": 420,
+                 *         "p95": 2000,
+                 *         "p99": 2300
+                 *       },
+                 *       "retries": [
+                 *         {
+                 *           "exit_code": null,
+                 *           "attempts": 1
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                overall: components["schemas"]["statsRunsBucket"];
                 /**
                  * @description The durations of the runs that ended over the range, in the bins histogram asked for, shortest first; fewer where the runs are fewer than the bins, and empty where none has ended. Present where histogram was asked for.
                  * @example [
@@ -5334,7 +5545,23 @@ export interface components {
          *                 }
          *               ]
          *             }
-         *           ]
+         *           ],
+         *           "overall": {
+         *             "since": "2026-09-30T06:00:00Z",
+         *             "until": "2026-09-30T07:59:59.999999999Z",
+         *             "duration_ms": {
+         *               "p50": 1150,
+         *               "p95": 1800,
+         *               "p99": 2050
+         *             },
+         *             "attempts": 21,
+         *             "exit_codes": [
+         *               {
+         *                 "exit_code": 0,
+         *                 "attempts": 21
+         *               }
+         *             ]
+         *           }
          *         },
          *         {
          *           "step": "invoice",
@@ -5377,7 +5604,28 @@ export interface components {
          *               ],
          *               "items_per_minute": 81
          *             }
-         *           ]
+         *           ],
+         *           "overall": {
+         *             "since": "2026-09-30T06:00:00Z",
+         *             "until": "2026-09-30T07:59:59.999999999Z",
+         *             "duration_ms": {
+         *               "p50": 174000,
+         *               "p95": 236000,
+         *               "p99": 249000
+         *             },
+         *             "attempts": 24,
+         *             "exit_codes": [
+         *               {
+         *                 "exit_code": 0,
+         *                 "attempts": 20
+         *               },
+         *               {
+         *                 "exit_code": 108,
+         *                 "attempts": 4
+         *               }
+         *             ],
+         *             "items_per_minute": 77.2
+         *           }
          *         }
          *       ]
          *     }
@@ -5479,7 +5727,23 @@ export interface components {
              *               }
              *             ]
              *           }
-             *         ]
+             *         ],
+             *         "overall": {
+             *           "since": "2026-09-30T06:00:00Z",
+             *           "until": "2026-09-30T07:59:59.999999999Z",
+             *           "duration_ms": {
+             *             "p50": 1150,
+             *             "p95": 1800,
+             *             "p99": 2050
+             *           },
+             *           "attempts": 21,
+             *           "exit_codes": [
+             *             {
+             *               "exit_code": 0,
+             *               "attempts": 21
+             *             }
+             *           ]
+             *         }
              *       },
              *       {
              *         "step": "invoice",
@@ -5522,7 +5786,28 @@ export interface components {
              *             ],
              *             "items_per_minute": 81
              *           }
-             *         ]
+             *         ],
+             *         "overall": {
+             *           "since": "2026-09-30T06:00:00Z",
+             *           "until": "2026-09-30T07:59:59.999999999Z",
+             *           "duration_ms": {
+             *             "p50": 174000,
+             *             "p95": 236000,
+             *             "p99": 249000
+             *           },
+             *           "attempts": 24,
+             *           "exit_codes": [
+             *             {
+             *               "exit_code": 0,
+             *               "attempts": 20
+             *             },
+             *             {
+             *               "exit_code": 108,
+             *               "attempts": 4
+             *             }
+             *           ],
+             *           "items_per_minute": 77.2
+             *         }
              *       }
              *     ]
              */
@@ -5577,6 +5862,31 @@ export interface components {
                  */
                 buckets?: components["schemas"]["statsStepBucket"][];
                 /**
+                 * @description The range as one bucket, from the first bucket's since to the last one's until: what the step came to over the whole range, which a figure beside the charts reads. Its attempts and exit codes are the buckets' summed, and its percentiles and its items a minute are taken over the whole range, since neither combines from the buckets'. Absent with by=hour.
+                 * @example {
+                 *       "since": "2026-09-30T06:00:00Z",
+                 *       "until": "2026-09-30T07:59:59.999999999Z",
+                 *       "duration_ms": {
+                 *         "p50": 174000,
+                 *         "p95": 236000,
+                 *         "p99": 249000
+                 *       },
+                 *       "attempts": 24,
+                 *       "exit_codes": [
+                 *         {
+                 *           "exit_code": 0,
+                 *           "attempts": 20
+                 *         },
+                 *         {
+                 *           "exit_code": 108,
+                 *           "attempts": 4
+                 *         }
+                 *       ],
+                 *       "items_per_minute": 77.2
+                 *     }
+                 */
+                overall?: components["schemas"]["statsStepBucket"];
+                /**
                  * @description The 168 cells, Monday at midnight first. Present with by=hour alone.
                  * @example [
                  *       {
@@ -5622,6 +5932,27 @@ export interface components {
                  *     ]
                  */
                 previous?: components["schemas"]["statsStepBucket"][];
+                /**
+                 * @description The span before as one bucket, as overall is the range's: what a figure's change is worked out against. Present where compare=previous.
+                 * @example {
+                 *       "since": "2026-09-30T04:00:00Z",
+                 *       "until": "2026-09-30T05:59:59.999999999Z",
+                 *       "duration_ms": {
+                 *         "p50": 181000,
+                 *         "p95": 244000,
+                 *         "p99": 260000
+                 *       },
+                 *       "attempts": 22,
+                 *       "exit_codes": [
+                 *         {
+                 *           "exit_code": 0,
+                 *           "attempts": 22
+                 *         }
+                 *       ],
+                 *       "items_per_minute": 70.4
+                 *     }
+                 */
+                previous_overall?: components["schemas"]["statsStepBucket"];
             }[];
         };
         /**
@@ -6399,7 +6730,21 @@ export interface components {
          *           "triggered_by": "alice",
          *           "created_at": "2026-10-01T05:41:03Z",
          *           "started_at": "2026-10-01T05:41:03Z",
-         *           "finished_at": "2026-10-01T05:42:55Z"
+         *           "finished_at": "2026-10-01T05:42:55Z",
+         *           "steps": [
+         *             {
+         *               "step": "normalize",
+         *               "verdict": "succeeded",
+         *               "started_at": "2026-09-30T05:40:12Z",
+         *               "finished_at": "2026-09-30T05:41:02Z"
+         *             },
+         *             {
+         *               "step": "invoice",
+         *               "verdict": "failed",
+         *               "started_at": "2026-09-30T05:41:03Z",
+         *               "finished_at": "2026-09-30T05:44:10Z"
+         *             }
+         *           ]
          *         },
          *         {
          *           "namespace": "finance",
@@ -6410,7 +6755,8 @@ export interface components {
          *           "trigger_kind": "webhook",
          *           "triggered_by": "finance/agentiik",
          *           "created_at": "2026-10-01T05:28:44Z",
-         *           "started_at": "2026-10-01T05:28:45Z"
+         *           "started_at": "2026-10-01T05:28:45Z",
+         *           "steps": []
          *         }
          *       ]
          *     }
@@ -6432,7 +6778,21 @@ export interface components {
              *         "triggered_by": "alice",
              *         "created_at": "2026-10-01T05:41:03Z",
              *         "started_at": "2026-10-01T05:41:03Z",
-             *         "finished_at": "2026-10-01T05:42:55Z"
+             *         "finished_at": "2026-10-01T05:42:55Z",
+             *         "steps": [
+             *           {
+             *             "step": "normalize",
+             *             "verdict": "succeeded",
+             *             "started_at": "2026-09-30T05:40:12Z",
+             *             "finished_at": "2026-09-30T05:41:02Z"
+             *           },
+             *           {
+             *             "step": "invoice",
+             *             "verdict": "failed",
+             *             "started_at": "2026-09-30T05:41:03Z",
+             *             "finished_at": "2026-09-30T05:44:10Z"
+             *           }
+             *         ]
              *       },
              *       {
              *         "namespace": "finance",
@@ -6443,7 +6803,8 @@ export interface components {
              *         "trigger_kind": "webhook",
              *         "triggered_by": "finance/agentiik",
              *         "created_at": "2026-10-01T05:28:44Z",
-             *         "started_at": "2026-10-01T05:28:45Z"
+             *         "started_at": "2026-10-01T05:28:45Z",
+             *         "steps": []
              *       }
              *     ]
              * @example []
@@ -6553,6 +6914,30 @@ export interface components {
             ports?: {
                 [key: string]: components["schemas"]["envelopeReference"];
             };
+            /**
+             * @description The image the step runs, by digest, as the version the run pinned resolved it: an image the file named by a tag is the digest the tag was resolved to when the version was pushed. Absent for a workflow step, which runs no container, and where the version can no longer be read.
+             * @example ghcr.io/acme/agk-invoice@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0
+             */
+            image?: components["schemas"]["imageRef"];
+            /**
+             * @description The input ports the step declares, by name, sorted: those its edges feed and those its inputs keyword feeds, each handed to a task as an envelope, empty ones included. Absent for a step that reads nothing.
+             * @example [
+             *       "orders"
+             *     ]
+             * @example [
+             *       "customers",
+             *       "orders"
+             *     ]
+             */
+            input_ports?: components["schemas"]["identifier"][];
+            /**
+             * @description The output ports the step declares, in the order the file writes them: each is published once, when the step ends, an empty envelope where nothing was written to it, which is what ports carries from then on.
+             * @example [
+             *       "out",
+             *       "error"
+             *     ]
+             */
+            output_ports?: components["schemas"]["identifier"][];
         };
         /**
          * Task summary
@@ -6663,6 +7048,16 @@ export interface components {
             inputs?: {
                 [key: string]: components["schemas"]["envelopeReference"];
             };
+            /**
+             * @description The parameters the task was dispatched with, resolved: every expression evaluated and the matrix combination in, as the container read them from /agk/params.json, a secret written as {"secret": name} and never as its value. An expression may carry envelope contents into them, so they are answered only to a caller holding run:read_data on the run's workflow, and otherwise left out; absent for a task never dispatched, a cache hit and a call.
+             * @example {
+             *       "currency": "EUR",
+             *       "vat_api_key": {
+             *         "secret": "vat-api"
+             *       }
+             *     }
+             */
+            params?: Record<string, never>;
         };
         /**
          * Run detail
@@ -6718,7 +7113,15 @@ export interface components {
          *               "size": 212,
          *               "items": 3
          *             }
-         *           }
+         *           },
+         *           "image": "ghcr.io/acme/agk-invoice@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+         *           "input_ports": [
+         *             "orders"
+         *           ],
+         *           "output_ports": [
+         *             "out",
+         *             "error"
+         *           ]
          *         },
          *         {
          *           "step": "archive",
@@ -9344,6 +9747,51 @@ export interface components {
              * @example 2026-10-01T04:09:41Z
              */
             finished_at?: components["schemas"]["timestamp"];
+            /**
+             * @description The run's steps in the order they started, those not started after them by name, each with its verdict and its times: what a listing draws as a strip whose segments are as wide as the steps took, so that where a run failed and how long each part lasted are read before its colours. Answered by a listing of runs; absent elsewhere.
+             * @example [
+             *       {
+             *         "step": "normalize",
+             *         "verdict": "succeeded",
+             *         "started_at": "2026-09-30T05:40:12Z",
+             *         "finished_at": "2026-09-30T05:41:02Z"
+             *       },
+             *       {
+             *         "step": "invoice",
+             *         "verdict": "failed",
+             *         "started_at": "2026-09-30T05:41:03Z",
+             *         "finished_at": "2026-09-30T05:44:10Z"
+             *       },
+             *       {
+             *         "step": "archive",
+             *         "verdict": "pending"
+             *       }
+             *     ]
+             */
+            steps?: {
+                /**
+                 * @description The step, by the name the workflow file gives it.
+                 * @example normalize
+                 */
+                step: components["schemas"]["identifier"];
+                /**
+                 * @description Where the step stands, as the run detail's steps say it.
+                 * @example succeeded
+                 * @example failed
+                 * @enum {string}
+                 */
+                verdict: "pending" | "running" | "succeeded" | "failed" | "skipped" | "cancelled";
+                /**
+                 * @description When its first attempt was dispatched. Absent before.
+                 * @example 2026-09-30T05:40:12Z
+                 */
+                started_at?: components["schemas"]["timestamp"];
+                /**
+                 * @description When it reached its verdict. Absent while it has none.
+                 * @example 2026-09-30T05:41:02Z
+                 */
+                finished_at?: components["schemas"]["timestamp"];
+            }[];
         } & unknown;
         /**
          * @description The run and the step that called this one, for a run whose trigger_kind is workflow. The caller may be in another namespace, and is named all the same: the callee's reader learns which run asked, and reading that run is still held to its own namespace's grants.
