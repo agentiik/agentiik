@@ -8,6 +8,8 @@ import { Session } from "../src/lib/session.svelte";
 import { opened, sockets } from "./live";
 import { answering, scenario } from "./scenario";
 
+vi.mock("uplot", () => import("./plot"));
+
 function open(path: string, who: "alice" | "dana" = "alice") {
   const asked: string[] = [];
   const api = connect("http://stand-in/", answering(scenario(who), asked));

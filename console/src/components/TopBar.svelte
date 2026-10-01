@@ -3,22 +3,19 @@
   import { follow, type Place } from "../lib/place.svelte";
   import type { Route } from "../lib/route";
   import { said } from "../lib/notifications";
-  import { apply, chosen, type Ground } from "../lib/theme";
-  import { photoOf } from "../lib/profile";
-  import Avatar from "./Avatar.svelte";
   import Icon from "./Icon.svelte";
   import Popover from "./Popover.svelte";
 
-  // The bar above the screen: where the screen is, as a trail of links back up to the home, then
-  // whether the installation answers, the caller's notifications and the caller. The views themselves
-  // are the sidebar's, so that nothing here moves with the namespace or the screen.
+  // The line above the screen's own head: where the screen is, as a trail of links back up to the
+  // home, then whether the installation answers and the caller's notifications. It is the screen's
+  // first line rather than a bar of its own, so that it takes no room the screen could use; the caller
+  // is at the foot of the sidebar.
   let {
     me,
     route,
     answering,
     live,
     place,
-    onsignout,
     ondismiss,
     onmenu,
   }: {
@@ -27,17 +24,10 @@
     answering: boolean;
     live: boolean;
     place: Place;
-    onsignout: () => void;
     ondismiss: (id: string) => void;
     onmenu?: () => void;
   } = $props();
 
-  let ground = $state<Ground>(chosen(globalThis.localStorage));
-
-  function choose(g: Ground) {
-    ground = g;
-    apply(document.documentElement, globalThis.localStorage, g);
-  }
 
   // Whether what the screen shows is current, in a word: both connections are retried on their own.
   const standing = $derived(!answering ? "unreachable" : live ? "live" : "reconnecting");
@@ -80,7 +70,6 @@
     }
   });
 
-  const name = $derived(me.user?.display_name ?? me.principal);
 </script>
 
 <header class="bar">
@@ -131,28 +120,6 @@
       {/snippet}
     </Popover>
 
-    <Popover label="You, {me.principal}" align="end" width={240}>
-      {#snippet button()}
-        <span class="who">
-          <Avatar {name} src={photoOf(me)} size={24} />
-          <span class="login">{name}</span>
-          <Icon name="control-expand" size={14} />
-        </span>
-      {/snippet}
-      {#snippet children(close)}
-        <div class="menu">
-          <p class="name">{name}<span class="faint">{me.principal}</span></p>
-          <a class="entry" href={place.href({ kind: "account", tab: "profile" })} onclick={(e) => { follow(place, { kind: "account", tab: "profile" })(e); close(); }}>Your account</a>
-          <fieldset class="ground">
-            <legend>Ground</legend>
-            {#each [["system", "System"], ["light", "Light"], ["dark", "Dark"]] as [value, label] (value)}
-              <button class="choice" aria-pressed={ground === value} onclick={() => choose(value as Ground)}>{label}</button>
-            {/each}
-          </fieldset>
-          <button class="entry signout" onclick={onsignout}><Icon name="control-signout" size={14} />Sign out</button>
-        </div>
-      {/snippet}
-    </Popover>
   </div>
 </header>
 
@@ -178,9 +145,17 @@
 
   /* On a phone the trail keeps where the screen is and drops the way back up, which the drawer gives,
      the installation's state keeps its dot, and the caller their face. */
+  /* On a phone it stays at the top as the screen scrolls, since it holds the way to the navigation. */
   @media (max-width: 759px) {
     .bar {
+      position: sticky;
+      top: -16px;
+      z-index: 30;
+      height: 48px;
+      margin: -16px -16px 16px;
       padding: 0 16px;
+      box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
+      background: var(--surface);
     }
 
     .trail li:not(:last-child) {
@@ -199,20 +174,14 @@
       clip-path: inset(50%);
       white-space: nowrap;
     }
-
-    .who .login {
-      display: none;
-    }
   }
 
   .bar {
     display: flex;
     align-items: center;
     gap: calc(var(--unit) * 5);
-    height: var(--bar-top);
-    padding: 0 calc(var(--padding-page) + 6px);
-    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
-    background: var(--surface);
+    height: 32px;
+    margin: 0 0 calc(var(--unit) * 6);
   }
 
   .trail {
@@ -318,96 +287,6 @@
     font-weight: 700;
     line-height: 14px;
     text-align: center;
-  }
-
-  .who {
-    display: inline-flex;
-    align-items: center;
-    gap: calc(var(--unit) * 4);
-    color: var(--muted);
-  }
-
-
-  .login {
-    color: var(--text);
-    font-size: var(--type-name-size);
-    font-weight: 500;
-  }
-
-  .menu {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .name {
-    display: flex;
-    flex-direction: column;
-    margin: calc(var(--unit) * 2) calc(var(--unit) * 4) calc(var(--unit) * 3);
-    font-weight: 600;
-  }
-
-  .name .faint {
-    font-size: 12px;
-    font-weight: 400;
-  }
-
-  .entry {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 3);
-    padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
-    border: none;
-    border-radius: var(--radius-control);
-    background: none;
-    color: var(--text);
-    font-size: var(--type-control-size);
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .entry:hover {
-    background: var(--surface);
-    text-decoration: none;
-  }
-
-  .ground {
-    display: flex;
-    gap: calc(var(--unit) * 2);
-    margin: calc(var(--unit) * 3) calc(var(--unit) * 4);
-    padding: 0;
-    border: none;
-  }
-
-  .ground legend {
-    float: left;
-    margin-right: auto;
-    color: var(--muted);
-    font-size: var(--type-control-size);
-    line-height: 24px;
-  }
-
-  .choice {
-    height: 24px;
-    padding: 0 calc(var(--unit) * 3);
-    border: var(--border-hairline) solid var(--line);
-    border-radius: var(--radius-chip);
-    background: var(--surface);
-    font-size: 11.5px;
-    cursor: pointer;
-  }
-
-  .choice[aria-pressed="true"] {
-    border-color: var(--accentLine);
-    background: var(--accentDim);
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  .signout {
-    margin-top: calc(var(--unit) * 2);
-    border-top: var(--border-hairline) solid var(--line);
-    border-radius: 0;
-    padding-top: calc(var(--unit) * 4);
   }
 
   .empty {

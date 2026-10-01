@@ -7,6 +7,8 @@ import { Place } from "../src/lib/place.svelte";
 import { Session } from "../src/lib/session.svelte";
 import { answering, scenario } from "./scenario";
 
+vi.mock("uplot", () => import("./plot"));
+
 const now = Date.parse("2026-10-01T06:02:30Z"); // a Thursday
 
 describe("a year of activity", () => {
