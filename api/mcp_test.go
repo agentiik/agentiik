@@ -12,9 +12,9 @@ import (
 	"github.com/agentiik/agentiik/mcp"
 )
 
-// sessionOrBearer identifies a caller by a bearer token as bearer does, or by a session cookie
+// cookieOrBearer identifies a caller by a bearer token as bearer does, or by a session cookie
 // naming them, which is how the console's credential looks from the router's side.
-func sessionOrBearer(r *http.Request) (api.Identity, error) {
+func cookieOrBearer(r *http.Request) (api.Identity, error) {
 	if c, err := r.Cookie("session"); err == nil {
 		return api.Identity{Principal: api.Principal(c.Value)}, nil
 	}
@@ -24,7 +24,7 @@ func sessionOrBearer(r *http.Request) (api.Identity, error) {
 // platform is a router serving the platform's MCP server on the public URL.
 func platform(t *testing.T) *api.Router {
 	t.Helper()
-	rt, err := api.NewRouter(owning{}, sessionOrBearer)
+	rt, err := api.NewRouter(owning{}, cookieOrBearer)
 	if err != nil {
 		t.Fatal(err)
 	}
