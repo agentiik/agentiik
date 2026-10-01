@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -58,7 +59,8 @@ type installation struct {
 	runs      []db.ListedRun
 	run       db.RunDetail
 	me        *principal
-	runners   []runner
+	runners   []db.Runner
+	pools     []api.Pool
 	envelopes map[string]any
 	failing   error
 	asked     []string
@@ -81,6 +83,15 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 			return errors.New("no such thing, or not yours")
 		}
 		answer = map[string]any{"runners": in.runners}
+	case path == "/api/v1/runner-pools":
+		if in.me == nil || !in.me.Admin {
+			return errors.New("no such thing, or not yours")
+		}
+		listed := []api.RunnerPool{}
+		for _, p := range in.pools {
+			listed = append(listed, api.RunnerPool{Pool: p})
+		}
+		answer = map[string]any{"runner_pools": listed}
 	case strings.HasPrefix(path, "/api/v1/runs?"):
 		answer = map[string]any{"runs": in.runs}
 	case strings.Contains(path, "/steps/"):
