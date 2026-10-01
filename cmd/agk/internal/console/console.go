@@ -151,6 +151,11 @@ type Model struct {
 	palette *palette
 	used    []string
 
+	// clicked is what the last click landed on and clickedAt when, which tell a second click on
+	// the same from a first.
+	clicked   pick
+	clickedAt time.Time
+
 	// The workflows view's: the workflows the runs read name, the one chosen, and what was read of
 	// each beyond its row. graphOf is the workflow whose graph is shown with no run laid over it.
 	flows       []flowRow
@@ -535,6 +540,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case typedPaused:
 		return m.paused(msg)
+	case tea.MouseMsg:
+		return m.mouse(msg)
 	case tea.KeyPressMsg:
 		if m.palette != nil && m.asking == notAsking {
 			return m.typingCommand(msg)

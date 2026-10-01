@@ -16,16 +16,22 @@ func (m Model) View() tea.View {
 	v := tea.NewView(m.screen())
 	v.AltScreen = true
 	v.WindowTitle = "agk console"
+	// Cell motion reports a button held and nothing else, which is all a click and the wheel need.
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
 // screen is the whole window as text: the top line, the view, and the line of its keys, every
 // line as wide as the window so that the ground is painted under all of it.
-func (m Model) screen() string {
+func (m Model) screen() string { return m.drawn(nil) }
+
+// drawn is the screen, with what a click lands on written in picks where it is given.
+func (m Model) drawn(picks *[]pick) string {
 	if m.width == 0 {
 		return ""
 	}
 	t := m.theme()
+	t.picks = picks
 	if m.width < leastWidth || m.height < leastHeight {
 		asked := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			fmt.Sprintf("The window is %d by %d: agk console needs %d by %d.\nMake it larger, or press q to quit.", m.width, m.height, leastWidth, leastHeight))
@@ -37,21 +43,23 @@ func (m Model) screen() string {
 	}
 	body := m.height - 2
 	var lines []string
+	// The view's lines sit below the top line.
+	in := t.at(0, 1)
 	switch {
 	case m.listing:
 		lines = m.keysListed(t)
 	case m.view == runView:
-		lines = m.runLines(t, body)
+		lines = m.runLines(in, body)
 	case m.view == runnersView:
-		lines = m.runnersLines(t, body)
+		lines = m.runnersLines(in, body)
 	case m.view == graphView:
-		lines = m.graphLines(t, body)
+		lines = m.graphLines(in, body)
 	case m.view == workflowsView:
-		lines = m.workflowsLines(t, body)
+		lines = m.workflowsLines(in, body)
 	case m.view == sharingView:
-		lines = m.sharingLines(t, body)
+		lines = m.sharingLines(in, body)
 	default:
-		lines = m.runsLines(t, body)
+		lines = m.runsLines(in, body)
 	}
 	for len(lines) < body {
 		lines = append(lines, t.line(false, m.width))
@@ -98,6 +106,17 @@ func (m Model) topLine(t theme) string {
 			break
 		}
 	}
+	// Each tab is clicked where the line writes it, after the installation, the namespace and the
+	// principal, three spaces before each.
+	x := widthOf(left) - widthOf(m.tabs())
+	for _, v := range m.tabList() {
+		x += 3
+		w := lipgloss.Width(v.key + " " + v.name)
+		if x+w <= m.width {
+			t.pickAt(0, x, x+w, "tab", v.key)
+		}
+		x += w
+	}
 	return t.line(false, m.width, fitted(left, right, m.width)...)
 }
 
@@ -107,15 +126,20 @@ type tab struct {
 	view      view
 }
 
-// tabs are the views a digit turns to, the one shown in bold: the runs, the workflows, the sharing,
-// and the runners to an administrator.
-func (m Model) tabs() []part {
+// tabList are the views a digit turns to: the runs, the workflows, the sharing, and the runners
+// to an administrator.
+func (m Model) tabList() []tab {
 	tabs := []tab{{"1", "Runs", runsView}, {"2", "Workflows", workflowsView}, {"3", "Sharing", sharingView}}
 	if m.me.Admin {
 		tabs = append(tabs, tab{"4", "Runners", runnersView})
 	}
+	return tabs
+}
+
+// tabs are the tabs as the top line writes them, the one shown in bold.
+func (m Model) tabs() []part {
 	var parts []part
-	for _, v := range tabs {
+	for _, v := range m.tabList() {
 		r := muted
 		if m.view == v.view || v.view == runsView && m.view == runView {
 			r = strong
@@ -214,6 +238,7 @@ func (m Model) keysListed(t theme) []string {
 			[2]string{"/", "Filter the runs as you type: words against what is loaded, and namespace=, workflow=, state=, since= and until= asked of the installation"},
 			[2]string{"esc", "Clear the filter"})
 	}
+	rows = append(rows, [2]string{"mouse", "A click selects a row, a step, a port or a tab, a second click opens it, the wheel moves the selection; shift and drag copy, as the terminal does"})
 	lines := []string{t.line(false, m.width, part{strong, "Every key of this view"}), t.line(false, m.width)}
 	for _, r := range rows {
 		lines = append(lines, t.line(false, m.width, part{plain, "  "}, part{strong, fmt.Sprintf("%-12s", r[0])}, part{plain, " " + r[1]}))
@@ -281,6 +306,7 @@ func (m Model) runsLines(t theme, height int) []string {
 	if len(failed) > 0 && m.filter == "" {
 		lines = append(lines, t.line(false, m.width, part{strong, fmt.Sprintf("Failed, %d of the last %d", len(failed), len(runs))}))
 		for _, r := range failed[:min(len(failed), 3)] {
+			t.pick(len(lines), m.width, "run", string(r.Run))
 			lines = append(lines, t.line(false, m.width, m.row(r, now)...))
 		}
 		lines = append(lines, t.line(false, m.width))
@@ -295,6 +321,7 @@ func (m Model) runsLines(t theme, height int) []string {
 	}
 	first := min(max(0, at-room+1), max(0, len(runs)-room))
 	for i := first; i < len(runs) && i < first+room; i++ {
+		t.pick(len(lines), m.width, "run", string(runs[i].Run))
 		lines = append(lines, t.line(string(runs[i].Run) == m.selected, m.width, m.row(runs[i], now)...))
 	}
 	return lines
