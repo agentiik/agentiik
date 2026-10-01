@@ -65,6 +65,10 @@
       "description": "Where a namespace's secrets are kept, and never what they are: one declaration per secret, a value written to the built-in store and never read back."
     },
     {
+      "name": "variables",
+      "description": "A namespace's variables, read by its workflows through the vars context beside their files' own, each shown to every workflow of the namespace or to those it names. Not secrets: their values are answered to whoever reads the namespace's workflows. From v0.6.0."
+    },
+    {
       "name": "runners",
       "description": "The fleet as an administrator reads it: the runners and their pools, to write a namespace's allowed_runner_pools against. Never a host."
     },
@@ -6412,7 +6416,7 @@
           "runs"
         ],
         "summary": "Replay a run",
-        "description": "Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.",
+        "description": "Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, and with the namespace variables it read, however they changed since, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#memoisation-and-replay"
@@ -8629,6 +8633,369 @@
           "404": {
             "$ref": "#/components/responses/notFound",
             "description": "No such declaration, no such namespace, or one where the caller does not hold secret:write: the same answer."
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/variables": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        }
+      ],
+      "get": {
+        "operationId": "listVariables",
+        "tags": [
+          "variables"
+        ],
+        "summary": "List a namespace's variables",
+        "description": "Every variable of the namespace, sorted by name, whole and not paged, each with its value, its visibility and, where it is selected, the workflows that read it, and who wrote it last and when. Requires workflow:read at namespace scope, which reading the workflows these variables are shown to takes; a grant on one workflow reads none, since a variable serves every workflow it is shown to.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        "responses": {
+          "200": {
+            "description": "The variables.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/variableList"
+                },
+                "examples": {
+                  "variables": {
+                    "summary": "a namespace's variables",
+                    "value": {
+                      "variables": [
+                        {
+                          "name": "ledger_url",
+                          "value": "https://ledger.example.com/api",
+                          "visibility": "all",
+                          "updated_by": "alice",
+                          "updated_at": "2026-10-01T09:10:00Z"
+                        },
+                        {
+                          "name": "reminder_days",
+                          "value": [
+                            7,
+                            14,
+                            30
+                          ],
+                          "visibility": "selected",
+                          "workflows": [
+                            "payment-reminders"
+                          ],
+                          "updated_by": "alice",
+                          "updated_at": "2026-10-01T09:12:00Z"
+                        }
+                      ]
+                    }
+                  },
+                  "none": {
+                    "summary": "a namespace holding none",
+                    "value": {
+                      "variables": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer."
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/variables/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/variable"
+        }
+      ],
+      "get": {
+        "operationId": "readVariable",
+        "tags": [
+          "variables"
+        ],
+        "summary": "Read one variable",
+        "description": "One variable, as the list gives it. Requires workflow:read at namespace scope.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        "responses": {
+          "200": {
+            "description": "The variable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/namespaceVariable"
+                },
+                "examples": {
+                  "all": {
+                    "summary": "read by every workflow of the namespace",
+                    "value": {
+                      "name": "ledger_url",
+                      "value": "https://ledger.example.com/api",
+                      "visibility": "all",
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:10:00Z"
+                    }
+                  },
+                  "selected": {
+                    "summary": "read by one workflow",
+                    "value": {
+                      "name": "reminder_days",
+                      "value": [
+                        7,
+                        14,
+                        30
+                      ],
+                      "visibility": "selected",
+                      "workflows": [
+                        "payment-reminders"
+                      ],
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:12:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such variable, no such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer."
+          }
+        }
+      },
+      "put": {
+        "operationId": "writeVariable",
+        "tags": [
+          "variables"
+        ],
+        "summary": "Create or replace one variable",
+        "description": "Writes the variable whole, its value, its visibility and for selected the workflows that read it, creating it or replacing what it held. One variable per request, so that two Terraform applies each setting their own never drop each other's change. A run created afterwards reads it; a run created before reads what it read when it was created, and so does its replay. A name its workflow's file writes in vars takes the file's value. Requires workflow:write at namespace scope, since a variable changes what the workflows reading it do, as pushing a version does, and is audited as variable.write with the visibility, the workflows, whether it was created and the SHA-256 of the value, never the value itself, which every run that read it keeps.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        "requestBody": {
+          "description": "The whole variable.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/variableWrite"
+              },
+              "examples": {
+                "all": {
+                  "summary": "read by every workflow of the namespace",
+                  "value": {
+                    "value": "https://ledger.example.com/api",
+                    "visibility": "all"
+                  }
+                },
+                "selected": {
+                  "summary": "read by one workflow",
+                  "value": {
+                    "value": [
+                      7,
+                      14,
+                      30
+                    ],
+                    "visibility": "selected",
+                    "workflows": [
+                      "payment-reminders"
+                    ]
+                  }
+                },
+                "aside": {
+                  "summary": "kept, read by none",
+                  "value": {
+                    "value": 45,
+                    "visibility": "selected",
+                    "workflows": []
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced: the variable as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/namespaceVariable"
+                },
+                "examples": {
+                  "all": {
+                    "summary": "read by every workflow of the namespace",
+                    "value": {
+                      "name": "ledger_url",
+                      "value": "https://ledger.example.com/api",
+                      "visibility": "all",
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:10:00Z"
+                    }
+                  },
+                  "selected": {
+                    "summary": "read by one workflow",
+                    "value": {
+                      "name": "reminder_days",
+                      "value": [
+                        7,
+                        14,
+                        30
+                      ],
+                      "visibility": "selected",
+                      "workflows": [
+                        "payment-reminders"
+                      ],
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:12:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created: the variable, and Location naming it.",
+            "headers": {
+              "Location": {
+                "description": "Where the variable is read.",
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "variable": {
+                    "summary": "the new variable",
+                    "value": "/api/v1/finance/variables/ledger_url"
+                  }
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/namespaceVariable"
+                },
+                "examples": {
+                  "all": {
+                    "summary": "read by every workflow of the namespace",
+                    "value": {
+                      "name": "ledger_url",
+                      "value": "https://ledger.example.com/api",
+                      "visibility": "all",
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:10:00Z"
+                    }
+                  },
+                  "selected": {
+                    "summary": "read by one workflow",
+                    "value": {
+                      "name": "reminder_days",
+                      "value": [
+                        7,
+                        14,
+                        30
+                      ],
+                      "visibility": "selected",
+                      "workflows": [
+                        "payment-reminders"
+                      ],
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:12:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A name the workflow file could not write, no value or no visibility, a visibility that is neither all nor selected, selected without workflows or workflows beside all, a workflow's name the file could not write or one named twice, a number no 64-bit float holds or written past 340 digits from the point, U+0000 in a string, a field the route does not read, or two credentials."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, or one where the caller does not hold workflow:write at namespace scope: the same answer."
+          },
+          "409": {
+            "$ref": "#/components/responses/conflict",
+            "description": "A variable created in a namespace holding 1,000 already, or a value taking the namespace's variables past 4 MiB or 100,000 values in all, the bounds a run's inputs are held to, since a run keeps those it reads and the controller reads them at every decision: nothing is written."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge",
+            "description": "A value past 64 KiB written as compact JSON, workflows past 1,024 names, or a body past 512 KiB."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeVariable",
+        "tags": [
+          "variables"
+        ],
+        "summary": "Remove one variable",
+        "description": "Removes the variable. A run created afterwards no longer reads it; one created before, and its replay, read what it read. Requires workflow:write at namespace scope, and is audited as variable.delete.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such variable, no such namespace, or one where the caller does not hold workflow:write at namespace scope: the same answer."
           }
         }
       }
@@ -18789,6 +19156,160 @@
           }
         ]
       },
+      "variableList": {
+        "title": "Variable list",
+        "type": "object",
+        "required": [
+          "variables"
+        ],
+        "additionalProperties": false,
+        "description": "A namespace's variables, by name, whole and not paged: a namespace holds at most 1,000.",
+        "properties": {
+          "variables": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "wire.schema.json#/$defs/namespaceVariable"
+            },
+            "description": "Every variable of the namespace, sorted by name, each with its value.",
+            "examples": [
+              [
+                {
+                  "name": "ledger_url",
+                  "value": "https://ledger.example.com/api",
+                  "visibility": "all",
+                  "updated_by": "alice",
+                  "updated_at": "2026-10-01T09:10:00Z"
+                }
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "variables": [
+              {
+                "name": "ledger_url",
+                "value": "https://ledger.example.com/api",
+                "visibility": "all",
+                "updated_by": "alice",
+                "updated_at": "2026-10-01T09:10:00Z"
+              },
+              {
+                "name": "reminder_days",
+                "value": [
+                  7,
+                  14,
+                  30
+                ],
+                "visibility": "selected",
+                "workflows": [
+                  "payment-reminders"
+                ],
+                "updated_by": "alice",
+                "updated_at": "2026-10-01T09:12:00Z"
+              }
+            ]
+          },
+          {
+            "variables": []
+          }
+        ]
+      },
+      "variableWrite": {
+        "title": "Variable written",
+        "type": "object",
+        "required": [
+          "value",
+          "visibility"
+        ],
+        "additionalProperties": false,
+        "description": "What a PUT writes: the whole variable, its value, its visibility and for selected its workflows, each written every time, so that a PUT changing only the value never leaves the visibility to a default that could widen a variable selected for one workflow to every workflow of the namespace.",
+        "properties": {
+          "value": {
+            "description": "Any JSON value, null among them, at most 64 KiB written as compact JSON. A number is held as a run's inputs are: one no 64-bit float holds, or written past 340 digits from the point, is refused, and one written with an exponent is written out with a point, 1e3 as 1000.0, so that it reads back a double. U+0000 in a string or a name is refused, since PostgreSQL does not keep it in JSON.",
+            "examples": [
+              "https://ledger.example.com/api",
+              [
+                7,
+                14,
+                30
+              ],
+              45
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "all",
+              "selected"
+            ],
+            "description": "all, read by every workflow of the namespace, or selected, read by those workflows names.",
+            "examples": [
+              "all",
+              "selected"
+            ]
+          },
+          "workflows": {
+            "type": "array",
+            "maxItems": 1024,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "wire.schema.json#/$defs/identifier",
+              "description": "A workflow of the namespace by name, one not pushed yet included.",
+              "examples": [
+                "payment-reminders"
+              ]
+            },
+            "description": "For selected alone, and required with it, the workflows that read it, each once, in any order, kept sorted; [] for none. Required rather than taken as none where left out, so that a PUT forgetting it does not empty the list, and refused beside all.",
+            "examples": [
+              [
+                "payment-reminders"
+              ],
+              []
+            ]
+          }
+        },
+        "if": {
+          "properties": {
+            "visibility": {
+              "const": "selected"
+            }
+          },
+          "required": [
+            "visibility"
+          ]
+        },
+        "then": {
+          "required": [
+            "workflows"
+          ]
+        },
+        "else": {
+          "not": {
+            "required": [
+              "workflows"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "value": "https://ledger.example.com/api",
+            "visibility": "all"
+          },
+          {
+            "value": [
+              7,
+              14,
+              30
+            ],
+            "visibility": "selected",
+            "workflows": [
+              "payment-reminders"
+            ]
+          }
+        ]
+      },
       "runner": {
         "title": "Runner",
         "type": "object",
@@ -20105,6 +20626,21 @@
           "secret": {
             "summary": "a secret",
             "value": "stripe-key"
+          }
+        }
+      },
+      "variable": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/identifier"
+        },
+        "examples": {
+          "variable": {
+            "summary": "a variable",
+            "value": "ledger_url"
           }
         }
       },

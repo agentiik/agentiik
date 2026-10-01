@@ -34418,5 +34418,83 @@
         "retries": []
       }
     }
+  },
+  "GET /api/v1/finance/variables": {
+    "status": 200,
+    "body": {
+      "variables": [
+        {
+          "name": "currency",
+          "value": "EUR",
+          "visibility": "all",
+          "updated_by": "bruno",
+          "updated_at": "2026-09-24T09:10:00Z"
+        },
+        {
+          "name": "dunning_days",
+          "value": 45,
+          "visibility": "selected",
+          "workflows": [],
+          "updated_by": "finance/nightly-sync",
+          "updated_at": "2026-09-30T22:15:30Z"
+        },
+        {
+          "name": "invoice_footer",
+          "value": {
+            "iban": "FR76 3000 6000 0112 3456 7890 189",
+            "bic": "AGRIFRPP",
+            "note": "Payable within 30 days of the invoice date, by transfer to the account above."
+          },
+          "visibility": "selected",
+          "workflows": [
+            "monthly-invoicing"
+          ],
+          "updated_by": "alice",
+          "updated_at": "2026-09-29T14:02:00Z"
+        },
+        {
+          "name": "ledger_url",
+          "value": "https://ledger.example.com/api",
+          "visibility": "all",
+          "updated_by": "alice",
+          "updated_at": "2026-09-28T08:40:00Z"
+        },
+        {
+          "name": "reminder_days",
+          "value": [
+            7,
+            14,
+            30
+          ],
+          "visibility": "selected",
+          "workflows": [
+            "monthly-invoicing",
+            "payment-reminders"
+          ],
+          "updated_by": "alice",
+          "updated_at": "2026-10-01T05:12:00Z"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/alice/variables": {
+    "status": 200,
+    "body": {
+      "variables": []
+    }
+  },
+  "GET /api/v1/team-ops/variables": {
+    "status": 200,
+    "body": {
+      "variables": [
+        {
+          "name": "export_bucket",
+          "value": "s3://ops-exports",
+          "visibility": "all",
+          "updated_by": "carol",
+          "updated_at": "2026-09-20T07:00:00Z"
+        }
+      ]
+    }
   }
 }
