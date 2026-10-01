@@ -35,6 +35,10 @@ type Repository struct {
 	// never changed, so that a rename moves no object.
 	Key string
 
+	// Storage is the storage name of its namespace, the first segment of every key of its packs,
+	// which a namespace's rename leaves as it was (NS.Storage).
+	Storage string
+
 	// DefaultBranch is the branch HEAD names, without refs/heads/.
 	DefaultBranch string
 
@@ -154,6 +158,9 @@ func (n *NS) Repository(ctx context.Context, workflow string) (Repository, error
 	}
 	if err != nil {
 		return Repository{}, fmt.Errorf("db: the repository of %s could not be read: %w", workflow, err)
+	}
+	if r.Storage, err = n.Storage(ctx); err != nil {
+		return Repository{}, err
 	}
 
 	// In C's collation, byte by byte, which is the order git sorts refs in and a client reads an

@@ -128,8 +128,13 @@ func (b *backfilling) record(ctx context.Context, pool *db.Pool, objects artifac
 		run := [2]string{u.Namespace, string(u.Run)}
 		r := db.Recording{Namespace: u.Namespace, Run: u.Run}
 		var failed error
+		// Under the namespace's storage name, which every object of it is kept under.
+		storage, err := pool.Storage(ctx, u.Namespace)
+		if err != nil {
+			return db.Recorded{}, err
+		}
 		for _, digest := range u.Envelopes {
-			e, err := artifact.GetEnvelope(ctx, objects, u.Namespace, digest, agk.DefaultLimits())
+			e, err := artifact.GetEnvelope(ctx, objects, storage, digest, agk.DefaultLimits())
 			switch {
 			case errors.Is(err, fs.ErrNotExist), errors.Is(err, artifact.ErrNotAnEnvelope):
 				b.unread[[3]string{u.Namespace, string(u.Run), digest}] = true

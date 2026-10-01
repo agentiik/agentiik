@@ -213,6 +213,12 @@ func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string, bo
 	if room.Held() {
 		counted.left = room.Bound()
 	}
+	// Kept under the namespace's storage name, the name it was created with, whatever name the
+	// key was signed under: a policy is signed for the name the task's message carries, which its
+	// runner writes its keys under, and every object of the namespace is kept under the other.
+	if room.storage != "" {
+		key = artifact.Key(room.storage, room.digest)
+	}
 	err = s.signed.Store(r.Context(), key, counted)
 	s.settle(r.Context(), room, counted, err)
 	switch {
@@ -230,11 +236,13 @@ func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string, bo
 }
 
 // heldRoom is room made for one write, the write as recorded, and the namespace both are settled
-// in, which is empty where nothing was recorded.
+// in, which is empty where nothing was recorded, with its storage name and the digest written.
 type heldRoom struct {
 	db.Room
 	writing   db.Writing
 	namespace string
+	storage   string
+	digest    string
 }
 
 // makeRoom records the write of the object key names as under way and makes room for it, of up to
@@ -252,22 +260,32 @@ func (s *ObjectAPI) makeRoom(ctx context.Context, key string, length int64, unti
 	if most > 0 && length > most {
 		length = most
 	}
+	// The key names the namespace by its name or its storage name, either of which may be one it
+	// held before a rename: the room is made under the name it answers to now.
+	namespace, err := s.pool.CurrentName(ctx, namespace)
+	if err != nil {
+		return heldRoom{}, err
+	}
 	var room db.Room
 	var writing db.Writing
-	err := s.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
+	var storage string
+	err = s.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
 		// Recorded as under way first, whatever the quota, so that the collector leaves the
 		// object alone until the result that references it has been heard.
 		var err error
 		if writing, err = ns.Uploading(ctx, digest, until); err != nil {
 			return err
 		}
-		room, err = ns.MakeRoom(ctx, db.Upload{Digest: digest, Length: length, Most: most, Until: until})
+		if room, err = ns.MakeRoom(ctx, db.Upload{Digest: digest, Length: length, Most: most, Until: until}); err != nil {
+			return err
+		}
+		storage, err = ns.Storage(ctx)
 		return err
 	})
 	if err != nil {
 		return heldRoom{}, err
 	}
-	return heldRoom{Room: room, writing: writing, namespace: namespace}, nil
+	return heldRoom{Room: room, writing: writing, namespace: namespace, storage: storage, digest: digest}, nil
 }
 
 // lowerHex is 64 lowercase hexadecimal characters, the one way a key writes a digest, which is

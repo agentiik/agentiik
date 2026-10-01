@@ -14,7 +14,10 @@
   import { useLive } from "../lib/live.svelte";
   import { paced } from "../lib/installation";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt } from "../lib/route";
   import type { Run } from "../lib/runs.svelte";
+  import NamespaceMark from "../components/NamespaceMark.svelte";
+  import { pictureOf } from "../lib/namespaces";
 
   // The console's root, laid out as a forge's home is: who you are, four counts, what needs you, a
   // year of activity and the latest runs, with the namespaces and workflows to go to and, to an
@@ -181,8 +184,8 @@
     ...(chosen ? [{ keys: ["Escape"], effect: "Close the day", does: () => choose(undefined) }] : []),
   ]);
 
-  const runRoute = (r: Run) => ({ kind: "namespace" as const, namespace: r.namespace, view: "runs" as const, run: r.run });
-  const runsOf = (ns: string) => ({ kind: "namespace" as const, namespace: ns, view: "runs" as const });
+  const runRoute = (r: Run) => runAt(r.namespace, r.workflow, r.run);
+  const runsOf = (ns: string) => ({ kind: "namespace" as const, namespace: ns, view: "workflows" as const });
   // The latest runs by the day they were made on, where the reader is, each day as a person names it.
   const byDay = $derived.by(() => {
     const groups: { day: string; name: string; runs: Run[] }[] = [];
@@ -236,7 +239,7 @@
     <div class="who">
       <h1>{name}</h1>
       <p class="muted">
-        <span class="term">{me.principal}</span>
+        {#if me.user?.email}<span>{me.user.email}</span>{:else}<span class="term">{me.principal}</span>{/if}
         {#if me.user?.title}<span>{me.user.title}</span>{/if}
         {#if me.user?.location}<span>{me.user.location}</span>{/if}
         {#if here}<span class="term">{here}</span>{/if}
@@ -388,7 +391,7 @@
             {@const s = series.get(n.name)}
             {@const seven = s ? lastWeek(s, now) : undefined}
             <li>
-              <span class="tile initial" aria-hidden="true">{n.name.charAt(0).toUpperCase()}</span>
+              <NamespaceMark name={n.name} src={pictureOf(n)} />
               <a class="term" href={place.href(runsOf(n.name))} onclick={follow(place, runsOf(n.name))}>{n.name}</a>
               <span class="faint">{seven ? `${seven.runs} ${seven.runs === 1 ? "run" : "runs"}` : ""}</span>
             </li>
@@ -700,13 +703,6 @@
     border-radius: var(--radius-control);
     background: var(--sunken);
     color: var(--muted);
-  }
-
-  .tile.initial {
-    background: var(--accentDim);
-    color: var(--accent);
-    font-size: 13px;
-    font-weight: 700;
   }
 
   .links li.muted {

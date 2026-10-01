@@ -3,6 +3,7 @@
   import { inputPorts, scheduling, type Step } from "../lib/graph";
   import type { RunDetail } from "../lib/run.svelte";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt } from "../lib/route";
 
   // One step of the graph as its version resolved it, said for its kind: a brick by its image, its
   // release and the ports its manifest declares; a script by its base image, its shell and its
@@ -14,7 +15,8 @@
   const child = $derived(run?.tasks.find((t) => t.step === name && t.called)?.called);
   const marks = $derived(scheduling(step));
   const ins = $derived(inputPorts(step));
-  const childRoute = $derived(child ? { kind: "namespace" as const, namespace: step.workflow?.workflow.split("/")[0] ?? namespace, view: "runs" as const, run: child } : undefined);
+  const called = $derived(step.workflow?.workflow.split("/"));
+  const childRoute = $derived(child && called?.length === 2 ? runAt(called[0]!, called[1]!, child) : undefined);
 </script>
 
 <dl class="detail">

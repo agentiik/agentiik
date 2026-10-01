@@ -150,6 +150,9 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	}
 	s.starter = starter
 	rt.ServeRuns(runsIn{o.Pool})
+	// A namespace renamed answers to its former names on every route naming it: a webhook's, a
+	// repository's, and every one under /api/v1/{ns}/.
+	rt.ServeNamespaces(o.Pool)
 	if o.Objects != nil {
 		// An object store that cannot read a range, which no installation's is, leaves the
 		// repositories unserved rather than the API unstarted: the tree push works on it.
@@ -583,9 +586,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// is stored rather than at the first redemption of a step naming it, and asked after
 	// secret:use, so that only a caller allowed to write a secret's name into a workflow learns
 	// whether the namespace declares it.
+	former, err := formerNames(r.Context(), s.pool, over.Namespace)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the version could not be read")
+		return
+	}
 	checked, err := version.Check(r.Context(), pushedTree(p.Tree), version.Checking{
 		Entry: p.Entry, Commit: commit, Committed: true,
-		Namespace: over.Namespace, Repository: over.Workflow, Stored: stored,
+		Namespace: over.Namespace, FormerNamespaces: former, Repository: over.Workflow, Stored: stored,
 		Resolvers: version.Resolvers{
 			Pin:      pinnedBy(p),
 			Manifest: manifestsCarried(p),
@@ -747,11 +755,16 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	for _, digest := range saved.MustWriteBytes {
 		again[digest] = blobs[digest]
 	}
+	storage, err := s.pool.Storage(r.Context(), over.Namespace)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the tree could not be stored")
+		return
+	}
 	for _, digest := range saved.Recorded {
 		held := !skipped[digest]
 		if held {
 			var err error
-			if held, err = s.objects.Has(r.Context(), artifact.Key(over.Namespace, digest)); err != nil {
+			if held, err = s.objects.Has(r.Context(), artifact.Key(storage, digest)); err != nil {
 				fail(w, http.StatusInternalServerError, "the tree could not be stored")
 				return
 			}
@@ -935,6 +948,11 @@ func manifestOf(paths []string, files map[string]PushFile) ([]db.TreeFile, map[s
 // because the store's word is only as good as the moment it was given, and the push asks again
 // for any of them whose row the version had to create.
 func (s *Server) storeTree(ctx context.Context, namespace string, blobs map[string][]byte, again bool) (map[string]bool, error) {
+	// Under the namespace's storage name, which every object of it is kept under.
+	storage, err := s.pool.Storage(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
 	digests := make([]string, 0, len(blobs))
 	for digest := range blobs {
 		digests = append(digests, digest)
@@ -942,7 +960,7 @@ func (s *Server) storeTree(ctx context.Context, namespace string, blobs map[stri
 	sort.Strings(digests)
 	skipped := map[string]bool{}
 	for _, digest := range digests {
-		key := artifact.Key(namespace, digest)
+		key := artifact.Key(storage, digest)
 		if !again {
 			held, err := s.objects.Has(ctx, key)
 			if err != nil {

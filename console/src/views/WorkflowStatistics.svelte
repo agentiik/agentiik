@@ -12,6 +12,7 @@
   import { took } from "../lib/format";
   import { workflowTabs } from "../lib/page";
   import type { Place } from "../lib/place.svelte";
+  import { runsOf } from "../lib/route";
   import { query, Ranged } from "../lib/range.svelte";
   import { ms, type Range } from "../lib/stats";
   import { chosen, count, exitCodes, figures, heat, notSucceeded, refused, type PortsSeries, type RunsSeries, type StepsSeries } from "../lib/workflow-stats";
@@ -70,14 +71,13 @@
     place.narrow(q);
   }
 
-  // A point opens the runs it counts: the runs view narrowed to the workflow and the bucket's
-  // bounds, as GET /api/v1/runs takes them.
+  // A point opens the runs it counts: the workflow's runs narrowed to the bucket's bounds, as GET
+  // /api/v1/runs takes them.
   function open(bucket: { since: string; until: string } | undefined) {
     if (!bucket) return;
-    place.go({ kind: "namespace", namespace, view: "runs" }, false, new URLSearchParams({ workflow, since: bucket.since, until: bucket.until }));
+    place.go(runsOf(namespace, workflow), false, new URLSearchParams({ since: bucket.since, until: bucket.until }));
   }
 
-  // The workflow's runs, the runs view narrowed to it, opened in place as a link of the console is.
   // The series behind the page, one route's answer at a time, as it answered them.
   const exports = {
     runs: { label: "runs", path: "/api/v1/{ns}/stats/runs", by: undefined },

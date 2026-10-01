@@ -59,4 +59,4 @@ var CheckTree = checkTree
 var ManifestsCarried = manifestsCarried
 
 // Reencode is what PUT /api/v1/me/avatar stores of a photo sent: a PNG, with its size in pixels.
-func Reencode(raw []byte) ([]byte, int, int, error) { return reencode(raw) }
+func Reencode(raw []byte) ([]byte, int, int, error) { return reencode(raw, "photo") }

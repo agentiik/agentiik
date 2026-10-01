@@ -101,7 +101,7 @@ describe("the page of two runs", () => {
     const select = (await screen.findByLabelText("Compare with")) as HTMLSelectElement;
     expect(select.value).toBe(good);
     await fireEvent.click(screen.getByRole("link", { name: "Compare" }));
-    expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "runs", run: failed, against: good });
+    expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", run: failed, against: good });
   });
 
   it("answers as the API does for a run that is not there", async () => {

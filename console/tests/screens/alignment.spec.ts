@@ -12,11 +12,11 @@ import { measure, type Finding } from "./measure";
 const screens: Record<string, string[]> = {
   alice: [
     "/",
-    "/finance/runs",
-    "/finance/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A",
-    "/finance/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A?step=invoice",
-    "/finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A",
-    "/finance/runs/01JMZ8Q6F1T7QK2N4D6F8H0A2F",
+    "/finance/workflows/monthly-invoicing/runs",
+    "/finance/workflows/monthly-invoicing/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A",
+    "/finance/workflows/monthly-invoicing/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A?step=invoice",
+    "/finance/workflows/monthly-invoicing/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+    "/finance/workflows/monthly-invoicing/runs/01JMZ8Q6F1T7QK2N4D6F8H0A2F",
     "/finance/workflows",
     "/finance/workflows/monthly-invoicing",
     "/finance/workflows/monthly-invoicing?step=archive",
@@ -26,17 +26,19 @@ const screens: Record<string, string[]> = {
     "/finance/workflows/monthly-invoicing?edit=1&step=invoice",
     "/finance/statistics",
     "/finance/sharing",
+    "/finance/variables",
     "/finance/settings",
     "/alice/workflows/report",
     "/alice/workflows/vat-reconciliation/files",
     "/team-ops/workflows/nightly?step=export",
     "/alice/sharing",
+    "/alice/variables",
     "/me",
     "/me/profile",
     "/me/tokens",
     "/me/service-accounts",
   ],
-  dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/me"],
+  dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/finance/settings", "/me"],
 };
 
 const widths = [2560, 1440, 1099, 759, 390];

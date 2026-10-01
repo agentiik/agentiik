@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,9 +21,18 @@ import (
 // Go of every package, the root's and the commands' included, whatever its build tags, the sign-in
 // page's HTML and scripts, the migrations, the images' Dockerfiles and scripts, go.mod, and whatever
 // a //go:embed directive puts in a binary, and names each that imports a mail package, requires a
-// module for mail, or holds a mail transport, a provider's name, the word email or a mailto: link.
-// Test files and testdata are not read: they ship nowhere, and a test may name what it refuses, as
-// this one does.
+// module for mail, or holds a mail transport, the program that sends mail, a provider's name or a
+// mailto: link. Test files and testdata are not read: they ship nowhere, and a test may name what it
+// refuses, as this one does.
+//
+// The word email is not among them, though it was until v0.6.0: a user has an email address, which
+// an administrator gives them for the people they work with to reach them by, and the word names
+// that field in the API, the users table and the console, as git's author lines had it name a field
+// in package repo. Refusing the word would refuse the field, and the field sends nothing: what a
+// mailer needs to send, a transport, a program, a package or a provider, is still refused here
+// wherever it is written, and a link that opens a message to be sent, mailto:, too, since a console
+// showing an address writes it as text for a person to copy rather than as a message the product
+// starts.
 //
 // What //go:embed puts in agentiik-api includes the web console's build, console/dist, so where the
 // console has been built this reads the scripts a browser is sent, its dependencies' code included,
@@ -33,10 +41,10 @@ import (
 // runs this test again once it has built it, which is where what agentiik-api carries is checked.
 func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 	// What no shipped file holds, whatever the case of its letters: the protocol mail is sent
-	// with, the program that sends it on a host, a link that opens a message to be sent, the word
-	// itself, which a mailer calling a provider's HTTP API writes somewhere, in a field, a route
-	// or a function's name, and the providers whose APIs send it.
-	words := []string{"smtp", "sendmail", "mailto:", "email", "e-mail", "sendgrid", "mailgun", "postmark", "mandrill", "sesv2", "sparkpost"}
+	// with, the program that sends it on a host, a link that opens a message to be sent, and the
+	// providers whose APIs send it, which a mailer calling one over HTTP writes somewhere, in a
+	// host, a module or a function's name.
+	words := []string{"smtp", "sendmail", "mailto:", "sendgrid", "mailgun", "mailjet", "postmark", "mandrill", "sesv2", "sparkpost", "sendinblue"}
 	// The packages that send or compose mail, and any module whose path says it does.
 	mailPackages := map[string]bool{"net/smtp": true, "net/mail": true}
 
@@ -52,24 +60,8 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// The console validates a run's inputs and a workflow against JSON Schema with
-		// @cfworker/json-schema, whose table of the format names a schema may give a string has a
-		// check under email, beside hostname, ipv4 and ipv6: a format a schema can name, which tests
-		// the shape of a string and sends nothing. So in the console's build the word is read past
-		// where it keys that table, and nowhere else, and every other word is read as before.
-		text := b
-		if strings.HasPrefix(filepath.ToSlash(path), "../console/dist/") {
-			text = withoutEmailFormat(b)
-		}
-		lower := bytes.ToLower(text)
+		lower := bytes.ToLower(b)
 		for _, word := range words {
-			// Git's author, committer and tagger lines carry an email address, and git names its
-			// own checks of them for it, missingEmail and badEmail among them. Package repo reads
-			// that format as the data a commit holds and sends nothing to anyone, so it may hold
-			// that word, and none of the others.
-			if word == "email" && strings.HasPrefix(filepath.ToSlash(path), "../repo/") {
-				continue
-			}
 			if bytes.Contains(lower, []byte(word)) {
 				t.Errorf("%s holds %q: nothing in the product sends mail or writes a link to be mailed", path, word)
 			}
@@ -172,36 +164,4 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 	if _, err := os.Stat("../console/dist/index.html"); err == nil && consoleScripts == 0 {
 		t.Fatal("console/dist holds a build and none of its scripts was read")
 	}
-}
-
-// emailFormat is the word email as the key of an object, quoted or not, and formatNames are the
-// keys a table of JSON Schema format names holds beside it. Each is spelled as the format is, in
-// lower case, which is how the table keys it: an Email keying anything is not that table's.
-var (
-	emailFormat = regexp.MustCompile(`[{,\s]["']?(email)["']?\s*:`)
-	formatNames = []*regexp.Regexp{
-		regexp.MustCompile(`[{,\s]["']?hostname["']?\s*:`),
-		regexp.MustCompile(`[{,\s]["']?ipv4["']?\s*:`),
-		regexp.MustCompile(`[{,\s]["']?ipv6["']?\s*:`),
-	}
-)
-
-// withoutEmailFormat blanks the word email out of b wherever it keys a check in a table of JSON
-// Schema format names: an object's key, with hostname, ipv4 and ipv6 keyed within a few hundred
-// bytes of it, as @cfworker/json-schema's table has them whether a bundler has minified it or not.
-// The window is that wide because a table left as written spreads its keys over lines. Nothing else
-// is touched, so the word anywhere else, or as the key of anything but that table, is still found.
-func withoutEmailFormat(b []byte) []byte {
-	out := bytes.Clone(b)
-	for _, m := range emailFormat.FindAllSubmatchIndex(b, -1) {
-		around := b[max(m[0]-256, 0):min(m[1]+256, len(b))]
-		table := true
-		for _, name := range formatNames {
-			table = table && name.Match(around)
-		}
-		if table {
-			copy(out[m[2]:m[3]], bytes.Repeat([]byte{' '}, m[3]-m[2]))
-		}
-	}
-	return out
 }

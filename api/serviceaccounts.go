@@ -247,6 +247,13 @@ func (s *ServiceAccountAPI) remove(w http.ResponseWriter, r *http.Request, calle
 		fail(w, http.StatusNotFound, noServiceAccount)
 		return
 	}
+	// The namespace the path names as it answers now, a name it held before a rename reaching it,
+	// as every address naming a namespace does.
+	namespace, err := s.pool.CurrentName(r.Context(), namespace)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the namespace could not be read")
+		return
+	}
 	owned, err := caller.Owned(r.Context())
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "what the caller owns could not be read")

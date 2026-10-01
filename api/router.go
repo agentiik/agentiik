@@ -76,6 +76,10 @@ type Router struct {
 	// route taking OnRun without it is refused at registration, as a runner route is.
 	runs FindRun
 
+	// names says which namespace a name in an address answers to now, and is nil where nothing
+	// was renamed or the installation keeps no names: see ServeNamespaces.
+	names CurrentNames
+
 	// routes is what was registered, in registration order, for the test that reads the
 	// list back and for an installation that wants to print its own surface.
 	routes []Route
@@ -174,6 +178,31 @@ func (rt *Router) ServeRunners(runners IdentifyRunner) { rt.runners = runners }
 // ServeRuns says where the namespace and workflow of a run are found. Without it, a route taking
 // OnRun is refused at registration.
 func (rt *Router) ServeRuns(runs FindRun) { rt.runs = runs }
+
+// CurrentNames says which name the namespace an address names answers to now: the name itself, or
+// for a name a namespace held before it was renamed, the name that namespace has. "The old name
+// stays the namespace's, as a former name, and is resolved wherever an address names a namespace",
+// so that a webhook sender, a git remote or a client configured with it keeps working. A name
+// nobody holds is answered as it is, and found absent by whatever asks of it. db.Pool is one.
+type CurrentNames interface {
+	CurrentName(ctx context.Context, name string) (string, error)
+}
+
+// ServeNamespaces says where the name a namespace answers to now is found. With it, every route
+// whose path names a namespace is authorised against, and handed, the namespace that answers to the
+// name its path carries, a former name reaching its namespace as its name does; without it, the
+// name is taken as it is written.
+func (rt *Router) ServeNamespaces(names CurrentNames) { rt.names = names }
+
+// current is the name the namespace named in an address answers to now, as ServeNamespaces says. A
+// name no namespace could carry is taken as it is, and refused as the absence it is, before the
+// database is asked about it, since a path can carry bytes PostgreSQL refuses to hold as text.
+func (rt *Router) current(ctx context.Context, name string) (string, error) {
+	if rt.names == nil || name == "" || NamespaceRef(name) != nil {
+		return name, nil
+	}
+	return rt.names.CurrentName(ctx, name)
+}
 
 // HandleRunner registers one route a runner reaches.
 //
@@ -646,6 +675,15 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 	if g.repository {
 		target.Workflow = strings.TrimSuffix(r.PathValue("repository"), ".git")
 	}
+	// The namespace the path names is the one that answers to its name now, a former name reaching
+	// it, and every question below is asked about that one, so that what an address renamed from
+	// reaches is what its new name does and no less.
+	current, err := rt.current(r.Context(), target.Namespace)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+		return
+	}
+	target.Namespace = current
 
 	if g.public {
 		h(w, r, "", target)
@@ -829,6 +867,11 @@ func (rt *Router) serveAcross(w http.ResponseWriter, r *http.Request, g guard, h
 		// installation.
 		if within.Namespace = r.PathValue("namespace"); within.Namespace == "" {
 			rt.deny(w, Namespace)
+			return
+		}
+		// Answered across the namespace that answers to the name now, a former name among them.
+		if within.Namespace, err = rt.current(r.Context(), within.Namespace); err != nil {
+			refuse(w, http.StatusInternalServerError, "the request could not be authorised")
 			return
 		}
 	}

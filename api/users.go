@@ -21,9 +21,10 @@ import (
 	"github.com/agentiik/agentiik/internal/ulid"
 )
 
-// The administrator's routes for people: the users of an installation, the enrolment link a user
-// with no credential enrols their first passkey with, the groups users are put in, and a user's
-// photo, which an administrator reads and removes where it should not be shown (avatar.go).
+// The administrator's routes for people: the users of an installation and the email address an
+// administrator gives each, the enrolment link a user with no credential enrols their first passkey
+// with, the groups users are put in, and a user's photo, which an administrator reads and removes
+// where it should not be shown (avatar.go).
 //
 // "A platform administrator manages users, groups, namespaces, quotas, runners, runner policies and
 // the authentication policy", so every route here requires grant:manage at installation scope,
@@ -34,9 +35,9 @@ import (
 // the memberships at every request, so a member added gains what the group's grants give from their
 // next request, and one removed loses it the same way.
 //
-// Each act is recorded in the audit log in its own transaction, as every act is: a user created or
-// removed, an enrolment link issued, a group created or removed, a member added or removed, since
-// each changes who may reach what.
+// Each act is recorded in the audit log in its own transaction, as every act is: a user created,
+// changed or removed, an enrolment link issued, a group created or removed, a member added or
+// removed, since each changes who may reach what or who people take somebody to be.
 //
 // Each transaction takes its rows' locks first, the bootstrap state's next, and appends to the audit
 // log last. Appending locks the head of the chain, one row for the whole installation, until the
@@ -53,8 +54,9 @@ const EnrolmentLife = time.Hour
 // passkey ceremony on the Relying Party's origin.
 const enrolPage = "/auth/enrol#"
 
-// displayNameMax is the longest display name, in characters, as $defs/user holds it.
-const displayNameMax = 256
+// emailMax is the longest email address, in characters, as $defs/user and the users table hold it:
+// the longest address a mail path carries, 256 octets, once its two angle brackets are counted.
+const emailMax = 254
 
 // installationActor is how the installation itself is written as the author of its own rows, the
 // pool default for one. It is refused as a login, as operator is, so that no user reads as it.
@@ -111,6 +113,7 @@ func NewUsers(rt *Router, o UserOptions) (*UserAPI, error) {
 		{"POST", "/api/v1/users", s.createUser},
 		{"GET", "/api/v1/users", s.users},
 		{"GET", "/api/v1/users/{login}", s.user},
+		{"PATCH", "/api/v1/users/{login}", s.updateUser},
 		{"DELETE", "/api/v1/users/{login}", s.removeUser},
 		{"POST", "/api/v1/users/{login}/enrolment", s.issueEnrolment},
 		{"POST", "/api/v1/users/{login}/recovery", s.issueRecovery},
@@ -179,62 +182,142 @@ func groupName(name string, reserved func(string) bool) error {
 	return nil
 }
 
-// displayName refuses a display name $defs/user would refuse, and one that holds a control
-// character: it is shown in a console and printed at a terminal, where a line break forges a line
-// and an escape sequence rewrites what is shown.
-func displayName(name string) error {
-	switch n := utf8.RuneCountInString(name); {
-	case name == "":
-		return errors.New("display_name: a user has a display name, the name people read in the console and in the sharing panel, such as Alice Martin")
-	case n > displayNameMax:
-		return fmt.Errorf("display_name: a display name is at most %d characters and this one is %d", displayNameMax, n)
-	case strings.ContainsFunc(name, unicode.IsControl):
-		return errors.New("display_name: it holds a line break or another control character, and it is one line, shown in a console and printed at a terminal as it is")
+// displayNameMade is the refusal of a display name a request writes: nobody writes one, since it is
+// made of the given and family names (db.User.DisplayName), and a request naming one is refused
+// rather than read and dropped, which would tell whoever sent it the name had been kept.
+var displayNameMade = errors.New("display_name: nobody writes a display name: it is made of the given and family names, given_name and family_name, and is the login where neither is said")
+
+// emailAddress refuses an email address $defs/user would refuse, the empty string being none. It is
+// held loosely, to one @ with something on each side, no space and no control character, and
+// emailMax characters: whether an address reaches anybody is something only sending to it would
+// tell, and nothing here sends anything. A space or a control character is refused all the same,
+// since no address holds one and the address is shown in a console and printed at a terminal, where
+// a line break forges a line.
+func emailAddress(address string) error {
+	switch n := utf8.RuneCountInString(address); {
+	case address == "":
+		return nil
+	case n > emailMax:
+		return fmt.Errorf("email: an email address is at most %d characters and this one is %d", emailMax, n)
+	case strings.ContainsFunc(address, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }):
+		return errors.New("email: it holds a space, a line break or another control character, which no email address holds")
+	}
+	if at := strings.IndexByte(address, '@'); at <= 0 || at == len(address)-1 || strings.Count(address, "@") != 1 {
+		return fmt.Errorf("email: %.64q is not an email address, which is one @ with something on each side, such as alice.martin@example.com", address)
 	}
 	return nil
 }
 
 // NewUser is a user to create, as agk user create sends it: openapi.json's userCreate. agk sends
-// only what it was given, and the display name and admin a request leaves out are the login and
-// false for a user created, and what is recorded for one asked for again.
+// only what it was given, and what a request leaves out is unsaid for a user created, their names
+// and email address empty and admin false, and what is recorded for one asked for again. The given
+// and family names are the user's own to write once they are signed in (profile.go); an
+// administrator gives them here so that a user is shown by their name from the start.
 type NewUser struct {
-	Login       string `json:"login"`
-	DisplayName string `json:"display_name,omitempty"`
-	Admin       bool   `json:"admin,omitempty"`
+	Login      string `json:"login"`
+	GivenName  string `json:"given_name,omitempty"`
+	FamilyName string `json:"family_name,omitempty"`
+	Email      string `json:"email,omitempty"`
+	Admin      bool   `json:"admin,omitempty"`
 
-	// namesOne and saysAdmin are whether the request wrote a display name and admin, null being
-	// neither: a user asked for again for a fresh link is refused only for what the request
+	// saysGiven, saysFamily, saysEmail and saysAdmin are whether the request wrote each, null
+	// being none: a user asked for again for a fresh link is refused only for what the request
 	// says otherwise than was recorded, so that agk user create LOGIN, run again with nothing
 	// more, answers the fresh link it is run again for.
-	namesOne, saysAdmin bool
+	saysGiven, saysFamily, saysEmail, saysAdmin bool
 }
 
 func (u *NewUser) field(b *body, name string) error {
+	says := b.d.PeekKind() != jsontext.KindNull
 	switch name {
 	case "login":
 		return text(b, &u.Login)
-	case "display_name":
-		u.namesOne = b.d.PeekKind() != jsontext.KindNull
-		return text(b, &u.DisplayName)
+	case "given_name":
+		u.saysGiven = says
+		return text(b, &u.GivenName)
+	case "family_name":
+		u.saysFamily = says
+		return text(b, &u.FamilyName)
+	case "email":
+		u.saysEmail = says
+		return text(b, &u.Email)
 	case "admin":
-		u.saysAdmin = b.d.PeekKind() != jsontext.KindNull
+		u.saysAdmin = says
 		return flag(b, &u.Admin)
+	case "display_name":
+		return displayNameMade
 	}
 	return unknown(name)
 }
 
+// check refuses a name or an email address a user would not hold, saying which and why.
+func (u NewUser) check() error {
+	if err := profileLine("given_name", u.GivenName, profileLineMax); err != nil {
+		return err
+	}
+	if err := profileLine("family_name", u.FamilyName, profileLineMax); err != nil {
+		return err
+	}
+	return emailAddress(u.Email)
+}
+
 // otherwise says whether the request says something of existing other than was recorded.
 func (u NewUser) otherwise(existing db.User) bool {
-	return (u.namesOne && u.DisplayName != existing.DisplayName) || (u.saysAdmin && u.Admin != existing.Admin)
+	return (u.saysGiven && u.GivenName != existing.GivenName) || (u.saysFamily && u.FamilyName != existing.FamilyName) ||
+		(u.saysEmail && u.Email != existing.Email) || (u.saysAdmin && u.Admin != existing.Admin)
+}
+
+// UserChange is what PATCH /api/v1/users/{login} changes, openapi.json's userUpdate: what an
+// administrator gives a user after creating them, their email address, set to what the field holds,
+// the empty string removing it, and kept where the field is left out.
+//
+// The user's names and the rest of their profile are not among it, and a request naming one is
+// refused saying whose they are: a profile is what a person tells the people they work with about
+// themself, and one an administrator could rewrite would be a sentence put in their mouth. The
+// email address is the other way round, the administrator's to give and not the user's to change
+// (profile.go), since nothing proves an address and one the installation shows beside a name comes
+// from whoever answers for its accounts.
+type UserChange struct {
+	Email *string `json:"email,omitempty"`
+}
+
+func (c *UserChange) field(b *body, name string) error {
+	switch name {
+	case "email":
+		if b.d.PeekKind() == jsontext.KindNull {
+			return fmt.Errorf("%s: null says neither what the field holds nor that it is cleared: the empty string removes the address, and a field left out is kept", name)
+		}
+		var value string
+		if err := text(b, &value); err != nil {
+			return err
+		}
+		c.Email = &value
+		return nil
+	case "display_name":
+		return displayNameMade
+	}
+	if (&ProfileChange{}).of(name) != nil {
+		return fmt.Errorf("%s: what a user says of themself is theirs to write, at PATCH /api/v1/me, and an administrator gives their given and family names only when creating them", name)
+	}
+	return unknown(name)
 }
 
 // User is a user as the routes answer one, $defs/user: never a credential.
 type User struct {
-	Kind        string `json:"kind"`
-	Login       string `json:"login"`
+	Kind  string `json:"kind"`
+	Login string `json:"login"`
+
+	// DisplayName is the name people read, made of the given and family names, and the login
+	// where neither is said (db.User.DisplayName): answered rather than written, so that every
+	// client shows a user by the same name.
 	DisplayName string `json:"display_name"`
-	Admin       bool   `json:"admin"`
-	Suspended   bool   `json:"suspended"`
+
+	// Email is the address an administrator gave the user, the empty string where none was given,
+	// for the people reading the record to reach them by: nothing sends anything to it.
+	Email string `json:"email"`
+
+	Admin     bool `json:"admin"`
+	Suspended bool `json:"suspended"`
 
 	// SuspendedFor is why the authentication policy suspended the account, no_passkey, and absent
 	// for a suspension it did not make: an administrator reading it knows that an enrolment link
@@ -242,7 +325,8 @@ type User struct {
 	SuspendedFor string `json:"suspended_for,omitempty"`
 
 	// What the user says of themself, PATCH /api/v1/me, each the empty string where it is left
-	// unsaid rather than absent, so that a client reads one spelling of nothing.
+	// unsaid rather than absent, so that a client reads one spelling of nothing; the given and
+	// family names as an administrator gave them at the creation, until the user writes theirs.
 	GivenName  string `json:"given_name"`
 	FamilyName string `json:"family_name"`
 	Title      string `json:"title"`
@@ -261,7 +345,7 @@ type User struct {
 
 func userOf(u db.User) User {
 	answered := User{
-		Kind: db.KindUser, Login: u.Login, DisplayName: u.DisplayName, Admin: u.Admin, Suspended: u.Suspended,
+		Kind: db.KindUser, Login: u.Login, DisplayName: u.DisplayName(), Email: u.Email, Admin: u.Admin, Suspended: u.Suspended,
 		SuspendedFor: u.SuspendedFor, GivenName: u.GivenName, FamilyName: u.FamilyName, Title: u.Title,
 		Location: u.Location, Timezone: u.Timezone, Bio: u.Bio, CreatedAt: u.CreatedAt.UTC(),
 	}
@@ -291,8 +375,8 @@ type CreatedUser struct {
 
 // The refusals of a user that exists, each a 409.
 var (
-	// errOtherwise is a user asked for again with another display name or admin, which is not
-	// the same request made again but a second user under a login already taken.
+	// errOtherwise is a user asked for again with another name, email address or admin, which is
+	// not the same request made again but a second user under a login already taken.
 	errOtherwise = errors.New("api: that login is a user created otherwise")
 	// errLastAdministrator is the removal of the last administrator who can sign in.
 	errLastAdministrator = errors.New("api: that is the last administrator")
@@ -329,8 +413,8 @@ func stillBootstrapping(ctx context.Context, wide *db.Wide, who Principal) error
 
 // createUser is POST /api/v1/users: a user, and the link that enrols their first passkey.
 //
-// Asked again for a user who has not enrolled, with the same login, and the display name and admin
-// as they were created or left out, it answers a fresh link and revokes the one before, with 200
+// Asked again for a user who has not enrolled, with the same login, and the names, the email address
+// and admin as they were created or left out, it answers a fresh link and revokes the one before, with 200
 // rather than 201, so that a link that lapsed unused locks nobody out: "run again for the same
 // login before it has enrolled, it answers a fresh link and revokes the one before". The bootstrap
 // token relies on this until the first administrator has enrolled.
@@ -344,11 +428,9 @@ func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Princip
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if ask.namesOne {
-		if err := displayName(ask.DisplayName); err != nil {
-			fail(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	if err := ask.check(); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// To the microsecond the database keeps, so that the expiry answered is the one stored.
@@ -367,9 +449,9 @@ func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Princip
 	}
 	switch {
 	case errors.Is(err, db.ErrNameTaken):
-		fail(w, http.StatusConflict, fmt.Sprintf("%s is already a namespace, and logins and namespaces share one name space, since a user's personal namespace is named after their login", ask.Login))
+		fail(w, http.StatusConflict, fmt.Sprintf("%s is a namespace's name, or one a namespace held before it was renamed, and logins and namespaces share one name space, since a user's personal namespace is named after their login", ask.Login))
 	case errors.Is(err, errOtherwise):
-		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user created with another display name or admin: a user is asked for again as they were created, or with neither, for a fresh link while they have not enrolled", ask.Login))
+		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user created with another name, email address or admin: a user is asked for again as they were created, or with none of them, for a fresh link while they have not enrolled", ask.Login))
 	case errors.Is(err, db.ErrEnrolled):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user who has enrolled already, and an enrolment link enrols the first passkey of an account that holds none", ask.Login))
 	case errors.Is(err, db.ErrPrincipalExists):
@@ -395,12 +477,10 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 		existing, err := wide.User(ctx, ask.Login)
 		switch {
 		case errors.Is(err, db.ErrNoPrincipal):
-			// A user created with no display name reads as their login until one is given.
-			name := ask.DisplayName
-			if !ask.namesOne {
-				name = ask.Login
-			}
-			if err := wide.CreateUser(ctx, db.User{Login: ask.Login, DisplayName: name, Admin: ask.Admin}); err != nil {
+			// A user created with neither name reads as their login until one is said.
+			made := db.User{Login: ask.Login, Email: ask.Email, Admin: ask.Admin,
+				Profile: db.Profile{GivenName: ask.GivenName, FamilyName: ask.FamilyName}}
+			if err := wide.CreateUser(ctx, made); err != nil {
 				return err
 			}
 			created = true
@@ -431,7 +511,7 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 		}
 		if err := wide.Audit(ctx, audit.Record{
 			Actor: string(who), Action: audit.UserCreate, Target: user.Login, Result: result,
-			Detail: map[string]any{"display_name": user.DisplayName, "admin": user.Admin},
+			Detail: map[string]any{"display_name": user.DisplayName(), "admin": user.Admin},
 		}); err != nil {
 			return err
 		}
@@ -605,6 +685,73 @@ func (s *UserAPI) user(w http.ResponseWriter, r *http.Request, _ Principal, _ Ta
 	}
 }
 
+// updateUser is PATCH /api/v1/users/{login}: what an administrator gives a user after creating them,
+// as the body names it (UserChange), answered as GET /api/v1/users/{login} answers the user.
+//
+// The user's row is held while the change is merged into it, as PATCH /api/v1/me holds it, so that
+// the answer is the row as written. The change is recorded as user.update with the names of the
+// fields that changed and never what they hold, as user.profile records a profile, and as
+// unchanged where none did.
+func (s *UserAPI) updateUser(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
+	var change UserChange
+	if err := readAtMost(r, &change, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
+	}
+	login := r.PathValue("login")
+	if LoginRef(login) != nil {
+		fail(w, http.StatusNotFound, noUser)
+		return
+	}
+	if change == (UserChange{}) {
+		fail(w, http.StatusBadRequest, "the request names nothing to change: email")
+		return
+	}
+	if change.Email != nil {
+		if err := emailAddress(*change.Email); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	var answered db.User
+	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+		user, err := wide.HoldUser(ctx, login)
+		if err != nil {
+			return err
+		}
+		changed := []string{}
+		if change.Email != nil && *change.Email != user.Email {
+			if err := wide.SetEmail(ctx, login, *change.Email); err != nil {
+				return err
+			}
+			user.Email = *change.Email
+			changed = append(changed, "email")
+		}
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
+			return err
+		}
+		result := audit.Done
+		if len(changed) == 0 {
+			result = audit.Unchanged
+		}
+		answered = user
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.UserUpdate, Target: login, Result: result,
+			Detail: map[string]any{"fields": changed},
+		})
+	})
+	switch {
+	case errors.Is(err, db.ErrNoPrincipal):
+		fail(w, http.StatusNotFound, noUser)
+	case errors.Is(err, db.ErrBootstrapEnded):
+		bootstrapEnded(w)
+	case err != nil:
+		fail(w, http.StatusInternalServerError, "the user could not be written")
+	default:
+		write(w, http.StatusOK, userOf(answered))
+	}
+}
+
 // removeUser is DELETE /api/v1/users/{login}: the user, with their credentials, tokens, sessions,
 // enrolment links, memberships and grants, and their personal namespace where it holds nothing.
 //
@@ -674,7 +821,7 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 		}
 		return wide.Audit(ctx, audit.Record{
 			Actor: string(who), Action: audit.UserDelete, Target: login, Result: audit.Done,
-			Detail: map[string]any{"display_name": user.DisplayName, "admin": user.Admin},
+			Detail: map[string]any{"display_name": user.DisplayName(), "admin": user.Admin},
 		})
 	})
 	var owns *ownsNamespaces

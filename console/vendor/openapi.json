@@ -65,6 +65,10 @@
       "description": "Where a namespace's secrets are kept, and never what they are: one declaration per secret, a value written to the built-in store and never read back."
     },
     {
+      "name": "variables",
+      "description": "A namespace's variables, read by its workflows through the vars context beside their files' own, each shown to every workflow of the namespace or to those it names. Not secrets: their values are answered to whoever reads the namespace's workflows. From v0.6.0."
+    },
+    {
       "name": "runners",
       "description": "The fleet as an administrator reads it: the runners and their pools, to write a namespace's allowed_runner_pools against. Never a host."
     },
@@ -2211,6 +2215,7 @@
                         "kind": "user",
                         "login": "alice",
                         "display_name": "Alice Martin",
+                        "email": "alice.martin@example.com",
                         "admin": true,
                         "suspended": false,
                         "given_name": "Alice",
@@ -2288,10 +2293,11 @@
                         "kind": "user",
                         "login": "bob-martin",
                         "display_name": "Bob Martin",
+                        "email": "bob.martin@example.com",
                         "admin": true,
                         "suspended": false,
-                        "given_name": "",
-                        "family_name": "",
+                        "given_name": "Bob",
+                        "family_name": "Martin",
                         "title": "",
                         "location": "",
                         "timezone": "",
@@ -2364,7 +2370,7 @@
           "me"
         ],
         "summary": "Change what the caller says of themself",
-        "description": "Changes the caller's display name and profile as the body names them: given_name, family_name, title, location, timezone and bio, each set to what the body holds, the empty string clearing it, and each the body leaves out kept. The display name is never cleared, since a user always has one. Set by the user alone, and by no administrator: a profile is what a person tells the people they work with about themself, and one somebody else could rewrite would put words in their mouth. The bootstrap token and a service account have no profile, and are refused saying so; a token narrowed by a scope keeps only the permissions it names, and saying who its holder is to everybody who reads their name is none of them. Each field is one line holding no control character, since it is shown in a console and printed at a terminal: at most 128 characters, the display name 256 and the bio 280. timezone is a name of the IANA database, which a client turns an instant into the user's own hours with; Local, the server's own zone, names no place and is refused. The user's row is held while the change is merged into it, so that two changes at once each keep what the other wrote. Answers who the caller is, as GET /api/v1/me does. Audited as user.profile with the names of the fields that changed and never what they hold, since the log is kept for good and what a person wrote about themself is theirs to take back; unchanged where none did.",
+        "description": "Changes the caller's profile as the body names it: given_name, family_name, title, location, timezone and bio, each set to what the body holds, the empty string clearing it, and each the body leaves out kept. The display name is made of the given and family names, the login where neither is said, and written by nobody, so display_name is refused; so is email, which an administrator gives at PATCH /api/v1/users/{login} and the user does not change. Set by the user alone, and by no administrator: a profile is what a person tells the people they work with about themself, and one somebody else could rewrite would put words in their mouth. The bootstrap token and a service account have no profile, and are refused saying so; a token narrowed by a scope keeps only the permissions it names, and saying who its holder is to everybody who reads their name is none of them. Each field is one line holding no control character, since it is shown in a console and printed at a terminal: at most 128 characters, and the bio 280. timezone is a name of the IANA database, which a client turns an instant into the user's own hours with; Local, the server's own zone, names no place and is refused. The user's row is held while the change is merged into it, so that two changes at once each keep what the other wrote. Answers who the caller is, as GET /api/v1/me does. Audited as user.profile with the names of the fields that changed and never what they hold, since the log is kept for good and what a person wrote about themself is theirs to take back; unchanged where none did.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#principals"
@@ -2396,10 +2402,11 @@
                     "location": ""
                   }
                 },
-                "display name": {
-                  "summary": "the display name alone",
+                "names": {
+                  "summary": "the two names the display name is made of",
                   "value": {
-                    "display_name": "Alice Martin"
+                    "given_name": "Alice",
+                    "family_name": "Martin"
                   }
                 }
               }
@@ -2424,6 +2431,7 @@
                         "kind": "user",
                         "login": "alice",
                         "display_name": "Alice Martin",
+                        "email": "alice.martin@example.com",
                         "admin": false,
                         "suspended": false,
                         "given_name": "Alice",
@@ -2460,7 +2468,7 @@
           },
           "400": {
             "$ref": "#/components/responses/badRequest",
-            "description": "The body is refused: empty, naming nothing to change, a field the route does not read, a field null, written twice or not a string, a field past its length or holding a line break or another control character, an empty display name, or a time zone the IANA database does not hold, named, or Local. Two credentials: a bearer token beside the session cookie, or two session cookies."
+            "description": "The body is refused: empty, naming nothing to change, a field the route does not read, a field null, written twice or not a string, a field past its length or holding a line break or another control character, or a time zone the IANA database does not hold, named, or Local; display_name, which is made of the given and family names, or email, which an administrator gives, each refused saying so. Two credentials: a bearer token beside the session cookie, or two session cookies."
           },
           "401": {
             "$ref": "#/components/responses/unauthorised",
@@ -2807,7 +2815,7 @@
           "namespaces"
         ],
         "summary": "Create a namespace",
-        "description": "Creates a shared namespace with an owner and, optionally, quotas. The owner, a user or group:NAME, is required, and is given the owner role on the namespace in the same transaction, granted by the administrator, so that it can share the namespace and act in it from the start: an owner in the record alone would be refused everything in it. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Administrator only, audited as namespace.create, and the owner's grant as grant.create in the namespace.",
+        "description": "Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20, max_retention_days 90 and the other four unset. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#scopes-and-resolution"
@@ -2839,6 +2847,12 @@
                       ]
                     }
                   }
+                },
+                "own": {
+                  "summary": "a user's namespace, owned by them at the installation's defaults",
+                  "value": {
+                    "name": "team-ops"
+                  }
                 }
               }
             }
@@ -2869,7 +2883,23 @@
                           "default",
                           "dmz"
                         ]
-                      }
+                      },
+                      "former_names": [],
+                      "avatar_updated_at": null
+                    }
+                  },
+                  "own": {
+                    "summary": "a user's namespace",
+                    "value": {
+                      "name": "team-ops",
+                      "kind": "shared",
+                      "owner": "bob-martin",
+                      "quotas": {
+                        "max_concurrent_tasks": 20,
+                        "max_retention_days": 90
+                      },
+                      "former_names": [],
+                      "avatar_updated_at": null
                     }
                   }
                 }
@@ -2878,18 +2908,18 @@
           },
           "400": {
             "$ref": "#/components/responses/badRequest",
-            "description": "The body is refused: a name outside the namespace grammar or a reserved word, no owner or one outside a principal's grammar, a kind other than shared, a quota written null or outside its bounds. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well."
+            "description": "The body is refused: a name outside the namespace grammar or a reserved word, an owner outside a principal's grammar, a kind other than shared, a quota written null or outside its bounds; or the bootstrap token naming no owner, since it is nobody. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well."
           },
           "401": {
             "$ref": "#/components/responses/unauthorised"
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "The caller is not an administrator, or holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
+            "description": "A caller who does not administer the installation naming another owner than themself, or any quota; a service account, or a token narrowed by a scope, which create no namespace; or a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
           },
           "409": {
             "$ref": "#/components/responses/conflict",
-            "description": "The name is held by a namespace or a login."
+            "description": "The name is held by a namespace, as its name or as a former one, or by a login."
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
@@ -2982,7 +3012,7 @@
           "namespaces"
         ],
         "summary": "Read a namespace",
-        "description": "One namespace as GET /api/v1/namespaces lists it: its kind, its owner where it has one, and its quotas. A namespace from before v0.3.0 names no owner, since v0.2 had nobody to name. Readable by an administrator and by every principal holding a grant carrying a role in it, directly or through a group; anyone else is answered the 404 of a namespace that does not exist, so that no name can be learnt by asking. What the Terraform provider refreshes and imports a namespace with.",
+        "description": "One namespace as GET /api/v1/namespaces lists it: its kind, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. A namespace from before v0.3.0 names no owner, since v0.2 had nobody to name. A former name in the path reaches the namespace as its name does, and the record answered names it as it now stands. Readable by an administrator and by every principal holding a grant carrying a role in it, directly or through a group; anyone else is answered the 404 of a namespace that does not exist, so that no name can be learnt by asking. What the Terraform provider refreshes and imports a namespace with.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#scopes-and-resolution"
@@ -3012,7 +3042,9 @@
                           "default",
                           "dmz"
                         ]
-                      }
+                      },
+                      "former_names": [],
+                      "avatar_updated_at": "2026-10-01T09:30:00Z"
                     }
                   },
                   "upgraded": {
@@ -3023,7 +3055,25 @@
                       "quotas": {
                         "max_concurrent_tasks": 20,
                         "max_retention_days": 90
-                      }
+                      },
+                      "former_names": [],
+                      "avatar_updated_at": null
+                    }
+                  },
+                  "renamed": {
+                    "summary": "a namespace renamed from finance",
+                    "value": {
+                      "name": "accounting",
+                      "kind": "shared",
+                      "owner": "group:finance-leads",
+                      "quotas": {
+                        "max_concurrent_tasks": 20,
+                        "max_retention_days": 90
+                      },
+                      "former_names": [
+                        "finance"
+                      ],
+                      "avatar_updated_at": null
                     }
                   }
                 }
@@ -3053,7 +3103,7 @@
           "namespaces"
         ],
         "summary": "Remove a namespace",
-        "description": "Removes a namespace that holds no workflow, run, secret, stored object or service account but its built-in NS/agentiik, which goes first; one that holds any is refused, saying what it holds, since what a namespace holds is somebody's work. Its grants go with it, so that a namespace created again under the same name starts with none of the old one's, and so does its authentication policy; who granted what, and when, stays in the audit log. A user's personal namespace is refused, since it is removed with its user. Administrator only, and audited as namespace.delete.",
+        "description": "Removes a namespace that holds no workflow, run, secret, stored object or service account but its built-in NS/agentiik, which goes first; one that holds any is refused, saying what it holds, since what a namespace holds is somebody's work. Its grants go with it, so that a namespace created again under the same name starts with none of the old one's, and so do its authentication policy and its picture; who granted what, and when, stays in the audit log. Every name it held, its own and its former ones, is free once it is gone. A user's personal namespace is refused, since it is removed with its user. By its owner, whoever holds grant:manage at its scope, or an administrator, and audited as namespace.delete.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#scopes-and-resolution"
@@ -3071,15 +3121,374 @@
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "The caller is not an administrator, which is answered before the namespace is looked up; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
+            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404."
           },
           "404": {
             "$ref": "#/components/responses/notFound",
-            "description": "No such namespace, or a name no namespace can have."
+            "description": "No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers."
           },
           "409": {
             "$ref": "#/components/responses/conflict",
             "description": "The namespace holds a workflow, a run, a secret, a stored object or a service account other than NS/agentiik, the error saying what; or it is a user's personal namespace, removed with its user."
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateNamespace",
+        "tags": [
+          "namespaces"
+        ],
+        "summary": "Change a namespace's settings",
+        "description": "The namespace's settings, as a partial object: each field the body names is set and each it leaves out is kept, so that the route takes more fields as a namespace's settings grow and a client sends only what it changes. Today it takes name, which renames a shared namespace in one transaction carrying every row that names it: its workflows with their versions, refs and runs, its grants and denies, its secrets and their values, its triggers and webhooks, its quotas, its authentication policy and its picture, and its service accounts, which become NEW/NAME, the built-in one among them, keeping their tokens and their grants in every namespace; a token narrowed to it, a pool accepting it by name, an event trigger of another namespace hearing it, and who did what wherever one of its service accounts acted, follow it. Its objects and sealed values stay under the name it was created with, so nothing is copied. The name it leaves stays its own, listed in former_names: every address naming it, this route's among them, reaches the namespace, and no other namespace or login takes it until the namespace is removed. Renaming it to one of its former names takes that name back; renaming it to its own name changes nothing and is recorded as unchanged. A user's personal namespace is never renamed, since it is named after a login and a login never changes. Refused while a run of it is queued, running or waiting, since its tasks carry its name to their runners; while a move of one of its workflows to or from it waits to be carried out; and while a runner not revoked narrows itself to it by name on its host, which no rename reaches. By its owner, whoever holds grant:manage at its scope, or an administrator. Audited as namespace.rename on the installation, with from and to, the new name as its target.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#renaming-a-namespace"
+        },
+        "requestBody": {
+          "description": "What changes, each field left out kept.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/namespaceUpdate"
+              },
+              "examples": {
+                "rename": {
+                  "summary": "a rename",
+                  "value": {
+                    "name": "accounting"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The namespace's record as it now stands, under its new name, the name it left in former_names.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/namespaceRecord"
+                },
+                "examples": {
+                  "renamed": {
+                    "summary": "finance renamed accounting",
+                    "value": {
+                      "name": "accounting",
+                      "kind": "shared",
+                      "owner": "group:finance-leads",
+                      "quotas": {
+                        "max_concurrent_tasks": 20,
+                        "max_retention_days": 90
+                      },
+                      "former_names": [
+                        "finance"
+                      ],
+                      "avatar_updated_at": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The body names no setting, a field that is not one, null, or a name outside the namespace grammar. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers."
+          },
+          "409": {
+            "description": "The rename cannot be made, the error saying why: a user's personal namespace; a name a namespace, a login or a reserved word holds, or a former name of another namespace; a run of the namespace queued, running or waiting; a move of one of its workflows asked and not carried out; or a runner not revoked narrowing itself to it by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "taken": {
+                    "summary": "a name another namespace held",
+                    "value": {
+                      "error": "billing is a name namespace ledger held before it was renamed, and a name a namespace held stays its own until that namespace is removed, so that an address written with it reaches nobody else"
+                    }
+                  },
+                  "running": {
+                    "summary": "a run in flight",
+                    "value": {
+                      "error": "namespace finance has 2 runs queued, running or waiting, and their tasks carry its name to their runners, so it is renamed once they have finished"
+                    }
+                  },
+                  "personal": {
+                    "summary": "a personal namespace",
+                    "value": {
+                      "error": "namespace alice is the personal namespace of the user alice, named after their login, which never changes, and is never renamed"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
+    "/api/v1/namespaces/{ns}/avatar": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        }
+      ],
+      "get": {
+        "operationId": "getNamespaceAvatar",
+        "tags": [
+          "namespaces"
+        ],
+        "summary": "Read a namespace's picture",
+        "description": "The namespace's picture, the PNG PUT /api/v1/namespaces/{ns}/avatar stored, at most 512 by 512 pixels, read by whoever reads the namespace's record: an administrator, and every principal holding a grant carrying a role in it. Kept a day by the browser that asked and by no shared cache, since a namespace is shown to those it is shared with alone; a client asks for it with v, the record's avatar_updated_at, so that a picture set again is asked for at another address, and revalidates past the day by its tag. nosniff, so that a browser shows it as the PNG it is declared as.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/avatarVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The picture.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/privateDay"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/avatarTag"
+              },
+              "X-Content-Type-Options": {
+                "$ref": "#/components/headers/noSniff"
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "image/png"
+                },
+                "examples": {
+                  "photo": {
+                    "summary": "a PNG of at most 512 by 512 pixels",
+                    "value": "PNG\r\n\u001a\n..."
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The picture is the one the If-None-Match tag names: the client's copy is still the picture.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/avatarTag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "description": "The namespace has no picture, one never set or removed; or there is no such namespace, or one the caller cannot see, the same answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "none": {
+                    "summary": "no picture",
+                    "value": {
+                      "error": "no such namespace, or it has no picture"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "setNamespaceAvatar",
+        "tags": [
+          "namespaces"
+        ],
+        "summary": "Set a namespace's picture",
+        "description": "Sets the namespace's picture in place of any before it, held to the rules of a user's photo: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it. Set by its owner, whoever holds grant:manage at its scope, a personal namespace's user among them, or an administrator. The record's avatar_updated_at says when it was set, which a client adds to the picture's address. Audited as namespace.avatar with the size it was stored at, and never the picture.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "requestBody": {
+          "description": "The picture, a PNG or a JPEG of at most 1 MiB and 2048 by 2048 pixels.",
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "contentMediaType": "image/png"
+              },
+              "examples": {
+                "png": {
+                  "summary": "a PNG",
+                  "value": "PNG\r\n\u001a\n..."
+                }
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "contentMediaType": "image/jpeg"
+              },
+              "examples": {
+                "jpeg": {
+                  "summary": "a JPEG, its Exif among it",
+                  "value": "ÿØÿá...Exif..."
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Stored, as GET /api/v1/namespaces/{ns}/avatar answers it from now on."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "An empty body. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised",
+            "description": "No credential, or one that opens nothing."
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers."
+          },
+          "413": {
+            "description": "A picture past 1 MiB, refused before it is decoded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "too large": {
+                    "summary": "past a mebibyte",
+                    "value": {
+                      "error": "a picture is at most 1048576 bytes, a mebibyte, and this one is more: send it smaller, since it is stored at 512 by 512 pixels at most"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A Content-Type other than image/png and image/jpeg, refused before the body is read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "type": {
+                    "summary": "a picture sent as something else",
+                    "value": {
+                      "error": "a picture is sent as image/png or image/jpeg, and this request's Content-Type is \"image/gif\""
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not a PNG or a JPEG that can be read, or its header announces more than 2048 pixels a side, saying how many.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "too many pixels": {
+                    "summary": "past 2048 by 2048",
+                    "value": {
+                      "error": "the picture is 4096 by 3072 pixels, and one is at most 2048 by 2048: it is stored at 512 by 512 at most, and a larger one takes more to decode than it gives"
+                    }
+                  },
+                  "unreadable": {
+                    "summary": "not a picture",
+                    "value": {
+                      "error": "the body is not a PNG or a JPEG that can be read, and a picture is one of the two"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeNamespaceAvatar",
+        "tags": [
+          "namespaces"
+        ],
+        "summary": "Remove a namespace's picture",
+        "description": "Removes the namespace's picture, which a client draws as the namespace's initial from then on, avatar_updated_at null. Removing none is the same answer, so that a client that lost the first answer asks again with nothing to sort out. By its owner, whoever holds grant:manage at its scope, or an administrator, removing one that should not be shown. Audited as namespace.avatar with removed, and as unchanged where there was none. No body is read, and one sent is refused.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "204": {
+            "description": "Removed, or there was none."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised",
+            "description": "No credential, or one that opens nothing."
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
           }
         }
       }
@@ -3256,7 +3665,7 @@
           "users"
         ],
         "summary": "List users",
-        "description": "Every user of the installation, by login, with whether each is an administrator, whether it is suspended and, where the policy suspended it, why, when each was created and last signed in, and what each says of themself and when their photo was last set; never a credential, and never a photo. Administrator only.",
+        "description": "Every user of the installation, by login, with their display name and the email address an administrator gave them, whether each is an administrator, whether it is suspended and, where the policy suspended it, why, when each was created and last signed in, and what each says of themself and when their photo was last set; never a credential, and never a photo. Administrator only.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#principals"
@@ -3278,10 +3687,11 @@
                           "kind": "user",
                           "login": "alice",
                           "display_name": "Alice Martin",
+                          "email": "alice.martin@example.com",
                           "admin": true,
                           "suspended": false,
-                          "given_name": "",
-                          "family_name": "",
+                          "given_name": "Alice",
+                          "family_name": "Martin",
                           "title": "",
                           "location": "",
                           "timezone": "",
@@ -3293,10 +3703,11 @@
                           "kind": "user",
                           "login": "bob-martin",
                           "display_name": "Bob Martin",
+                          "email": "bob.martin@example.com",
                           "admin": false,
                           "suspended": false,
-                          "given_name": "",
-                          "family_name": "",
+                          "given_name": "Bob",
+                          "family_name": "Martin",
                           "title": "",
                           "location": "",
                           "timezone": "",
@@ -3315,11 +3726,12 @@
                           "kind": "user",
                           "login": "dave",
                           "display_name": "Dave Moreau",
+                          "email": "",
                           "admin": false,
                           "suspended": true,
                           "suspended_for": "no_passkey",
-                          "given_name": "",
-                          "family_name": "",
+                          "given_name": "Dave",
+                          "family_name": "Moreau",
                           "title": "",
                           "location": "",
                           "timezone": "",
@@ -3354,7 +3766,7 @@
           "users"
         ],
         "summary": "Create a user",
-        "description": "Creates a user from a login, a display name, the login where none is given, and admin where it is an administrator, holding no credential, answered 201 with an enrolment link shown once, single use and good for an hour. Asked again for a user who has not enrolled, with nothing said otherwise than was recorded, it answers 200 with a fresh link and revokes the one before, a field left out keeping what is recorded, so that a link that lapsed unused locks nobody out: agk user create LOGIN, run again with nothing more, answers the fresh link it is run again for. Administrator only, and the bootstrap token's until the first administrator has signed in: an administrator it creates gets a first administrator's link, which revokes every first administrator's link still open, and anybody else a new user's. An administrator the bootstrap token creates is also given, in the same act, the owner role on every namespace whose record names no owner, which the token owned in effect, each audited as grant.create by operator in its namespace, so that the first administrator owns the installation's namespaces with nothing shared by hand; a repeat gives nothing twice. The login is refused where a namespace holds it, and operator, installation and the reserved words by its grammar. Audited as user.create, recorded unchanged for a repeat, and the link as enrolment.issue.",
+        "description": "Creates a user from a login, the given and family names their display name is made of, the login standing for both where neither is given, an email address for the people they work with to reach them at, which nothing sends anything to, and admin where it is an administrator, holding no credential, answered 201 with an enrolment link shown once, single use and good for an hour. Asked again for a user who has not enrolled, with nothing said otherwise than was recorded, it answers 200 with a fresh link and revokes the one before, a field left out keeping what is recorded, so that a link that lapsed unused locks nobody out: agk user create LOGIN, run again with nothing more, answers the fresh link it is run again for. Administrator only, and the bootstrap token's until the first administrator has signed in: an administrator it creates gets a first administrator's link, which revokes every first administrator's link still open, and anybody else a new user's. An administrator the bootstrap token creates is also given, in the same act, the owner role on every namespace whose record names no owner, which the token owned in effect, each audited as grant.create by operator in its namespace, so that the first administrator owns the installation's namespaces with nothing shared by hand; a repeat gives nothing twice. The login is refused where a namespace holds it, and operator, installation and the reserved words by its grammar; display_name is refused, since nobody writes it. Audited as user.create, recorded unchanged for a repeat, and the link as enrolment.issue.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#first-run"
@@ -3372,7 +3784,9 @@
                   "summary": "agk user create alice --admin",
                   "value": {
                     "login": "alice",
-                    "display_name": "Alice Martin",
+                    "given_name": "Alice",
+                    "family_name": "Martin",
+                    "email": "alice.martin@example.com",
                     "admin": true
                   }
                 },
@@ -3380,7 +3794,8 @@
                   "summary": "a user",
                   "value": {
                     "login": "bob-martin",
-                    "display_name": "Bob Martin"
+                    "given_name": "Bob",
+                    "family_name": "Martin"
                   }
                 },
                 "login alone": {
@@ -3414,10 +3829,11 @@
                         "kind": "user",
                         "login": "alice",
                         "display_name": "Alice Martin",
+                        "email": "alice.martin@example.com",
                         "admin": true,
                         "suspended": false,
-                        "given_name": "",
-                        "family_name": "",
+                        "given_name": "Alice",
+                        "family_name": "Martin",
                         "title": "",
                         "location": "",
                         "timezone": "",
@@ -3455,10 +3871,11 @@
                         "kind": "user",
                         "login": "alice",
                         "display_name": "Alice Martin",
+                        "email": "alice.martin@example.com",
                         "admin": true,
                         "suspended": false,
-                        "given_name": "",
-                        "family_name": "",
+                        "given_name": "Alice",
+                        "family_name": "Martin",
                         "title": "",
                         "location": "",
                         "timezone": "",
@@ -3479,6 +3896,7 @@
                         "kind": "user",
                         "login": "carol",
                         "display_name": "carol",
+                        "email": "",
                         "admin": false,
                         "suspended": false,
                         "given_name": "",
@@ -3502,7 +3920,7 @@
           },
           "400": {
             "$ref": "#/components/responses/badRequest",
-            "description": "The body is refused: a login outside the namespace grammar, a reserved word, operator or installation; or a display name empty, over 256 characters, or holding a line break or another control character. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well."
+            "description": "The body is refused: a login outside the namespace grammar, a reserved word, operator or installation; a given or family name over 128 characters or holding a line break or another control character; an email address that is not one @ with something on each side, holds a space or a control character, or is over 254 characters; or display_name, which is made of the names and written by nobody. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well."
           },
           "401": {
             "$ref": "#/components/responses/unauthorised"
@@ -3513,7 +3931,7 @@
           },
           "409": {
             "$ref": "#/components/responses/conflict",
-            "description": "The login is held by a namespace, by a user who has enrolled, by one created with another display name or admin than this request says, or by one another request created at the same moment."
+            "description": "The login is held by a namespace, by a user who has enrolled, by one created with another name, email address or admin than this request says, or by one another request created at the same moment."
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
@@ -3533,7 +3951,7 @@
           "users"
         ],
         "summary": "Read a user",
-        "description": "One user: login, display name, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.",
+        "description": "One user: login, display name, the email address an administrator gave them, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#principals"
@@ -3553,6 +3971,7 @@
                       "kind": "user",
                       "login": "bob-martin",
                       "display_name": "Bob Martin",
+                      "email": "bob.martin@example.com",
                       "admin": false,
                       "suspended": false,
                       "given_name": "Bob",
@@ -3572,11 +3991,12 @@
                       "kind": "user",
                       "login": "dave",
                       "display_name": "Dave Moreau",
+                      "email": "",
                       "admin": false,
                       "suspended": true,
                       "suspended_for": "no_passkey",
-                      "given_name": "",
-                      "family_name": "",
+                      "given_name": "Dave",
+                      "family_name": "Moreau",
                       "title": "",
                       "location": "",
                       "timezone": "",
@@ -3604,6 +4024,95 @@
           "404": {
             "$ref": "#/components/responses/notFound",
             "description": "No user by that login, or a login no user can have."
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateUser",
+        "tags": [
+          "users"
+        ],
+        "summary": "Change what an administrator gives a user",
+        "description": "Changes what an administrator gives a user after creating them, as the body names it: email, set to what the body holds, the empty string removing it, and kept where the body leaves it out. The address is for the people the user works with to reach them at, read wherever the user is answered, and nothing sends anything to it: the product signs nobody in, enrols nobody and recovers no account by mail. It is held as at the creation: one @ with something on each side, no space or control character, and at most 254 characters. Nothing else of a user is the administrator's to change here: the given and family names and the rest of the profile are the user's own, written at PATCH /api/v1/me, and display_name is made of the names and written by nobody, each refused saying so. The user's row is held while the change is merged into it, and the answer is the user as GET /api/v1/users/{login} answers them. Administrator only, and the bootstrap token's until the first administrator has signed in. Audited as user.update with the names of the fields that changed and never what they hold, since the log is kept for good and an address is somebody's to have removed; unchanged where none did.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#principals"
+        },
+        "requestBody": {
+          "description": "What changes.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/userUpdate"
+              },
+              "examples": {
+                "given": {
+                  "summary": "an address given",
+                  "value": {
+                    "email": "bob.martin@example.com"
+                  }
+                },
+                "removed": {
+                  "summary": "the address removed",
+                  "value": {
+                    "email": ""
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written: the user, as GET /api/v1/users/{login} answers them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/user"
+                },
+                "examples": {
+                  "given": {
+                    "summary": "bob-martin once given an address",
+                    "value": {
+                      "kind": "user",
+                      "login": "bob-martin",
+                      "display_name": "Bob Martin",
+                      "email": "bob.martin@example.com",
+                      "admin": false,
+                      "suspended": false,
+                      "given_name": "Bob",
+                      "family_name": "Martin",
+                      "title": "Platform engineer",
+                      "location": "",
+                      "timezone": "Europe/Paris",
+                      "bio": "",
+                      "avatar_updated_at": null,
+                      "created_at": "2026-09-27T09:20:00Z",
+                      "last_sign_in_at": "2026-09-27T12:30:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The body is refused: empty, naming nothing to change, a field the route does not read, email null or not a string, or an address that is not one @ with something on each side, holds a space or a control character, or is over 254 characters; a name or another field of the profile, which is the user's, or display_name, which nobody writes, each refused saying so. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, and not the bootstrap token before the first administrator has signed in; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No user by that login, or a login no user can have."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
           }
         }
       },
@@ -6308,7 +6817,7 @@
           "runs"
         ],
         "summary": "Replay a run",
-        "description": "Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.",
+        "description": "Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, and with the namespace variables it read, however they changed since, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#memoisation-and-replay"
@@ -8529,6 +9038,369 @@
         }
       }
     },
+    "/api/v1/{ns}/variables": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        }
+      ],
+      "get": {
+        "operationId": "listVariables",
+        "tags": [
+          "variables"
+        ],
+        "summary": "List a namespace's variables",
+        "description": "Every variable of the namespace, sorted by name, whole and not paged, each with its value, its visibility and, where it is selected, the workflows that read it, and who wrote it last and when. Requires workflow:read at namespace scope, which reading the workflows these variables are shown to takes; a grant on one workflow reads none, since a variable serves every workflow it is shown to.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        "responses": {
+          "200": {
+            "description": "The variables.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/variableList"
+                },
+                "examples": {
+                  "variables": {
+                    "summary": "a namespace's variables",
+                    "value": {
+                      "variables": [
+                        {
+                          "name": "ledger_url",
+                          "value": "https://ledger.example.com/api",
+                          "visibility": "all",
+                          "updated_by": "alice",
+                          "updated_at": "2026-10-01T09:10:00Z"
+                        },
+                        {
+                          "name": "reminder_days",
+                          "value": [
+                            7,
+                            14,
+                            30
+                          ],
+                          "visibility": "selected",
+                          "workflows": [
+                            "payment-reminders"
+                          ],
+                          "updated_by": "alice",
+                          "updated_at": "2026-10-01T09:12:00Z"
+                        }
+                      ]
+                    }
+                  },
+                  "none": {
+                    "summary": "a namespace holding none",
+                    "value": {
+                      "variables": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer."
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/variables/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/variable"
+        }
+      ],
+      "get": {
+        "operationId": "readVariable",
+        "tags": [
+          "variables"
+        ],
+        "summary": "Read one variable",
+        "description": "One variable, as the list gives it. Requires workflow:read at namespace scope.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        "responses": {
+          "200": {
+            "description": "The variable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/namespaceVariable"
+                },
+                "examples": {
+                  "all": {
+                    "summary": "read by every workflow of the namespace",
+                    "value": {
+                      "name": "ledger_url",
+                      "value": "https://ledger.example.com/api",
+                      "visibility": "all",
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:10:00Z"
+                    }
+                  },
+                  "selected": {
+                    "summary": "read by one workflow",
+                    "value": {
+                      "name": "reminder_days",
+                      "value": [
+                        7,
+                        14,
+                        30
+                      ],
+                      "visibility": "selected",
+                      "workflows": [
+                        "payment-reminders"
+                      ],
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:12:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such variable, no such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer."
+          }
+        }
+      },
+      "put": {
+        "operationId": "writeVariable",
+        "tags": [
+          "variables"
+        ],
+        "summary": "Create or replace one variable",
+        "description": "Writes the variable whole, its value, its visibility and for selected the workflows that read it, creating it or replacing what it held. One variable per request, so that two Terraform applies each setting their own never drop each other's change. A run created afterwards reads it; a run created before reads what it read when it was created, and so does its replay. A name its workflow's file writes in vars takes the file's value. Requires workflow:write at namespace scope, since a variable changes what the workflows reading it do, as pushing a version does, and is audited as variable.write with the visibility, the workflows, whether it was created and the SHA-256 of the value, never the value itself, which every run that read it keeps.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        "requestBody": {
+          "description": "The whole variable.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/variableWrite"
+              },
+              "examples": {
+                "all": {
+                  "summary": "read by every workflow of the namespace",
+                  "value": {
+                    "value": "https://ledger.example.com/api",
+                    "visibility": "all"
+                  }
+                },
+                "selected": {
+                  "summary": "read by one workflow",
+                  "value": {
+                    "value": [
+                      7,
+                      14,
+                      30
+                    ],
+                    "visibility": "selected",
+                    "workflows": [
+                      "payment-reminders"
+                    ]
+                  }
+                },
+                "aside": {
+                  "summary": "kept, read by none",
+                  "value": {
+                    "value": 45,
+                    "visibility": "selected",
+                    "workflows": []
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced: the variable as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/namespaceVariable"
+                },
+                "examples": {
+                  "all": {
+                    "summary": "read by every workflow of the namespace",
+                    "value": {
+                      "name": "ledger_url",
+                      "value": "https://ledger.example.com/api",
+                      "visibility": "all",
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:10:00Z"
+                    }
+                  },
+                  "selected": {
+                    "summary": "read by one workflow",
+                    "value": {
+                      "name": "reminder_days",
+                      "value": [
+                        7,
+                        14,
+                        30
+                      ],
+                      "visibility": "selected",
+                      "workflows": [
+                        "payment-reminders"
+                      ],
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:12:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created: the variable, and Location naming it.",
+            "headers": {
+              "Location": {
+                "description": "Where the variable is read.",
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "variable": {
+                    "summary": "the new variable",
+                    "value": "/api/v1/finance/variables/ledger_url"
+                  }
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/namespaceVariable"
+                },
+                "examples": {
+                  "all": {
+                    "summary": "read by every workflow of the namespace",
+                    "value": {
+                      "name": "ledger_url",
+                      "value": "https://ledger.example.com/api",
+                      "visibility": "all",
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:10:00Z"
+                    }
+                  },
+                  "selected": {
+                    "summary": "read by one workflow",
+                    "value": {
+                      "name": "reminder_days",
+                      "value": [
+                        7,
+                        14,
+                        30
+                      ],
+                      "visibility": "selected",
+                      "workflows": [
+                        "payment-reminders"
+                      ],
+                      "updated_by": "alice",
+                      "updated_at": "2026-10-01T09:12:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A name the workflow file could not write, no value or no visibility, a visibility that is neither all nor selected, selected without workflows or workflows beside all, a workflow's name the file could not write or one named twice, a number no 64-bit float holds or written past 340 digits from the point, U+0000 in a string, a field the route does not read, or two credentials."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such namespace, or one where the caller does not hold workflow:write at namespace scope: the same answer."
+          },
+          "409": {
+            "$ref": "#/components/responses/conflict",
+            "description": "A variable created in a namespace holding 1,000 already, or a value taking the namespace's variables past 4 MiB or 100,000 values in all, the bounds a run's inputs are held to, since a run keeps those it reads and the controller reads them at every decision: nothing is written."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge",
+            "description": "A value past 64 KiB written as compact JSON, workflows past 1,024 names, or a body past 512 KiB."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeVariable",
+        "tags": [
+          "variables"
+        ],
+        "summary": "Remove one variable",
+        "description": "Removes the variable. A run created afterwards no longer reads it; one created before, and its replay, read what it read. Requires workflow:write at namespace scope, and is audited as variable.delete.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such variable, no such namespace, or one where the caller does not hold workflow:write at namespace scope: the same answer."
+          }
+        }
+      }
+    },
     "/api/v1/runners": {
       "get": {
         "operationId": "listRunners",
@@ -8655,6 +9527,209 @@
         }
       }
     },
+    "/api/v1/runners/{runner}/drain": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runner"
+        }
+      ],
+      "post": {
+        "operationId": "drainRunner",
+        "tags": [
+          "runners"
+        ],
+        "summary": "Drain a runner",
+        "description": "Orders a runner to take nothing new and finish what it holds, from its next heartbeat, which answers drain: true with the reason; its results are accepted as usual and it stays up, so that a host can be taken down for maintenance without losing work. A runner already draining is answered as it stands, the order recorded as having changed nothing. Requires grant:manage at installation scope, audited as runner.drain with the reason, in the transaction of the order.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#registering-a-runner"
+        },
+        "requestBody": {
+          "description": "Why, handed to the runner at its next heartbeat.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/runnerOrder"
+              },
+              "examples": {
+                "reason": {
+                  "summary": "an order with its reason",
+                  "value": {
+                    "reason": "kernel update"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The runner as GET /api/v1/runners lists it, with the order it now carries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runner"
+                },
+                "examples": {
+                  "draining": {
+                    "summary": "a runner draining",
+                    "value": {
+                      "runner": "01jmz8x2d5f8qx7t2n5r8wd3hk",
+                      "pool": "dmz",
+                      "labels": [
+                        "zone=dmz",
+                        "arch=amd64"
+                      ],
+                      "cpu": 8,
+                      "memory_bytes": 34359738368,
+                      "disk_bytes": 214748364800,
+                      "architecture": "amd64",
+                      "agent_version": "0.6.0",
+                      "containment": {
+                        "runtime": "runc",
+                        "userns_remap": true
+                      },
+                      "reported_state": "ready",
+                      "concurrency": 4,
+                      "joined_at": "2026-09-20T08:14:02Z",
+                      "last_seen_at": "2026-10-01T06:41:57Z",
+                      "rotate_by": "2026-10-21T08:14:02Z",
+                      "state": "draining",
+                      "drain_reason": "kernel update",
+                      "drained_by": "dana",
+                      "drained_at": "2026-10-01T06:42:10Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The reason is refused: none, longer than 256 characters, or holding a line break or another control character. A request carrying two credentials is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No runner of that identifier: the caller is an administrator already, so this names the runner rather than hiding the route."
+          },
+          "409": {
+            "$ref": "#/components/responses/conflict",
+            "description": "The runner is revoked, which already takes nothing new: a drain would only undo part of that, and a revocation is not undone."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
+    "/api/v1/runners/{runner}/revoke": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runner"
+        }
+      ],
+      "post": {
+        "operationId": "revokeRunner",
+        "tags": [
+          "runners"
+        ],
+        "summary": "Revoke a runner",
+        "description": "Orders a runner out: it takes nothing new from its next heartbeat, its results are accepted until the end of its grace, revocation_grace after the order, and its credential is refused everywhere after that, so that revoking a credential never destroys work already done. Its record stays for the audit log, and a host it ran on joins again as a new runner. A runner already revoked is answered as it stands, so that revoking it again gives it no more time. Requires grant:manage at installation scope, audited as runner.revoke with the reason and the end of the grace, in the transaction of the order.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#registering-a-runner"
+        },
+        "requestBody": {
+          "description": "Why, handed to the runner at its next heartbeat.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/runnerOrder"
+              },
+              "examples": {
+                "reason": {
+                  "summary": "an order with its reason",
+                  "value": {
+                    "reason": "kernel update"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The runner as GET /api/v1/runners lists it, with the order it now carries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runner"
+                },
+                "examples": {
+                  "revoked": {
+                    "summary": "a runner revoked, in its grace",
+                    "value": {
+                      "runner": "01jmz8x2d5f8qx7t2n5r8wd3hk",
+                      "pool": "dmz",
+                      "labels": [
+                        "zone=dmz",
+                        "arch=amd64"
+                      ],
+                      "cpu": 8,
+                      "memory_bytes": 34359738368,
+                      "disk_bytes": 214748364800,
+                      "architecture": "amd64",
+                      "agent_version": "0.6.0",
+                      "containment": {
+                        "runtime": "runc",
+                        "userns_remap": true
+                      },
+                      "reported_state": "draining",
+                      "concurrency": 4,
+                      "joined_at": "2026-09-20T08:14:02Z",
+                      "last_seen_at": "2026-10-01T06:41:57Z",
+                      "rotate_by": "2026-10-21T08:14:02Z",
+                      "state": "revoked",
+                      "drain_reason": "disk replaced",
+                      "revoked_by": "dana",
+                      "revoked_at": "2026-10-01T06:42:10Z",
+                      "results_accepted_until": "2026-10-01T07:42:10Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The reason is refused: none, longer than 256 characters, or holding a line break or another control character. A request carrying two credentials is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No runner of that identifier: the caller is an administrator already, so this names the runner rather than hiding the route."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
     "/api/v1/runner-pools": {
       "get": {
         "operationId": "listRunnerPools",
@@ -8757,6 +9832,231 @@
           "403": {
             "$ref": "#/components/responses/forbidden",
             "description": "The caller is not an administrator, or holds a session that may only enrol."
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRunnerPool",
+        "tags": [
+          "runners"
+        ],
+        "summary": "Create a runner pool",
+        "description": "A pool with its labels, the namespaces it accepts and the ceilings of one task on it, the first thing an administrator writes before any machine can join. Its labels, namespaces and resource_ceilings are written even when empty, each then meaning the widest thing, so that a pool open to every namespace is one somebody said so of; containment left out is hardened, the one tier this release gives. The pool's consumer on the bus is created in the same step, and a bus that refuses it answers 503 with no pool created, so that a pool never exists with nowhere for its runners to pull from. Administrator only, audited as runner_pool.create with the pool as it was created.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#registering-a-runner"
+        },
+        "requestBody": {
+          "description": "The pool, without a join token, which is issued from a pool that exists.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "wire.schema.json#/$defs/runnerPool"
+              },
+              "examples": {
+                "dmz": {
+                  "summary": "a pool for a zone, accepting one namespace, capping a task",
+                  "value": {
+                    "pool": {
+                      "name": "dmz",
+                      "labels": [
+                        "zone=dmz",
+                        "arch=amd64"
+                      ],
+                      "namespaces": [
+                        "finance"
+                      ],
+                      "resource_ceilings": {
+                        "cpu": "4",
+                        "memory": "8Gi",
+                        "pids": 512
+                      }
+                    }
+                  }
+                },
+                "lab": {
+                  "summary": "a pool accepting every namespace and capping nothing",
+                  "value": {
+                    "pool": {
+                      "name": "lab",
+                      "labels": [
+                        "zone=lab"
+                      ],
+                      "namespaces": [],
+                      "resource_ceilings": {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pool as it was created, its tier written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/runnerPool"
+                },
+                "examples": {
+                  "dmz": {
+                    "summary": "the pool created",
+                    "value": {
+                      "pool": {
+                        "name": "dmz",
+                        "labels": [
+                          "zone=dmz",
+                          "arch=amd64"
+                        ],
+                        "namespaces": [
+                          "finance"
+                        ],
+                        "resource_ceilings": {
+                          "cpu": "4",
+                          "memory": "8Gi",
+                          "pids": 512
+                        },
+                        "containment": "hardened"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The pool is refused: a name outside the grammar or longer than 255 characters, a label that is not key=value, a namespace outside its grammar, an entry written twice, a list or the ceilings left out, a ceiling outside its grammar or null, disk named as a ceiling, a tier other than hardened, or a join token written with it. A request carrying two credentials is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "409": {
+            "$ref": "#/components/responses/conflict",
+            "description": "A pool of that name exists already, and a pool's name is its only identity."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/unavailable",
+            "description": "The bus could not make the pool's queue ready, and no pool was created."
+          }
+        }
+      }
+    },
+    "/api/v1/runner-pools/{pool}/join-tokens": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/pool"
+        }
+      ],
+      "post": {
+        "operationId": "issueJoinToken",
+        "tags": [
+          "runners"
+        ],
+        "summary": "Issue a join token",
+        "description": "A join token of the pool: single use, an hour unless asked otherwise and never more than a day, only for labels the pool carries, and shown once, in this answer and nowhere else. A machine trades it for a runner's identity with agk-runner join, or agk-runner serve given it in AGK_RUNNER_JOIN_TOKEN. Issuing one is how a runner is added, and, with agk-runner join --replace on the same host, how a runner's labels are changed: it joins again as a new runner, and the one it replaces stays registered until it is revoked. Administrator only, audited as join_token.issue by its identifier, never by the token.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#registering-a-runner"
+        },
+        "requestBody": {
+          "description": "The labels the token permits and how long it lives, either left out.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/joinTokenRequest"
+              },
+              "examples": {
+                "dmz": {
+                  "summary": "a token for a machine claiming both of the pool's labels",
+                  "value": {
+                    "labels": [
+                      "zone=dmz",
+                      "arch=amd64"
+                    ]
+                  }
+                },
+                "default": {
+                  "summary": "a token for the pool default, which permits no label",
+                  "value": {}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pool the token was issued from, and the token, its secret written this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/runnerPool"
+                },
+                "examples": {
+                  "dmz": {
+                    "summary": "a token of dmz",
+                    "value": {
+                      "pool": {
+                        "name": "dmz",
+                        "labels": [
+                          "zone=dmz",
+                          "arch=amd64"
+                        ],
+                        "namespaces": [
+                          "finance"
+                        ],
+                        "resource_ceilings": {
+                          "cpu": "4",
+                          "memory": "8Gi",
+                          "pids": 512
+                        },
+                        "containment": "hardened"
+                      },
+                      "join_token": {
+                        "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                        "token": "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ",
+                        "pool": "dmz",
+                        "labels": [
+                          "zone=dmz",
+                          "arch=amd64"
+                        ],
+                        "single_use": true,
+                        "issued_at": "2026-09-10T06:12:00Z",
+                        "expires_at": "2026-09-10T07:12:00Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The request is refused: a label written twice, a label the pool does not carry, or a life longer than a day. A request carrying two credentials is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No runner pool of that name: the caller is an administrator already, so this names the pool rather than hiding the route."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
           }
         }
       }
@@ -10411,6 +11711,7 @@
                 "kind": "user",
                 "login": "alice",
                 "display_name": "Alice Martin",
+                "email": "alice.martin@example.com",
                 "admin": true,
                 "suspended": false,
                 "given_name": "Alice",
@@ -10548,6 +11849,7 @@
               "kind": "user",
               "login": "alice",
               "display_name": "Alice Martin",
+              "email": "alice.martin@example.com",
               "admin": true,
               "suspended": false,
               "given_name": "Alice",
@@ -10883,15 +12185,14 @@
         "title": "Namespace creation",
         "type": "object",
         "required": [
-          "name",
-          "owner"
+          "name"
         ],
         "additionalProperties": false,
-        "description": "A shared namespace to create: its name, its owner and its quotas. The record answered is the one GET /api/v1/namespaces lists.",
+        "description": "A shared namespace to create: its name and, where an administrator creates it, its owner and its quotas. The record answered is the one GET /api/v1/namespaces lists.",
         "properties": {
           "name": {
             "$ref": "wire.schema.json#/$defs/namespaceRecord/properties/name",
-            "description": "The namespace's name, the first path segment of its routes. Refused where a namespace or a login already holds it.",
+            "description": "The namespace's name, the first path segment of its routes. Refused where a namespace holds it, as its name or a former one, or a login does.",
             "examples": [
               "finance"
             ]
@@ -10905,14 +12206,14 @@
           },
           "owner": {
             "$ref": "wire.schema.json#/$defs/namespaceRecord/properties/owner",
-            "description": "Who owns it: a user or group:NAME, given the owner role on the namespace in the same transaction, so that it can share the namespace and act in it from the start. The owner is who is told when an administrator writes a grant there by the installation's power or widens their own access in it.",
+            "description": "Who owns it: a user or group:NAME, given the owner role on the namespace in the same transaction, so that it can share the namespace and act in it from the start. Left out, the caller owns it, which the bootstrap token, being nobody, cannot. Naming another owner than the caller is an administrator's. The owner is who is told when an administrator writes a grant there by the installation's power or widens their own access in it.",
             "examples": [
               "group:finance-leads"
             ]
           },
           "quotas": {
             "$ref": "wire.schema.json#/$defs/namespaceRecord/properties/quotas",
-            "description": "What it may consume. max_concurrent_tasks and max_retention_days start at 20 and 90 where left out, and the other four bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later.",
+            "description": "What it may consume, an administrator's to write. max_concurrent_tasks and max_retention_days start at 20 and 90 where left out, and the other four bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later, an administrator's as well.",
             "examples": [
               {
                 "max_concurrent_tasks": 20,
@@ -10948,6 +12249,30 @@
           {
             "name": "team-ops",
             "owner": "bob-martin"
+          },
+          {
+            "name": "research"
+          }
+        ]
+      },
+      "namespaceUpdate": {
+        "title": "Namespace settings",
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "description": "What PATCH /api/v1/namespaces/{ns} changes, as a partial object: each field named is set and each left out kept, null refused rather than read as either. It is the namespace's settings and takes more fields as they grow, each written by whoever holds grant:manage at the namespace's scope or administers the installation. The quotas are not among them: they are an administrator's alone, at PUT /api/v1/namespaces/{ns}/quotas.",
+        "properties": {
+          "name": {
+            "$ref": "wire.schema.json#/$defs/namespace",
+            "description": "The namespace's new name, on the grammar every namespace's name is written on. The name it leaves becomes a former name, still the namespace's; a name a namespace, a login or a reserved word holds, or a former name of another namespace, is refused.",
+            "examples": [
+              "accounting"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "name": "accounting"
           }
         ]
       },
@@ -11036,7 +12361,7 @@
           "login"
         ],
         "additionalProperties": false,
-        "description": "A user to create, as agk user create sends it: what it was given and nothing more, so that the same command run again asks for the same user.",
+        "description": "A user to create, as agk user create sends it: what it was given and nothing more, so that the same command run again asks for the same user. The display name is not among it: it is made of the given and family names.",
         "properties": {
           "login": {
             "$ref": "wire.schema.json#/$defs/user/properties/login",
@@ -11045,11 +12370,25 @@
               "alice"
             ]
           },
-          "display_name": {
-            "$ref": "wire.schema.json#/$defs/user/properties/display_name",
-            "description": "The name people read in the console and in the sharing panel: one line of at most 256 characters, holding no control character, since it is shown in a console and printed at a terminal. Left out, a user created is given their login, and a user asked for again keeps what is recorded.",
+          "given_name": {
+            "$ref": "wire.schema.json#/$defs/user/properties/given_name",
+            "description": "The name the user is called by, which with the family name makes the name people read. Left out, a user created has none, and is shown by their login while they say neither name, and a user asked for again keeps what is recorded. The user writes it once signed in.",
             "examples": [
-              "Alice Martin"
+              "Alice"
+            ]
+          },
+          "family_name": {
+            "$ref": "wire.schema.json#/$defs/user/properties/family_name",
+            "description": "The user's family name, the second half of the name people read. Left out, a user created has none, and a user asked for again keeps what is recorded. The user writes it once signed in.",
+            "examples": [
+              "Martin"
+            ]
+          },
+          "email": {
+            "$ref": "wire.schema.json#/$defs/user/properties/email",
+            "description": "An address for the people the user works with to reach them at, which nothing sends anything to. Left out, a user created has none, and a user asked for again keeps what is recorded. An administrator changes it later at PATCH /api/v1/users/{login}.",
+            "examples": [
+              "alice.martin@example.com"
             ]
           },
           "admin": {
@@ -11063,15 +12402,43 @@
         "examples": [
           {
             "login": "alice",
-            "display_name": "Alice Martin",
+            "given_name": "Alice",
+            "family_name": "Martin",
+            "email": "alice.martin@example.com",
             "admin": true
           },
           {
             "login": "bob-martin",
-            "display_name": "Bob Martin"
+            "given_name": "Bob",
+            "family_name": "Martin"
           },
           {
             "login": "carol"
+          }
+        ]
+      },
+      "userUpdate": {
+        "title": "User change",
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": false,
+        "description": "What an administrator changes of a user after creating them, and nothing else: the email address, set to what the field holds, the empty string removing it, and kept where it is left out. Null is refused rather than read as either. The names and the rest of the profile are the user's, and the display name nobody's.",
+        "properties": {
+          "email": {
+            "$ref": "wire.schema.json#/$defs/user/properties/email",
+            "description": "The address the people the user works with reach them at, which nothing sends anything to; the empty string removes it.",
+            "examples": [
+              "bob.martin@example.com",
+              ""
+            ]
+          }
+        },
+        "examples": [
+          {
+            "email": "bob.martin@example.com"
+          },
+          {
+            "email": ""
           }
         ]
       },
@@ -11126,10 +12493,11 @@
                 "kind": "user",
                 "login": "alice",
                 "display_name": "Alice Martin",
+                "email": "alice.martin@example.com",
                 "admin": true,
                 "suspended": false,
-                "given_name": "",
-                "family_name": "",
+                "given_name": "Alice",
+                "family_name": "Martin",
                 "title": "",
                 "location": "",
                 "timezone": "",
@@ -11156,10 +12524,11 @@
               "kind": "user",
               "login": "alice",
               "display_name": "Alice Martin",
+              "email": "alice.martin@example.com",
               "admin": true,
               "suspended": false,
-              "given_name": "",
-              "family_name": "",
+              "given_name": "Alice",
+              "family_name": "Martin",
               "title": "",
               "location": "",
               "timezone": "",
@@ -11237,10 +12606,11 @@
                   "kind": "user",
                   "login": "alice",
                   "display_name": "Alice Martin",
+                  "email": "alice.martin@example.com",
                   "admin": true,
                   "suspended": false,
-                  "given_name": "",
-                  "family_name": "",
+                  "given_name": "Alice",
+                  "family_name": "Martin",
                   "title": "",
                   "location": "",
                   "timezone": "",
@@ -11252,10 +12622,11 @@
                   "kind": "user",
                   "login": "bob-martin",
                   "display_name": "Bob Martin",
+                  "email": "bob.martin@example.com",
                   "admin": false,
                   "suspended": false,
-                  "given_name": "",
-                  "family_name": "",
+                  "given_name": "Bob",
+                  "family_name": "Martin",
                   "title": "",
                   "location": "",
                   "timezone": "",
@@ -11274,10 +12645,11 @@
                 "kind": "user",
                 "login": "alice",
                 "display_name": "Alice Martin",
+                "email": "alice.martin@example.com",
                 "admin": true,
                 "suspended": false,
-                "given_name": "",
-                "family_name": "",
+                "given_name": "Alice",
+                "family_name": "Martin",
                 "title": "",
                 "location": "",
                 "timezone": "",
@@ -11289,10 +12661,11 @@
                 "kind": "user",
                 "login": "bob-martin",
                 "display_name": "Bob Martin",
+                "email": "bob.martin@example.com",
                 "admin": false,
                 "suspended": false,
-                "given_name": "",
-                "family_name": "",
+                "given_name": "Bob",
+                "family_name": "Martin",
                 "title": "",
                 "location": "",
                 "timezone": "",
@@ -18207,6 +19580,160 @@
           }
         ]
       },
+      "variableList": {
+        "title": "Variable list",
+        "type": "object",
+        "required": [
+          "variables"
+        ],
+        "additionalProperties": false,
+        "description": "A namespace's variables, by name, whole and not paged: a namespace holds at most 1,000.",
+        "properties": {
+          "variables": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "wire.schema.json#/$defs/namespaceVariable"
+            },
+            "description": "Every variable of the namespace, sorted by name, each with its value.",
+            "examples": [
+              [
+                {
+                  "name": "ledger_url",
+                  "value": "https://ledger.example.com/api",
+                  "visibility": "all",
+                  "updated_by": "alice",
+                  "updated_at": "2026-10-01T09:10:00Z"
+                }
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "variables": [
+              {
+                "name": "ledger_url",
+                "value": "https://ledger.example.com/api",
+                "visibility": "all",
+                "updated_by": "alice",
+                "updated_at": "2026-10-01T09:10:00Z"
+              },
+              {
+                "name": "reminder_days",
+                "value": [
+                  7,
+                  14,
+                  30
+                ],
+                "visibility": "selected",
+                "workflows": [
+                  "payment-reminders"
+                ],
+                "updated_by": "alice",
+                "updated_at": "2026-10-01T09:12:00Z"
+              }
+            ]
+          },
+          {
+            "variables": []
+          }
+        ]
+      },
+      "variableWrite": {
+        "title": "Variable written",
+        "type": "object",
+        "required": [
+          "value",
+          "visibility"
+        ],
+        "additionalProperties": false,
+        "description": "What a PUT writes: the whole variable, its value, its visibility and for selected its workflows, each written every time, so that a PUT changing only the value never leaves the visibility to a default that could widen a variable selected for one workflow to every workflow of the namespace.",
+        "properties": {
+          "value": {
+            "description": "Any JSON value, null among them, at most 64 KiB written as compact JSON. A number is held as a run's inputs are: one no 64-bit float holds, or written past 340 digits from the point, is refused, and one written with an exponent is written out with a point, 1e3 as 1000.0, so that it reads back a double. U+0000 in a string or a name is refused, since PostgreSQL does not keep it in JSON.",
+            "examples": [
+              "https://ledger.example.com/api",
+              [
+                7,
+                14,
+                30
+              ],
+              45
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "all",
+              "selected"
+            ],
+            "description": "all, read by every workflow of the namespace, or selected, read by those workflows names.",
+            "examples": [
+              "all",
+              "selected"
+            ]
+          },
+          "workflows": {
+            "type": "array",
+            "maxItems": 1024,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "wire.schema.json#/$defs/identifier",
+              "description": "A workflow of the namespace by name, one not pushed yet included.",
+              "examples": [
+                "payment-reminders"
+              ]
+            },
+            "description": "For selected alone, and required with it, the workflows that read it, each once, in any order, kept sorted; [] for none. Required rather than taken as none where left out, so that a PUT forgetting it does not empty the list, and refused beside all.",
+            "examples": [
+              [
+                "payment-reminders"
+              ],
+              []
+            ]
+          }
+        },
+        "if": {
+          "properties": {
+            "visibility": {
+              "const": "selected"
+            }
+          },
+          "required": [
+            "visibility"
+          ]
+        },
+        "then": {
+          "required": [
+            "workflows"
+          ]
+        },
+        "else": {
+          "not": {
+            "required": [
+              "workflows"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "value": "https://ledger.example.com/api",
+            "visibility": "all"
+          },
+          {
+            "value": [
+              7,
+              14,
+              30
+            ],
+            "visibility": "selected",
+            "workflows": [
+              "payment-reminders"
+            ]
+          }
+        ]
+      },
       "runner": {
         "title": "Runner",
         "type": "object",
@@ -18707,18 +20234,11 @@
         "type": "object",
         "minProperties": 1,
         "additionalProperties": false,
-        "description": "What changes of the caller's display name and profile, and nothing else: a field left out keeps what is recorded, and the empty string clears a field, the display name excepted, which a user always has. Null is refused rather than read as either, since a client could have meant both.",
+        "description": "What changes of the caller's profile, and nothing else: a field left out keeps what is recorded, and the empty string clears a field. Null is refused rather than read as either, since a client could have meant both. The display name is not among it, being made of the given and family names, and neither is the email address, which an administrator gives.",
         "properties": {
-          "display_name": {
-            "$ref": "wire.schema.json#/$defs/user/properties/display_name",
-            "description": "The name people read in the console and in the sharing panel, never cleared.",
-            "examples": [
-              "Alice Martin"
-            ]
-          },
           "given_name": {
             "$ref": "wire.schema.json#/$defs/user/properties/given_name",
-            "description": "The name the user is called by; the empty string clears it.",
+            "description": "The name the user is called by, the first half of their display name; the empty string clears it.",
             "examples": [
               "Alice",
               ""
@@ -18726,7 +20246,7 @@
           },
           "family_name": {
             "$ref": "wire.schema.json#/$defs/user/properties/family_name",
-            "description": "The user's family name; the empty string clears it.",
+            "description": "The user's family name, the second half of their display name; the empty string clears it.",
             "examples": [
               "Martin",
               ""
@@ -18777,7 +20297,87 @@
             "location": ""
           },
           {
-            "display_name": "Alice Martin"
+            "given_name": "Alice",
+            "family_name": "Martin"
+          }
+        ]
+      },
+      "joinTokenRequest": {
+        "title": "Join token request",
+        "type": "object",
+        "additionalProperties": false,
+        "description": "What a join token is asked for with: the labels the machine it is meant for may claim, every one of them a label its pool carries, and how long the administrator needs to get it there. Both may be left out: a token permitting no label, which is what a runner of the pool default claims, and the default life of an hour.",
+        "properties": {
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/label"
+            },
+            "uniqueItems": true,
+            "maxItems": 1024,
+            "description": "The labels a runner joining with the token may claim, a subset of its pool's: a label reaches a machine only where an administrator wrote it on a pool first, and a token narrows that further to the one machine it is meant for.",
+            "examples": [
+              [
+                "zone=dmz",
+                "arch=amd64"
+              ],
+              []
+            ]
+          },
+          "expires_in_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "How long the token lives, at most a day, an hour where it is left out: a join token only has to survive the minutes between an administrator copying it and a machine presenting it.",
+            "examples": [
+              3600,
+              900
+            ]
+          }
+        },
+        "examples": [
+          {
+            "labels": [
+              "zone=dmz",
+              "arch=amd64"
+            ]
+          },
+          {},
+          {
+            "labels": [
+              "zone=lab"
+            ],
+            "expires_in_seconds": 900
+          }
+        ]
+      },
+      "runnerOrder": {
+        "title": "Runner order",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "description": "An administrator's order to a runner, drain or revoke, and why: the reason is handed to the runner at its next heartbeat, which writes it to its own log, since whoever owns the machine is rarely whoever gave the order.",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$",
+            "description": "Why, in one line of at most 256 characters: one line of a journal, which is where the runner writes it, and short enough for the console to show beside the runner.",
+            "examples": [
+              "kernel update",
+              "disk replaced"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "reason": "kernel update"
+          },
+          {
+            "reason": "disk replaced"
           }
         ]
       }
@@ -18787,7 +20387,7 @@
         "name": "ns",
         "in": "path",
         "required": true,
-        "description": "The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking.",
+        "description": "The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking.",
         "schema": {
           "$ref": "wire.schema.json#/$defs/namespace"
         },
@@ -19453,11 +21053,26 @@
           }
         }
       },
+      "variable": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/identifier"
+        },
+        "examples": {
+          "variable": {
+            "summary": "a variable",
+            "value": "ledger_url"
+          }
+        }
+      },
       "avatarVersion": {
         "name": "v",
         "in": "query",
         "required": false,
-        "description": "Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it.",
+        "description": "Read by nobody: the avatar_updated_at of the user or the namespace whose picture it is, which a client writes here so that the picture's address changes when the picture does, and no cache answers a picture set again with the one before it.",
         "schema": {
           "type": "string"
         },
@@ -19465,6 +21080,36 @@
           "set": {
             "summary": "the instant the photo was set",
             "value": "2026-09-28T10:15:00Z"
+          }
+        }
+      },
+      "pool": {
+        "name": "pool",
+        "in": "path",
+        "required": true,
+        "description": "The runner pool, by its name, its only identity.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/runnerPool/properties/pool/properties/name"
+        },
+        "examples": {
+          "dmz": {
+            "summary": "a pool for a zone",
+            "value": "dmz"
+          }
+        }
+      },
+      "runner": {
+        "name": "runner",
+        "in": "path",
+        "required": true,
+        "description": "The runner, by the identifier the API minted at its join.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/runnerRegistration/properties/response/properties/runner"
+        },
+        "examples": {
+          "runner": {
+            "summary": "a runner",
+            "value": "01jmz8x2d5f8qx7t2n5r8wd3hk"
           }
         }
       }

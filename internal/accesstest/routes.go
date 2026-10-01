@@ -17,8 +17,8 @@ type Case struct {
 	Refused bool
 
 	// Makes is set where the route removes what it names and reads no body: each asking names a
-	// thing made for it by the owner of the namespace it is in, a grant, a secret, a token or a
-	// service account, removed again by its owner where the route did not remove it.
+	// thing made for it by the owner of the namespace it is in, a grant, a secret, a variable, a
+	// token or a service account, removed again by its owner where the route did not remove it.
 	Makes string
 
 	// Owned is set where the route is answered to the owners of the namespace it names, in its
@@ -44,7 +44,8 @@ type Case struct {
 // namespace's record is read "to an administrator and to a principal holding a grant in it", and
 // drain and revoke "require grant:manage at installation scope", which is what an administrator
 // holds there; a secret's declarations take workflow:read at namespace scope and writing one
-// secret:write there; a push workflow:write, and secret:use where it names a secret; recording a
+// secret:write there; a namespace's variables workflow:read at namespace scope and writing one
+// workflow:write there; a push workflow:write, and secret:use where it names a secret; recording a
 // repository's image pins and brick manifests workflow:write, and reading them workflow:read;
 // reading what a workflow has armed workflow:read, and writing a webhook's credential workflow:write;
 // starting a run and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
@@ -99,16 +100,26 @@ var Cases = []Case{
 	{Route: administer("PUT", "/api/v1/auth/policy"), Refused: true},
 	{Route: administer("PUT", "/api/v1/{namespace}/auth/policy"), Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/auth/policy", Scope: api.Namespace, Members: true}},
-	{Route: administer("POST", "/api/v1/namespaces"), Refused: true},
+	// A namespace any user creates and owns, an administrator one for another owner: a route about
+	// its caller, sent a body it refuses. Its owner, whoever holds grant:manage there, or an
+	// administrator renames it, removes it once it holds nothing, which no shared namespace of the
+	// fixture is, and sets or removes its picture, which none holds; whoever reads its record reads
+	// its picture.
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/namespaces", Own: true}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces", Scope: api.Namespace, Members: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}", Scope: api.Namespace, Members: true}},
-	{Route: administer("DELETE", "/api/v1/namespaces/{namespace}")},
+	{Route: ownerOrAdministrator("PATCH", "/api/v1/namespaces/{namespace}"), Refused: true},
+	{Route: ownerOrAdministrator("DELETE", "/api/v1/namespaces/{namespace}")},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}/avatar", Scope: api.Namespace, Members: true}},
+	{Route: ownerOrAdministrator("PUT", "/api/v1/namespaces/{namespace}/avatar"), Refused: true},
+	{Route: ownerOrAdministrator("DELETE", "/api/v1/namespaces/{namespace}/avatar")},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}/quotas", Scope: api.Namespace, Members: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/quotas", Scope: api.Namespace, Members: true}},
 	{Route: administer("PUT", "/api/v1/namespaces/{namespace}/quotas"), Refused: true},
 	{Route: administer("GET", "/api/v1/users")},
 	{Route: administer("POST", "/api/v1/users"), Refused: true},
 	{Route: administer("GET", "/api/v1/users/{login}")},
+	{Route: administer("PATCH", "/api/v1/users/{login}"), Refused: true},
 	{Route: administer("DELETE", "/api/v1/users/{login}")},
 	{Route: administer("POST", "/api/v1/users/{login}/enrolment")},
 	{Route: administer("POST", "/api/v1/users/{login}/recovery")},
@@ -148,6 +159,10 @@ var Cases = []Case{
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.WorkflowRead, Scope: api.Namespace}},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.SecretWrite, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.SecretWrite, Scope: api.Namespace}, Makes: "secret"},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/variables", Permission: api.WorkflowRead, Scope: api.Namespace}},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowRead, Scope: api.Namespace}},
+	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowWrite, Scope: api.Namespace}, Refused: true},
+	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowWrite, Scope: api.Namespace}, Makes: "variable"},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/grants", Permission: api.GrantManage, Scope: api.Namespace}},
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/grants", Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true, Seeing: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/grants/{id}", Permission: api.GrantManage, Scope: api.Namespace}, Makes: "grant"},
@@ -220,6 +235,12 @@ func own(method, pattern string) Case {
 // administer is a route an administrator alone reaches: grant:manage at the installation.
 func administer(method, pattern string) api.Route {
 	return api.Route{Method: method, Pattern: pattern, Permission: api.GrantManage, Scope: api.Installation}
+}
+
+// ownerOrAdministrator is a route a namespace's owner reaches, whoever holds grant:manage at its
+// scope, and an administrator by the installation's power over every namespace.
+func ownerOrAdministrator(method, pattern string) api.Route {
+	return api.Route{Method: method, Pattern: pattern, Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true}
 }
 
 // runner is a route a runner reaches with its credential, and nobody else.

@@ -13,20 +13,20 @@ export function workflowTabs(
   o: { shares: boolean; mcp: boolean; go: (route: Route, query: URLSearchParams) => void },
 ): Tab[] {
   const page = (t?: string): Route => ({ kind: "namespace", namespace, view: "workflows", workflow, tab: t });
-  const narrowed = (view: "runs" | "sharing"): Tab => ({
-    label: view === "runs" ? "Runs" : "Sharing",
-    icon: view === "runs" ? "control-runs" : "control-share",
-    to: { kind: "namespace", namespace, view },
+  const sharing: Tab = {
+    label: "Sharing",
+    icon: "control-share",
+    to: { kind: "namespace", namespace, view: "sharing" },
     query: `?workflow=${encodeURIComponent(workflow)}`,
     current: false,
-    onclick: () => o.go({ kind: "namespace", namespace, view }, new URLSearchParams({ workflow })),
-  });
+    onclick: () => o.go({ kind: "namespace", namespace, view: "sharing" }, new URLSearchParams({ workflow })),
+  };
   return [
     { label: "Graph", icon: "control-workflows", to: page(), current: tab === undefined || tab === "graph" },
     { label: "Files", icon: "control-open", to: page("files"), current: tab === "files" },
-    narrowed("runs"),
+    { label: "Runs", icon: "control-runs", to: page("runs"), current: tab === "runs" },
     { label: "Statistics", icon: "control-statistics", to: page("statistics"), current: tab === "statistics" },
-    ...(o.shares ? [narrowed("sharing")] : []),
+    ...(o.shares ? [sharing] : []),
     ...(o.mcp ? [{ label: "MCP", icon: "trigger-mcp", to: page("mcp"), current: tab === "mcp" }] : []),
   ];
 }

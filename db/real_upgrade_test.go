@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -444,12 +445,12 @@ func TestAWorkflowOfV030BecomesAnEmptyRepositoryWithEveryVersionItHeld(t *testin
 	// Every row as it is stored, where it is stored and by which transaction: a row written again,
 	// even with the same values, moves or changes its xmin. Less the columns the migrations after
 	// v0.3.0 add, source, a run's replay_of, replay_from, trigger_context, caller_run, caller_step,
-	// caller_task and depth, and a task's called_run, which a row v0.3.0 wrote reads as their
-	// default without being written again.
+	// caller_task, depth and namespace_vars, and a task's called_run, which a row v0.3.0 wrote reads
+	// as their default without being written again.
 	rows := func(table string) []string {
 		t.Helper()
 		var out []string
-		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - array['source', 'replay_of', 'replay_from', 'trigger_context', 'caller_run', 'caller_step', 'caller_task', 'depth', 'called_run'])::text
+		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - array['source', 'replay_of', 'replay_from', 'trigger_context', 'caller_run', 'caller_step', 'caller_task', 'depth', 'called_run', 'namespace_vars'])::text
 		                                         from %s t order by 1`, pgx.Identifier{table}.Sanitize()))
 		if err != nil {
 			t.Fatal(err)
@@ -555,5 +556,60 @@ func TestAWorkflowOfV030BecomesAnEmptyRepositoryWithEveryVersionItHeld(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// v050 is the last migration v0.5.0 carried.
+const v050 = "0062_events.sql"
+
+// A user of v0.5.0 is shown by the name they were at the upgrade. From v0.6.0 the display name is
+// made of the given and family names, so one an administrator gave that is not the login becomes the
+// given name, cut to the 128 characters a given name holds, and one that is the login leaves both
+// names empty, the login standing for them as it did. Nobody is given an email address, and the
+// column the display name was kept in stays as it was, read by nothing.
+func TestAUserOfV050KeepsTheNameTheyWereShownBy(t *testing.T) {
+	super, role := migratedAt(t, v050)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	long := strings.Repeat("é", 200)
+	for _, stmt := range []string{
+		`insert into principals (id, kind) values ('alice', 'user'), ('bob', 'user'), ('carol', 'user')`,
+		`insert into users (login, display_name) values ('alice', 'Alice Martin'), ('bob', 'bob'), ('carol', '` + long + `')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("filling the database as v0.5.0 would have: %s", err)
+		}
+	}
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatalf("the upgrade was refused: %s", err)
+	}
+	pool, err := Open(ctx, withCredentials(super, role, "test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for login, want := range map[string]string{"alice": "Alice Martin", "bob": "", "carol": strings.Repeat("é", 128)} {
+			u, err := w.User(ctx, login)
+			if err != nil {
+				return err
+			}
+			shown := want
+			if shown == "" {
+				shown = login
+			}
+			if u.GivenName != want || u.FamilyName != "" || u.DisplayName() != shown || u.Email != "" {
+				t.Errorf("%s reads after the upgrade as given %q, family %q, shown as %q, at %q", login, u.GivenName, u.FamilyName, u.DisplayName(), u.Email)
+			}
+		}
+		return nil
+	})
+	var kept string
+	if err := conn.QueryRow(ctx, `select display_name from users where login = 'carol'`).Scan(&kept); err != nil || kept != long {
+		t.Errorf("the display name carol was given reads after the upgrade as %q, %v", kept, err)
 	}
 }
