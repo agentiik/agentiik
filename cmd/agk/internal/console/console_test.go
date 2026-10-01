@@ -257,7 +257,7 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 	if m.selected != "01RUNAAAAAAAAAAAAAAAAAAAAA" {
 		t.Errorf("the runs view opens with %q selected, not the newest run", m.selected)
 	}
-	if last := strings.TrimRight(lines[23], " "); last != "↑↓ Move   enter Open   q Quit   ? Every key" {
+	if last := strings.TrimRight(lines[23], " "); last != "↑↓ Move   enter Open   / Filter   q Quit   ? Every key" {
 		t.Errorf("the key line is %q", last)
 	}
 	// Every line is as wide as the window, so that the ground is painted under all of it.

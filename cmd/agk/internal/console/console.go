@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -96,6 +97,15 @@ type Model struct {
 	selected string
 	top      int
 
+	// The runs' filter: whether its line is open, what was typed, how many keys were, the filter
+	// as it stood when typing last paused, whose terms the runs are asked with, and why the
+	// installation refused them.
+	filtering     bool
+	filter        string
+	keys          int
+	terms         string
+	filterRefused string
+
 	run       *db.RunDetail
 	runRead   bool
 	runFailed string
@@ -175,8 +185,9 @@ type (
 		err error
 	}
 	runsRead struct {
-		runs []db.ListedRun
-		err  error
+		runs  []db.ListedRun
+		err   error
+		shown int
 	}
 	runRead struct {
 		run *db.RunDetail
@@ -227,15 +238,22 @@ func (m Model) readShown() tea.Cmd {
 		}
 	}
 	path := "/api/v1/runs?limit=100"
-	if m.o.Namespace != "" {
+	// A namespace the filter names is the one asked for, in place of the one the console opened on.
+	terms := parse(m.terms)
+	if _, named := terms.terms["namespace"]; m.o.Namespace != "" && !named {
 		path += "&namespace=" + url.QueryEscape(m.o.Namespace)
 	}
+	// since=24h is read back from now at each read, so that the runs kept live keep the last day.
+	if q := terms.query(m.o.Now()); q != "" {
+		path += "&" + q
+	}
+	shown := m.shown
 	return func() tea.Msg {
 		var listed struct {
 			Runs []db.ListedRun `json:"runs"`
 		}
 		err := m.o.Read(m.ctx, path, &listed)
-		return runsRead{runs: listed.Runs, err: err}
+		return runsRead{runs: listed.Runs, err: err, shown: shown}
 	}
 }
 
@@ -275,12 +293,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.payloads[msg.key] = msg
 	case runsRead:
-		if msg.err != nil {
+		if msg.shown != m.shown {
+			// Asked for with terms since changed, or by a view since left.
+			return m, nil
+		}
+		switch {
+		case msg.err != nil && len(parse(m.terms).terms) > 0:
+			m.filterRefused = "The runs could not be read with these terms: " + said(msg.err)
+		case msg.err != nil:
 			m.unanswered = said(msg.err)
-		} else {
-			m.unanswered, m.runs, m.read = "", msg.runs, true
-			if m.selected == "" && len(m.runs) > 0 {
-				m.selected = string(m.runs[0].Run)
+		default:
+			m.unanswered, m.filterRefused, m.runs, m.read = "", "", msg.runs, true
+			if shown := m.shownRuns(); !slices.ContainsFunc(shown, func(r db.ListedRun) bool { return string(r.Run) == m.selected }) && len(shown) > 0 {
+				m.selected = string(shown[0].Run)
 			}
 		}
 		if m.view == runsView {
@@ -338,7 +363,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.view == m.view && msg.shown == m.shown {
 			return m, m.readShown()
 		}
+	case typedPaused:
+		return m.paused(msg)
 	case tea.KeyPressMsg:
+		if m.filtering && m.view == runsView && m.asking == notAsking && !m.listing {
+			return m.typing(msg)
+		}
 		return m.press(msg.String())
 	}
 	return m, nil
@@ -456,9 +486,15 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 	}
 	switch key {
 	case "up", "k":
-		m.selected = moved(m.runs, m.selected, -1)
+		m.selected = moved(m.shownRuns(), m.selected, -1)
 	case "down", "j":
-		m.selected = moved(m.runs, m.selected, 1)
+		m.selected = moved(m.shownRuns(), m.selected, 1)
+	case "/":
+		m.filtering = true
+	case "esc":
+		if m.filter != "" {
+			return m.filtered("")
+		}
 	case "enter":
 		if m.selected != "" {
 			return m.showing(runView)
@@ -477,6 +513,10 @@ func (m Model) showing(v view) (tea.Model, tea.Cmd) {
 	}
 	m.view = v
 	m.shown++
+	if v == runsView {
+		// A filter changed and left before typing paused is asked for on coming back.
+		m.terms = m.filter
+	}
 	return m, m.readShown()
 }
 
