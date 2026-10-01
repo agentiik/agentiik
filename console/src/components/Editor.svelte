@@ -431,4 +431,15 @@
       grid-template-columns: minmax(0, 1fr);
     }
   }
+
+  /* On a phone the count takes a line of its own, and the buttons follow it from the left. */
+  @media (max-width: 759px) {
+    .count {
+      flex-basis: 100%;
+    }
+
+    .bar .right {
+      margin-left: 0;
+    }
+  }
 </style>
