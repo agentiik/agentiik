@@ -15,7 +15,8 @@
     current,
     view,
     place,
-  }: { namespaces: Namespace[]; principal: string; current: string | undefined; view: View; place: Place } = $props();
+    every = false,
+  }: { namespaces: Namespace[]; principal: string; current: string | undefined; view: View; place: Place; every?: boolean } = $props();
 
   const groups = $derived(ordered(namespaces, principal));
 </script>
@@ -23,7 +24,8 @@
 <Popover label="Switch namespace">
   {#snippet button()}
     <span class="current">
-      <span class="name">{current ?? "no namespace"}</span>
+      <!-- The home reads every namespace together, which is what it is named there. -->
+      <span class="name">{current ?? (every ? "every namespace" : "no namespace")}</span>
       <Icon name="control-expand" size={14} />
     </span>
   {/snippet}

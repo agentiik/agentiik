@@ -5,13 +5,14 @@
   import Pane from "./components/Pane.svelte";
   import TopBar from "./components/TopBar.svelte";
   import { Keys, provide } from "./lib/keys.svelte";
-  import { holds, holdsSomewhereIn, home, inNamespace } from "./lib/permissions";
+  import { holds, holdsSomewhereIn, inNamespace } from "./lib/permissions";
   import type { Place } from "./lib/place.svelte";
   import type { View } from "./lib/route";
   import type { Session } from "./lib/session.svelte";
   import Account from "./views/Account.svelte";
   import Fleet from "./views/Fleet.svelte";
   import Groups from "./views/Groups.svelte";
+  import Home from "./views/Home.svelte";
   import Namespaces from "./views/Namespaces.svelte";
   import PoolStatistics from "./views/PoolStatistics.svelte";
   import Refused from "./views/Refused.svelte";
@@ -59,16 +60,6 @@
   const workflowStatistics = $derived(
     route.kind === "namespace" && route.view === "workflows" && route.workflow !== undefined && route.tab === "statistics" && known && !!session.me && holdsSomewhereIn(session.me, "run:read", route.namespace),
   );
-
-  // The address with nothing after the console's root opens the caller's own namespace.
-  $effect(() => {
-    if (session.standing === "signed-in" && session.me && route.kind === "landing") {
-      const ns = home(session.me, session.namespaces);
-      if (ns) {
-        place.go({ kind: "namespace", namespace: ns, view: "runs" }, true);
-      }
-    }
-  });
 
   // The console's own keys, beside those of the view drawn: a digit for each view of the top bar,
   // in its order there, as agk console numbers its views, and ? for every key of the view.
@@ -147,6 +138,8 @@
         <Settings {api} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "statistics"}
         <Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
+      {:else if route.kind === "landing"}
+        <Home {api} {place} me={session.me} namespaces={session.namespaces} />
       {:else if route.kind === "account"}
         <Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />
       {:else if route.kind === "users" && session.me.admin}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Me, Namespace } from "../src/api/client";
-import { holds, holdsSomewhereIn, home, inNamespace, ordered } from "../src/lib/permissions";
+import { holds, holdsSomewhereIn, inNamespace, ordered } from "../src/lib/permissions";
 
 const me = (permissions: Me["permissions"], principal = "alice"): Me => ({ principal, admin: false, groups: [], permissions, notifications: [] });
 
@@ -42,11 +42,5 @@ describe("the namespace switcher", () => {
     expect(own?.name).toBe("alice");
     expect(shared.map((n) => n.name)).toEqual(["finance", "zeta"]);
     expect(personal.map((n) => n.name)).toEqual(["bob"]);
-  });
-
-  it("opens on the caller's own namespace, or a service account's, or the first it reads", () => {
-    expect(home(me({}), namespaces)).toBe("alice");
-    expect(home({ ...me({}, "finance/nightly-sync"), service_account: { kind: "service_account", namespace: "finance", name: "nightly-sync", created_by: "alice", created_at: "2026-09-27T09:05:00Z" } }, [])).toBe("finance");
-    expect(home(me({}, "carol"), namespaces)).toBe("finance");
   });
 });
