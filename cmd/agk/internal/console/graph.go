@@ -246,6 +246,27 @@ func portRole(port string) role {
 	return muted
 }
 
+// along is the step an edge leads to from step: forward, the first step in running order that needs
+// it, and back, the first step it needs as it declares them; nothing at either end of the graph.
+func (g *flowGraph) along(step string, forward bool) string {
+	if !forward {
+		for _, n := range g.Steps[step].Needs {
+			if _, ok := g.Steps[n.Step]; ok {
+				return n.Step
+			}
+		}
+		return ""
+	}
+	for _, other := range g.Order {
+		for _, n := range g.Steps[other].Needs {
+			if n.Step == step {
+				return other
+			}
+		}
+	}
+	return ""
+}
+
 // graphStep is the step chosen in the graph, the inspector's own.
 func (m Model) graphStep() string {
 	if m.graph == nil || len(m.graph.Order) == 0 {

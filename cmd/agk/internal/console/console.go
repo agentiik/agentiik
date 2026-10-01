@@ -708,6 +708,12 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 				}
 				m.step, m.port = m.graph.Order[i], 0
 			}
+		case "left", "h", "right", "l":
+			if m.graph != nil && len(m.graph.Order) > 0 {
+				if next := m.graph.along(m.graphStep(), key == "right" || key == "l"); next != "" {
+					m.step, m.port = next, 0
+				}
+			}
 		case "enter":
 			if m.run != nil {
 				m.step = m.graphStep()

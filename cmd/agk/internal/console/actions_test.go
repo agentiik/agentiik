@@ -128,3 +128,24 @@ func TestAReplaySaysWhatItReplays(t *testing.T) {
 		t.Errorf("a replay does not say what it replays:\n%s", s)
 	}
 }
+
+// A token narrowed to one workflow narrows the console as it narrows every request: GET
+// /api/v1/me answers what it keeps, and what it does not keep is neither offered nor asked for.
+func TestATokensScopeNarrowsTheConsole(t *testing.T) {
+	narrowed := &principal{Principal: "alice", Permissions: map[string][]string{"finance/monthly-invoicing": {"workflow:read", "run:read"}}}
+	in := &installation{me: narrowed, runs: someRuns(), envelopes: map[string]any{}}
+	m := openedOn(t, in, aFailedRun(), 160)
+	last := lastLine(m)
+	if strings.Contains(last, "c Cancel") || strings.Contains(last, "p Replay") {
+		t.Errorf("a token keeping no workflow:run is offered %q", last)
+	}
+	for _, a := range in.asked {
+		if strings.Contains(a, "/outputs/") || strings.HasSuffix(a, "/grants") || a == "/api/v1/runners" {
+			t.Errorf("a token keeping neither run:read_data nor grant:manage asked %s", a)
+		}
+	}
+	m = press(t, m, keyC, keyP, tea.KeyPressMsg{Code: '3', Text: "3"})
+	if len(in.sent) != 0 || !strings.Contains(screen(m), "you hold it nowhere") {
+		t.Errorf("a narrowed token sent %v, and its sharing shows:\n%s", in.sent, screen(m))
+	}
+}

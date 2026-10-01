@@ -190,7 +190,7 @@ func (m Model) keyLine(t theme) string {
 			written = "Drawing"
 		}
 		back := map[view]string{runsView: "Runs", runView: "Run", workflowsView: "Workflows"}[m.graphFrom]
-		keys = [][2]string{{"↑↓", "Step"}}
+		keys = [][2]string{{"↑↓", "Step"}, {"←→", "Along an edge"}}
 		if m.run != nil {
 			keys = append(keys, [2]string{"enter", "Inspect"})
 		}
@@ -244,7 +244,9 @@ func (m Model) keysListed(t theme) []string {
 	case workflowsView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the workflows"}, [2]string{"enter, g", "The graph of the workflow chosen"}, [2]string{"esc", "Back to the runs"})
 	case graphView:
-		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps, in the order the graph runs them"}, [2]string{"enter", "Open the step chosen in the inspector"},
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps, in the order the graph runs them"},
+			[2]string{"← →, h l", "Move to the step before or after the one chosen, along an edge: the first it needs, or the first that needs it"},
+			[2]string{"enter", "Open the step chosen in the inspector"},
 			[2]string{"g", "Write the graph as a list, and draw it again"}, [2]string{"esc", "Back to the view the graph was opened from"})
 	default:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"}, [2]string{"g", "The graph of the run selected"},
