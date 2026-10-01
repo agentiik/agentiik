@@ -6786,5 +6786,75 @@
         }
       ]
     }
+  },
+  "GET /api/v1/users": {
+    "status": 200,
+    "body": {
+      "users": [
+        {
+          "kind": "user",
+          "login": "alice",
+          "display_name": "Alice Martin",
+          "admin": false,
+          "suspended": false,
+          "created_at": "2026-09-20T08:05:00Z",
+          "last_sign_in_at": "2026-09-30T05:40:12Z"
+        },
+        {
+          "kind": "user",
+          "login": "bob-martin",
+          "display_name": "Bob Martin",
+          "admin": false,
+          "suspended": false,
+          "created_at": "2026-09-29T16:20:00Z"
+        },
+        {
+          "kind": "user",
+          "login": "carol",
+          "display_name": "Carol Diaz",
+          "admin": false,
+          "suspended": true,
+          "suspended_for": "no_passkey",
+          "created_at": "2026-09-21T10:00:00Z",
+          "last_sign_in_at": "2026-09-24T09:12:40Z"
+        },
+        {
+          "kind": "user",
+          "login": "dana",
+          "display_name": "Dana Okafor",
+          "admin": true,
+          "suspended": false,
+          "created_at": "2026-09-20T08:00:00Z",
+          "last_sign_in_at": "2026-09-30T06:00:02Z"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/groups": {
+    "status": 200,
+    "body": {
+      "groups": [
+        {
+          "kind": "group",
+          "name": "finance-leads",
+          "members": [
+            "alice"
+          ]
+        },
+        {
+          "kind": "group",
+          "name": "research",
+          "members": [
+            "carol",
+            "dana"
+          ]
+        },
+        {
+          "kind": "group",
+          "name": "team-ops",
+          "members": []
+        }
+      ]
+    }
   }
 }
