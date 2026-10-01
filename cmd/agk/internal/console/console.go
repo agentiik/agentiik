@@ -81,6 +81,7 @@ const (
 	runsView view = iota
 	runView
 	runnersView
+	graphView
 )
 
 // Model is the console's state, as Bubble Tea holds it between one message and the next.
@@ -133,6 +134,14 @@ type Model struct {
 	spinning  bool
 	recent    []db.ListedRun
 	recentFor string
+
+	// The graph view's: the graph of the run's workflow, read for graphFor, or why it could not be;
+	// the view it was opened from, which esc goes back to; and whether it is written as a list.
+	graph       *flowGraph
+	graphFor    string
+	graphFailed string
+	graphFrom   view
+	asList      bool
 
 	// The runners view's: the pools and the runners as last read, and the runner chosen.
 	pools       []api.Pool
@@ -235,7 +244,7 @@ func (m Model) readShown() tea.Cmd {
 	if m.view == runnersView {
 		return m.readFleet()
 	}
-	if m.view == runView {
+	if m.view == runView || m.view == graphView {
 		run := m.selected
 		return func() tea.Msg {
 			var d db.RunDetail
@@ -350,7 +359,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recentFor = string(m.run.Run)
 			cmds = append(cmds, m.readRecent())
 		}
-		if m.view == runView && (m.run == nil || !m.run.State.Terminal()) {
+		if m.view == graphView && m.run != nil && m.graphFor != workflowKey(m.run) {
+			m.graphFor, m.graph, m.graphFailed = workflowKey(m.run), nil, ""
+			cmds = append(cmds, m.readWorkflow())
+		}
+		if (m.view == runView || m.view == graphView) && (m.run == nil || !m.run.State.Terminal()) {
 			cmds = append(cmds, m.later())
 		}
 		if m.view == runView && m.me.Admin && m.runners == nil {
@@ -358,6 +371,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.readChosen())
 		return m, tea.Batch(cmds...)
+	case workflowRead:
+		if msg.key == m.graphFor {
+			if msg.err != nil {
+				m.graphFailed = said(msg.err)
+			} else {
+				m.graph, m.graphFailed = msg.graph, ""
+			}
+		}
 	case recentRead:
 		if m.run != nil && msg.run == string(m.run.Run) {
 			m.recent = msg.runs
@@ -466,6 +487,30 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.view == graphView {
+		switch key {
+		case "esc":
+			return m.showing(m.graphFrom)
+		case "g":
+			m.asList = !m.asList
+		case "up", "k", "down", "j":
+			if m.graph != nil && len(m.graph.Order) > 0 {
+				i := slices.Index(m.graph.Order, m.graphStep())
+				if key == "up" || key == "k" {
+					i = max(0, i-1)
+				} else {
+					i = min(len(m.graph.Order)-1, i+1)
+				}
+				m.step, m.port = m.graph.Order[i], 0
+			}
+		case "enter":
+			if m.run != nil {
+				m.step = m.graphStep()
+				return m.showing(runView)
+			}
+		}
+		return m, nil
+	}
 	if m.view == runnersView {
 		switch key {
 		case "esc":
@@ -491,6 +536,11 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 				var follow tea.Cmd
 				m, follow = m.followChosen(true)
 				return m, tea.Batch(m.readChosen(), follow)
+			}
+		case "g":
+			if m.run != nil {
+				m.graphFrom = runView
+				return m.showing(graphView)
 			}
 		case "c":
 			if m.mayCancel() {
@@ -520,6 +570,11 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		m.selected = moved(m.shownRuns(), m.selected, 1)
 	case "/":
 		m.filtering = true
+	case "g":
+		if m.selected != "" {
+			m.graphFrom = runsView
+			return m.showing(graphView)
+		}
 	case "esc":
 		if m.filter != "" {
 			return m.filtered("")
@@ -535,8 +590,13 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 // showing is the console turned to another view, which is read at once: a run left behind is
 // forgotten, and opened again from the runs.
 func (m Model) showing(v view) (tea.Model, tea.Cmd) {
+	// The run and its graph are one run seen two ways, and turning between them keeps it; any
+	// other view forgets it, and it is read again once opened again.
 	if m.view == runView {
 		m = m.unfollow()
+	}
+	ofRun := func(v view) bool { return v == runView || v == graphView }
+	if ofRun(m.view) && !ofRun(v) {
 		m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
 		m.asking, m.acted, m.problem = notAsking, "", ""
 		m.recent, m.recentFor = nil, ""

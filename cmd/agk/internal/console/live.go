@@ -38,7 +38,7 @@ func (m Model) live() bool {
 	switch m.view {
 	case runsView:
 		return slices.ContainsFunc(m.shownRuns(), func(r db.ListedRun) bool { return r.State == agk.Running })
-	case runView:
+	case runView, graphView:
 		return m.run != nil && m.run.State == agk.Running
 	}
 	return false
@@ -111,8 +111,8 @@ func shardsOf(tasks []db.TaskSummary) int {
 	return 0
 }
 
-// doneBar is a bar of the shards done, ten cells wide, and how many of how many.
-func doneBar(tasks []db.TaskSummary, of int) []part {
+// doneOf counts the shards that ended, however they did.
+func doneOf(tasks []db.TaskSummary) int {
 	done := 0
 	for _, t := range tasks {
 		switch t.State {
@@ -120,6 +120,12 @@ func doneBar(tasks []db.TaskSummary, of int) []part {
 			done++
 		}
 	}
+	return done
+}
+
+// doneBar is a bar of the shards done, ten cells wide, and how many of how many.
+func doneBar(tasks []db.TaskSummary, of int) []part {
+	done := doneOf(tasks)
 	filled := done * 10 / of
 	return []part{{plain, strings.Repeat("█", filled)}, {quiet, strings.Repeat("░", 10-filled)}, {muted, fmt.Sprintf(" %d/%d done", done, of)}}
 }
