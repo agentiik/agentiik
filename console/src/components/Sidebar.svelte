@@ -5,9 +5,10 @@
   import AccountMenu from "./AccountMenu.svelte";
   import Icon from "./Icon.svelte";
   import NamespaceSwitcher from "./NamespaceSwitcher.svelte";
+  import Notifications from "./Notifications.svelte";
 
-  // The navigation, down the left of every screen: the home, the views of one namespace, what an
-  // administrator manages, and the caller's account. Its entries never move: the namespace's views are
+  // The navigation, down the left of every screen: the home and the caller's notifications, the views
+  // of one namespace, what an administrator manages, and the caller's account. Its entries never move: the namespace's views are
   // listed in one order, those of the namespace last opened while the home or the account is shown, so
   // that a menu is where it was whichever screen is open. Folded, it keeps its icons alone; in a
   // window too narrow to choose otherwise it is folded or a drawer whatever was chosen, and offers no
@@ -24,6 +25,7 @@
     onfold,
     version,
     onsignout,
+    ondismiss,
   }: {
     me: Me;
     namespaces: Namespace[];
@@ -36,6 +38,7 @@
     onfold: (value: boolean) => void;
     version: string;
     onsignout: () => void;
+    ondismiss: (id: string) => void;
   } = $props();
 
   const icon: Record<View, string> = { runs: "control-runs", workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", settings: "control-settings" };
@@ -64,6 +67,7 @@
         <Icon name="control-home" /><span class="label">Home</span>
       </a>
     </li>
+    <li><Notifications {me} {folded} {ondismiss} /></li>
   </ul>
 
   <div class="switcher">
