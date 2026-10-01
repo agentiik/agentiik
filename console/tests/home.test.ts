@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -85,7 +85,7 @@ describe("the home", () => {
   it("reads each namespace the caller reads runs in by the day, over the year", async () => {
     const { asked } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/runs, 12 months/);
+    await within(activity).findByText(/runs in 12 months/);
     const series = asked.filter((a) => a.includes("/stats/runs"));
     expect(series.map((a) => a.split("?")[0])).toEqual(["GET /api/v1/alice/stats/runs", "GET /api/v1/finance/stats/runs", "GET /api/v1/team-ops/stats/runs"]);
     for (const a of series) {
@@ -98,20 +98,31 @@ describe("the home", () => {
     expect(within(activity).getAllByRole("gridcell").length).toBe(weeks * 7 - 3);
   });
 
-  it("lists the namespaces with their last seven days, and the last runs across them", async () => {
+  it("offers the namespaces and the workflows last run, and lists the latest runs across them", async () => {
     const { asked } = open();
-    const namespaces = await screen.findByRole("region", { name: "Namespaces" });
-    expect(within(namespaces).getAllByRole("link").map((l) => l.textContent)).toEqual(["alice", "finance", "team-ops"]);
-    expect(within(namespaces).getByRole("link", { name: "finance" }).getAttribute("href")).toBe("/finance/runs");
-    const last = screen.getByRole("region", { name: "Last runs" });
+    const quick = await screen.findByRole("region", { name: "Quick access" });
+    expect(within(quick).getAllByRole("link").map((l) => l.textContent)).toEqual(["alice", "finance", "team-ops"]);
+    expect(within(quick).getByRole("link", { name: "finance" }).getAttribute("href")).toBe("/finance/runs");
+    const last = screen.getByRole("region", { name: "Latest runs" });
     expect(await within(last).findAllByText(/^finance\//)).not.toHaveLength(0);
-    expect(asked).toContain("GET /api/v1/runs?limit=10");
+    await fireEvent.click(within(quick).getByRole("button", { name: "Workflows" }));
+    expect(within(quick).getByRole("link", { name: "finance/monthly-invoicing" }).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
+    expect(asked).toContain("GET /api/v1/runs?limit=50");
+  });
+
+  it("counts what runs and awaits approval now, and lists what needs the caller", async () => {
+    const { asked } = open();
+    const cards = await screen.findByRole("list", { name: "Counts" });
+    await waitFor(() => expect(within(cards).getByText("Running").closest("li")!.textContent!.replace(/\s+/g, "")).toMatch(/^Running\d+now$/));
+    expect(asked.some((a) => a.startsWith("GET /api/v1/runs?state=waiting"))).toBe(true);
+    const attention = screen.getByRole("region", { name: "Needs your attention" });
+    expect(within(attention).getByRole("combobox", { name: "Show" })).toBeTruthy();
   });
 
   it("opens a day's runs across every namespace, as ?day= in the address, and closes it", async () => {
     const { asked, place } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/, 12 months/);
+    await within(activity).findByText(/ in 12 months/);
     const day = within(activity).getByRole("gridcell", { name: /Tuesday, 29 September 2026/ });
     await fireEvent.click(day);
     expect(place.query.get("day")).toBe("2026-09-29");
@@ -161,9 +172,9 @@ describe("the home", () => {
   it("shades by the runs that failed where asked", async () => {
     const { place } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/, 12 months/);
+    await within(activity).findByText(/ in 12 months/);
     await fireEvent.click(within(activity).getByRole("button", { name: "Failures" }));
     expect(place.query.get("by")).toBe("failures");
-    expect(await within(activity).findByText(/failures, 12 months/)).toBeTruthy();
+    expect(await within(activity).findByText(/failures in 12 months/)).toBeTruthy();
   });
 });
