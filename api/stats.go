@@ -226,19 +226,24 @@ func runSeries(ctx context.Context, wide *db.Wide, among []db.Workflow, b db.Buc
 	return buckets, overall, histogram, nil
 }
 
+// runCounts is runs counted by state, as the API writes them.
+func runCounts(runs map[string]int) statsRunCounts {
+	return statsRunCounts{
+		Queued: runs["queued"], Running: runs["running"], Waiting: runs["waiting"],
+		Succeeded: runs["succeeded"], Failed: runs["failed"], Cancelled: runs["cancelled"],
+		TimedOut: runs["timed_out"],
+	}
+}
+
 // runBuckets is what the runs came to in each of b's buckets, as the API writes it.
 func runBuckets(counted []db.RunBucket, b db.Buckets) []statsRunsBucket {
 	buckets := make([]statsRunsBucket, len(counted))
 	for i, c := range counted {
 		since := b.First.Add(time.Duration(i) * b.Width)
 		buckets[i] = statsRunsBucket{
-			Since: stamp(since),
-			Until: stamp(since.Add(b.Width - time.Nanosecond)),
-			Runs: statsRunCounts{
-				Queued: c.Runs["queued"], Running: c.Runs["running"], Waiting: c.Runs["waiting"],
-				Succeeded: c.Runs["succeeded"], Failed: c.Runs["failed"], Cancelled: c.Runs["cancelled"],
-				TimedOut: c.Runs["timed_out"],
-			},
+			Since:     stamp(since),
+			Until:     stamp(since.Add(b.Width - time.Nanosecond)),
+			Runs:      runCounts(c.Runs),
 			Duration:  percentiles(c.Duration),
 			QueueWait: percentiles(c.QueueWait),
 			Retries:   make([]statsExitCode, len(c.Retries)),

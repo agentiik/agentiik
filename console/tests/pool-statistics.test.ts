@@ -7,29 +7,7 @@ import { marks, ticks, usage } from "../src/lib/pool-stats";
 import { Session } from "../src/lib/session.svelte";
 import { answering, scenario } from "./scenario";
 
-// uPlot draws on a canvas, which a document with no browser has none of: the charts are drawn by a
-// stand-in here, as tests/statistics.test.ts says.
-vi.mock("uplot", () => {
-  class Plot {
-    over = document.createElement("div");
-    cursor: { idx: number | null } = { idx: null };
-    select = { left: 0, top: 0, width: 0, height: 0 };
-    constructor(_opts: unknown, _data: unknown, el: HTMLElement) {
-      el.appendChild(this.over);
-    }
-    setSize() {}
-    setSelect() {}
-    destroy() {}
-    posToVal() {
-      return 0;
-    }
-    valToPos() {
-      return 0;
-    }
-    static paths = { bars: () => () => null, stepped: () => () => null };
-  }
-  return { default: Plot };
-});
+vi.mock("uplot", () => import("./plot"));
 
 const at = (i: number) => new Date(Date.parse("2026-09-30T00:00:00Z") + i * 900_000).toISOString().replace(".000", "");
 

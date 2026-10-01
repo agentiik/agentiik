@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -28,6 +28,7 @@ describe("the console", () => {
     open("/finance/runs");
     expect(await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Runs" }).getAttribute("aria-current")).toBe("page");
+    await fireEvent.click(screen.getByRole("button", { name: "You, alice" }));
     expect(screen.getByText("agentiik v0.6.0")).toBeTruthy();
   });
 

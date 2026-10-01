@@ -76,6 +76,7 @@ describe("a profile", () => {
 describe("the caller's profile in the console", () => {
   it("opens from the account, and writes what was changed alone", async () => {
     const { asked, place } = open("/");
+    await fireEvent.click(await screen.findByRole("button", { name: "You, alice" }));
     await fireEvent.click(await screen.findByRole("link", { name: "Your account" }));
     expect(place.route).toEqual({ kind: "account", tab: "profile" });
     const form = await screen.findByRole("form", { name: "Your profile" });

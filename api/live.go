@@ -23,6 +23,7 @@ import (
 //	{"kind": "run", "namespace", "workflow", "run"}   a run, one of its steps or tasks, under run:read
 //	{"kind": "notifications"}                         the caller's notifications
 //	{"kind": "runners"}                               a runner or a pool, to an administrator
+//	{"kind": "activity"}                              a run anywhere, to an administrator, naming none
 //	{"kind": "all"}                                   anything: a change may have been missed
 //
 // What it names is read through the route that answers it, under that route's permissions, so that
@@ -48,6 +49,11 @@ type liveTiming struct {
 // balancer allow, and a permission revoked stops its messages within the log stream's 30 s, for
 // the reason that one stops its lines.
 var defaultLiveTiming = liveTiming{pace: 250 * time.Millisecond, ping: logKeepAlive, reauthorise: logReauthorise, write: 10 * time.Second}
+
+// changedActivity is the message telling an administrator that a run changed somewhere, which GET
+// /api/v1/stats/activity counts. It names nothing, since an administrator may read no namespace's
+// runs: what they are told is that the installation's load moved, not where.
+const changedActivity db.ChangeKind = "activity"
 
 // liveQueue is how many changes wait for one connection to take them. A connection that falls
 // further behind is told everything changed, once it catches up, rather than holding the others
@@ -245,15 +251,17 @@ func (f *liveFollower) follow(ctx context.Context, sub *liveSub) {
 			if sub.missed.Swap(false) {
 				change = db.LiveChange{Kind: db.ChangedAll}
 			}
-			message, ok := f.shown(ctx, change)
-			if !ok {
+			messages := f.shown(ctx, change)
+			if len(messages) == 0 {
 				continue
 			}
-			if message.Kind == db.ChangedAll {
-				clear(pending)
-			}
-			if !pending[liveMessage{Kind: db.ChangedAll}] {
-				pending[message] = true
+			for _, message := range messages {
+				if message.Kind == db.ChangedAll {
+					clear(pending)
+				}
+				if !pending[liveMessage{Kind: db.ChangedAll}] {
+					pending[message] = true
+				}
 			}
 			if !gathering {
 				gather.Reset(timing.pace)
@@ -271,38 +279,56 @@ func (f *liveFollower) follow(ctx context.Context, sub *liveSub) {
 	}
 }
 
-// shown is the message a change is to the caller, and false where the caller may not read it.
-func (f *liveFollower) shown(ctx context.Context, change db.LiveChange) (liveMessage, bool) {
+// shown is what a change is to the caller: none where it may read nothing of it, and for a run,
+// the run where it reads its workflow's runs and the installation's activity where it administers,
+// either or both.
+func (f *liveFollower) shown(ctx context.Context, change db.LiveChange) []liveMessage {
 	switch change.Kind {
 	case db.ChangedRun:
+		var told []liveMessage
 		over := Target{Namespace: change.Namespace, Workflow: change.Workflow}
 		reads, asked := f.reads[over]
 		if !asked {
 			var err error
-			if reads, err = f.holds(ctx, over); err != nil {
-				return liveMessage{}, false
+			if reads, err = f.holds(ctx, over); err == nil {
+				if f.reads == nil {
+					f.reads = map[Target]bool{}
+				}
+				f.reads[over] = reads
 			}
-			if f.reads == nil {
-				f.reads = map[Target]bool{}
-			}
-			f.reads[over] = reads
 		}
-		return liveMessage{Kind: db.ChangedRun, Namespace: change.Namespace, Workflow: change.Workflow, Run: change.Run}, reads
+		if reads {
+			told = append(told, liveMessage{Kind: db.ChangedRun, Namespace: change.Namespace, Workflow: change.Workflow, Run: change.Run})
+		}
+		if f.administrator(ctx) {
+			told = append(told, liveMessage{Kind: changedActivity})
+		}
+		return told
 	case db.ChangedNotifications:
-		return liveMessage{Kind: db.ChangedNotifications}, Principal(change.Recipient) == f.who
-	case db.ChangedRunners:
-		if f.administering == nil {
-			administers, err := f.administers(ctx)
-			if err != nil {
-				return liveMessage{}, false
-			}
-			f.administering = &administers
+		if Principal(change.Recipient) == f.who {
+			return []liveMessage{{Kind: db.ChangedNotifications}}
 		}
-		return liveMessage{Kind: db.ChangedRunners}, *f.administering
+	case db.ChangedRunners:
+		if f.administrator(ctx) {
+			return []liveMessage{{Kind: db.ChangedRunners}}
+		}
 	case db.ChangedAll:
-		return liveMessage{Kind: db.ChangedAll}, true
+		return []liveMessage{{Kind: db.ChangedAll}}
 	}
-	return liveMessage{}, false
+	return nil
+}
+
+// administrator is whether the caller administers the installation, as the authorizer last
+// answered it, and false where it could not answer.
+func (f *liveFollower) administrator(ctx context.Context) bool {
+	if f.administering == nil {
+		administers, err := f.administers(ctx)
+		if err != nil {
+			return false
+		}
+		f.administering = &administers
+	}
+	return *f.administering
 }
 
 // send writes one message, within the time one may take.

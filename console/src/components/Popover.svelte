@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
-  // A menu that opens under its button and closes on escape, on a click outside it, or once something
+  // A menu that opens under its button, or over it at the foot of the window, and closes on escape, on a click outside it, or once something
   // in it is chosen. The button says whether it is open, and focus returns to it on closing.
   let {
     label,
@@ -10,7 +10,8 @@
     align = "start",
     width = 260,
     block = false,
-  }: { label: string; button: Snippet; children: Snippet<[() => void]>; align?: "start" | "end"; width?: number; block?: boolean } = $props();
+    side = "bottom",
+  }: { label: string; button: Snippet; children: Snippet<[() => void]>; align?: "start" | "end"; width?: number; block?: boolean; side?: "top" | "bottom" } = $props();
 
   let open = $state(false);
   let root: HTMLElement | undefined = $state();
@@ -42,7 +43,7 @@
     {@render button()}
   </button>
   {#if open}
-    <div class="menu {align}" style:width="{width}px">
+    <div class="menu {align} {side}" style:width="{width}px">
       {@render children(close)}
     </div>
   {/if}
@@ -78,6 +79,11 @@
     border-radius: var(--radius-card);
     background: var(--raised);
     box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+  }
+
+  .menu.top {
+    top: auto;
+    bottom: calc(100% + 6px);
   }
 
   .menu.start {

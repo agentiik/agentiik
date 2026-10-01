@@ -45,7 +45,7 @@
   .notice {
     position: fixed;
     right: calc(var(--padding-page) + 8px);
-    bottom: calc(var(--bar-keyLine) + 16px);
+    bottom: calc(var(--padding-page) + 8px);
     z-index: 40;
     display: flex;
     align-items: flex-start;

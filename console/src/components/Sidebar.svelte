@@ -2,6 +2,7 @@
   import type { Me, Namespace } from "../api/client";
   import { follow, type Place } from "../lib/place.svelte";
   import type { Route, View } from "../lib/route";
+  import AccountMenu from "./AccountMenu.svelte";
   import Icon from "./Icon.svelte";
   import NamespaceSwitcher from "./NamespaceSwitcher.svelte";
 
@@ -21,6 +22,8 @@
     folded,
     foldable = true,
     onfold,
+    version,
+    onsignout,
   }: {
     me: Me;
     namespaces: Namespace[];
@@ -31,6 +34,8 @@
     folded: boolean;
     foldable?: boolean;
     onfold: (value: boolean) => void;
+    version: string;
+    onsignout: () => void;
   } = $props();
 
   const icon: Record<View, string> = { runs: "control-runs", workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", settings: "control-settings" };
@@ -41,8 +46,6 @@
     { kind: "groups" as const, label: "Groups", icon: "control-groups" },
     { kind: "namespaces" as const, label: "Namespaces", icon: "control-namespaces" },
   ];
-  // The account opens on the caller's profile, the tab a person looks for under their own name.
-  const account = { kind: "account" as const, tab: "profile" };
   const current = $derived(route.kind === "namespace" && route.namespace === namespace ? route.view : undefined);
 </script>
 
@@ -94,11 +97,7 @@
   {/if}
 
   <ul class="entries foot">
-    <li>
-      <a class="entry" class:open={route.kind === "account"} aria-current={route.kind === "account" ? "page" : undefined} href={place.href(account)} onclick={follow(place, account)} title={folded ? "Your account" : undefined}>
-        <Icon name="control-passkey" /><span class="label">Your account</span>
-      </a>
-    </li>
+    <li class="account" class:open={route.kind === "account"}><AccountMenu {me} {place} {version} {folded} {onsignout} /></li>
     {#if foldable}
       <li>
         <button class="entry" aria-pressed={folded} onclick={() => onfold(!folded)} title={folded ? "Unfold the sidebar" : undefined}>

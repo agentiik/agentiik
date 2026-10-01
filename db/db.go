@@ -174,6 +174,13 @@ const (
 	// runner serves several namespaces and its inventory is administrator only.
 	RunnerInventory Reason = "the runner inventory"
 
+	// InstallationActivity is what every namespace together is doing, counted for an administrator:
+	// the runs created and the tasks in flight, bucket by bucket, and what runs now, as counts that
+	// name no run, workflow or namespace. An administrator holds no run:read by being one, so no
+	// namespace's handle would let it count anything, and what is counted is the installation's
+	// load, which is theirs to watch as the runners are.
+	InstallationActivity Reason = "the installation's activity, counted for an administrator"
+
 	// Heartbeat is one request covering every in-flight task on one host, which is
 	// one host across however many namespaces it is working for.
 	Heartbeat Reason = "a runner's heartbeat"

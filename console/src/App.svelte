@@ -155,9 +155,7 @@
   <!-- The frame is drawn while the session is read, empty, so that nothing moves when it fills. -->
   <div class="frame" class:folded class:narrow={viewport.narrow}>
     <div class="side blank" aria-hidden="true"></div>
-    <div class="top blank" aria-hidden="true"></div>
     <main class="screen" aria-busy="true"></main>
-    <div class="keys blank" aria-hidden="true"></div>
   </div>
 {:else if session.standing === "signed-out"}
   <SignIn {api} {session} {passkeys} />
@@ -176,16 +174,14 @@
 {:else if session.me}
   <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer}>
     <div class="side" inert={viewport.narrow && !drawer}>
-      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} />
+      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} />
     </div>
     {#if viewport.narrow && drawer}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="scrim" onclick={() => (drawer = false)}></div>
     {/if}
-    <div class="top">
-      <TopBar me={session.me} {route} answering={session.answering} live={live.open} {place} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
-    </div>
     <main class="screen">
+      <TopBar me={session.me} {route} answering={session.answering} live={live.open} {place} ondismiss={(id) => session.dismiss(id)} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
         <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} shares={holds(session.me, "grant:manage", route.namespace, route.workflow)} />
       {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
@@ -226,16 +222,16 @@
         <Refused />
       {/if}
     </main>
-    <div class="keys"><KeyLine {keys} {version} /></div>
   </div>
+  <KeyLine {keys} />
 {/if}
 
 <style>
   .frame {
     display: grid;
     grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-    grid-template-rows: var(--bar-top) minmax(0, 1fr) var(--bar-keyLine);
-    grid-template-areas: "side top" "side screen" "side keys";
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "side screen";
     height: 100%;
   }
 
@@ -248,30 +244,12 @@
     min-height: 0;
   }
 
-  .top {
-    grid-area: top;
-  }
-
-  .keys {
-    grid-area: keys;
-  }
-
   .frame > .screen {
     grid-area: screen;
   }
 
   .side.blank {
     border-right: var(--border-hairline) solid var(--line);
-    background: var(--surface);
-  }
-
-  .top.blank {
-    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
-    background: var(--surface);
-  }
-
-  .keys.blank {
-    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
     background: var(--surface);
   }
 
@@ -282,21 +260,28 @@
     scrollbar-gutter: stable;
   }
 
+  /* A screen whose last block takes the height the window has left, a workflow's graph beside its
+     step, is laid out as a column, from 1100px where the two sit side by side. */
+  @media (min-width: 1100px) {
+    .screen:has(> :global(.fills)) {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .screen:has(> :global(.fills)) > :global(*) {
+      flex-shrink: 0;
+    }
+  }
+
   .alone {
     max-width: 480px;
     margin: 18vh auto 0;
   }
 
-  /* Under 760px the screen takes the window's whole width, the sidebar opens over it as a drawer, and
-     the key line is not drawn, since the keys it names are a keyboard's. */
+  /* Under 760px the screen takes the window's whole width, and the sidebar opens over it as a drawer. */
   .frame.narrow {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--bar-top) minmax(0, 1fr);
-    grid-template-areas: "top" "screen";
-  }
-
-  .frame.narrow .keys {
-    display: none;
+    grid-template-areas: "screen";
   }
 
   .frame.narrow .side {

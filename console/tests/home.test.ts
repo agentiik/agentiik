@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -6,6 +6,8 @@ import { added, boundsOf, dayOf, grid, mondayOf, months, none, said, shades, wee
 import { Place } from "../src/lib/place.svelte";
 import { Session } from "../src/lib/session.svelte";
 import { answering, scenario } from "./scenario";
+
+vi.mock("uplot", () => import("./plot"));
 
 const now = Date.parse("2026-10-01T06:02:30Z"); // a Thursday
 
@@ -63,9 +65,9 @@ describe("a year of activity", () => {
   });
 });
 
-function open(search = "") {
+function open(search = "", who: "alice" | "dana" = "alice") {
   const asked: string[] = [];
-  const api = connect("http://stand-in/", answering(scenario("alice"), asked));
+  const api = connect("http://stand-in/", answering(scenario(who), asked));
   const place = new Place({ pathname: "/", search, baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
   render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
   return { asked, place };
@@ -85,7 +87,7 @@ describe("the home", () => {
   it("reads each namespace the caller reads runs in by the day, over the year", async () => {
     const { asked } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/runs, 12 months/);
+    await within(activity).findByText(/runs in 12 months/);
     const series = asked.filter((a) => a.includes("/stats/runs"));
     expect(series.map((a) => a.split("?")[0])).toEqual(["GET /api/v1/alice/stats/runs", "GET /api/v1/finance/stats/runs", "GET /api/v1/team-ops/stats/runs"]);
     for (const a of series) {
@@ -98,20 +100,34 @@ describe("the home", () => {
     expect(within(activity).getAllByRole("gridcell").length).toBe(weeks * 7 - 3);
   });
 
-  it("lists the namespaces with their last seven days, and the last runs across them", async () => {
+  it("lists the namespaces, the workflows last run, and the latest runs across them by the day", async () => {
     const { asked } = open();
-    const namespaces = await screen.findByRole("region", { name: "Namespaces" });
-    expect(within(namespaces).getAllByRole("link").map((l) => l.textContent)).toEqual(["alice", "finance", "team-ops"]);
-    expect(within(namespaces).getByRole("link", { name: "finance" }).getAttribute("href")).toBe("/finance/runs");
-    const last = screen.getByRole("region", { name: "Last runs" });
+    const spaces = await screen.findByRole("region", { name: "Namespaces" });
+    expect(within(spaces).getAllByRole("link").map((l) => l.textContent)).toEqual(["alice", "finance", "team-ops"]);
+    expect(within(spaces).getByRole("link", { name: "finance" }).getAttribute("href")).toBe("/finance/runs");
+    const last = screen.getByRole("region", { name: "Latest runs" });
     expect(await within(last).findAllByText(/^finance\//)).not.toHaveLength(0);
-    expect(asked).toContain("GET /api/v1/runs?limit=10");
+    expect(within(last).getByRole("region", { name: "Yesterday" })).toBeTruthy();
+    const flows = screen.getByRole("region", { name: "Workflows" });
+    expect(within(flows).getByRole("link", { name: "finance/monthly-invoicing" }).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
+    expect(asked).toContain("GET /api/v1/runs?limit=50");
+  });
+
+  it("counts what runs and awaits approval now, and lists what needs the caller", async () => {
+    const { asked } = open();
+    const cards = await screen.findByRole("list", { name: "Counts" });
+    await waitFor(() => expect(within(cards).getByText("Running").closest("li")!.textContent!.replace(/\s+/g, "")).toMatch(/^Running\d+now$/));
+    expect(asked.some((a) => a.startsWith("GET /api/v1/runs?state=waiting"))).toBe(true);
+    const attention = screen.getByRole("region", { name: "Needs your attention" });
+    const show = within(attention).getByRole("group", { name: "Show" });
+    await fireEvent.click(within(show).getByRole("button", { name: "Failed" }));
+    expect(within(show).getByRole("button", { name: "Failed" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("opens a day's runs across every namespace, as ?day= in the address, and closes it", async () => {
     const { asked, place } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/, 12 months/);
+    await within(activity).findByText(/ in 12 months/);
     const day = within(activity).getByRole("gridcell", { name: /Tuesday, 29 September 2026/ });
     await fireEvent.click(day);
     expect(place.query.get("day")).toBe("2026-09-29");
@@ -137,12 +153,33 @@ describe("the home", () => {
     expect(place.query.get("day")).toBeNull();
   });
 
+  it("shows an administrator what the installation is doing, the last hour a minute at a time", async () => {
+    const { asked } = open("", "dana");
+    const installation = await screen.findByRole("region", { name: "Server activity" });
+    await within(installation).findByText("121 runs in the last hour");
+    const now = within(installation).getByRole("list", { name: "Now" });
+    const figure = (label: string) => within(now).getByText(label).parentElement!.textContent;
+    expect(figure("Runs running")).toBe("Runs running7");
+    expect(figure("Tasks running")).toBe("Tasks running17 / 24");
+    expect(figure("Runners ready")).toBe("Runners ready3 / 4");
+    expect(within(installation).getByRole("figure")).toBeTruthy();
+    const q = new URL(`http://x${asked.find((a) => a.startsWith("GET /api/v1/stats/activity"))!.slice(4)}`).searchParams;
+    expect([q.get("from"), q.get("to"), q.get("bucket")]).toEqual(["2026-10-01T05:03:00.000Z", "2026-10-01T06:03:00.000Z", "1m"]);
+  });
+
+  it("shows a user who administers nothing no figure of the installation", async () => {
+    const { asked } = open();
+    await screen.findByRole("region", { name: "Activity" });
+    expect(screen.queryByRole("region", { name: "Server activity" })).toBeNull();
+    expect(asked.some((a) => a.startsWith("GET /api/v1/stats/activity"))).toBe(false);
+  });
+
   it("shades by the runs that failed where asked", async () => {
     const { place } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/, 12 months/);
+    await within(activity).findByText(/ in 12 months/);
     await fireEvent.click(within(activity).getByRole("button", { name: "Failures" }));
     expect(place.query.get("by")).toBe("failures");
-    expect(await within(activity).findByText(/failures, 12 months/)).toBeTruthy();
+    expect(await within(activity).findByText(/failures in 12 months/)).toBeTruthy();
   });
 });
