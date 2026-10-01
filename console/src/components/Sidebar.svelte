@@ -41,7 +41,8 @@
     { kind: "groups" as const, label: "Groups", icon: "control-groups" },
     { kind: "namespaces" as const, label: "Namespaces", icon: "control-namespaces" },
   ];
-  const account = { kind: "account" as const };
+  // The account opens on the caller's profile, the tab a person looks for under their own name.
+  const account = { kind: "account" as const, tab: "profile" };
   const current = $derived(route.kind === "namespace" && route.namespace === namespace ? route.view : undefined);
 </script>
 

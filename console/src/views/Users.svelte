@@ -1,6 +1,8 @@
 <script lang="ts">
   import { refusal, type API, type Me } from "../api/client";
   import AdminTabs from "../components/AdminTabs.svelte";
+  import Avatar from "../components/Avatar.svelte";
+  import { userPhotoOf } from "../lib/profile";
   import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
   import Notice from "../components/Notice.svelte";
@@ -99,6 +101,16 @@
     });
   }
 
+  // unphoto removes a photo that should not be shown: an administrator's one say over a profile,
+  // which its user otherwise writes alone.
+  function unphoto(u: User) {
+    return act(async () => {
+      const answer = await api.DELETE("/api/v1/users/{login}/avatar", { params: { path: { login: u.login } } });
+      if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
+      await reread();
+    });
+  }
+
   // asking is the user whose removal waits on a second click, and removed the one removed last.
   let asking = $state("");
   let removed = $state("");
@@ -160,8 +172,8 @@
       <tbody>
         {#each users as u (u.login)}
           <tr>
-            <td class="term nowrap">{u.login}</td>
-            <td>{u.display_name}</td>
+            <td class="term nowrap"><span class="who"><Avatar name={u.display_name} src={userPhotoOf(u)} size={24} /><span class="login">{u.login}</span></span></td>
+            <td>{u.display_name}{#if u.title}<span class="muted title">{u.title}</span>{/if}</td>
             <td class="muted">
               {#if u.suspended}<span class="suspended">suspended{u.suspended_for === "no_passkey" ? ", holding no passkey the policy accepts" : ""}</span>{:else if u.admin}administrator{:else}user{/if}
             </td>
@@ -179,6 +191,7 @@
                     <button class="control" disabled={working} onclick={() => enrol(u)}>Enrolment link</button>
                   {/if}
                   <button class="control" disabled={working} onclick={() => recover(u)}>Recovery code</button>
+                  {#if u.avatar_updated_at}<button class="control" disabled={working} onclick={() => unphoto(u)}>Remove the photo</button>{/if}
                   <button class="control" disabled={working} onclick={() => (asking = u.login)}>Remove</button>
                 {/if}
               {/if}
@@ -282,6 +295,17 @@
 
   .end .control + .control {
     margin-left: calc(var(--unit) * 2);
+  }
+
+  .who {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--unit) * 4);
+  }
+
+  .title {
+    display: block;
+    font-size: 12.5px;
   }
 
   .suspended {
