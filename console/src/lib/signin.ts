@@ -121,7 +121,7 @@ export function wait(seconds: number | null): string {
 
 // What WebAuthn Level 3 writes as JSON, and the browser's own conversions where it has them, which
 // the ones below stand in for where it does not: the same conversions as the sign-in page's
-// codec.js, for a sign-in alone.
+// codec.js, for a sign-in and for a passkey added from a session.
 
 export interface RequestOptionsJSON {
   challenge: string;
@@ -147,9 +147,38 @@ export function requestOptions(json: RequestOptionsJSON): PublicKeyCredentialReq
   };
 }
 
-// credentialJSON is toJSON(): the browser's where it has one and it answers, else an
-// AuthenticationResponseJSON written here. The extensions' results are left empty, since the API
-// asks for none and reads none.
+export interface CreationOptionsJSON {
+  rp: PublicKeyCredentialRpEntity;
+  user: { id: string; name: string; displayName: string };
+  challenge: string;
+  pubKeyCredParams: PublicKeyCredentialParameters[];
+  timeout?: number;
+  excludeCredentials?: { type: "public-key"; id: string; transports?: AuthenticatorTransport[] }[];
+  authenticatorSelection?: AuthenticatorSelectionCriteria;
+  attestation?: AttestationConveyancePreference;
+}
+
+type WithCreationJSON = typeof PublicKeyCredential & { parseCreationOptionsFromJSON?: (json: CreationOptionsJSON) => PublicKeyCredentialCreationOptions };
+
+// creationOptions is parseCreationOptionsFromJSON(): the browser's where it has one, else a
+// registration's options with their bytes decoded and every other member as the API wrote it.
+export function creationOptions(json: CreationOptionsJSON): PublicKeyCredentialCreationOptions {
+  const own = (globalThis as unknown as { PublicKeyCredential?: WithCreationJSON }).PublicKeyCredential;
+  if (own && typeof own.parseCreationOptionsFromJSON === "function") {
+    return own.parseCreationOptionsFromJSON(json);
+  }
+  return {
+    ...json,
+    challenge: decode(json.challenge),
+    user: { ...json.user, id: decode(json.user.id) },
+    excludeCredentials: (json.excludeCredentials ?? []).map((d) => ({ ...d, id: decode(d.id) })),
+  };
+}
+
+// credentialJSON is toJSON(): the browser's where it has one and it answers, else a
+// RegistrationResponseJSON for what create() answered, or an AuthenticationResponseJSON for what
+// get() answered, written here. The extensions' results are left empty, since the API asks for none
+// and reads none.
 export function credentialJSON(credential: PublicKeyCredential): Record<string, unknown> {
   const own = credential as PublicKeyCredential & { toJSON?: () => Record<string, unknown> };
   if (typeof own.toJSON === "function") {
@@ -159,14 +188,34 @@ export function credentialJSON(credential: PublicKeyCredential): Record<string, 
       // written below, as the page does for the stand-in some password managers answer with
     }
   }
-  const r = credential.response as AuthenticatorAssertionResponse;
-  const response: Record<string, string> = {
-    clientDataJSON: encode(r.clientDataJSON),
-    authenticatorData: encode(r.authenticatorData),
-    signature: encode(r.signature),
-  };
-  if (r.userHandle) {
-    response.userHandle = encode(r.userHandle);
+  const response: Record<string, unknown> = { clientDataJSON: encode(credential.response.clientDataJSON) };
+  if ("attestationObject" in credential.response) {
+    // Each getter where the browser has it, as codec.js reads them: an older one answers the
+    // attestation object alone, which holds the rest.
+    const r = credential.response as Partial<AuthenticatorAttestationResponse> & { attestationObject: ArrayBuffer };
+    if (typeof r.getAuthenticatorData === "function") {
+      response.authenticatorData = encode(r.getAuthenticatorData());
+    }
+    if (typeof r.getTransports === "function") {
+      response.transports = r.getTransports();
+    }
+    if (typeof r.getPublicKey === "function") {
+      const key = r.getPublicKey();
+      if (key) {
+        response.publicKey = encode(key);
+      }
+    }
+    if (typeof r.getPublicKeyAlgorithm === "function") {
+      response.publicKeyAlgorithm = r.getPublicKeyAlgorithm();
+    }
+    response.attestationObject = encode(r.attestationObject);
+  } else {
+    const r = credential.response as AuthenticatorAssertionResponse;
+    response.authenticatorData = encode(r.authenticatorData);
+    response.signature = encode(r.signature);
+    if (r.userHandle) {
+      response.userHandle = encode(r.userHandle);
+    }
   }
   const json: Record<string, unknown> = { id: credential.id, rawId: encode(credential.rawId), type: credential.type, response };
   if (credential.authenticatorAttachment) {

@@ -8,11 +8,13 @@
   import type { Place } from "./lib/place.svelte";
   import type { View } from "./lib/route";
   import type { Session } from "./lib/session.svelte";
+  import Account from "./views/Account.svelte";
   import Refused from "./views/Refused.svelte";
   import Run from "./views/Run.svelte";
   import Runs from "./views/Runs.svelte";
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
   import Statistics from "./views/Statistics.svelte";
+  import Users from "./views/Users.svelte";
 
   // The console: who it is signed in as, the top bar, the screen the address names, and the key line.
   let { api, session, place, version, passkeys }: { api: API; session: Session; place: Place; version: string; passkeys: Passkeys } = $props();
@@ -94,6 +96,10 @@
         <Runs {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else if route.kind === "namespace" && route.view === "statistics"}
         <Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
+      {:else if route.kind === "account"}
+        <Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />
+      {:else if route.kind === "users" && session.me.admin}
+        <Users {api} me={session.me} />
       {:else}
         <Refused />
       {/if}
