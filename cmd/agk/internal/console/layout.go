@@ -28,6 +28,9 @@ const (
 	runsPane pane = iota
 	runPane
 	logPane
+	// portsPane is the focus on the ports of the step chosen, inside the run's pane: tab moves "in
+	// a run, steps, ports, then log", and the run's frame is the one in focus for both.
+	portsPane
 )
 
 var paneNames = map[pane]string{runsPane: "runs", runPane: "run", logPane: "log"}
@@ -154,7 +157,7 @@ func (m Model) panesLines(t theme, height int) []string {
 // paneLines is one pane framed: rounded corners, its name in its top border, the accent's border
 // when in focus, its inside on the palette's surface.
 func (m Model) paneLines(t theme, b box) []string {
-	focused := m.focus == b.pane
+	focused := m.focus == b.pane || b.pane == runPane && m.focus == portsPane
 	for y := range b.h {
 		t.pickAt(b.y+y, b.x, b.x+b.w, "pane", paneNames[b.pane])
 	}
@@ -242,11 +245,18 @@ func (m Model) foldedRuns() []part {
 	return append(parts, part{quiet, "   folded · tab"})
 }
 
-// focused moves the focus by one pane, forward or back, among those shown.
+// focused moves the focus by one, forward or back: the runs, then in a run its steps, its ports
+// and its log.
 func (m Model) focused(by int) Model {
-	shown := m.panesShown()
-	i := slices.Index(shown, m.focus)
-	m.focus = shown[(max(0, i)+by+len(shown))%len(shown)]
+	var order []pane
+	for _, p := range m.panesShown() {
+		order = append(order, p)
+		if p == runPane {
+			order = append(order, portsPane)
+		}
+	}
+	i := slices.Index(order, m.focus)
+	m.focus = order[(max(0, i)+by+len(order))%len(order)]
 	return m
 }
 
@@ -286,6 +296,15 @@ func (m Model) panePress(key string) (tea.Model, tea.Cmd, bool) {
 			}
 			m.focus = runPane
 			return m, nil, true
+		}
+	case portsPane:
+		switch key {
+		case "up", "k":
+			next, cmd := m.press("[")
+			return next, cmd, true
+		case "down", "j":
+			next, cmd := m.press("]")
+			return next, cmd, true
 		}
 	case logPane:
 		switch key {
