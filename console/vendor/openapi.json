@@ -5017,7 +5017,7 @@
           "runs"
         ],
         "summary": "List runs",
-        "description": "The runs of every workflow the caller holds run:read on, over its namespace or itself, newest first, each with its namespace, its trigger_kind and its triggered_by: where the console's runs view and a phone open. Every workflow it could list is asked about as one question, a namespace the caller holds nothing in included, so that a listing is no way of learning which namespaces and workflows exist, by what it answers or by how long it takes. Also served within one namespace as GET /api/v1/{ns}/runs, which reads the namespace from its path and no namespace from its query.",
+        "description": "The runs of every workflow the caller holds run:read on, over its namespace or itself, newest first, each with its namespace, its trigger_kind and its triggered_by, and from v0.6.0 its steps in the order they started with their verdicts and times, which the console draws as a strip: where the console's runs view and a phone open. Every workflow it could list is asked about as one question, a namespace the caller holds nothing in included, so that a listing is no way of learning which namespaces and workflows exist, by what it answers or by how long it takes. Also served within one namespace as GET /api/v1/{ns}/runs, which reads the namespace from its path and no namespace from its query.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#api"
@@ -5065,7 +5065,21 @@
                           "triggered_by": "alice",
                           "created_at": "2026-10-01T05:41:03Z",
                           "started_at": "2026-10-01T05:41:03Z",
-                          "finished_at": "2026-10-01T05:42:55Z"
+                          "finished_at": "2026-10-01T05:42:55Z",
+                          "steps": [
+                            {
+                              "step": "normalize",
+                              "verdict": "succeeded",
+                              "started_at": "2026-09-30T05:40:12Z",
+                              "finished_at": "2026-09-30T05:41:02Z"
+                            },
+                            {
+                              "step": "invoice",
+                              "verdict": "failed",
+                              "started_at": "2026-09-30T05:41:03Z",
+                              "finished_at": "2026-09-30T05:44:10Z"
+                            }
+                          ]
                         },
                         {
                           "namespace": "finance",
@@ -5076,7 +5090,8 @@
                           "trigger_kind": "webhook",
                           "triggered_by": "finance/agentiik",
                           "created_at": "2026-10-01T05:28:44Z",
-                          "started_at": "2026-10-01T05:28:45Z"
+                          "started_at": "2026-10-01T05:28:45Z",
+                          "steps": []
                         }
                       ]
                     }
@@ -5194,7 +5209,15 @@
                               "size": 212,
                               "items": 3
                             }
-                          }
+                          },
+                          "image": "ghcr.io/acme/agk-invoice@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+                          "input_ports": [
+                            "orders"
+                          ],
+                          "output_ports": [
+                            "out",
+                            "error"
+                          ]
                         },
                         {
                           "step": "archive",
@@ -5234,7 +5257,8 @@
                             }
                           }
                         }
-                      ]
+                      ],
+                      "artifacts": []
                     }
                   }
                 }
@@ -5328,7 +5352,7 @@
           "runs"
         ],
         "summary": "Replay a run",
-        "description": "Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only or a step above never ended.",
+        "description": "Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#memoisation-and-replay"
@@ -5407,7 +5431,7 @@
             "$ref": "#/components/responses/notFound"
           },
           "409": {
-            "description": "The run is not over, what its steps publish being undecided; or, from a step, the run is replayable from the start only, or a step above the one named never ended.",
+            "description": "The run is not over, what its steps publish being undecided; or, from a step, the run is replayable from the start only, or a step above the one named never ended or was cancelled with its run, and published nothing to reuse.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6754,6 +6778,230 @@
           "403": {
             "$ref": "#/components/responses/forbidden",
             "description": "A caller who is not an administrator, or a session that may only enrol."
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/outputs/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runId"
+        },
+        {
+          "$ref": "#/components/parameters/outputName"
+        }
+      ],
+      "get": {
+        "operationId": "getRunOutput",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Read a workflow output of a run",
+        "description": "The envelope a workflow output names: the one its step published on the port the output is a view of, read back from the object store and held to its digest. Recorded once the run has ended with every output it declares published, and a name the workflow does not declare is answered as an output there is nothing of yet. The envelope lives by the run's defaults.retain, so it may still be read after an output declaring a short retain or a fetch budget has lost its files, which then answer 410. Envelope contents, so it requires run:read_data on the run's workflow.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#artifact-expiry"
+        },
+        "responses": {
+          "200": {
+            "description": "The envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "envelope.schema.json"
+                },
+                "examples": {
+                  "archived": {
+                    "summary": "an output whose item carries a file",
+                    "value": {
+                      "meta": {
+                        "run_id": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                        "step": "archive",
+                        "port": "out",
+                        "attempt": 1,
+                        "count": 1,
+                        "produced_at": "2026-09-30T05:44:10.512Z"
+                      },
+                      "items": [
+                        {
+                          "id": "01JMZ8V1PB2C3D4E5F6G7H8J9K",
+                          "data": {
+                            "invoices": 211
+                          },
+                          "files": [
+                            {
+                              "name": "invoices.zip",
+                              "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
+                              "media_type": "application/zip",
+                              "size": 481233,
+                              "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "description": "No such run, or not the caller's; or no output of that name recorded, a run's outputs being recorded when it ends with every one of them published.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "absent": {
+                    "summary": "no such output yet",
+                    "value": {
+                      "error": "the run records no output of that name: a run's outputs are recorded when it ends with every one of them published"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The output's envelope existed and its bytes were purged with the run's retention: the run still shows its digest.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "purged": {
+                    "summary": "past the retention",
+                    "value": {
+                      "error": "the envelope of the output archived was purged at 2026-10-31T05:44:10Z with the run's other envelopes, past the retention its workflow declared, and its digest is all that is kept"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{uri}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/artifactUri"
+        }
+      ],
+      "get": {
+        "operationId": "getArtifact",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Fetch an artifact",
+        "description": "Fetches one artifact by the URI an envelope names it with: a redirect to a presigned URL good for 5 minutes where it has no fetch budget, so that the bytes never touch the control plane; the bytes themselves where it has one, since a redirect would spend a fetch on a client that never arrived. A fetch counts when the transfer completes, is held while it goes and given back where it does not; one held while every fetch left is being served is answered 409. Expired, or with its budget spent, it is 410 rather than 404, so that a client tells this existed and is finished from this never existed, and the run detail keeps showing it. A HEAD is answered what a GET would be, bytes aside, and spends nothing. A Range is not honoured. Requires run:read_data on the workflow of the run that published it, a run of another namespace answered as one that does not exist.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#artifact-expiry"
+        },
+        "responses": {
+          "200": {
+            "description": "The bytes of an artifact with a fetch budget, as an attachment, with nosniff; the fetch spent once they have all gone and matched their digest.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                },
+                "examples": {
+                  "bytes": {
+                    "summary": "the file, whole",
+                    "value": "PK..."
+                  }
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "Where an artifact with no fetch budget is read: a presigned URL of the object store, good for 5 minutes, which no cache may keep.",
+            "headers": {
+              "Location": {
+                "description": "The presigned URL.",
+                "schema": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "examples": {
+                  "presigned": {
+                    "summary": "a presigned URL on the installation's object store",
+                    "value": "https://agentiik.example.com/objects/finance/sha256/c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b?expires=1790815800&run=01JMZ8V1P9C4XQ7K2N4D6F8H0A&sig=4f2a"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "description": "No such artifact, never written or in a run the caller may not read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "absent": {
+                    "summary": "never written",
+                    "value": {
+                      "error": "no such thing, or not yours"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Every fetch its budget has left is being served right now; one comes back where its transfer does not complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "held": {
+                    "summary": "every fetch being served",
+                    "value": {
+                      "error": "every fetch left of that artifact is being served to somebody else, and one comes back if its transfer does not complete: ask again later"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "It existed and is finished: past its retain, or its fetches spent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "gone": {
+                    "summary": "its fetches spent",
+                    "value": {
+                      "error": "that artifact has expired or its fetches are spent: it existed, and is finished"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/unavailable"
           }
         }
       }
@@ -13682,7 +13930,21 @@
                   "triggered_by": "alice",
                   "created_at": "2026-10-01T05:41:03Z",
                   "started_at": "2026-10-01T05:41:03Z",
-                  "finished_at": "2026-10-01T05:42:55Z"
+                  "finished_at": "2026-10-01T05:42:55Z",
+                  "steps": [
+                    {
+                      "step": "normalize",
+                      "verdict": "succeeded",
+                      "started_at": "2026-09-30T05:40:12Z",
+                      "finished_at": "2026-09-30T05:41:02Z"
+                    },
+                    {
+                      "step": "invoice",
+                      "verdict": "failed",
+                      "started_at": "2026-09-30T05:41:03Z",
+                      "finished_at": "2026-09-30T05:44:10Z"
+                    }
+                  ]
                 },
                 {
                   "namespace": "finance",
@@ -13693,7 +13955,8 @@
                   "trigger_kind": "webhook",
                   "triggered_by": "finance/agentiik",
                   "created_at": "2026-10-01T05:28:44Z",
-                  "started_at": "2026-10-01T05:28:45Z"
+                  "started_at": "2026-10-01T05:28:45Z",
+                  "steps": []
                 }
               ],
               []
@@ -13713,7 +13976,21 @@
                 "triggered_by": "alice",
                 "created_at": "2026-10-01T05:41:03Z",
                 "started_at": "2026-10-01T05:41:03Z",
-                "finished_at": "2026-10-01T05:42:55Z"
+                "finished_at": "2026-10-01T05:42:55Z",
+                "steps": [
+                  {
+                    "step": "normalize",
+                    "verdict": "succeeded",
+                    "started_at": "2026-09-30T05:40:12Z",
+                    "finished_at": "2026-09-30T05:41:02Z"
+                  },
+                  {
+                    "step": "invoice",
+                    "verdict": "failed",
+                    "started_at": "2026-09-30T05:41:03Z",
+                    "finished_at": "2026-09-30T05:44:10Z"
+                  }
+                ]
               },
               {
                 "namespace": "finance",
@@ -13724,7 +14001,8 @@
                 "trigger_kind": "webhook",
                 "triggered_by": "finance/agentiik",
                 "created_at": "2026-10-01T05:28:44Z",
-                "started_at": "2026-10-01T05:28:45Z"
+                "started_at": "2026-10-01T05:28:45Z",
+                "steps": []
               }
             ]
           },
@@ -13839,7 +14117,7 @@
               "skipped",
               "cancelled"
             ],
-            "description": "Where the step stands: pending before it starts, or while it waits for another attempt; running while a shard of it is in flight; succeeded once it published its ports; failed, which continue_on_error does not change; skipped where its if was false; cancelled with its run.",
+            "description": "Where the step stands: pending before it starts, or while it waits for another attempt; running while a shard of it is in flight; succeeded once it published its ports; failed, which continue_on_error does not change; skipped where its if was false; cancelled with its run, where it was under way when the run was cancelled or timed out, a step nobody reached staying pending.",
             "examples": [
               "succeeded",
               "failed"
@@ -13885,6 +14163,42 @@
                   "items": 211
                 }
               }
+            ]
+          },
+          "image": {
+            "$ref": "wire.schema.json#/$defs/imageRef",
+            "description": "The image the step runs, by digest, as the version the run pinned resolved it: an image the file named by a tag is the digest the tag was resolved to when the version was pushed. Absent for a workflow step, which runs no container, and where the version can no longer be read.",
+            "examples": [
+              "ghcr.io/acme/agk-invoice@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0"
+            ]
+          },
+          "input_ports": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/identifier"
+            },
+            "description": "The input ports the step declares, by name, sorted: those its edges feed and those its inputs keyword feeds, each handed to a task as an envelope, empty ones included. Absent for a step that reads nothing.",
+            "examples": [
+              [
+                "orders"
+              ],
+              [
+                "customers",
+                "orders"
+              ]
+            ]
+          },
+          "output_ports": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/identifier"
+            },
+            "description": "The output ports the step declares, in the order the file writes them: each is published once, when the step ends, an empty envelope where nothing was written to it, which is what ports carries from then on.",
+            "examples": [
+              [
+                "out",
+                "error"
+              ]
             ]
           }
         }
@@ -14037,6 +14351,18 @@
                 }
               }
             ]
+          },
+          "params": {
+            "type": "object",
+            "description": "The parameters the task was dispatched with, resolved: every expression evaluated and the matrix combination in, as the container read them from /agk/params.json, a secret written as {\"secret\": name} and never as its value. An expression may carry envelope contents into them, so they are answered only to a caller holding run:read_data on the run's workflow, and otherwise left out; absent for a task never dispatched, a cache hit and a call.",
+            "examples": [
+              {
+                "currency": "EUR",
+                "vat_api_key": {
+                  "secret": "vat-api"
+                }
+              }
+            ]
           }
         }
       },
@@ -14054,7 +14380,8 @@
           "created_at",
           "replay_from_start_only",
           "steps",
-          "tasks"
+          "tasks",
+          "artifacts"
         ],
         "description": "One run whole: the record the listing gives, then what became of every part of it, its steps and each of their tasks, the envelopes they published and were handed by digest, and why it ended where nothing in its workflow ended it. Its inputs are envelope contents, answered only to a caller holding run:read_data on the run's workflow.",
         "examples": [
@@ -14109,7 +14436,15 @@
                     "size": 212,
                     "items": 3
                   }
-                }
+                },
+                "image": "ghcr.io/acme/agk-invoice@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+                "input_ports": [
+                  "orders"
+                ],
+                "output_ports": [
+                  "out",
+                  "error"
+                ]
               },
               {
                 "step": "archive",
@@ -14148,6 +14483,19 @@
                     "items": 27
                   }
                 }
+              }
+            ],
+            "artifacts": [
+              {
+                "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
+                "step": "archive",
+                "port": "out",
+                "name": "invoices.zip",
+                "media_type": "application/zip",
+                "size": 481233,
+                "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+                "status": "live",
+                "expires_at": "2026-12-29T05:44:10Z"
               }
             ]
           }
@@ -14476,6 +14824,42 @@
                 }
               ]
             ]
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/runArtifact"
+            },
+            "description": "The files the run's steps published, live or retired, by step, port and name: what each envelope's files name, with where each stands in its retention. Empty for a run that published none.",
+            "examples": [
+              [
+                {
+                  "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
+                  "step": "archive",
+                  "port": "out",
+                  "name": "invoices.zip",
+                  "media_type": "application/zip",
+                  "size": 481233,
+                  "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+                  "status": "live",
+                  "expires_at": "2026-12-29T05:44:10Z"
+                },
+                {
+                  "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/render/out/payslips.pdf",
+                  "step": "render",
+                  "port": "out",
+                  "name": "payslips.pdf",
+                  "media_type": "application/pdf",
+                  "size": 88412,
+                  "sha256": "9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+                  "status": "collected",
+                  "expires_at": "2026-10-02T05:44:10Z",
+                  "retired_at": "2026-10-01T09:12:00Z",
+                  "fetches_left": 0
+                }
+              ],
+              []
+            ]
           }
         }
       },
@@ -14580,6 +14964,136 @@
             "replay_from": "invoice"
           }
         ]
+      },
+      "runArtifact": {
+        "title": "Run artifact",
+        "type": "object",
+        "required": [
+          "uri",
+          "step",
+          "port",
+          "name",
+          "media_type",
+          "size",
+          "sha256",
+          "status",
+          "expires_at"
+        ],
+        "additionalProperties": false,
+        "description": "One file a step of the run published on a port, as its reference holds it: what the envelope's file names, and where it stands in its retention. The reference outlives the bytes, so that a file fetched past its retention answers 410 rather than 404 and the run keeps showing its name, size and digest with its collection recorded.",
+        "examples": [
+          {
+            "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
+            "step": "archive",
+            "port": "out",
+            "name": "invoices.zip",
+            "media_type": "application/zip",
+            "size": 481233,
+            "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+            "status": "live",
+            "expires_at": "2026-12-29T05:44:10Z"
+          },
+          {
+            "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/render/out/payslips.pdf",
+            "step": "render",
+            "port": "out",
+            "name": "payslips.pdf",
+            "media_type": "application/pdf",
+            "size": 88412,
+            "sha256": "9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+            "status": "collected",
+            "expires_at": "2026-10-02T05:44:10Z",
+            "retired_at": "2026-10-01T09:12:00Z",
+            "fetches_left": 0
+          }
+        ],
+        "properties": {
+          "uri": {
+            "$ref": "envelope.schema.json#/$defs/file/properties/uri",
+            "description": "The URI the envelope names it by, which GET /api/v1/artifacts/{uri} fetches it with.",
+            "examples": [
+              "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip"
+            ]
+          },
+          "step": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The step that published it.",
+            "examples": [
+              "archive"
+            ]
+          },
+          "port": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The port it was published on.",
+            "examples": [
+              "out"
+            ]
+          },
+          "name": {
+            "$ref": "envelope.schema.json#/$defs/file/properties/name",
+            "description": "Its name on that port, the last segment of its URI.",
+            "examples": [
+              "invoices.zip"
+            ]
+          },
+          "media_type": {
+            "$ref": "envelope.schema.json#/$defs/file/properties/media_type",
+            "description": "What the bytes are.",
+            "examples": [
+              "application/zip"
+            ]
+          },
+          "size": {
+            "$ref": "envelope.schema.json#/$defs/file/properties/size",
+            "description": "How many bytes it holds, kept once the bytes are gone.",
+            "examples": [
+              481233
+            ]
+          },
+          "sha256": {
+            "$ref": "envelope.schema.json#/$defs/file/properties/sha256",
+            "description": "The SHA-256 digest of its bytes, kept once the bytes are gone.",
+            "examples": [
+              "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "live",
+              "expired",
+              "collected"
+            ],
+            "description": "live while it may be fetched; expired once its duration ran out; collected once the fetches its budget allowed were spent. A retired reference is kept rather than deleted, which is what the run detail reads.",
+            "examples": [
+              "live",
+              "collected"
+            ]
+          },
+          "expires_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When it stops being fetchable, its retain capped by the namespace's max_retention_days when it was written: an output's own retain where it declares one, defaults.retain otherwise.",
+            "examples": [
+              "2026-12-29T05:44:10Z"
+            ]
+          },
+          "retired_at": {
+            "$ref": "wire.schema.json#/$defs/timestamp",
+            "description": "When it stopped being live. Absent while it is.",
+            "examples": [
+              "2026-10-01T09:12:00Z"
+            ]
+          },
+          "fetches_left": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "What remains of a fetch budget, which only a workflow output declaring retain with fetches carries. Absent where there is none.",
+            "examples": [
+              1,
+              0
+            ]
+          }
+        }
       }
     },
     "parameters": {
@@ -15202,6 +15716,37 @@
           "a line": {
             "summary": "resuming after a line",
             "value": "01JMZ8V1P9C4XQ7K2N4D6F8H0A.invoice.2.3/0/12"
+          }
+        }
+      },
+      "outputName": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "A workflow output, by the name the workflow's outputs block gives it.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/identifier"
+        },
+        "examples": {
+          "archived": {
+            "summary": "the output the archive step's port feeds",
+            "value": "archived"
+          }
+        }
+      },
+      "artifactUri": {
+        "name": "uri",
+        "in": "path",
+        "required": true,
+        "description": "The artifact's agk:// URI, as an envelope's file names it, percent-encoded as one path segment, so that a proxy in front passes %2F undecoded.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "invoices": {
+            "summary": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
+            "value": "agk%3A%2F%2Frun%2F01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Farchive%2Fout%2Finvoices.zip"
           }
         }
       }

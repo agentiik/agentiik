@@ -4,6 +4,7 @@
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
+  import StepStrip from "../components/StepStrip.svelte";
   import { between, clock, took } from "../lib/format";
   import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
@@ -146,7 +147,9 @@
         <th>State</th>
         <th>Run</th>
         <th>Workflow</th>
+        <th>Commit</th>
         <th>Trigger</th>
+        <th>Steps</th>
         <th>By</th>
         <th>Created</th>
         <th class="number">Took</th>
@@ -158,14 +161,16 @@
           <td><StatePill state={r.state} {live} /></td>
           <td class="mono id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
           <td class="mono name">{r.workflow}</td>
-          <td class="trigger"><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="mono">{r.trigger_kind}</span></td>
+          <td class="mono muted commit" title={r.commit}>{r.commit.slice(0, 7)}</td>
+          <td class="trigger" title={r.from ? `called by run ${r.from.run} at step ${r.from.step}` : undefined}><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="mono">{r.trigger_kind}</span></td>
+          <td><StepStrip steps={r.steps ?? []} {now} /></td>
           <td class="mono by">{r.triggered_by}</td>
           <td><time class="mono" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
           <td class="number mono" class:going={r.state === "running"}>{duration(r)}</td>
         </tr>
       {:else}
         {#if !list.reading && !list.refused}
-          <tr><td class="empty" colspan="7">No run {filters.state ? `in ${filters.state} ` : ""}{filters.workflow ? `of ${filters.workflow} ` : ""}was created in this span.</td></tr>
+          <tr><td class="empty" colspan="9">No run {filters.state ? `in ${filters.state} ` : ""}{filters.workflow ? `of ${filters.workflow} ` : ""}was created in this span.</td></tr>
         {/if}
       {/each}
     </tbody>

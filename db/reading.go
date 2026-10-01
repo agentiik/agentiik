@@ -79,6 +79,23 @@ type RunSummary struct {
 	FinishedAt time.Time `json:"finished_at,omitzero"`
 }
 
+// ListedRun is a run as a listing answers it: its record, and its steps in the order they started,
+// each with its verdict and when it started and ended, which a listing draws as a strip whose
+// segments are as wide as the steps took, so that where a run failed and how long each part of it
+// lasted are read before its colours are.
+type ListedRun struct {
+	RunSummary
+	Steps []StepStrip `json:"steps"`
+}
+
+// StepStrip is one step of a listed run, as its strip draws it.
+type StepStrip struct {
+	Step       agk.Step    `json:"step"`
+	Verdict    agk.Verdict `json:"verdict"`
+	StartedAt  time.Time   `json:"started_at,omitzero"`
+	FinishedAt time.Time   `json:"finished_at,omitzero"`
+}
+
 // StepSummary is one step of a run, as a screen shows it.
 type StepSummary struct {
 	Step     agk.Step    `json:"step"`
@@ -457,12 +474,12 @@ func (w *Wide) Workflows(ctx context.Context, namespace, name string) ([]Workflo
 // authorisation decision, and a missing one fails closed. There is no listing of one namespace's
 // runs that skips the question, because "a deny wins at any scope" and a deny on one workflow is
 // only in the answer where that workflow is in the question.
-func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]RunSummary, error) {
+func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]ListedRun, error) {
 	if err := q.check(); err != nil {
 		return nil, err
 	}
 	if len(among) == 0 {
-		return []RunSummary{}, nil
+		return []ListedRun{}, nil
 	}
 	namespaces := make([]string, len(among))
 	names := make([]string, len(among))
@@ -482,7 +499,61 @@ func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]RunSum
 	if err != nil {
 		return nil, fmt.Errorf("db: the runs could not be read: %w", err)
 	}
-	return summaries(rows)
+	listed, err := summaries(rows)
+	if err != nil {
+		return nil, err
+	}
+	return w.strips(ctx, listed)
+}
+
+// strips reads the steps of the runs a page lists, in one question for the page: each run's steps
+// in the order they started, those not started after them by name, since a listing reads no graph
+// to order them by.
+func (w *Wide) strips(ctx context.Context, listed []RunSummary) ([]ListedRun, error) {
+	out := make([]ListedRun, len(listed))
+	at := make(map[string]int, len(listed))
+	namespaces := make([]string, len(listed))
+	runs := make([]string, len(listed))
+	for i, r := range listed {
+		out[i] = ListedRun{RunSummary: r, Steps: []StepStrip{}}
+		at[r.Namespace+"/"+string(r.Run)] = i
+		namespaces[i], runs[i] = r.Namespace, string(r.Run)
+	}
+	if len(listed) == 0 {
+		return out, nil
+	}
+	rows, err := w.tx.Query(ctx, `
+		select namespace, run_id::text, step, state, started_at, finished_at
+		from steps
+		where (namespace, run_id::text) in (select * from unnest($1::text[], $2::text[]))
+		order by namespace, run_id, started_at nulls last, step`, namespaces, runs)
+	if err != nil {
+		return nil, fmt.Errorf("db: the steps of the runs listed could not be read: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var namespace, run, verdict string
+		var s StepStrip
+		var started, finished *time.Time
+		if err := rows.Scan(&namespace, &run, &s.Step, &verdict, &started, &finished); err != nil {
+			return nil, fmt.Errorf("db: a step of the runs listed could not be read: %w", err)
+		}
+		if err := s.Verdict.UnmarshalText([]byte(verdict)); err != nil {
+			return nil, err
+		}
+		if started != nil {
+			s.StartedAt = started.UTC()
+		}
+		if finished != nil {
+			s.FinishedAt = finished.UTC()
+		}
+		i, ok := at[namespace+"/"+run]
+		if !ok {
+			continue
+		}
+		out[i].Steps = append(out[i].Steps, s)
+	}
+	return out, rows.Err()
 }
 
 // ErrNoOutput is no output of that name recorded on the run: the workflow declares none, or the
