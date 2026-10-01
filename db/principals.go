@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -39,8 +40,11 @@ var ErrOwnsNamespace = errors.New("db: that principal owns a namespace")
 
 // User is a local account, and nothing it proves itself with.
 type User struct {
-	Login       string
-	DisplayName string
+	Login string
+
+	// Email is the address an administrator gave the user, for the people they work with to reach
+	// them by, and empty where none was given. Nothing sends anything to it.
+	Email string
 
 	// Admin is a platform administrator, which grants no run:read_data anywhere.
 	Admin bool
@@ -52,7 +56,8 @@ type User struct {
 	// where it is not suspended or was suspended for no reason recorded.
 	SuspendedFor string
 
-	// Profile is what the user says of themself, set by them alone.
+	// Profile is what the user says of themself, theirs to write, save the given and family names
+	// an administrator may give at the creation.
 	Profile
 
 	// AvatarUpdatedAt is when the user's photo was last set, and zero where they have none. The
@@ -63,9 +68,26 @@ type User struct {
 	LastSignInAt time.Time
 }
 
-// Profile is what a user says of themself beside their display name, each field empty where it is
-// left unsaid: their given and family names, what they do, where they are, the IANA time zone they
-// work in, and a line about themself.
+// DisplayName is the name people read for the user: their given name and their family name, each
+// trimmed of the spaces at its ends and joined by one space, either alone where only one is said,
+// and their login where neither is. Nobody writes it, so that it never says otherwise than the names
+// the user writes.
+func (u User) DisplayName() string {
+	given, family := strings.TrimSpace(u.GivenName), strings.TrimSpace(u.FamilyName)
+	switch {
+	case given != "" && family != "":
+		return given + " " + family
+	case given != "":
+		return given
+	case family != "":
+		return family
+	}
+	return u.Login
+}
+
+// Profile is what a user says of themself, each field empty where it is left unsaid: their given and
+// family names, which their display name is made of, what they do, where they are, the IANA time
+// zone they work in, and a line about themself.
 type Profile struct {
 	GivenName  string
 	FamilyName string
@@ -75,13 +97,15 @@ type Profile struct {
 	Bio        string
 }
 
-// CreateUser writes a user and the principal it is, in one statement.
+// CreateUser writes a user and the principal it is, in one statement: their login, their given and
+// family names and email address where an administrator gave them, and whether they administer or
+// are suspended. The rest of the profile starts empty, the user's own to write.
 func (w *Wide) CreateUser(ctx context.Context, u User) error {
 	_, err := w.tx.Exec(ctx,
 		`with p as (insert into principals (id, kind) values ($1, 'user') returning id)
-		 insert into users (login, display_name, admin, suspended)
-		 select id, $2, $3, $4 from p`,
-		u.Login, u.DisplayName, u.Admin, u.Suspended)
+		 insert into users (login, given_name, family_name, email, admin, suspended)
+		 select id, $2, $3, $4, $5, $6 from p`,
+		u.Login, u.GivenName, u.FamilyName, u.Email, u.Admin, u.Suspended)
 	return principalCreated(err, "user", u.Login)
 }
 
@@ -104,14 +128,16 @@ func principalCreated(err error, what, name string) error {
 }
 
 // userColumns are what a user is read with, the photo's bytes left out: a listing of every user
-// would otherwise carry every photo, which nobody reading it shows.
-const userColumns = `login, display_name, admin, suspended, coalesce(suspended_for, ''),
+// would otherwise carry every photo, which nobody reading it shows. display_name is not among them:
+// what an administrator wrote there before v0.6.0 is kept and read by nothing, the display name
+// being made of the given and family names (User.DisplayName, migration 0068).
+const userColumns = `login, email, admin, suspended, coalesce(suspended_for, ''),
 	given_name, family_name, title, location, timezone, bio, avatar_updated_at, created_at, last_sign_in_at`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
 	var signedIn, avatarAt *time.Time
-	err := row.Scan(&u.Login, &u.DisplayName, &u.Admin, &u.Suspended, &u.SuspendedFor,
+	err := row.Scan(&u.Login, &u.Email, &u.Admin, &u.Suspended, &u.SuspendedFor,
 		&u.GivenName, &u.FamilyName, &u.Title, &u.Location, &u.Timezone, &u.Bio, &avatarAt, &u.CreatedAt, &signedIn)
 	if signedIn != nil {
 		u.LastSignInAt = *signedIn
@@ -167,14 +193,15 @@ func (w *Wide) Users(ctx context.Context) ([]User, error) {
 	return users, nil
 }
 
-// UpdateUser writes what an administrator and the authentication policy change of a user: the
-// display name, whether they administer, and whether they are suspended, and why. The login never
-// changes, since it is also the name of their personal namespace, and the profile and the photo are
-// left as they are, being the user's own to write (UpdateProfile, SetAvatar).
+// UpdateUser writes what an administrator and the authentication policy change of a user: whether
+// they administer, and whether they are suspended, and why. The login never changes, since it is
+// also the name of their personal namespace; the email address is written on its own (SetEmail);
+// and the profile and the photo are left as they are, being the user's own to write (UpdateProfile,
+// SetAvatar).
 func (w *Wide) UpdateUser(ctx context.Context, u User) error {
 	tag, err := w.tx.Exec(ctx,
-		`update users set display_name = $2, admin = $3, suspended = $4, suspended_for = $5 where login = $1`,
-		u.Login, u.DisplayName, u.Admin, u.Suspended, nilIfEmpty(u.SuspendedFor))
+		`update users set admin = $2, suspended = $3, suspended_for = $4 where login = $1`,
+		u.Login, u.Admin, u.Suspended, nilIfEmpty(u.SuspendedFor))
 	if err != nil {
 		return fmt.Errorf("db: user %s could not be written: %w", u.Login, err)
 	}
@@ -184,16 +211,28 @@ func (w *Wide) UpdateUser(ctx context.Context, u User) error {
 	return nil
 }
 
-// UpdateProfile writes what a user says of themself: their display name and their profile, every
-// field of it, the empty string clearing one. A login no user holds is ErrNoPrincipal.
-func (w *Wide) UpdateProfile(ctx context.Context, login, displayName string, p Profile) error {
+// UpdateProfile writes what a user says of themself: their profile, every field of it, the empty
+// string clearing one. A login no user holds is ErrNoPrincipal.
+func (w *Wide) UpdateProfile(ctx context.Context, login string, p Profile) error {
 	tag, err := w.tx.Exec(ctx,
-		`update users set display_name = $2, given_name = $3, family_name = $4, title = $5, location = $6,
-		        timezone = $7, bio = $8
+		`update users set given_name = $2, family_name = $3, title = $4, location = $5, timezone = $6, bio = $7
 		  where login = $1`,
-		login, displayName, p.GivenName, p.FamilyName, p.Title, p.Location, p.Timezone, p.Bio)
+		login, p.GivenName, p.FamilyName, p.Title, p.Location, p.Timezone, p.Bio)
 	if err != nil {
 		return fmt.Errorf("db: the profile of %s could not be written: %w", login, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrNoPrincipal, login)
+	}
+	return nil
+}
+
+// SetEmail writes the email address an administrator gives a user, the empty string removing it. A
+// login no user holds is ErrNoPrincipal.
+func (w *Wide) SetEmail(ctx context.Context, login, email string) error {
+	tag, err := w.tx.Exec(ctx, `update users set email = $2 where login = $1`, login, email)
+	if err != nil {
+		return fmt.Errorf("db: the email address of %s could not be written: %w", login, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: %s", ErrNoPrincipal, login)

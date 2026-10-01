@@ -134,9 +134,9 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 	in.exec(t, `insert into namespaces (name) values ('finance')`)
 	err = pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, u := range []db.User{
-			{Login: "alice", DisplayName: "Alice"}, {Login: "bob", DisplayName: "Bob"},
-			{Login: "carol", DisplayName: "Carol"}, {Login: "dave", DisplayName: "Dave", Suspended: true},
-			{Login: "erin", DisplayName: "Erin"},
+			{Login: "alice", Profile: db.Profile{GivenName: "Alice"}}, {Login: "bob", Profile: db.Profile{GivenName: "Bob"}},
+			{Login: "carol", Profile: db.Profile{GivenName: "Carol"}}, {Login: "dave", Profile: db.Profile{GivenName: "Dave"}, Suspended: true},
+			{Login: "erin", Profile: db.Profile{GivenName: "Erin"}},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
