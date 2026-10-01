@@ -3,6 +3,7 @@
   import { refusal, type API, type Me } from "../api/client";
   import type { components } from "../api/schema";
   import FileView from "../components/FileView.svelte";
+  import Files from "../components/Files.svelte";
   import GraphCanvas from "../components/GraphCanvas.svelte";
   import Icon from "../components/Icon.svelte";
   import McpPanel from "../components/McpPanel.svelte";
@@ -23,7 +24,7 @@
   // it, with the state of a run laid over it: the one the address names, or the workflow's latest,
   // read again while it runs. Beside the graph, the step chosen as it resolved, or the file it was
   // written in, each selecting the other.
-  // tab is the page's: its graph where it names none, or the tools it publishes.
+  // tab is the page's: its graph where it names none, its files, or the tools it publishes.
   let { api, place, me, namespace, workflow, tab }: { api: API; place: Place; me: Me; namespace: string; workflow: string; tab?: string } = $props();
 
   type Detail = components["schemas"]["workflowDetail"];
@@ -70,7 +71,8 @@
   }
 
   // The run laid over the graph, read again every five seconds while it has not ended.
-  const shownRun = $derived(place.query.get("run") ?? latest);
+  // None on the files or the tools, which draw no run.
+  const shownRun = $derived(tab === "files" || tab === "mcp" ? undefined : (place.query.get("run") ?? latest));
   const reader = $derived(shownRun ? new RunReader(api, shownRun) : null);
   $effect(() => {
     const r = reader;
@@ -96,6 +98,14 @@
   // Starting a run is workflow:run's, which the button is left out without.
   const mayRun = $derived(holds(me, "workflow:run", namespace, workflow));
   let running = $state(false);
+  // The ref a run is asked for at, the head where the run form opens from the page's own button, and
+  // the ref the files are read at where it opens from theirs, so that a branch is tried on real
+  // inputs before it is merged.
+  let runRef = $state("");
+  function runAt(ref: string) {
+    runRef = ref === detail?.repository.default_branch ? "" : ref;
+    running = true;
+  }
 
   function narrow(set: Record<string, string>) {
     const q = new URLSearchParams(place.query);
@@ -119,6 +129,7 @@
   const statistics = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "statistics" });
   const graphTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow });
   const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
+  const filesTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "files" });
   const runRoute = $derived(run ? { kind: "namespace" as const, namespace, view: "runs" as const, run: run.run } : undefined);
   const now = Date.now();
 </script>
@@ -130,10 +141,15 @@
 {:else if detail}
   <nav class="sub" aria-label="{namespace}/{workflow}">
     <span class="mono where">{namespace} / {workflow}</span>
-    {#if tab === "mcp"}
+    {#if tab === "mcp" || tab === "files"}
       <a class="tab" href={place.href(graphTab)} onclick={follow(place, graphTab)}>Graph</a>
     {:else}
       <span class="tab" aria-current="page">Graph</span>
+    {/if}
+    {#if tab === "files"}
+      <span class="tab" aria-current="page">Files</span>
+    {:else}
+      <a class="tab" href={place.href(filesTab)} onclick={follow(place, filesTab)}>Files</a>
     {/if}
     <a class="tab" href={place.href(runsOf) + `?workflow=${encodeURIComponent(workflow)}`} onclick={narrowed(runsOf)}>Runs</a>
     <a class="tab" href={place.href(statistics)} onclick={follow(place, statistics)}>Statistics</a>
@@ -151,7 +167,7 @@
       {/if}
       <button class="control" aria-pressed={showHistory} onclick={() => (showHistory = !showHistory)}><Icon name="control-history" size={14} />History</button>
       {#if mayRun && graph && detail.version}
-        <button class="control primary" aria-pressed={running} onclick={() => (running = !running)}><Icon name="control-run" size={14} />Run</button>
+        <button class="control primary" aria-pressed={running} onclick={() => { runRef = ""; running = !running; }}><Icon name="control-run" size={14} />Run</button>
       {/if}
     </span>
   </nav>
@@ -210,12 +226,21 @@
   {#if running && graph && detail.version}
     <div class="runform">
       <Pane title="Run {workflow}" aside="manual, as {me.principal}">
-        <RunForm {api} {place} {namespace} {workflow} {graph} commit={detail.version.commit} onclose={() => (running = false)} />
+        {#key runRef}
+          <RunForm {api} {place} {namespace} {workflow} {graph} commit={detail.version.commit} ref={runRef} onclose={() => (running = false)} />
+        {/key}
       </Pane>
     </div>
   {/if}
 
-  {#if tab === "mcp" && graph}
+  {#if tab === "files" && detail.repository.head === null}
+    <Pane title="Files" aside="an empty repository">
+      <p class="muted">Nothing has been pushed yet: <span class="mono">{detail.repository.default_branch}</span> is born by the first push. Clone the repository, commit <span class="mono">agentiik.yaml</span> and push it, with git or with <span class="mono">agk push</span>.</p>
+      <pre class="clone mono">git clone {detail.repository.clone_url}</pre>
+    </Pane>
+  {:else if tab === "files"}
+    <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runAt} />
+  {:else if tab === "mcp" && graph}
     <Pane title="MCP" aside="what a client of this workflow sees">
       <McpPanel {graph} {namespace} {workflow} />
     </Pane>
@@ -384,5 +409,13 @@
 
   .refused {
     color: var(--failed);
+  }
+
+  .clone {
+    margin: calc(var(--unit) * 5) 0 0;
+    padding: calc(var(--unit) * 4) calc(var(--unit) * 6);
+    border-radius: var(--radius-control);
+    background: var(--sunken);
+    font-size: var(--type-identifier-size-min);
   }
 </style>
