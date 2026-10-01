@@ -260,6 +260,19 @@
     scrollbar-gutter: stable;
   }
 
+  /* A screen whose last block takes the height the window has left, a workflow's graph beside its
+     step, is laid out as a column, from 1100px where the two sit side by side. */
+  @media (min-width: 1100px) {
+    .screen:has(> :global(.fills)) {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .screen:has(> :global(.fills)) > :global(*) {
+      flex-shrink: 0;
+    }
+  }
+
   .alone {
     max-width: 480px;
     margin: 18vh auto 0;

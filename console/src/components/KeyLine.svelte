@@ -54,7 +54,7 @@
   .listing {
     position: fixed;
     right: var(--padding-page);
-    bottom: calc(var(--bar-keyLine) + var(--padding-page));
+    bottom: var(--padding-page);
     z-index: 20;
     width: 380px;
     padding: var(--padding-panel);

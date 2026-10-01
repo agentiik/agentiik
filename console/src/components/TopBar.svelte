@@ -143,9 +143,17 @@
     background: var(--raised);
   }
 
-  /* On a phone the trail keeps where the screen is and drops the way back up, which the drawer gives,
-     the installation's state keeps its dot, and the caller their face. */
-  /* On a phone it stays at the top as the screen scrolls, since it holds the way to the navigation. */
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--unit) * 5);
+    height: 32px;
+    margin: 0 0 calc(var(--unit) * 6);
+  }
+
+  /* On a phone the bar runs from one edge of the window to the other and stays at the top as the
+     screen scrolls, since it holds the way to the navigation; the trail keeps where the screen is and
+     drops the way back up, which the drawer gives, and the installation's state keeps its dot. */
   @media (max-width: 759px) {
     .bar {
       position: sticky;
@@ -176,13 +184,6 @@
     }
   }
 
-  .bar {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 5);
-    height: 32px;
-    margin: 0 0 calc(var(--unit) * 6);
-  }
 
   .trail {
     min-width: 0;

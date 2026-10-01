@@ -283,7 +283,7 @@
       <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} bind:selected={editSelected} onclose={() => narrow({ edit: null })} />
     {/await}
   {:else if graph && laid}
-    <div class="columns">
+    <div class="columns fills">
       <Pane title="Graph" aside={run ? "last run" : ""} focused>
         <!-- The run's line holds its height before the run is read, so that the canvas under it stays put. -->
         <div class="run">
@@ -476,6 +476,36 @@
   @media (max-width: 1099px) {
     .columns {
       grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* From 1100px the graph and the step take the height the window has left, however large, and what
+     either holds beyond it scrolls inside its pane; a window too short for 560px of them scrolls. */
+  @media (min-width: 1100px) {
+    .columns {
+      flex: 1 0 auto;
+      min-height: 560px;
+    }
+
+    .columns > :global(.pane) > :global(.body) {
+      flex: 1 1 0px;
+    }
+
+    .columns :global(.canvas) {
+      flex: 1 1 0px;
+    }
+
+    .columns :global(.canvas > .scroll) {
+      flex: 1 1 0px;
+      max-height: none;
+    }
+
+
+    /* The screen is then a column, whose margins add rather than fold into one another: the room
+       under what starts it is its own margin alone, as it is where the screen is not a column. */
+    .about + .columns,
+    .about + .runform {
+      margin-top: 0;
     }
   }
 </style>

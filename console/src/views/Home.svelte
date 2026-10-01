@@ -17,8 +17,8 @@
   import type { Run } from "../lib/runs.svelte";
 
   // The console's root, laid out as a forge's home is: who you are, four counts, what needs you, a
-  // year of activity and the latest runs, with quick access and, to an administrator, the server's
-  // activity beside them. Every namespace the caller reads together, since what a person looks at
+  // year of activity and the latest runs, with the namespaces and workflows to go to and, to an
+  // administrator, the server's activity beside them. Every namespace the caller reads together, since what a person looks at
   // first is what moved anywhere they work. Nothing here is a route of its own: the squares are each
   // namespace's series by the day, added together, and the runs are GET /api/v1/runs, which lists
   // every namespace's at once.
@@ -106,12 +106,11 @@
     });
   });
 
-  // What needs the caller, as the filter beside it chooses.
+  // What needs the caller, as the tabs above it choose.
   let needs = $state<"all" | "failed" | "waiting">("all");
   const attention = $derived(needs === "failed" ? failing : needs === "waiting" ? waiting : [...waiting, ...failing]);
 
-  // Quick access: the namespaces read, or the workflows the latest runs name, most recent first.
-  let quick = $state<"namespaces" | "workflows">("namespaces");
+  // The workflows the latest runs name, the one run last first.
   const workflows = $derived.by(() => {
     const seen = new Map<string, Run>();
     for (const r of recent) if (!seen.has(`${r.namespace}/${r.workflow}`)) seen.set(`${r.namespace}/${r.workflow}`, r);
@@ -184,6 +183,25 @@
 
   const runRoute = (r: Run) => ({ kind: "namespace" as const, namespace: r.namespace, view: "runs" as const, run: r.run });
   const runsOf = (ns: string) => ({ kind: "namespace" as const, namespace: ns, view: "runs" as const });
+  // The latest runs by the day they were made on, where the reader is, each day as a person names it.
+  const byDay = $derived.by(() => {
+    const groups: { day: string; name: string; runs: Run[] }[] = [];
+    for (const r of recent.slice(0, 10)) {
+      const day = new Date(r.created_at).toDateString();
+      const last = groups.at(-1);
+      if (last?.day === day) last.runs.push(r);
+      else groups.push({ day, name: dayName(r.created_at), runs: [r] });
+    }
+    return groups;
+  });
+  function dayName(at: string): string {
+    const day = new Date(at).toDateString();
+    if (day === new Date(now).toDateString()) return "Today";
+    if (day === new Date(now - 86_400_000).toDateString()) return "Yesterday";
+    return new Date(at).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  }
+  // The time of day of a run listed under its day.
+  const timeOf = (r: Run) => clock(r.created_at, Date.parse(r.created_at));
   const lasted = (r: Run) => (r.started_at ? took(Math.max(0, (r.finished_at ? Date.parse(r.finished_at) : now) - Date.parse(r.started_at))) : "");
   const weekdays = ["Mon", "", "Wed", "", "Fri", "", ""];
   const name = $derived(me.user?.display_name ?? me.principal);
@@ -201,205 +219,199 @@
   const week = $derived(together(read.map((n) => series.get(n.name)).filter((s) => s !== undefined).map((s) => lastWeek(s, now))));
 </script>
 
-<header class="profile">
-  <Avatar {name} src={photoOf(me)} size={64} />
-  <div class="who">
-    <h1>{name}</h1>
-    <p class="muted">
-      <span class="term">{me.principal}</span>
-      {#if me.user?.title}<span>{me.user.title}</span>{/if}
-      {#if me.user?.location}<span>{me.user.location}</span>{/if}
-      {#if here}<span class="term">{here}</span>{/if}
-      {#if me.admin}<span class="role">administrator</span>{/if}
-    </p>
-  </div>
-</header>
+{#snippet item(r: Run, when: string)}
+  <li>
+    <StatePill state={r.state} live={r.state === "running"} />
+    <span class="line">
+      <a class="term" href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.namespace}/{r.workflow}</a>
+      <span class="meta"><span class="code">{r.run.slice(-8)}</span> · <span class="term">{r.trigger_kind}</span> by <span class="term">{r.triggered_by}</span>{#if lasted(r)}{" · "}<span class="term">{lasted(r)}</span>{/if}</span>
+    </span>
+    <time class="when term" datetime={r.created_at} title={r.created_at}>{when}</time>
+  </li>
+{/snippet}
 
-<div class="home">
-  <div class="main">
-    <!-- Drawn at their size before the series answer, each value said once they have. -->
-    <ul class="cards" aria-label="Counts">
-      <li>
-        <span class="head"><span>Runs</span><Icon name="control-runs" size={16} /></span>
-        <span class="value term">{reading ? "\u00a0" : week.runs}</span>
-        <span class="caption">last 7 days</span>
-      </li>
-      <li>
-        <span class="head"><span>Failed</span><Icon name="state-failed" size={16} /></span>
-        <span class="value term" class:failed={!reading && week.failures > 0}>{reading ? "\u00a0" : week.failures}</span>
-        <span class="caption">last 7 days</span>
-      </li>
-      <li>
-        <span class="head"><span>Running</span><Icon name="state-running" size={16} /></span>
-        <span class="value term">{running.length}</span>
-        <span class="caption">now</span>
-      </li>
-      <li>
-        <span class="head"><span>Awaiting approval</span><Icon name="state-waiting" size={16} /></span>
-        <span class="value term" class:waiting={waiting.length > 0}>{waiting.length}</span>
-        <span class="caption">now</span>
-      </li>
-    </ul>
+<div class="dashboard">
+  <header class="profile">
+    <Avatar {name} src={photoOf(me)} size={64} />
+    <div class="who">
+      <h1>{name}</h1>
+      <p class="muted">
+        <span class="term">{me.principal}</span>
+        {#if me.user?.title}<span>{me.user.title}</span>{/if}
+        {#if me.user?.location}<span>{me.user.location}</span>{/if}
+        {#if here}<span class="term">{here}</span>{/if}
+        {#if me.admin}<span class="role">administrator</span>{/if}
+      </p>
+    </div>
+  </header>
 
-    <Pane title="Needs your attention">
-      {#snippet actions()}
-        <select class="control" bind:value={needs} aria-label="Show">
-          <option value="all">Everything</option>
-          <option value="failed">Failed, last day</option>
-          <option value="waiting">Awaiting approval</option>
-        </select>
-      {/snippet}
-      {#if attention.length === 0}
-        <p class="clear"><span class="tick"><Icon name="state-succeeded" size={24} /></span><strong>Nothing needs your attention.</strong></p>
-      {:else}
-        <ul class="feed" aria-label="Runs that need your attention">
-          {#each attention.slice(0, 8) as r (r.run)}
-            <li>
-              <StatePill state={r.state} />
-              <span class="line">
-                <a class="term" href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.namespace}/{r.workflow}</a>
-                <span class="meta"><span class="code">{r.run.slice(-8)}</span> · <span class="term">{r.trigger_kind}</span> by <span class="term">{r.triggered_by}</span></span>
-              </span>
-              <time class="when term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </Pane>
-
-    <Pane title="Activity" aside={reading ? "" : `${yearTotal} ${by === "runs" ? (yearTotal === 1 ? "run" : "runs") : yearTotal === 1 ? "failure" : "failures"} in 12 months`}>
-      {#snippet actions()}
-        <div class="by" role="group" aria-label="What shades the squares">
-          <button class="tab" aria-pressed={by === "runs"} onclick={() => shadeBy("runs")}>Runs</button>
-          <button class="tab" aria-pressed={by === "failures"} onclick={() => shadeBy("failures")}>Failures</button>
-        </div>
-      {/snippet}
-      {#if unread.length}<p class="refused" role="alert">Could not load the runs of {unread.join(", ")}.</p>{/if}
-      <div class="year" class:failures={by === "failures"}>
-        <div class="weeks" bind:this={yearBox}>
-          <div class="months" style:grid-template-columns="repeat({weeks}, var(--square))" aria-hidden="true">
-            {#each labels as m (m.column)}<span style:grid-column="{m.column + 1} / span 3">{m.name}</span>{/each}
-          </div>
-          <div class="body">
-            <div class="weekdays" aria-hidden="true">
-              {#each weekdays as w, i (i)}<span>{w}</span>{/each}
-            </div>
-            <div class="squares" role="grid" aria-label="Runs a day over the last year">
-              {#each columns as column, w (w)}
-                <div class="week" role="row">
-                  {#each column as s (s.day)}
-                    {#if s.future}
-                      <span class="square future" role="gridcell" aria-hidden="true"></span>
-                    {:else}
-                      <button
-                        class="square level-{scale.level(valueOf(s))}"
-                        class:chosen={chosen?.day === s.day}
-                        role="gridcell"
-                        title={said(s, by)}
-                        aria-label={said(s, by)}
-                        aria-selected={chosen?.day === s.day}
-                        onclick={() => choose(chosen?.day === s.day ? undefined : s.day)}
-                      ></button>
-                    {/if}
-                  {/each}
-                </div>
-              {/each}
-            </div>
-          </div>
-        </div>
-        <div class="legend" aria-hidden="true">
-          <span class="faint less">Less</span>
-          {#each [0, 1, 2, 3, 4] as l (l)}<span class="square level-{l}"></span>{/each}
-          <span class="faint">More</span>
-        </div>
-      </div>
-
-      {#if chosen}
-        <section class="day" aria-label="Runs of {chosen.day}">
-          <header>
-            <strong>{said(chosen, "runs")}</strong>
-            <button class="control" onclick={() => choose(undefined)}><Icon name="control-close" size={14} />Close</button>
-          </header>
-          {#if ofDay?.day === chosen.day}
-            <table>
-              <thead><tr><th>State</th><th>Run</th><th>Workflow</th><th>Trigger</th><th>By</th><th>Created</th><th class="number">Took</th></tr></thead>
-              <tbody>
-                {#each ofDay.runs as r (r.run)}
-                  <tr>
-                    <td><StatePill state={r.state} /></td>
-                    <td class="code"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
-                    <td class="term">{r.namespace}/{r.workflow}</td>
-                    <td class="term muted">{r.trigger_kind}</td>
-                    <td class="term">{r.triggered_by}</td>
-                    <td class="term"><time datetime={r.created_at} title={r.created_at}>{r.created_at.slice(11, 19)} UTC</time></td>
-                    <td class="term number">{lasted(r)}</td>
-                  </tr>
-                {:else}
-                  <tr><td colspan="7" class="muted">No runs</td></tr>
-                {/each}
-              </tbody>
-            </table>
-            {#if ofDay.more}<p class="faint">First 100 runs</p>{/if}
-          {:else}
-            <p class="muted" role="status">Loading</p>
-          {/if}
-        </section>
-      {/if}
-    </Pane>
-
-    <Pane title="Latest runs">
-      <ul class="feed" aria-label="Latest runs">
-        {#each recent.slice(0, 10) as r (r.run)}
+  <div class="home" class:admin={me.admin}>
+    <div class="main">
+      <div class="stack">
+        <!-- Drawn at their size before the series answer, each value said once they have. -->
+        <ul class="cards" aria-label="Counts">
           <li>
-            <StatePill state={r.state} live={r.state === "running"} />
-            <span class="line">
-              <a class="term" href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.namespace}/{r.workflow}</a>
-              <span class="meta"><span class="code">{r.run.slice(-8)}</span> · <span class="term">{r.trigger_kind}</span> by <span class="term">{r.triggered_by}</span>{#if lasted(r)}{" · "}<span class="term">{lasted(r)}</span>{/if}</span>
-            </span>
-            <time class="when term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
+            <span class="head"><span>Runs</span><Icon name="control-runs" size={16} /></span>
+            <span class="value term">{reading ? "\u00a0" : week.runs}</span>
+            <span class="caption">last 7 days</span>
           </li>
-        {:else}
-          <li class="muted">No runs</li>
-        {/each}
-      </ul>
-    </Pane>
-  </div>
+          <li>
+            <span class="head"><span>Failed</span><Icon name="state-failed" size={16} /></span>
+            <span class="value term" class:failed={!reading && week.failures > 0}>{reading ? "\u00a0" : week.failures}</span>
+            <span class="caption">last 7 days</span>
+          </li>
+          <li>
+            <span class="head"><span>Running</span><Icon name="state-running" size={16} /></span>
+            <span class="value term">{running.length}</span>
+            <span class="caption">now</span>
+          </li>
+          <li>
+            <span class="head"><span>Awaiting approval</span><Icon name="state-waiting" size={16} /></span>
+            <span class="value term" class:waiting={waiting.length > 0}>{waiting.length}</span>
+            <span class="caption">now</span>
+          </li>
+        </ul>
 
-  <aside class="side">
-    {#if me.admin}<InstallationActivity {api} />{/if}
+        <div class="attention">
+          <Pane title="Needs your attention">
+            {#snippet actions()}
+              <div class="by" role="group" aria-label="Show">
+                <button class="tab" aria-pressed={needs === "all"} onclick={() => (needs = "all")}>All</button>
+                <button class="tab" aria-pressed={needs === "failed"} onclick={() => (needs = "failed")}>Failed</button>
+                <button class="tab" aria-pressed={needs === "waiting"} onclick={() => (needs = "waiting")}>Awaiting approval</button>
+              </div>
+            {/snippet}
+            {#if attention.length === 0}
+              <p class="clear"><span class="tick"><Icon name="state-succeeded" size={24} /></span><strong>Nothing needs your attention.</strong></p>
+            {:else}
+              <ul class="feed" aria-label="Runs that need your attention">
+                {#each attention.slice(0, 10) as r (r.run)}{@render item(r, clock(r.created_at, now))}{/each}
+              </ul>
+            {/if}
+          </Pane>
+        </div>
 
-    <Pane title="Quick access">
-      <div class="segmented" role="group" aria-label="Quick access">
-        <button aria-pressed={quick === "namespaces"} onclick={() => (quick = "namespaces")}>Namespaces</button>
-        <button aria-pressed={quick === "workflows"} onclick={() => (quick = "workflows")}>Workflows</button>
+        <div class="activity">
+          <Pane title="Activity" aside={reading ? "" : `${yearTotal} ${by === "runs" ? (yearTotal === 1 ? "run" : "runs") : yearTotal === 1 ? "failure" : "failures"} in 12 months`}>
+            {#snippet actions()}
+              <div class="by" role="group" aria-label="What shades the squares">
+                <button class="tab" aria-pressed={by === "runs"} onclick={() => shadeBy("runs")}>Runs</button>
+                <button class="tab" aria-pressed={by === "failures"} onclick={() => shadeBy("failures")}>Failures</button>
+              </div>
+            {/snippet}
+            {#if unread.length}<p class="refused" role="alert">Could not load the runs of {unread.join(", ")}.</p>{/if}
+            <div class="calendar">
+              <div class="year" class:failures={by === "failures"}>
+                <div class="weeks" bind:this={yearBox}>
+                  <div class="months" style:grid-template-columns="repeat({weeks}, var(--square))" aria-hidden="true">
+                    {#each labels as m (m.column)}<span style:grid-column="{m.column + 1} / span 3">{m.name}</span>{/each}
+                  </div>
+                  <div class="body">
+                    <div class="weekdays" aria-hidden="true">
+                      {#each weekdays as w, i (i)}<span>{w}</span>{/each}
+                    </div>
+                    <div class="squares" role="grid" aria-label="Runs a day over the last year">
+                      {#each columns as column, w (w)}
+                        <div class="week" role="row">
+                          {#each column as s (s.day)}
+                            {#if s.future}
+                              <span class="square future" role="gridcell" aria-hidden="true"></span>
+                            {:else}
+                              <button
+                                class="square level-{scale.level(valueOf(s))}"
+                                class:chosen={chosen?.day === s.day}
+                                role="gridcell"
+                                title={said(s, by)}
+                                aria-label={said(s, by)}
+                                aria-selected={chosen?.day === s.day}
+                                onclick={() => choose(chosen?.day === s.day ? undefined : s.day)}
+                              ></button>
+                            {/if}
+                          {/each}
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+                <div class="legend" aria-hidden="true">
+                  <span class="faint less">Less</span>
+                  {#each [0, 1, 2, 3, 4] as l (l)}<span class="square level-{l}"></span>{/each}
+                  <span class="faint">More</span>
+                </div>
+              </div>
+            </div>
+
+            {#if chosen}
+              <section class="day" aria-label="Runs of {chosen.day}">
+                <header>
+                  <strong>{said(chosen, "runs")}</strong>
+                  <button class="control" onclick={() => choose(undefined)}><Icon name="control-close" size={14} />Close</button>
+                </header>
+                {#if ofDay?.day === chosen.day}
+                  <ul class="feed" aria-label="Runs of {chosen.day}">
+                    {#each ofDay.runs as r (r.run)}{@render item(r, timeOf(r))}{:else}<li class="muted">No runs</li>{/each}
+                  </ul>
+                  {#if ofDay.more}<p class="faint">First 100 runs</p>{/if}
+                {:else}
+                  <p class="muted" role="status">Loading</p>
+                {/if}
+              </section>
+            {/if}
+          </Pane>
+        </div>
+
+        <div class="latest">
+          <Pane title="Latest runs">
+            {#each byDay as g (g.day)}
+              <section class="group" aria-label={g.name}>
+                <h3>{g.name}</h3>
+                <ul class="feed">
+                  {#each g.runs as r (r.run)}{@render item(r, timeOf(r))}{/each}
+                </ul>
+              </section>
+            {:else}
+              <p class="muted">No runs</p>
+            {/each}
+          </Pane>
+        </div>
       </div>
-      <ul class="links">
-        {#if quick === "namespaces"}
+    </div>
+
+    {#if me.admin}
+      <div class="server"><InstallationActivity {api} /></div>
+    {/if}
+
+    <div class="places">
+      <Pane title="Namespaces">
+        <ul class="links">
           {#each read as n (n.name)}
             {@const s = series.get(n.name)}
             {@const seven = s ? lastWeek(s, now) : undefined}
             <li>
-              <Icon name="control-namespaces" size={16} />
+              <span class="tile initial" aria-hidden="true">{n.name.charAt(0).toUpperCase()}</span>
               <a class="term" href={place.href(runsOf(n.name))} onclick={follow(place, runsOf(n.name))}>{n.name}</a>
               <span class="faint">{seven ? `${seven.runs} ${seven.runs === 1 ? "run" : "runs"}` : ""}</span>
             </li>
           {:else}
             <li class="muted">No namespaces</li>
           {/each}
-        {:else}
+        </ul>
+      </Pane>
+      <Pane title="Workflows">
+        <ul class="links">
           {#each workflows as r (`${r.namespace}/${r.workflow}`)}
             <li>
-              <Icon name="control-workflows" size={16} />
+              <span class="tile" aria-hidden="true"><Icon name="control-workflows" size={14} /></span>
               <a class="term" href={place.href(workflowOf(r))} onclick={follow(place, workflowOf(r))}>{r.namespace}/{r.workflow}</a>
               <StatePill state={r.state} />
             </li>
           {:else}
             <li class="muted">No workflows</li>
           {/each}
-        {/if}
-      </ul>
-    </Pane>
-  </aside>
+        </ul>
+      </Pane>
+    </div>
+  </div>
 </div>
 
 <style>
@@ -439,21 +451,101 @@
     font-size: 12.5px;
   }
 
-  /* Two columns, as a forge's home has: what is the caller's on the left, quick access and the
-     server beside it; one above the other where the window is narrow. */
+  /* The columns follow the room the home is given, not the window: one under 1000px, the main
+     column with the server and the places beside it up to 1560px, and wider still the places on the
+     left as a forge's home has them, the main column in the middle and the server on the right. */
+  .dashboard {
+    container: home / inline-size;
+  }
+
   .home {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main" "server" "places";
     align-items: start;
     gap: calc(var(--unit) * 8);
   }
 
-  .main,
-  .side {
+  .main {
+    grid-area: main;
+    container: main / inline-size;
+    min-width: 0;
+  }
+
+  .server {
+    grid-area: server;
+    min-width: 0;
+  }
+
+  .places {
+    grid-area: places;
     display: flex;
     flex-direction: column;
     gap: calc(var(--unit) * 8);
     min-width: 0;
+  }
+
+  @container home (min-width: 1000px) {
+    .home {
+      grid-template-columns: minmax(0, 1fr) 340px;
+      grid-template-areas: "main places";
+    }
+
+    .home.admin {
+      grid-template-rows: auto 1fr;
+      grid-template-areas: "main server" "main places";
+    }
+  }
+
+  @container home (min-width: 1560px) {
+    .home {
+      grid-template-columns: 300px minmax(0, 1fr);
+      grid-template-areas: "places main";
+    }
+
+    .home.admin {
+      grid-template-columns: 300px minmax(0, 1fr) 360px;
+      grid-template-rows: auto;
+      grid-template-areas: "places main server";
+    }
+  }
+
+  /* Inside the main column, its blocks one above the other, and where it is wide enough what needs
+     the caller and the latest runs side by side under the year. */
+  .stack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "cards" "attention" "activity" "latest";
+    gap: calc(var(--unit) * 8);
+  }
+
+  .cards {
+    grid-area: cards;
+  }
+
+  .attention {
+    grid-area: attention;
+  }
+
+  .activity {
+    grid-area: activity;
+  }
+
+  .latest {
+    grid-area: latest;
+  }
+
+  .attention,
+  .latest {
+    display: grid;
+    min-width: 0;
+  }
+
+  @container main (min-width: 1100px) {
+    .stack {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-areas: "cards cards" "activity activity" "attention latest";
+    }
   }
 
   /* Four counts, each a card with its name and icon in a band over its value. */
@@ -509,11 +601,14 @@
     font-size: 12.5px;
   }
 
+  /* Nothing to show sits in the middle of its pane's height, where the pane is drawn as tall as the
+     latest runs beside it. */
   .clear {
     display: flex;
     align-items: center;
     gap: calc(var(--unit) * 6);
-    margin: calc(var(--unit) * 2) 0;
+    margin: auto 0;
+    padding: calc(var(--unit) * 2) 0;
   }
 
   .tick {
@@ -548,6 +643,20 @@
     box-shadow: none;
   }
 
+  /* The latest runs under the day they were made on. */
+  .group + .group {
+    margin-top: calc(var(--unit) * 6);
+  }
+
+  .group h3 {
+    margin: 0;
+    padding-bottom: calc(var(--unit) * 2);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
+    color: var(--muted);
+    font-size: var(--type-control-size);
+    font-weight: 500;
+  }
+
   .line {
     display: flex;
     flex-direction: column;
@@ -570,34 +679,6 @@
     white-space: nowrap;
   }
 
-  .segmented {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    margin-bottom: calc(var(--unit) * 4);
-    border: var(--border-hairline) solid var(--lineStrong);
-    border-radius: var(--radius-control);
-    overflow: hidden;
-  }
-
-  .segmented button {
-    height: var(--control-height);
-    border: none;
-    background: var(--surface);
-    color: var(--muted);
-    font-size: var(--type-control-size);
-    cursor: pointer;
-  }
-
-  .segmented button + button {
-    box-shadow: inset var(--border-hairline) 0 0 var(--lineStrong);
-  }
-
-  .segmented button[aria-pressed="true"] {
-    background: var(--sunken);
-    color: var(--text);
-    font-weight: 500;
-  }
-
   .links {
     margin: 0;
     padding: 0;
@@ -606,11 +687,36 @@
 
   .links li {
     display: grid;
-    grid-template-columns: 16px minmax(0, 1fr) auto;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
     align-items: center;
     gap: calc(var(--unit) * 4);
     min-height: 36px;
     color: var(--muted);
+  }
+
+  /* Each place is marked as the namespace switcher marks it: a namespace by its initial, a workflow
+     by its icon, on a tile the list's text starts beside. */
+  .tile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-control);
+    background: var(--sunken);
+    color: var(--muted);
+  }
+
+  .tile.initial {
+    background: var(--accentDim);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .links li.muted {
+    display: block;
+    line-height: 36px;
   }
 
   .links a {
@@ -647,7 +753,7 @@
   }
 
   .year {
-    --square: 11px;
+    --square: 10px;
     --gap: 3px;
     --shade: var(--accent);
     display: flex;
@@ -659,17 +765,57 @@
   }
 
   /* The weeks alone scroll where the year is wider than the pane, its legend staying in view, with
-     room inside for the ring of the day chosen, which the scrolling box would otherwise cut. */
+     room inside for the ring of the day chosen, which the scrolling box would otherwise cut; that
+     room sits in the pane's gutter, so that the names of the days start under the pane's title. */
   .weeks {
     display: flex;
     flex-direction: column;
     gap: calc(var(--unit) * 2);
     overflow: auto hidden;
+    margin-left: -4px;
     padding: 4px;
   }
 
   .year.failures {
     --shade: var(--failed);
+  }
+
+  /* The squares grow with the room the pane gives the year, in whole pixels, each step taken where
+     the year at that size fits: 53 weeks, the names of the days beside them and the ring's room. */
+  .calendar {
+    container: calendar / inline-size;
+  }
+
+  @container calendar (min-width: 781px) {
+    .year {
+      --square: 11px;
+    }
+  }
+
+  @container calendar (min-width: 890px) {
+    .year {
+      --square: 13px;
+    }
+  }
+
+  @container calendar (min-width: 1050px) {
+    .year {
+      --square: 15px;
+      --gap: 4px;
+    }
+  }
+
+  @container calendar (min-width: 1210px) {
+    .year {
+      --square: 18px;
+    }
+  }
+
+  @container calendar (min-width: 1420px) {
+    .year {
+      --square: 21px;
+      --gap: 5px;
+    }
   }
 
   .months {
@@ -745,11 +891,20 @@
     background: var(--shade);
   }
 
+  /* The legend's squares are one size whatever the year's, set on a line as tall as its words, so
+     that both sit on whole pixels. */
   .legend {
     display: flex;
     align-items: center;
-    gap: var(--gap);
+    gap: 3px;
+    height: 16px;
     margin-top: calc(var(--unit) * 2);
+    line-height: 16px;
+  }
+
+  .legend .square {
+    width: 12px;
+    height: 12px;
   }
 
 
@@ -788,46 +943,8 @@
     font-size: var(--type-control-size);
   }
 
-  table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  th {
-    height: var(--row-header);
-    padding: 0 calc(var(--unit) * 4);
-    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
-    color: var(--faint);
-    font-size: var(--type-columnHead-size);
-    font-weight: var(--type-columnHead-weight);
-    letter-spacing: var(--type-columnHead-tracking);
-    text-align: left;
-    text-transform: var(--type-columnHead-case);
-  }
-
-  td {
-    height: var(--row-body);
-    padding: 0 calc(var(--unit) * 4);
-    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
-    font-size: var(--type-identifier-size-max);
-    white-space: nowrap;
-  }
-
-  td a {
-    color: var(--accent);
-  }
-
-  .number {
-    text-align: right;
-  }
-
-  /* Under 1100px, where the sidebar folds, the side column goes under the main one, and the four
-     counts two by two. */
-  @media (max-width: 1099px) {
-    .home {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
+  /* The four counts two by two where the main column is narrow. */
+  @container main (max-width: 699px) {
     .cards {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }

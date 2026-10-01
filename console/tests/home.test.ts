@@ -100,15 +100,16 @@ describe("the home", () => {
     expect(within(activity).getAllByRole("gridcell").length).toBe(weeks * 7 - 3);
   });
 
-  it("offers the namespaces and the workflows last run, and lists the latest runs across them", async () => {
+  it("lists the namespaces, the workflows last run, and the latest runs across them by the day", async () => {
     const { asked } = open();
-    const quick = await screen.findByRole("region", { name: "Quick access" });
-    expect(within(quick).getAllByRole("link").map((l) => l.textContent)).toEqual(["alice", "finance", "team-ops"]);
-    expect(within(quick).getByRole("link", { name: "finance" }).getAttribute("href")).toBe("/finance/runs");
+    const spaces = await screen.findByRole("region", { name: "Namespaces" });
+    expect(within(spaces).getAllByRole("link").map((l) => l.textContent)).toEqual(["alice", "finance", "team-ops"]);
+    expect(within(spaces).getByRole("link", { name: "finance" }).getAttribute("href")).toBe("/finance/runs");
     const last = screen.getByRole("region", { name: "Latest runs" });
     expect(await within(last).findAllByText(/^finance\//)).not.toHaveLength(0);
-    await fireEvent.click(within(quick).getByRole("button", { name: "Workflows" }));
-    expect(within(quick).getByRole("link", { name: "finance/monthly-invoicing" }).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
+    expect(within(last).getByRole("region", { name: "Yesterday" })).toBeTruthy();
+    const flows = screen.getByRole("region", { name: "Workflows" });
+    expect(within(flows).getByRole("link", { name: "finance/monthly-invoicing" }).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
     expect(asked).toContain("GET /api/v1/runs?limit=50");
   });
 
@@ -118,7 +119,9 @@ describe("the home", () => {
     await waitFor(() => expect(within(cards).getByText("Running").closest("li")!.textContent!.replace(/\s+/g, "")).toMatch(/^Running\d+now$/));
     expect(asked.some((a) => a.startsWith("GET /api/v1/runs?state=waiting"))).toBe(true);
     const attention = screen.getByRole("region", { name: "Needs your attention" });
-    expect(within(attention).getByRole("combobox", { name: "Show" })).toBeTruthy();
+    const show = within(attention).getByRole("group", { name: "Show" });
+    await fireEvent.click(within(show).getByRole("button", { name: "Failed" }));
+    expect(within(show).getByRole("button", { name: "Failed" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("opens a day's runs across every namespace, as ?day= in the address, and closes it", async () => {
