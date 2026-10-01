@@ -1,0 +1,44 @@
+agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   3 Sharing                                                 1 notification  ● live
+╭─ Runs every namespace · 12 runs ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Failed, 3 of the last 12                                                                                                                                     │
+│ ● failed    01JMZ8V1P9C4XQ7K2N4D6F8H0A finance/monthly-invoicing                 manual    05:41:03  1m 52s alice          ■■□          ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● failed    01JMZ8T7B2M0QK2N4D6F8H0A2C finance/dunning-reminders                 schedule  05:30:00     22s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● timed_out 01JMZ8G4X6D2QK2N4D6F8H0A2N finance/vat-reconcile                     event     01:18:39  9m 51s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│                                                                                                                                                              │
+│ STATE       RUN                        WORKFLOW                                  TRIGGER   STARTED     TOOK BY             STEPS        LAST 20              │
+│ ⠋ running   01JMZ8W4K2R7QX6T1N3P5V7Y9A finance/monthly-invoicing                 schedule  06:00:12  1m 48s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● failed    01JMZ8V1P9C4XQ7K2N4D6F8H0A finance/monthly-invoicing                 manual    05:41:03  1m 52s alice          ■■□          ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● failed    01JMZ8T7B2M0QK2N4D6F8H0A2C finance/dunning-reminders                 schedule  05:30:00     22s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ⠋ running   01JMZ8S3H6X8QK2N4D6F8H0A2D finance/ledger-export                     webhook   05:28:45 33m 15s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● queued    01JMZ8R0D4K2QK2N4D6F8H0A2E finance/vat-reconcile                     event     05:22:10         finance/agent…              ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● succeeded 01JMZ8Q6F1T7QK2N4D6F8H0A2F finance/monthly-invoicing                 manual    04:58:31  3m 47s bruno          ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● succeeded 01JMZ8P2N8Y5QK2N4D6F8H0A2G finance/ledger-export                     webhook   04:41:09     58s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● cancelled 01JMZ8N9J3W1QK2N4D6F8H0A2H finance/vat-reconcile                     manual    04:12:55  2m 16s alice          ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● succeeded 01JMZ8M5Z7Q3QK2N4D6F8H0A2J finance/dunning-reminders                 schedule  03:30:00     41s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● succeeded 01JMZ8K1V4R9QK2N4D6F8H0A2K finance/ledger-export                     webhook   02:41:12  1m 03s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● succeeded 01JMZ8H8C0K6QK2N4D6F8H0A2M finance/monthly-invoicing                 schedule  02:00:07  4m 22s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│ ● timed_out 01JMZ8G4X6D2QK2N4D6F8H0A2N finance/vat-reconcile                     event     01:18:39  9m 51s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+↑↓ Move   enter Open   g Graph   / Filter   q Quit   ? Every key

@@ -1,0 +1,24 @@
+agentiik  every namespace  alice   1 Runs   2 Workflows   3 Sharing  1 notifica…
+▸ Runs  12 runs · 3 failed · 3 running   folded · tab
+╭─ Run ────────────────────────────────────────────────────────────────────────╮
+│ Run 01JMZ8V1P9C4XQ7K2N4D6F8H0A  finance/monthly-invoicing@a3f9c1e  ● failed  │
+│ manual · by alice · started 05:41:03 · took 1m 52s  last 11 ▃▁▁▁▁▁▁█▁▁▁  me… │
+│ failed at invoice, shard 3/8: exit 108, transient failure, attempt 2         │
+│                                                                              │
+│ STEPS 3                                                                      │
+│ ● succeeded  normalize      1s                                               │
+│ ● failed     invoice    1m 50s ■■■■■■■■ 8 shards · 1 failed                  │
+│ ● pending    archive                                                         │
+│                                                                              │
+│ invoice  ● failed  1m 50s                                                    │
+│ image   ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f5506… │
+│ shards  ██████████ 8/8 done                                                  │
+│                                                                              │
+│ SHARD  STATE      ATTEMPT  EXIT                          RUNNER              │
+│ 1/8    ● succeeded 1        exit 0, success               runner-dmz-02      │
+│ 2/8    ● succeeded 1        exit 0, success               runner-dmz-01      │
+│ 3/8    ● failed    2        exit 108, transient failure   runner-dmz-02      │
+│ 4/8    ● succeeded 1        exit 0, success               runner-dmz-01      │
+│ 5/8    ● succeeded 1        exit 0, success               runner-dmz-02      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+tab Next pane   ↑↓ Step   [] Port   g Graph   esc Runs   q Quit   ? Every key

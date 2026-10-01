@@ -1,0 +1,24 @@
+agentiik  every namespace  alice   1 Runs   2 Workflows   3 Sharing  1 notifica…
+Graph finance/monthly-invoicing@a3f9c1e  run 01JMZ8V1P9C4XQ7K2N4D6F8H0A  ● fail…
+
+inputs     customers, orders  -> normalize
+  normalize  succeeded  1s
+    ok        -> invoice    in
+    rejected  -> archive    rejected
+▸ invoice    failed     1m 50s  8 of 8 shards done  fan_out: item
+    out      -> archive    invoices
+    error    -> output     errors
+  archive    pending
+    ok       -> output     invoices
+
+
+
+
+
+
+
+
+
+
+
+↑↓ Step   ←→ Along an edge   enter Inspect   g Drawing   esc Run   q Quit   ? E…
