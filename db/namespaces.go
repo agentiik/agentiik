@@ -117,8 +117,8 @@ func (w *Wide) CreateNamespace(ctx context.Context, n Namespace) (bool, error) {
 //
 // The built-in identity goes first, with the tokens and grants it holds: it is the namespace's own
 // and nobody created it, so it is no reason to keep the namespace, and a service account refers to
-// its namespace, which could not go while it stayed. The namespace's grants and its authentication
-// policy go with the row.
+// its namespace, which could not go while it stayed. The namespace's grants, its authentication
+// policy and its variables go with the row.
 //
 // The row is locked before anything is counted, so that a workflow pushed, a secret written or a
 // service account created while the counts are read waits for this transaction and then finds the

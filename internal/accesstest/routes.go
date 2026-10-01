@@ -17,8 +17,8 @@ type Case struct {
 	Refused bool
 
 	// Makes is set where the route removes what it names and reads no body: each asking names a
-	// thing made for it by the owner of the namespace it is in, a grant, a secret, a token or a
-	// service account, removed again by its owner where the route did not remove it.
+	// thing made for it by the owner of the namespace it is in, a grant, a secret, a variable, a
+	// token or a service account, removed again by its owner where the route did not remove it.
 	Makes string
 
 	// Owned is set where the route is answered to the owners of the namespace it names, in its
@@ -44,7 +44,8 @@ type Case struct {
 // namespace's record is read "to an administrator and to a principal holding a grant in it", and
 // drain and revoke "require grant:manage at installation scope", which is what an administrator
 // holds there; a secret's declarations take workflow:read at namespace scope and writing one
-// secret:write there; a push workflow:write, and secret:use where it names a secret; recording a
+// secret:write there; a namespace's variables workflow:read at namespace scope and writing one
+// workflow:write there; a push workflow:write, and secret:use where it names a secret; recording a
 // repository's image pins and brick manifests workflow:write, and reading them workflow:read;
 // reading what a workflow has armed workflow:read, and writing a webhook's credential workflow:write;
 // starting a run and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
@@ -158,6 +159,10 @@ var Cases = []Case{
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.WorkflowRead, Scope: api.Namespace}},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.SecretWrite, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.SecretWrite, Scope: api.Namespace}, Makes: "secret"},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/variables", Permission: api.WorkflowRead, Scope: api.Namespace}},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowRead, Scope: api.Namespace}},
+	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowWrite, Scope: api.Namespace}, Refused: true},
+	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowWrite, Scope: api.Namespace}, Makes: "variable"},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/grants", Permission: api.GrantManage, Scope: api.Namespace}},
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/grants", Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true, Seeing: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/grants/{id}", Permission: api.GrantManage, Scope: api.Namespace}, Makes: "grant"},

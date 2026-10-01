@@ -190,9 +190,21 @@ func (s *Server) hear(ctx context.Context, l db.Listening, published, publisher,
 		return h, false, fmt.Errorf("api: the event trigger %d of %s/%s is armed at %s, which declares %d", l.Position, l.Namespace, l.Workflow, l.Commit, len(events))
 	}
 	e := events[l.Position]
+	// The variables the listening workflow's namespace shows it, which its filter and its map read
+	// under vars beside the file's own, and which the run it starts is handed, so that its steps
+	// read what its filter and its map read. Its own namespace's, never the publisher's.
+	var shown map[string]any
+	if err := s.pool.In(ctx, l.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		shown, err = ns.VariablesFor(ctx, l.Workflow)
+		return err
+	}); err != nil {
+		return h, false, fmt.Errorf("api: the variables %s shows %s, whose event trigger %d heard an event, could not be read: %w", l.Namespace, l.Workflow, l.Position, err)
+	}
 	fired := graph.Fired{
 		Commit: l.Commit, Trigger: map[string]any{}, Event: event,
 		TriggerKind: agk.TriggerEvent.String(), TriggeredBy: l.Namespace + "/" + db.BuiltIn,
+		Vars: shown,
 	}
 	accepted, err := g.Hears(e, fired)
 	if err != nil {
@@ -213,7 +225,7 @@ func (s *Server) hear(ctx context.Context, l db.Listening, published, publisher,
 	}
 	h.prepared, err = s.starter.Prepare(ctx, trigger.Request{
 		Namespace: l.Namespace, Workflow: l.Workflow, Kind: agk.TriggerEvent, Commit: l.Commit,
-		Inputs: filled, Context: db.TriggerContext{Event: event},
+		Inputs: filled, Context: db.TriggerContext{Event: event}, NamespaceVars: shown,
 		Detail: map[string]any{"source": source, "id": id, "published_in": published, "publisher": publisher},
 	})
 	if err != nil {

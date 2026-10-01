@@ -185,9 +185,23 @@ func (s *Server) webhook(w http.ResponseWriter, r *http.Request, _ Principal, ov
 		fail(w, http.StatusInternalServerError, "the webhook could not be read")
 		return
 	}
+	// The variables the namespace shows the workflow, which its map reads under vars beside the
+	// file's own, and which the run is handed rather than reading them again, so that its steps
+	// read what its map read.
+	var shown map[string]any
+	if err := s.pool.In(r.Context(), namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		shown, err = ns.VariablesFor(ctx, hook.Workflow)
+		return err
+	}); err != nil {
+		s.report(err)
+		fail(w, http.StatusInternalServerError, "the namespace's variables could not be read")
+		return
+	}
 	filled, err := g.Fill(webhooks[hook.Position].Map, graph.Fired{
 		Commit: hook.Commit, Trigger: fired,
 		TriggerKind: agk.TriggerWebhook.String(), TriggeredBy: namespace + "/" + db.BuiltIn,
+		Vars: shown,
 	})
 	if err == nil {
 		filled, err = asSupplied(filled)
@@ -208,7 +222,7 @@ func (s *Server) webhook(w http.ResponseWriter, r *http.Request, _ Principal, ov
 	}
 	prepared, err := s.starter.Prepare(r.Context(), trigger.Request{
 		Namespace: namespace, Workflow: hook.Workflow, Kind: agk.TriggerWebhook, Commit: hook.Commit,
-		Inputs: filled, Detail: detail, Context: db.TriggerContext{Trigger: fired},
+		Inputs: filled, Detail: detail, Context: db.TriggerContext{Trigger: fired}, NamespaceVars: shown,
 	})
 	if s.refused(w, target, hook.Commit, err) {
 		return

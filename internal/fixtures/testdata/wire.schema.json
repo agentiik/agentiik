@@ -4627,6 +4627,148 @@
         }
       ]
     },
+    "namespaceVariable": {
+      "title": "Namespace variable",
+      "description": "A variable a namespace keeps beside those its workflows' files write, read through the vars context by the workflows it is shown to as a file's own are read, a name the file writes taking the file's value. A run reads the variables shown to its workflow once, when it is created, and keeps those its file does not write, so that a controller taking it over and a replay read what it read rather than what is true now. Not a secret: the value is answered to whoever reads the namespace's workflows, kept in clear on every run that read it and masked nowhere; a credential is a secret. Written whole, one variable per request, by whoever holds workflow:write at namespace scope.",
+      "type": "object",
+      "required": [
+        "name",
+        "value",
+        "visibility",
+        "updated_by",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier",
+          "description": "The variable's name, read as vars.<name>: the grammar a workflow file's vars names its keys with, so that an expression reads either alike, at most 255 characters.",
+          "examples": [
+            "ledger_url",
+            "reminder_days"
+          ]
+        },
+        "value": {
+          "description": "Any JSON value, as a workflow file's vars holds any value YAML writes, at most 64 KiB written as compact JSON. A number keeps the way it was written: one with no fraction and no exponent is an int in an expression, and any other a double, as a number of the file or of a run's inputs is, an exponent written out with a point.",
+          "examples": [
+            "https://ledger.example.com/api",
+            30,
+            2.5,
+            [
+              7,
+              14,
+              30
+            ],
+            {
+              "currency": "EUR",
+              "rounding": "half-even"
+            },
+            null
+          ]
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "all",
+            "selected"
+          ],
+          "description": "Which workflows of the namespace read it: all, every one of them, or selected, those workflows names and no other. It says which workflows read the variable and nothing about which people may: reading the variables takes workflow:read at namespace scope whatever their visibility.",
+          "examples": [
+            "all",
+            "selected"
+          ]
+        },
+        "workflows": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier",
+            "description": "A workflow of the namespace, by the name its metadata.name writes. A name no workflow holds yet is taken, and read by the workflow created under it later.",
+            "examples": [
+              "payment-reminders",
+              "monthly-invoicing"
+            ]
+          },
+          "description": "For selected alone, the workflows that read it, by name, sorted and each once, matched when a run is created: a rename rewrites the name in every list of the namespace, and a workflow deleted or moved leaves its name, read by whatever is created under it again. Empty is read by none, which keeps a variable aside without removing it. Absent for all.",
+          "examples": [
+            [
+              "payment-reminders"
+            ],
+            [
+              "monthly-invoicing",
+              "payment-reminders"
+            ],
+            []
+          ]
+        },
+        "updated_by": {
+          "$ref": "#/$defs/actor",
+          "description": "Who wrote it last.",
+          "examples": [
+            "alice",
+            "finance/nightly-sync"
+          ]
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it was written last.",
+          "examples": [
+            "2026-10-01T09:12:00Z"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "visibility": {
+            "const": "selected"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "workflows"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "workflows"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "name": "ledger_url",
+          "value": "https://ledger.example.com/api",
+          "visibility": "all",
+          "updated_by": "alice",
+          "updated_at": "2026-10-01T09:10:00Z"
+        },
+        {
+          "name": "reminder_days",
+          "value": [
+            7,
+            14,
+            30
+          ],
+          "visibility": "selected",
+          "workflows": [
+            "payment-reminders"
+          ],
+          "updated_by": "alice",
+          "updated_at": "2026-10-01T09:12:00Z"
+        },
+        {
+          "name": "dunning_days",
+          "value": 45,
+          "visibility": "selected",
+          "workflows": [],
+          "updated_by": "finance/nightly-sync",
+          "updated_at": "2026-10-01T09:15:30Z"
+        }
+      ]
+    },
     "notification": {
       "title": "Notification",
       "description": "Something the installation tells one principal of its own accord, listed in their GET /api/v1/me and kept 90 days from when it was written, or until they dismiss it with DELETE /api/v1/me/notifications/{id}: long enough to reach someone back from leave, and bounded so that the list does not grow for ever. Three kinds, each told to whoever can act on it. admin_access_widened is an administrator having widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, which is how an administrator reads another namespace's payloads, since they hold no run:read_data of their own; it is told to the namespace's owners, because an owner does not read the audit log and the people whose data it is should hear it from the installation itself, and where the act found nobody to tell, to the other administrators as well, so that an act where nobody owns is not told only to the owner it made. passkey_counter_refused is a sign-in refused because a passkey's signature counter did not move forward, which is what a cloned authenticator's does; it is told to the passkey's user, who is the one who knows whether the other copy is theirs. break_glass_recovery is a recovery code agentiik-api recover issued an administrator from the installation's host, the one way to a recovery code no administrator vouches for; it is told to every administrator, the one recovered and suspended ones included, so that an administrator who did not run it learns that whoever holds the host did. Each kind carries what its reader needs and nothing of the others', so the fields one requires the others refuse.",

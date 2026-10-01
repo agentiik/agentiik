@@ -24,6 +24,7 @@
     "role": "../wire.schema.json",
     "permission": "../wire.schema.json",
     "namespace-record": "../wire.schema.json",
+    "namespace-variable": "../wire.schema.json",
     "auth-policy": "../wire.schema.json",
     "notification": "../wire.schema.json",
     "repository": "../wire.schema.json",
@@ -1556,6 +1557,53 @@
           "rule": "a rename back to a former name takes it out of the list, since it is the namespace's name again, a rule between two values of one record that the API holds",
           "refused_by": "validator",
           "reference": "https://agentiik.github.io/docs/#renaming-a-namespace"
+        }
+      ]
+    },
+    "namespace-variable": {
+      "valid": [
+        {
+          "file": "wire/valid/namespace-variable-all.json",
+          "covers": "a variable every workflow of the namespace reads",
+          "source": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        {
+          "file": "wire/valid/namespace-variable-selected.json",
+          "covers": "a list read by the two workflows it names, sorted, a number of the list an int as it was written"
+        },
+        {
+          "file": "wire/valid/namespace-variable-aside.json",
+          "covers": "selected naming no workflow, kept aside and read by none, written last by a service account"
+        },
+        {
+          "file": "wire/valid/namespace-variable-null.json",
+          "covers": "null, a value as a file's vars may write one"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/namespace-variable-all-with-workflows.json",
+          "rule": "workflows beside all, which every workflow of the namespace reads already: a list there would say something the visibility does not.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        {
+          "file": "wire/invalid/namespace-variable-selected-without-workflows.json",
+          "rule": "selected naming no list, which the API always writes, [] for none, so that a reader never guesses whether a missing list means none or all.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        {
+          "file": "wire/invalid/namespace-variable-dotted-name.json",
+          "rule": "A name a workflow file's vars could not write: vars.ledger.url would read the url of a variable named ledger.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#namespace-variables"
+        },
+        {
+          "file": "wire/invalid/namespace-variable-no-value.json",
+          "rule": "A variable with no value. null is a value; nothing is not.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#namespace-variables"
         }
       ]
     },

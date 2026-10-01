@@ -98,6 +98,14 @@ type Request struct {
 	// context of the run it replays, so that it sees what fired it and not what is true now.
 	Context db.TriggerContext
 
+	// NamespaceVars are the variables the namespace shows the workflow, for a run whose were read
+	// already: a replay's, those the run it replays read, so that it reads what that run read and
+	// not what is true now; a webhook's or an event's, those its map and its filter read, so that
+	// its steps read what they did. Nil, which every other run leaves it, reads them in Create's
+	// transaction, the one that writes the run. Either way the run keeps those its file does not
+	// write, frozen on it.
+	NamespaceVars map[string]any
+
 	// Caller is the step whose call asks for the run, for the kind workflow, and Depth how deep
 	// in a chain of calls the run is.
 	Caller *db.Caller
@@ -153,7 +161,7 @@ func (s *Starter) Start(ctx context.Context, r Request) (Started, error) {
 type Prepared struct {
 	r      Request
 	commit string
-	g      interface{ Steps() []agk.Step }
+	g      *graph.Graph
 	inputs json.RawMessage
 }
 
@@ -225,13 +233,18 @@ func (p Prepared) Create(ctx context.Context, ns *db.NS) (agk.RunID, error) {
 	for k, v := range r.Detail {
 		detail[k] = v
 	}
+	vars, err := p.namespaceVars(ctx, ns)
+	if err != nil {
+		return "", err
+	}
 	if err := ns.CreateRun(ctx, db.NewRun{
 		ID: run, Workflow: r.Workflow, Commit: p.commit,
 		Trigger: r.Kind, TriggeredBy: r.By,
 		Inputs: p.inputs, Steps: p.g.Steps(),
 		ReplayOf: r.ReplayOf, ReplayFrom: r.ReplayFrom,
-		Context: r.Context,
-		Caller:  r.Caller, Depth: r.Depth,
+		Context:       r.Context,
+		NamespaceVars: vars,
+		Caller:        r.Caller, Depth: r.Depth,
 	}); err != nil {
 		return "", err
 	}
@@ -249,6 +262,29 @@ func (p Prepared) Create(ctx context.Context, ns *db.NS) (agk.RunID, error) {
 		return "", err
 	}
 	return run, nil
+}
+
+// namespaceVars are the namespace's variables the run keeps: those its namespace shows its workflow,
+// read here, in the transaction that writes the run, unless the request carries them, less those
+// its file writes, whose value the file's is. Read once, when the run is created, and kept, so that
+// a variable written in the middle of a run never gives its first step one value and its last
+// another, and a controller taking it over reads what the one before it did.
+func (p Prepared) namespaceVars(ctx context.Context, ns *db.NS) (map[string]any, error) {
+	shown := p.r.NamespaceVars
+	if shown == nil {
+		var err error
+		if shown, err = ns.VariablesFor(ctx, p.r.Workflow); err != nil {
+			return nil, err
+		}
+	}
+	own := p.g.Workflow().Vars
+	kept := make(map[string]any, len(shown))
+	for name, value := range shown {
+		if _, written := own[name]; !written {
+			kept[name] = value
+		}
+	}
+	return kept, nil
 }
 
 // InputsTooLarge is inputs past what a run's inputs may hold once the defaults the workflow declares

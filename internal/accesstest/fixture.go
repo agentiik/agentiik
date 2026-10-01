@@ -213,6 +213,9 @@ type Fixture struct {
 	Secrets map[string]string
 	Values  []string
 
+	// Variables are the name of the variable each namespace holds.
+	Variables map[string]string
+
 	// Token is the identifier of finance/nightly-sync's token.
 	Token string
 
@@ -253,11 +256,12 @@ func Build(t testing.TB, in Installation) *Fixture {
 			Transport: client.Transport, Timeout: client.Timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		Lapse:   in.Now().Add(time.Hour).Truncate(time.Second).UTC(),
-		Runs:    map[string]string{},
-		Grants:  map[string]string{},
-		Secrets: map[string]string{},
-		tokens:  map[string]*minted{},
+		Lapse:     in.Now().Add(time.Hour).Truncate(time.Second).UTC(),
+		Runs:      map[string]string{},
+		Grants:    map[string]string{},
+		Secrets:   map[string]string{},
+		Variables: map[string]string{},
+		tokens:    map[string]*minted{},
 	}
 	f.Nobody = Asker{Name: "nobody", holding: "nobody"}
 	f.Bootstrap = Asker{Name: "the bootstrap token", Principal: "operator", Bearer: in.Bootstrap, holding: "nobody"}
@@ -343,6 +347,20 @@ func Build(t testing.TB, in Installation) *Fixture {
 		f.must(t, "PUT", "/api/v1/"+s.namespace+"/secrets/"+s.name, s.by, api.Declare{Provider: "builtin", Value: &value}, http.StatusCreated)
 		f.Secrets[s.namespace] = s.name
 		f.Values = append(f.Values, value)
+	}
+
+	// A variable of each namespace, set by whoever may write one there, the same two, read by
+	// every workflow of finance and by onboarding alone in hr.
+	for _, v := range []struct {
+		by              Asker
+		namespace, name string
+		write           api.VariableWrite
+	}{
+		{f.Alice, Finance, "currency", api.VariableWrite{Value: []byte(`"EUR"`), Visibility: "all"}},
+		{f.Bob, HR, "probation_days", api.VariableWrite{Value: []byte(`90`), Visibility: "selected", Workflows: []string{Onboarding}}},
+	} {
+		f.must(t, "PUT", "/api/v1/"+v.namespace+"/variables/"+v.name, v.by, v.write, http.StatusCreated)
+		f.Variables[v.namespace] = v.name
 	}
 
 	// A run of monthly-invoicing started by alice, one of payroll started by finance/nightly-sync,

@@ -47,8 +47,8 @@ import (
 // links and recovery codes, the sign-ins that succeed and fail, groups and their members, service
 // accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap;
 // and from v0.4.0 the workflow repository's; and from v0.6.0 the profile's, what a user says of
-// themself, their photo, and what an administrator gives them. Approval arrives with the wait step
-// in v0.8.0.
+// themself, their photo, and what an administrator gives them, and a namespace's variables. Approval
+// arrives with the wait step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -239,6 +239,18 @@ const (
 // secret. "Audit webhook secret writes", since whoever writes one decides who may start the
 // workflow's runs.
 const WebhookCredentialWrite = "webhook_credential.write"
+
+// VariableWrite is a namespace variable created or replaced, PUT /api/v1/{ns}/variables/{name}, and
+// VariableDelete one removed, DELETE on the same path: recorded in the namespace with the variable
+// as its target. A write records the visibility, the workflows a selected one names, whether it was
+// created, and the SHA-256 of the value written as compact JSON, never the value, which every run
+// that read it keeps: an entry of up to 64 KiB would make the log where values are read. A variable
+// changes what the workflows reading it do, so whoever changed it is named in the log for good, where
+// the row keeps only who wrote it last.
+const (
+	VariableWrite  = "variable.write"
+	VariableDelete = "variable.delete"
+)
 
 // The results an entry records.
 const (
