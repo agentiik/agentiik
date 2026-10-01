@@ -140,16 +140,7 @@
 <h1 class="hello">{name}</h1>
 
 <Pane title="Activity" aside={reading ? "reading" : `${yearTotal} ${by === "runs" ? (yearTotal === 1 ? "run" : "runs") : yearTotal === 1 ? "failure" : "failures"} in the last year, ${read.length} ${read.length === 1 ? "namespace" : "namespaces"}`}>
-  <div class="heading">
-    <p class="muted">
-      A square a day, in UTC, the runs created in every workflow you read{by === "failures" ? " that ended failed or timed_out" : ""}.
-      {#if unread.length}<span class="refused">Not read: {unread.join(", ")}.</span>{/if}
-    </p>
-    <div class="by" role="group" aria-label="What shades the squares">
-      <button class="tab" aria-pressed={by === "runs"} onclick={() => shadeBy("runs")}>Runs</button>
-      <button class="tab" aria-pressed={by === "failures"} onclick={() => shadeBy("failures")}>Failures</button>
-    </div>
-  </div>
+  {#if unread.length}<p class="refused">Not read: {unread.join(", ")}</p>{/if}
   <div class="year" class:failures={by === "failures"}>
     <div class="months" style:grid-template-columns="repeat({weeks}, var(--square))" aria-hidden="true">
       {#each labels as m (m.column)}<span style:grid-column="{m.column + 1} / span 3">{m.name}</span>{/each}
@@ -181,7 +172,11 @@
       </div>
     </div>
     <div class="legend">
-      <span class="faint">Less</span>
+      <div class="by" role="group" aria-label="What shades the squares">
+        <button class="tab" aria-pressed={by === "runs"} onclick={() => shadeBy("runs")}>Runs</button>
+        <button class="tab" aria-pressed={by === "failures"} onclick={() => shadeBy("failures")}>Failures</button>
+      </div>
+      <span class="faint less">Less</span>
       {#each [0, 1, 2, 3, 4] as l (l)}<span class="square level-{l}" title={l === 0 ? "none" : `${scale.bounds[l - 1] ?? ""} or more`}></span>{/each}
       <span class="faint">More</span>
     </div>
@@ -208,11 +203,11 @@
                 <td class="mono number">{lasted(r)}</td>
               </tr>
             {:else}
-              <tr><td colspan="7" class="muted">No run you read was created that day.</td></tr>
+              <tr><td colspan="7" class="muted">No run</td></tr>
             {/each}
           </tbody>
         </table>
-        {#if ofDay.more}<p class="faint">The first 100 of the day, newest first: a namespace's runs view narrowed to the day lists them all.</p>{/if}
+        {#if ofDay.more}<p class="faint">First 100 runs</p>{/if}
       {:else}
         <p class="muted" role="status">Reading the day's runs.</p>
       {/if}
@@ -237,7 +232,7 @@
           {/if}
         </li>
       {:else}
-        <li class="muted">You read the runs of no namespace yet.</li>
+        <li class="muted">No namespace</li>
       {/each}
     </ul>
   </Pane>
@@ -254,7 +249,7 @@
             <td class="mono number">{lasted(r)}</td>
           </tr>
         {:else}
-          <tr><td colspan="5" class="muted">No run yet.</td></tr>
+          <tr><td colspan="5" class="muted">No run</td></tr>
         {/each}
       </tbody>
     </table>
@@ -268,22 +263,10 @@
     font-weight: 600;
   }
 
-  .heading {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 6);
-    margin-bottom: calc(var(--unit) * 5);
-  }
-
-  .heading p {
-    margin: 0;
-    font-size: var(--type-control-size);
-  }
-
   .by {
     display: inline-flex;
     gap: calc(var(--unit) * 2);
-    margin-left: auto;
+    margin-left: 34px;
   }
 
   .tab {
@@ -395,8 +378,10 @@
     display: flex;
     align-items: center;
     gap: var(--gap);
-    margin-left: auto;
+    margin-top: calc(var(--unit) * 2);
   }
+
+
 
   .legend .square {
     cursor: default;
@@ -404,6 +389,10 @@
 
   .legend .faint {
     margin: 0 calc(var(--unit) * 2);
+  }
+
+  .legend .faint.less {
+    margin-left: auto;
   }
 
   .day {
@@ -425,6 +414,7 @@
   .columns {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    align-items: start;
     gap: calc(var(--unit) * 7);
     margin-top: calc(var(--unit) * 8);
   }
@@ -462,7 +452,9 @@
   }
 
   .refused {
+    margin: 0 0 calc(var(--unit) * 4);
     color: var(--failed);
+    font-size: var(--type-control-size);
   }
 
   table {
