@@ -4,6 +4,7 @@
   import type { components } from "../api/schema";
   import Chart, { type Series } from "../components/Chart.svelte";
   import Icon from "../components/Icon.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import RangeBar from "../components/RangeBar.svelte";
   import type { Place } from "../lib/place.svelte";
@@ -155,11 +156,10 @@
   const limits = $derived(quotas?.quotas ?? record?.quotas);
 </script>
 
-<nav class="sub" aria-label="Statistics of {namespace}">
-  <span class="mono where">{namespace}</span>
-  <button class="tab" aria-pressed={tab === "runs"} onclick={() => show("runs")}>Runs</button>
-  <button class="tab" aria-pressed={tab === "quotas"} onclick={() => show("quotas")}>Quotas</button>
-</nav>
+<PageHeader title="Statistics" icon="control-statistics" {place} tabs={[
+  { label: "Runs", icon: "control-runs", current: tab === "runs", onclick: () => show("runs") },
+  { label: "Quotas", icon: "control-settings", current: tab === "quotas", onclick: () => show("quotas") },
+]} />
 
 <RangeBar {ranged} bucket={series?.bucket}>
   <span class="muted">Export the series</span>
@@ -195,9 +195,9 @@
           <ul class="codes">
             {#each runSeries.retries as [code, n] (code)}
               <li>
-                <span class="mono code">{code}</span>
+                <span class="term code">{code}</span>
                 <span class="bar" style:width="{(n / most) * 100}%"></span>
-                <span class="mono">{n}</span>
+                <span class="term">{n}</span>
               </li>
             {/each}
           </ul>
@@ -258,8 +258,8 @@
       <Pane title="Quotas" aside="now">
         <dl class="limits">
           {#each Object.entries(limits ?? {}) as [name, value] (name)}
-            <dt class="mono">{name}</dt>
-            <dd class="mono">{Array.isArray(value) ? value.join(", ") : name.includes("bytes") ? bytes(Number(value)) : String(value)}</dd>
+            <dt class="term">{name}</dt>
+            <dd class="term">{Array.isArray(value) ? value.join(", ") : name.includes("bytes") ? bytes(Number(value)) : String(value)}</dd>
           {/each}
         </dl>
         <p class="faint">The quotas are an administrator's to change, with PUT /api/v1/namespaces/{namespace}/quotas.</p>
@@ -269,35 +269,6 @@
 {/if}
 
 <style>
-  .sub {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 2);
-    margin: calc(var(--unit) * -3) 0 calc(var(--unit) * 7);
-  }
-
-  .where {
-    margin-right: calc(var(--unit) * 6);
-    font-weight: 600;
-  }
-
-  .tab {
-    height: 29px;
-    padding: 0 calc(var(--unit) * 5);
-    border: var(--border-hairline) solid transparent;
-    border-radius: var(--radius-control);
-    background: none;
-    color: var(--muted);
-    font-size: var(--type-navigation-size);
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .tab[aria-pressed="true"] {
-    border-color: var(--accentLine);
-    background: var(--accentDim);
-    color: var(--accent);
-  }
 
   .refused {
     color: var(--failed);

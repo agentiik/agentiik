@@ -7,6 +7,7 @@
   import GraphCanvas from "../components/GraphCanvas.svelte";
   import Icon from "../components/Icon.svelte";
   import McpPanel from "../components/McpPanel.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import RunForm from "../components/RunForm.svelte";
   import StatePill from "../components/StatePill.svelte";
@@ -18,6 +19,7 @@
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { RunReader } from "../lib/run.svelte";
+  import { workflowTabs } from "../lib/page";
   import { blocks } from "../lib/yaml-blocks";
 
   // A workflow: the version a run naming no ref runs, the head of its default branch, with what
@@ -153,72 +155,55 @@
   const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
   const filesTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "files" });
   const runRoute = $derived(run ? { kind: "namespace" as const, namespace, view: "runs" as const, run: run.run } : undefined);
+  const tabs = $derived(workflowTabs(namespace, workflow, tab, { shares, mcp: !!graph?.mcp, go: (r, q) => place.go(r, false, q) }));
   const now = Date.now();
 </script>
+
+<PageHeader title={workflow} icon="control-workflows" {place} tabs={tabs}>
+  {#snippet subtitle()}
+    {#if detail?.version}<span class="version" title={detail.version.commit}>{detail.repository.default_branch} · <span class="code">{detail.version.commit.slice(0, 7)}</span></span>{/if}
+  {/snippet}
+  {#snippet actions()}
+    {#if detail}
+      <button class="control" aria-pressed={showHistory} onclick={() => (showHistory = !showHistory)}><Icon name="control-history" size={14} />History</button>
+      {#if mayRun && graph && detail.version}
+        <button class="control primary" aria-pressed={running} onclick={() => { runRef = ""; running = !running; }}><Icon name="control-run" size={14} />Run</button>
+      {/if}
+    {/if}
+  {/snippet}
+</PageHeader>
 
 {#if missing}
   <Refused />
 {:else if refused}
   <Pane title={workflow}><p class="refused" role="alert">The workflow could not be read: {refused}</p></Pane>
 {:else if detail}
-  <nav class="sub" aria-label="{namespace}/{workflow}">
-    <span class="mono where">{namespace} / {workflow}</span>
-    {#if tab === "mcp" || tab === "files"}
-      <a class="tab" href={place.href(graphTab)} onclick={follow(place, graphTab)}>Graph</a>
-    {:else}
-      <span class="tab" aria-current="page">Graph</span>
-    {/if}
-    {#if tab === "files"}
-      <span class="tab" aria-current="page">Files</span>
-    {:else}
-      <a class="tab" href={place.href(filesTab)} onclick={follow(place, filesTab)}>Files</a>
-    {/if}
-    <a class="tab" href={place.href(runsOf) + `?workflow=${encodeURIComponent(workflow)}`} onclick={narrowed(runsOf)}>Runs</a>
-    <a class="tab" href={place.href(statistics)} onclick={follow(place, statistics)}>Statistics</a>
-    {#if graph?.mcp}
-      {#if tab === "mcp"}
-        <span class="tab" aria-current="page">MCP</span>
-      {:else}
-        <a class="tab" href={place.href(mcpTab)} onclick={follow(place, mcpTab)}>MCP</a>
-      {/if}
-    {/if}
-    {#if shares}<a class="tab" href={place.href(sharing) + `?workflow=${encodeURIComponent(workflow)}`} onclick={narrowed(sharing)}>Sharing</a>{/if}
-    <span class="right">
-      {#if detail.version}
-        <span class="version mono" title={detail.version.commit}>{detail.repository.default_branch} · {detail.version.commit.slice(0, 7)}</span>
-      {/if}
-      <button class="control" aria-pressed={showHistory} onclick={() => (showHistory = !showHistory)}><Icon name="control-history" size={14} />History</button>
-      {#if mayRun && graph && detail.version}
-        <button class="control primary" aria-pressed={running} onclick={() => { runRef = ""; running = !running; }}><Icon name="control-run" size={14} />Run</button>
-      {/if}
-    </span>
-  </nav>
 
   <section class="about" aria-label="What starts it">
     {#if detail.version}
-      <span class="muted">Head of <span class="mono">{detail.repository.default_branch}</span>, pushed by <span class="mono">{detail.version.author}</span> <time datetime={detail.version.created_at} title={detail.version.created_at}>{clock(detail.version.created_at, now)}</time>{detail.repository.protected ? "; the branch is protected" : ""}.</span>
+      <span class="muted">Head of <span class="term">{detail.repository.default_branch}</span>, pushed by <span class="term">{detail.version.author}</span> <time datetime={detail.version.created_at} title={detail.version.created_at}>{clock(detail.version.created_at, now)}</time>{detail.repository.protected ? "; the branch is protected" : ""}.</span>
     {:else}
       <span class="muted">No version yet: the repository holds nothing a run could run.</span>
     {/if}
     {#if graph}
       <ul class="triggers">
         {#each on.schedule as t, i (i)}
-          <li><Icon name="trigger-schedule" size={14} /><span class="mono">{t.cron}</span>{#if t.timezone}<span class="muted">{t.timezone}</span>{/if}{#if t.jitter}<span class="muted">jitter {t.jitter}</span>{/if}{#if t.catch_up !== undefined}<span class="muted">catch_up {String(t.catch_up)}</span>{/if}</li>
+          <li><Icon name="trigger-schedule" size={14} /><span class="code">{t.cron}</span>{#if t.timezone}<span class="muted">{t.timezone}</span>{/if}{#if t.jitter}<span class="muted">jitter {t.jitter}</span>{/if}{#if t.catch_up !== undefined}<span class="muted">catch_up {String(t.catch_up)}</span>{/if}</li>
         {/each}
         {#each on.webhook as t, i (i)}
-          <li><Icon name="trigger-webhook" size={14} /><span class="mono">{t.method ?? "POST"} /hooks/{namespace}{t.path}</span><span class="muted">auth {authOf(t)}, response {t.response ?? "async"}</span></li>
+          <li><Icon name="trigger-webhook" size={14} /><span class="code">{t.method ?? "POST"} /hooks/{namespace}{t.path}</span><span class="muted">auth {authOf(t)}, response {t.response ?? "async"}</span></li>
         {/each}
         {#each on.event as t, i (i)}
-          <li><Icon name="trigger-event" size={14} /><span class="mono">{t.type}</span>{#if t.source}<span class="muted">from <span class="mono">{t.source}</span></span>{/if}{#if t.namespace}<span class="muted">in <span class="mono">{t.namespace}</span></span>{/if}{#if t.filter}<span class="muted" title={t.filter}>filtered</span>{/if}</li>
+          <li><Icon name="trigger-event" size={14} /><span class="term">{t.type}</span>{#if t.source}<span class="muted">from <span class="term">{t.source}</span></span>{/if}{#if t.namespace}<span class="muted">in <span class="term">{t.namespace}</span></span>{/if}{#if t.filter}<span class="muted" title={t.filter}>filtered</span>{/if}</li>
         {/each}
         {#if !on.schedule.length && !on.webhook.length && !on.event.length}
           <li class="muted">No schedule, webhook or event starts it: it runs when asked.</li>
         {/if}
         {#if graph.concurrency}
-          <li><span class="muted">concurrency</span><span class="mono">{graph.concurrency.group}</span><span class="muted">{graph.concurrency.cancel_in_progress ? "an arriving run cancels the one going" : "a run waits for the one going"}</span></li>
+          <li><span class="muted">concurrency</span><span class="term">{graph.concurrency.group}</span><span class="muted">{graph.concurrency.cancel_in_progress ? "an arriving run cancels the one going" : "a run waits for the one going"}</span></li>
         {/if}
-        {#if graph.timeout}<li><span class="muted">timeout</span><span class="mono">{graph.timeout}</span></li>{/if}
-        {#if graph.retain}<li><span class="muted">retain</span><span class="mono">{graph.retain}</span></li>{/if}
+        {#if graph.timeout}<li><span class="muted">timeout</span><span class="term">{graph.timeout}</span></li>{/if}
+        {#if graph.retain}<li><span class="muted">retain</span><span class="term">{graph.retain}</span></li>{/if}
       </ul>
     {/if}
   </section>
@@ -230,10 +215,10 @@
         <tbody>
           {#each history as h (h.commit)}
             <tr>
-              <td class="mono" title={h.commit}>{h.commit.slice(0, 7)}</td>
+              <td class="code" title={h.commit}>{h.commit.slice(0, 7)}</td>
               <td>{h.subject ?? ""}</td>
               <td>{h.author?.name ?? ""}</td>
-              <td class="mono"><time datetime={h.authored_at}>{h.authored_at ? clock(h.authored_at, now) : ""}</time></td>
+              <td class="term"><time datetime={h.authored_at}>{h.authored_at ? clock(h.authored_at, now) : ""}</time></td>
               <td class="muted">{h.version ? "a version" : "not a version"}</td>
             </tr>
           {:else}
@@ -257,8 +242,8 @@
 
   {#if tab === "files" && detail.repository.head === null}
     <Pane title="Files" aside="an empty repository">
-      <p class="muted">Nothing has been pushed yet: <span class="mono">{detail.repository.default_branch}</span> is born by the first push. Clone the repository, commit <span class="mono">agentiik.yaml</span> and push it, with git or with <span class="mono">agk push</span>.</p>
-      <pre class="clone mono">git clone {detail.repository.clone_url}</pre>
+      <p class="muted">Nothing has been pushed yet: <span class="term">{detail.repository.default_branch}</span> is born by the first push. Clone the repository, commit <span class="term">agentiik.yaml</span> and push it, with git or with <span class="term">agk push</span>.</p>
+      <pre class="clone term">git clone {detail.repository.clone_url}</pre>
     </Pane>
   {:else if tab === "files"}
     <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runAt} />
@@ -268,15 +253,15 @@
     </Pane>
   {:else if graph && laid}
     <div class="columns">
-      <Pane title="Graph" aside={run ? `run ${run.run}` : "no run yet"} focused>
-        {#if run && runRoute}
-          <div class="run">
+      <Pane title="Graph" aside={run ? "its last run" : "no run yet"} focused>
+        <!-- The run's line holds its height before the run is read, so that the canvas under it stays put. -->
+        <div class="run">
+          {#if run && runRoute}
             <StatePill state={run.state} live={!reader?.ended} />
-            <a class="mono" href={place.href(runRoute)} onclick={follow(place, runRoute)}>{run.run}</a>
-            <span class="muted"><span class="mono">{run.trigger_kind}</span> · by <span class="mono">{run.triggered_by}</span>{#if run.started_at} · started <time class="mono" datetime={run.started_at}>{clock(run.started_at, now)}</time> · <span class="mono">{took(Math.max(0, (run.finished_at ? Date.parse(run.finished_at) : Date.now()) - Date.parse(run.started_at)))}</span>{/if}</span>
-            {#if run.commit !== detail.version?.commit}<span class="muted">of an older version, <span class="mono">{run.commit.slice(0, 7)}</span>, drawn on this one</span>{/if}
-          </div>
-        {/if}
+            <a class="code" href={place.href(runRoute)} onclick={follow(place, runRoute)}>{run.run}</a>
+            <span class="muted info"><span class="term">{run.trigger_kind}</span> · by <span class="term">{run.triggered_by}</span>{#if run.started_at} · started <time class="term" datetime={run.started_at}>{clock(run.started_at, now)}</time> · <span class="term">{took(Math.max(0, (run.finished_at ? Date.parse(run.finished_at) : Date.now()) - Date.parse(run.started_at)))}</span>{/if}{#if run.commit !== detail.version?.commit}, of an older version, <span class="code">{run.commit.slice(0, 7)}</span>, drawn on this one{/if}</span>
+          {/if}
+        </div>
         <GraphCanvas {graph} {laid} {run} {selected} onselect={(step) => narrow({ step })} />
       </Pane>
       <Pane title={pane === "file" ? "agentiik.yaml" : (selected ?? "Step")} aside={pane === "file" ? `${detail.repository.default_branch} · ${detail.version?.commit.slice(0, 7) ?? ""}` : graph.steps[selected ?? ""]?.kind}>
@@ -302,17 +287,6 @@
 {/if}
 
 <style>
-  .sub {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 2);
-    margin: calc(var(--unit) * -3) 0 calc(var(--unit) * 5);
-  }
-
-  .where {
-    margin-right: calc(var(--unit) * 6);
-    font-weight: 600;
-  }
 
   .tab {
     display: inline-flex;
@@ -329,18 +303,10 @@
     cursor: pointer;
   }
 
-  .tab[aria-current="page"],
   .tab[aria-pressed="true"] {
     border-color: var(--accentLine);
     background: var(--accentDim);
     color: var(--accent);
-  }
-
-  .right {
-    display: inline-flex;
-    align-items: center;
-    gap: calc(var(--unit) * 4);
-    margin-left: auto;
   }
 
   .version {
@@ -350,18 +316,24 @@
     font-size: var(--type-identifier-size-min);
   }
 
+  /* What starts the workflow, on one card above its graph: the version drawn, then each trigger and
+     each bound on a chip of its own, so that a long webhook path wraps as a whole rather than mid-way. */
   .about {
     display: flex;
     flex-direction: column;
-    gap: calc(var(--unit) * 3);
+    gap: calc(var(--unit) * 4);
     margin-bottom: calc(var(--unit) * 8);
+    padding: calc(var(--unit) * 5) var(--padding-panel);
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-card);
+    background: var(--surface);
     font-size: var(--type-control-size);
   }
 
   .triggers {
     display: flex;
     flex-wrap: wrap;
-    gap: calc(var(--unit) * 3) calc(var(--unit) * 8);
+    gap: calc(var(--unit) * 3);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -371,6 +343,16 @@
     display: inline-flex;
     align-items: center;
     gap: calc(var(--unit) * 3);
+    min-height: 28px;
+    padding: 0 calc(var(--unit) * 5);
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-control);
+    background: var(--raised);
+    white-space: nowrap;
+  }
+
+  .triggers li .code {
+    font-size: 12.5px;
   }
 
   .history {
@@ -412,11 +394,18 @@
 
   .run {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
     gap: calc(var(--unit) * 4);
+    height: 24px;
     margin-bottom: calc(var(--unit) * 5);
     font-size: var(--type-control-size);
+    white-space: nowrap;
+  }
+
+  .run .info {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .run a {

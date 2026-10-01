@@ -1,8 +1,11 @@
 <script lang="ts">
+  import type { Place } from "../lib/place.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import { refusal, type API, type Me } from "../api/client";
   import type { components } from "../api/schema";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
+  import Notice from "../components/Notice.svelte";
   import { holds } from "../lib/permissions";
   import { sentence } from "../lib/signin";
 
@@ -11,7 +14,7 @@
   // what reading the workflows that name them already takes, and written by whoever holds
   // secret:write there. A value goes one way: it is written to the built-in store with its
   // declaration, no answer returns it, and rotating it is writing it again, never reading it first.
-  let { api, me, namespace }: { api: API; me: Me; namespace: string } = $props();
+  let { api, place, me, namespace }: { api: API; place: Place; me: Me; namespace: string } = $props();
 
   type Declaration = components["schemas"]["secretDeclaration"];
   type Store = Declaration["provider"];
@@ -120,8 +123,10 @@
   ];
 </script>
 
-{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
-{#if said}<p class="said" role="status">{said}</p>{/if}
+<PageHeader title="Settings" icon="control-settings" {place} />
+
+{#if problem}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <div class="columns" class:alone={!(reads && writes)}>
   <Pane title="Secrets" aside={secrets ? `${secrets.length} in ${namespace}` : namespace}>
@@ -137,13 +142,13 @@
         <tbody>
           {#each secrets as d (d.name)}
             <tr>
-              <td class="mono">{d.name}</td>
+              <td class="term">{d.name}</td>
               <td>
-                <span class="mono">{d.provider}</span>
-                {#if d.path}<span class="mono muted path">{d.path}</span>{:else if d.provider === "builtin"}<span class="muted path">under {namespace} and its name</span>{/if}
+                <span class="term">{d.provider}</span>
+                {#if d.path}<span class="term muted path">{d.path}</span>{:else if d.provider === "builtin"}<span class="muted path">under {namespace} and its name</span>{/if}
               </td>
-              <td class="mono muted">{d.mount}</td>
-              <td class="muted nowrap"><span class="mono">{d.declared_by}</span> <time class="mono" datetime={d.declared_at} title={d.declared_at}>{d.declared_at.slice(0, 10)}</time></td>
+              <td class="term muted">{d.mount}</td>
+              <td class="muted nowrap"><span class="term">{d.declared_by}</span> <time class="term" datetime={d.declared_at} title={d.declared_at}>{d.declared_at.slice(0, 10)}</time></td>
               <td class="end">
                 {#if writes}
                   {#if asking === d.name}
@@ -172,7 +177,7 @@
         {#if !rotating}
           <label>
             <span>Name</span>
-            <input class="mono" bind:value={name} placeholder="stripe-key" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" maxlength="255" />
+            <input class="term" bind:value={name} placeholder="stripe-key" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" maxlength="255" />
           </label>
           <label>
             <span>Kept in</span>
@@ -184,12 +189,12 @@
         {#if store === "env"}
           <label>
             <span>Variable</span>
-            <input class="mono" bind:value={path} placeholder="AGK_DEV_{namespace.toUpperCase().replaceAll('-', '_')}_STRIPE_KEY" required />
+            <input class="term" bind:value={path} placeholder="AGK_DEV_{namespace.toUpperCase().replaceAll('-', '_')}_STRIPE_KEY" required />
           </label>
         {:else}
           <label>
             <span>Value</span>
-            <textarea class="mono" bind:value rows="3" spellcheck="false" autocomplete="off" required={rotating !== ""}></textarea>
+            <textarea class="term" bind:value rows="3" spellcheck="false" autocomplete="off" required={rotating !== ""}></textarea>
           </label>
           <label class="check"><input type="checkbox" bind:checked={base64} />Written as base64, for a value that is not text</label>
         {/if}
@@ -221,7 +226,6 @@
     color: var(--failed);
   }
 
-  .said,
   .problem {
     margin: 0 0 calc(var(--unit) * 6);
   }

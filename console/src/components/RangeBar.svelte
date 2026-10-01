@@ -15,7 +15,7 @@
       <button class="preset" aria-pressed={ranged.range.preset === key} onclick={() => ranged.choose(key as Preset)}>{p.label}</button>
     {/each}
   </div>
-  <span class="muted mono">{described(ranged.range, bucket)}</span>
+  <span class="muted term">{described(ranged.range, bucket)}</span>
   {#if ranged.before.length > 0}<button class="link" onclick={() => ranged.back()}>Back to the range before</button>{/if}
   {#if comparable}
     <label class="compare">

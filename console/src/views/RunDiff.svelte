@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeader from "../components/PageHeader.svelte";
   import type { API, Me } from "../api/client";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
@@ -77,6 +78,8 @@
   const now = Date.now();
 </script>
 
+<PageHeader title="Two runs" icon="control-diff" {place} />
+
 {#if missing}
   <Refused />
 {:else if first.refused || second.refused}
@@ -89,12 +92,12 @@
           <div class="side">
             <span class="which muted">{i === 0 ? "First" : "Second"}</span>
             <StatePill state={r.state} />
-            <a class="mono id" href={place.href(route(r.run))} onclick={follow(place, route(r.run))}>{r.run}</a>
+            <a class="code id" href={place.href(route(r.run))} onclick={follow(place, route(r.run))}>{r.run}</a>
             <span class="muted">
-              <span class="mono">{r.trigger_kind}</span>
-              · created <time class="mono" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
-              {#if r.started_at}· took <span class="mono">{lasted(r)}</span>{/if}
-              · by <span class="mono">{r.triggered_by}</span>
+              <span class="term">{r.trigger_kind}</span>
+              · created <time class="term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
+              {#if r.started_at}· took <span class="term">{lasted(r)}</span>{/if}
+              · by <span class="term">{r.triggered_by}</span>
             </span>
           </div>
         {/each}
@@ -137,15 +140,15 @@
           {#each steps as s (s.step)}
             <tr class:differs={s.differs.length > 0} class:chosen={s.step === chosen?.step}>
               <td>
-                <button class="link mono" aria-pressed={s.step === chosen?.step} onclick={() => choose(s.step)}>{s.step}</button>
+                <button class="link term" aria-pressed={s.step === chosen?.step} onclick={() => choose(s.step)}>{s.step}</button>
                 {#if s.step === parted}<span class="first">first difference</span>{/if}
               </td>
-              <td>{#if s.a}<StatePill state={s.a.verdict} />{#if s.a.attempts > 1}<span class="muted mono"> ×{s.a.attempts}</span>{/if}{/if}</td>
-              <td class="number mono">{lasted(s.a)}</td>
-              <td class="number mono">{s.a ? summed(exits(x, s.step)) : ""}</td>
-              <td>{#if s.b}<StatePill state={s.b.verdict} />{#if s.b.attempts > 1}<span class="muted mono"> ×{s.b.attempts}</span>{/if}{/if}</td>
-              <td class="number mono">{lasted(s.b)}</td>
-              <td class="number mono">{s.b ? summed(exits(y, s.step)) : ""}</td>
+              <td>{#if s.a}<StatePill state={s.a.verdict} />{#if s.a.attempts > 1}<span class="muted term"> ×{s.a.attempts}</span>{/if}{/if}</td>
+              <td class="number term">{lasted(s.a)}</td>
+              <td class="number term">{s.a ? summed(exits(x, s.step)) : ""}</td>
+              <td>{#if s.b}<StatePill state={s.b.verdict} />{#if s.b.attempts > 1}<span class="muted term"> ×{s.b.attempts}</span>{/if}{/if}</td>
+              <td class="number term">{lasted(s.b)}</td>
+              <td class="number term">{s.b ? summed(exits(y, s.step)) : ""}</td>
               <td>{s.differs.length ? s.differs.join(", ") : ""}</td>
             </tr>
           {/each}
@@ -165,9 +168,9 @@
               {@const q = chosen.b?.ports?.[port]}
               {@const c = compared[port]}
               <tr>
-                <td class="mono">{port}</td>
-                <td class="number mono">{p ? `${p.items} items` : "nothing"}</td>
-                <td class="number mono">{q ? `${q.items} items` : "nothing"}</td>
+                <td class="term">{port}</td>
+                <td class="number term">{p ? `${p.items} items` : "nothing"}</td>
+                <td class="number term">{q ? `${q.items} items` : "nothing"}</td>
                 {#if readsData}
                   <td>
                     {#if !p || !q}

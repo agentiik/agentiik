@@ -274,9 +274,9 @@
   ></div>
   {#if chosen !== null && since[chosen]}
     <p class="readout" aria-live="polite">
-      <span class="mono">{bounds(chosen)}</span>
+      <span class="term">{bounds(chosen)}</span>
       {#each series as s (s.label)}
-        <span><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label} <span class="mono">{s.values[chosen] === null ? "none" : format(s.values[chosen] ?? 0)}</span></span>
+        <span><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label} <span class="term">{s.values[chosen] === null ? "none" : format(s.values[chosen] ?? 0)}</span></span>
       {/each}
     </p>
   {/if}
@@ -289,8 +289,8 @@
       <tbody>
         {#each since as at, i (at)}
           <tr>
-            <td class="mono">{bounds(i)}</td>
-            {#each series as s (s.label)}<td class="number mono">{s.values[i] === null || s.values[i] === undefined ? "" : format(s.values[i]!)}</td>{/each}
+            <td class="term">{bounds(i)}</td>
+            {#each series as s (s.label)}<td class="number term">{s.values[i] === null || s.values[i] === undefined ? "" : format(s.values[i]!)}</td>{/each}
           </tr>
         {/each}
       </tbody>

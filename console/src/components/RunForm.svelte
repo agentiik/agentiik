@@ -87,8 +87,8 @@
     {@const wrong = (errors[f.name] ?? []).length > 0}
     <div class="field" class:wrong>
       <label for={id(f.name)}>
-        <span class="mono name">{f.name}</span>
-        {#if f.required && !f.hasDefault}<span class="muted">required</span>{:else if f.hasDefault}<span class="muted">default <span class="mono">{JSON.stringify(f.default)}</span></span>{:else}<span class="muted">optional</span>{/if}
+        <span class="term name">{f.name}</span>
+        {#if f.required && !f.hasDefault}<span class="muted">required</span>{:else if f.hasDefault}<span class="muted">default <span class="term">{JSON.stringify(f.default)}</span></span>{:else}<span class="muted">optional</span>{/if}
       </label>
       {#if f.description}<p class="faint">{f.description}</p>{/if}
       {#if f.kind === "boolean"}
@@ -99,9 +99,9 @@
           {#each f.options ?? [] as o, i (i)}<option value={String(i)}>{JSON.stringify(o)}</option>{/each}
         </select>
       {:else if f.kind === "json"}
-        <textarea id={id(f.name)} class="mono" rows="5" spellcheck="false" aria-invalid={wrong} value={String(raw[f.name] ?? "")} oninput={(e) => (raw[f.name] = e.currentTarget.value)} onblur={() => check(f)}></textarea>
+        <textarea id={id(f.name)} class="code" rows="5" spellcheck="false" aria-invalid={wrong} value={String(raw[f.name] ?? "")} oninput={(e) => (raw[f.name] = e.currentTarget.value)} onblur={() => check(f)}></textarea>
       {:else}
-        <input id={id(f.name)} class="mono" type={f.kind === "string" ? "text" : "number"} step={f.kind === "integer" ? "1" : "any"} aria-invalid={wrong} value={String(raw[f.name] ?? "")} oninput={(e) => (raw[f.name] = e.currentTarget.value)} onblur={() => check(f)} />
+        <input id={id(f.name)} class="term" type={f.kind === "string" ? "text" : "number"} step={f.kind === "integer" ? "1" : "any"} aria-invalid={wrong} value={String(raw[f.name] ?? "")} oninput={(e) => (raw[f.name] = e.currentTarget.value)} onblur={() => check(f)} />
       {/if}
       {#each errors[f.name] ?? [] as problem, i (i)}<p class="problem" role="alert">{problem}</p>{/each}
     </div>
@@ -110,7 +110,7 @@
   {/each}
   <div class="field">
     <label for="run-ref"><span>Ref</span><span class="muted">a branch, a tag or a commit; the head of the default branch where none is named</span></label>
-    <input id="run-ref" class="mono" type="text" bind:value={ref} placeholder={commit.slice(0, 7)} />
+    <input id="run-ref" class="term" type="text" bind:value={ref} placeholder={commit.slice(0, 7)} />
   </div>
   <div class="actions">
     <button class="control primary" type="submit" disabled={sending}><Icon name="control-run" size={14} />Start the run</button>

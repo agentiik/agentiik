@@ -69,7 +69,8 @@ describe("the users, for an administrator", () => {
       body: { user: { kind: "user", login: "erin", display_name: "Erin Lowe", admin: false, suspended: false, created_at: "2026-10-01T06:00:00Z" }, enrolment: { link: "https://agentiik.example.com/auth/enrol#code=agkenrol_x", expires_at: "2026-10-02T06:00:00Z" } },
     };
     const { asked } = open("/users", s);
-    const form = await screen.findByRole("form", { name: "Add a user" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Add a user" }));
+    const form = screen.getByRole("form", { name: "Add a user" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Login" }), { target: { value: "erin" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Display name" }), { target: { value: "Erin Lowe" } });
     await fireEvent.submit(form);
@@ -99,6 +100,7 @@ describe("the groups, for an administrator", () => {
     const { asked } = open("/groups", s);
     const row = (await screen.findByText("group:research", { selector: "td" })).closest("tr")!;
     expect(within(row).getAllByRole("button", { name: /^Take .* out of group:research$/ }).map((b) => b.getAttribute("aria-label"))).toEqual(["Take carol out of group:research", "Take dana out of group:research"]);
+    await fireEvent.click(screen.getByRole("button", { name: "New group" }));
     const form = screen.getByRole("form", { name: "Create a group" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "platform" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "First members, by login" }), { target: { value: "alice, dana" } });
@@ -166,7 +168,8 @@ describe("the namespaces, for an administrator", () => {
     s["POST /api/v1/namespaces"] = { status: 201, body: { name: "platform", kind: "shared", owner: "group:platform", quotas: { max_concurrent_tasks: 20, max_retention_days: 90 } } };
     s["DELETE /api/v1/namespaces/team-ops"] = { status: 204 };
     const { asked } = open("/namespaces", s);
-    const form = await screen.findByRole("form", { name: "Create a namespace" });
+    await fireEvent.click(await screen.findByRole("button", { name: "New namespace" }));
+    const form = screen.getByRole("form", { name: "Create a namespace" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "platform" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Owner, a login or group:NAME" }), { target: { value: "group:platform" } });
     await fireEvent.submit(form);
@@ -182,13 +185,12 @@ describe("the namespaces, for an administrator", () => {
     expect(asked.filter((a) => a.key.startsWith("DELETE")).map((a) => a.key)).toEqual(["DELETE /api/v1/namespaces/team-ops"]);
   });
 
-  it("are reached from the menu and the tabs, and offered to nobody else", async () => {
+  it("are reached from the sidebar, and offered to nobody else", async () => {
     const { place } = open("/dana/runs");
-    await fireEvent.click(await screen.findByRole("button", { name: /You, dana/ }));
-    await fireEvent.click(screen.getByRole("link", { name: "Users, groups and namespaces" }));
+    const installation = await screen.findByRole("list", { name: "Installation" });
+    await fireEvent.click(within(installation).getByRole("link", { name: "Users" }));
     expect(place.route).toEqual({ kind: "users" });
-    const tabs = await screen.findByRole("navigation", { name: "What an administrator manages" });
-    await fireEvent.click(within(tabs).getByRole("link", { name: "Namespaces" }));
+    await fireEvent.click(within(installation).getByRole("link", { name: "Namespaces" }));
     expect(place.route).toEqual({ kind: "namespaces" });
     cleanup();
 

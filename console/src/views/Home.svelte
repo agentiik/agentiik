@@ -195,12 +195,12 @@
             {#each ofDay.runs as r (r.run)}
               <tr>
                 <td><StatePill state={r.state} /></td>
-                <td class="mono"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
-                <td class="mono">{r.namespace}/{r.workflow}</td>
-                <td class="mono muted">{r.trigger_kind}</td>
-                <td class="mono">{r.triggered_by}</td>
-                <td class="mono"><time datetime={r.created_at} title={r.created_at}>{r.created_at.slice(11, 19)} UTC</time></td>
-                <td class="mono number">{lasted(r)}</td>
+                <td class="code"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
+                <td class="term">{r.namespace}/{r.workflow}</td>
+                <td class="term muted">{r.trigger_kind}</td>
+                <td class="term">{r.triggered_by}</td>
+                <td class="term"><time datetime={r.created_at} title={r.created_at}>{r.created_at.slice(11, 19)} UTC</time></td>
+                <td class="term number">{lasted(r)}</td>
               </tr>
             {:else}
               <tr><td colspan="7" class="muted">No run</td></tr>
@@ -222,11 +222,11 @@
         {@const s = series.get(n.name)}
         {@const week = s ? lastWeek(s, now) : undefined}
         <li>
-          <a class="mono" href={place.href(runsOf(n.name))} onclick={follow(place, runsOf(n.name))}>{n.name}</a>
+          <a class="term" href={place.href(runsOf(n.name))} onclick={follow(place, runsOf(n.name))}>{n.name}</a>
           <span class="faint">{n.kind}</span>
           {#if week}
-            <span class="mono figure">{week.runs} {week.runs === 1 ? "run" : "runs"}</span>
-            <span class="mono figure" class:failed={week.failures > 0}>{week.failures} failed</span>
+            <span class="term figure">{week.runs} {week.runs === 1 ? "run" : "runs"}</span>
+            <span class="term figure" class:failed={week.failures > 0}>{week.failures} failed</span>
           {:else}
             <span class="faint figure">{reading ? "reading" : "not read"}</span>
           {/if}
@@ -243,10 +243,10 @@
         {#each recent as r (r.run)}
           <tr>
             <td><StatePill state={r.state} live={r.state === "running"} /></td>
-            <td class="mono"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
-            <td class="mono">{r.namespace}/{r.workflow}</td>
-            <td class="mono"><time datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
-            <td class="mono number">{lasted(r)}</td>
+            <td class="code"><a href={place.href(runRoute(r))} onclick={follow(place, runRoute(r))}>{r.run}</a></td>
+            <td class="term">{r.namespace}/{r.workflow}</td>
+            <td class="term"><time datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
+            <td class="term number">{lasted(r)}</td>
           </tr>
         {:else}
           <tr><td colspan="5" class="muted">No run</td></tr>

@@ -70,8 +70,8 @@
     <p class="muted">Reading the envelope.</p>
   {:else}
     <div class="head">
-      <span class="mono name">{output ?? port}</span>
-      <span class="muted">{envelope.meta.count} {envelope.meta.count === 1 ? "item" : "items"} · produced <time class="mono" datetime={envelope.meta.produced_at}>{envelope.meta.produced_at}</time></span>
+      <span class="term name">{output ?? port}</span>
+      <span class="muted">{envelope.meta.count} {envelope.meta.count === 1 ? "item" : "items"} · produced <time class="term" datetime={envelope.meta.produced_at}>{envelope.meta.produced_at}</time></span>
       <span class="spacer"></span>
       <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy"}</button>
       <button class="control" onclick={download}><Icon name="control-download" size={14} />Download</button>
@@ -92,11 +92,11 @@
           <tbody>
             {#each files as f (f.item + f.file.name)}
               <tr>
-                <td class="mono">{f.file.name}</td>
-                <td class="mono muted">{f.file.media_type}</td>
-                <td class="number mono">{bytes(f.file.size)}</td>
-                <td class="mono muted" title={f.file.sha256}>{f.file.sha256.slice(0, 12)}</td>
-                <td class="mono muted">{f.item}</td>
+                <td class="term">{f.file.name}</td>
+                <td class="term muted">{f.file.media_type}</td>
+                <td class="number term">{bytes(f.file.size)}</td>
+                <td class="code muted" title={f.file.sha256}>{f.file.sha256.slice(0, 12)}</td>
+                <td class="term muted">{f.item}</td>
               </tr>
             {/each}
           </tbody>

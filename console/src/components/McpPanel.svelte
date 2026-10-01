@@ -30,9 +30,9 @@
 {#if block}
   <dl class="server">
     <dt>Endpoint</dt>
-    <dd class="mono">{endpoint}</dd>
+    <dd class="term">{endpoint}</dd>
     <dt>Name</dt>
-    <dd class="mono">{block.name ?? workflow}</dd>
+    <dd class="term">{block.name ?? workflow}</dd>
     {#if block.description}
       <dt>Description</dt>
       <dd>{block.description}</dd>
@@ -43,19 +43,19 @@
     {@const out = t.output ? outputs[t.output.from.output]?.schema : undefined}
     <section class="tool" aria-label="Tool {t.name}">
       <header>
-        <span class="mono name">{t.name}</span>
+        <span class="term name">{t.name}</span>
         {#if t.title}<span>{t.title}</span>{/if}
-        <span class="mono muted">mode: {t.mode ?? "sync"}{t.timeout ? ` · timeout: ${t.timeout}` : ""}</span>
+        <span class="term muted">mode: {t.mode ?? "sync"}{t.timeout ? ` · timeout: ${t.timeout}` : ""}</span>
       </header>
       <p>{t.description}</p>
       {#if t.annotations && Object.keys(t.annotations).length}
-        <p class="mono faint">{Object.entries(t.annotations).map(([k, v]) => `${k}: ${v}`).join(" · ")}</p>
+        <p class="term faint">{Object.entries(t.annotations).map(([k, v]) => `${k}: ${v}`).join(" · ")}</p>
       {/if}
-      <p class="label">inputSchema, the schema of the input <span class="mono">{t.input.from.input}</span></p>
+      <p class="label">inputSchema, the schema of the input <span class="term">{t.input.from.input}</span></p>
       <pre class="json"><code>{#each tokens(schema ?? true) as tok, i (i)}<span class="t-{tok.kind}">{tok.text}</span>{/each}</code></pre>
       {#if t.output}
         <p class="label">
-          {#if out !== undefined}outputSchema, the schema of the output <span class="mono">{t.output.from.output}</span>{:else}The output <span class="mono">{t.output.from.output}</span> carries no schema, so none is published{/if}
+          {#if out !== undefined}outputSchema, the schema of the output <span class="term">{t.output.from.output}</span>{:else}The output <span class="term">{t.output.from.output}</span> carries no schema, so none is published{/if}
         </p>
         {#if out !== undefined}<pre class="json"><code>{#each tokens(out) as tok, i (i)}<span class="t-{tok.kind}">{tok.text}</span>{/each}</code></pre>{/if}
       {/if}

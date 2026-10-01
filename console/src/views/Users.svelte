@@ -1,7 +1,9 @@
 <script lang="ts">
   import { refusal, type API, type Me } from "../api/client";
   import AdminTabs from "../components/AdminTabs.svelte";
+  import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
+  import Notice from "../components/Notice.svelte";
   import Pane from "../components/Pane.svelte";
   import { enrolmentFor, recoveryFor, usersOf, type User } from "../lib/credentials";
   import { clock } from "../lib/format";
@@ -75,7 +77,8 @@
     });
   }
 
-  // The form that adds a user.
+  // The form that adds a user, in a dialog opened from the screen's head.
+  let adding = $state(false);
   let login = $state("");
   let displayName = $state("");
   let admin = $state(false);
@@ -88,6 +91,7 @@
       if (!data) throw refusal(response, error);
       issued = { login: data.user.login, what: "enrolment", link: data.enrolment.link, expires_at: data.enrolment.expires_at };
       copied = false;
+      adding = false;
       login = "";
       displayName = "";
       admin = false;
@@ -120,27 +124,31 @@
   const own = $derived(me.user?.login ?? "");
 </script>
 
-<AdminTabs {place} current="users" />
+<AdminTabs {place} current="users">
+  {#snippet actions()}
+    <button class="control primary" onclick={() => ((adding = true), (problem = ""))}><Icon name="control-add" size={14} />Add a user</button>
+  {/snippet}
+</AdminTabs>
 
-{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
-{#if removed}<p class="said" role="status"><span class="mono">{removed}</span> is removed, with their credentials, tokens, sessions, memberships and grants.</p>{/if}
+{#if problem && !adding}<Notice kind="problem" ondismiss={() => (problem = "")}>{problem}</Notice>{/if}
+{#if removed}{#key removed}<Notice ondismiss={() => (removed = "")}><span class="term">{removed}</span> is removed, with their credentials, tokens, sessions, memberships and grants.</Notice>{/key}{/if}
 
-{#if issued}
-  <div class="issued" role="status">
-    <p>
-      {issued.what === "recovery" ? "A recovery code" : "An enrolment link"} for <span class="mono">{issued.login}</span>, shown this once and good until
-      <time class="mono" datetime={issued.expires_at}>{clock(issued.expires_at, now)}</time>. Hand it over yourself: it is never sent by mail.
-    </p>
-    <p class="value mono">{issued.link}</p>
-    {#if issued.code}<p class="muted">Or the code alone, typed on the enrolment page: <span class="mono">{issued.code}</span></p>{/if}
-    <p class="buttons">
-      <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy the link"}</button>
-      <button class="control" onclick={() => (issued = null)}>Done</button>
-    </p>
-  </div>
-{/if}
+<Dialog title={issued ? `${issued.what === "recovery" ? "Recovery code" : "Enrolment link"} for ${issued.login}` : ""} open={issued !== null} onclose={() => (issued = null)}>
+  {#if issued}
+    <div class="issued" role="status">
+      <p>
+        Shown this once and good until <time class="term" datetime={issued.expires_at}>{clock(issued.expires_at, now)}</time>. Hand it over yourself: it is never sent by mail.
+      </p>
+      <p class="value code">{issued.link}</p>
+      {#if issued.code}<p class="muted">Or the code alone, typed on the enrolment page: <span class="code">{issued.code}</span></p>{/if}
+      <p class="buttons">
+        <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy the link"}</button>
+        <button class="control primary" onclick={() => (issued = null)}>Done</button>
+      </p>
+    </div>
+  {/if}
+</Dialog>
 
-<div class="columns">
 <Pane title="Users" aside={users ? String(users.length) : ""}>
   {#if unread}
     <p class="problem" role="alert">{unread}</p>
@@ -152,13 +160,13 @@
       <tbody>
         {#each users as u (u.login)}
           <tr>
-            <td class="mono nowrap">{u.login}</td>
+            <td class="term nowrap">{u.login}</td>
             <td>{u.display_name}</td>
             <td class="muted">
               {#if u.suspended}<span class="suspended">suspended{u.suspended_for === "no_passkey" ? ", holding no passkey the policy accepts" : ""}</span>{:else if u.admin}administrator{:else}user{/if}
             </td>
-            <td class="mono muted nowrap">{#if u.created_at}<time datetime={u.created_at} title={u.created_at}>{clock(u.created_at, now)}</time>{/if}</td>
-            <td class="mono muted nowrap">{#if u.last_sign_in_at}<time datetime={u.last_sign_in_at} title={u.last_sign_in_at}>{clock(u.last_sign_in_at, now)}</time>{:else}never{/if}</td>
+            <td class="term muted nowrap">{#if u.created_at}<time datetime={u.created_at} title={u.created_at}>{clock(u.created_at, now)}</time>{/if}</td>
+            <td class="term muted nowrap">{#if u.last_sign_in_at}<time datetime={u.last_sign_in_at} title={u.last_sign_in_at}>{clock(u.last_sign_in_at, now)}</time>{:else}never{/if}</td>
             <td class="end">
               {#if u.login === own}
                 <span class="faint">Another administrator issues yours</span>
@@ -183,11 +191,12 @@
   {/if}
 </Pane>
 
-<Pane title="Add a user">
+<Dialog title="Add a user" bind:open={adding}>
+  {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
   <form onsubmit={add} aria-label="Add a user">
     <label>
       <span>Login</span>
-      <input class="mono" bind:value={login} placeholder="dana" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
+      <input class="term" bind:value={login} placeholder="dana" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
     </label>
     <label>
       <span>Display name</span>
@@ -197,31 +206,12 @@
     <p class="foot muted">The user is created with no credential, and its personal namespace with it. Their enrolment link is shown once, here: hand it over yourself, and they enrol what signs them in.</p>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add the user</button></p>
   </form>
-</Pane>
-</div>
+</Dialog>
 
 <style>
   .problem {
     margin: 0 0 calc(var(--unit) * 6);
     color: var(--failed);
-  }
-
-  .said {
-    margin: 0 0 calc(var(--unit) * 6);
-  }
-
-  .columns {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
-    gap: calc(var(--unit) * 8);
-    align-items: start;
-  }
-
-  /* The form goes under the list where the two side by side would squeeze the list's columns. */
-  @media (max-width: 1499px) {
-    .columns {
-      grid-template-columns: minmax(0, 1fr);
-    }
   }
 
   form {
@@ -303,16 +293,8 @@
     font-size: var(--type-control-size);
   }
 
-  .issued {
-    margin-bottom: calc(var(--unit) * 8);
-    padding: calc(var(--unit) * 4) calc(var(--unit) * 5);
-    border: var(--border-hairline) solid var(--accentLine);
-    border-radius: var(--radius-control);
-    background: var(--accentDim);
-  }
-
   .issued p {
-    margin: 0 0 calc(var(--unit) * 3);
+    margin: 0 0 calc(var(--unit) * 4);
   }
 
   .issued p:last-child {
@@ -321,6 +303,7 @@
 
   .issued .buttons {
     display: flex;
+    justify-content: flex-end;
     gap: calc(var(--unit) * 2);
   }
 

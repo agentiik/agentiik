@@ -243,7 +243,7 @@ describe("the sharing panel", () => {
 
   it("is offered from a workflow's page to whoever may share that workflow, and opens its grants", async () => {
     open("/finance/workflows/monthly-invoicing");
-    const plain = await screen.findByRole("navigation", { name: "finance/monthly-invoicing" });
+    const plain = await screen.findByRole("navigation", { name: "monthly-invoicing, what is shown" });
     expect(within(plain).queryByRole("link", { name: "Sharing" })).toBeNull();
     cleanup();
 
@@ -251,7 +251,7 @@ describe("the sharing panel", () => {
     const permissions = (s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> }).permissions;
     permissions["finance/monthly-invoicing"] = [...permissions["finance"]!, "grant:manage"];
     const { place } = open("/finance/workflows/monthly-invoicing", s);
-    const nav = await screen.findByRole("navigation", { name: "finance/monthly-invoicing" });
+    const nav = await screen.findByRole("navigation", { name: "monthly-invoicing, what is shown" });
     const tab = within(nav).getByRole("link", { name: "Sharing" });
     expect(tab.getAttribute("href")).toBe("/finance/sharing?workflow=monthly-invoicing");
     await fireEvent.click(tab);

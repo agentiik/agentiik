@@ -9,7 +9,8 @@
     children,
     align = "start",
     width = 260,
-  }: { label: string; button: Snippet; children: Snippet<[() => void]>; align?: "start" | "end"; width?: number } = $props();
+    block = false,
+  }: { label: string; button: Snippet; children: Snippet<[() => void]>; align?: "start" | "end"; width?: number; block?: boolean } = $props();
 
   let open = $state(false);
   let root: HTMLElement | undefined = $state();
@@ -36,7 +37,7 @@
 
 <svelte:window onclick={outside} />
 
-<div class="popover" bind:this={root} onkeydown={key} role="presentation">
+<div class="popover" class:block bind:this={root} onkeydown={key} role="presentation">
   <button bind:this={trigger} class="trigger" aria-haspopup="true" aria-expanded={open} aria-label={label} onclick={() => (open = !open)}>
     {@render button()}
   </button>
@@ -60,6 +61,12 @@
     border: none;
     background: none;
     cursor: pointer;
+  }
+
+  .block,
+  .block .trigger {
+    display: flex;
+    width: 100%;
   }
 
   .menu {

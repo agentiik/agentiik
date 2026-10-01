@@ -51,8 +51,19 @@ a:hover {
   outline-offset: 1px;
 }
 
-.mono {
+/* A name or a figure: a namespace, a workflow, a login, a time, a count. It stays Archivo, the
+   face of everything a person reads, with figures of one width so that a column of them lines up. */
+.term {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Code: what a person copies, diffs or matches against a log, a run identifier, a commit, a digest,
+   an image, a cron expression, YAML and logs. It alone is monospaced, since a screen of names set in
+   a monospace reads as a terminal, which the web console is not. */
+.code {
   font-family: var(--type-identifier-font);
+  font-size: var(--type-identifier-size-max);
+  font-variant-ligatures: none;
 }
 
 .muted {

@@ -93,7 +93,7 @@ describe("the pools' statistics", () => {
 
   it("are reached from the runners and pools, and offered to nobody else", async () => {
     const place = open("dana", "/runners");
-    const tabs = await screen.findByRole("navigation", { name: "The installation's runners" });
+    const tabs = await screen.findByRole("navigation", { name: "Runners, what is shown" });
     await fireEvent.click(within(tabs).getByRole("link", { name: "Statistics" }));
     expect(place.route).toEqual({ kind: "runners", tab: "statistics" });
     expect(await screen.findByText("Heartbeat gaps")).toBeTruthy();

@@ -73,12 +73,12 @@
     <form onsubmit={write} aria-label="Default branch of {namespace}/{workflow}">
       <label>
         <span>The branch a run naming no ref runs</span>
-        <input class="mono" bind:value={branch} required autocomplete="off" spellcheck="false" />
+        <input class="term" bind:value={branch} required autocomplete="off" spellcheck="false" />
       </label>
-      <label class="check"><input type="checkbox" bind:checked={guarded} />Protected: pushing to it takes <span class="mono">grant:manage</span>, as a forced push and a deletion always do</label>
+      <label class="check"><input type="checkbox" bind:checked={guarded} />Protected: pushing to it takes <span class="term">grant:manage</span>, as a forced push and a deletion always do</label>
       {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
       {#if said}<p class="said" role="status">{said}</p>{/if}
-      <p class="note muted">Another branch is pushed to with <span class="mono">workflow:write</span>, so that a change reaches the default branch through whoever may share the workflow. The protection moves with the branch named, and the branch it leaves is unprotected.</p>
+      <p class="note muted">Another branch is pushed to with <span class="term">workflow:write</span>, so that a change reaches the default branch through whoever may share the workflow. The protection moves with the branch named, and the branch it leaves is unprotected.</p>
       <p><button class="control primary" disabled={working || !changed}>Write it</button></p>
     </form>
   {/if}

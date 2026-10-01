@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import type { API, Me, Namespace } from "../api/client";
   import Icon from "../components/Icon.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import StepStrip from "../components/StepStrip.svelte";
@@ -109,7 +110,17 @@
   }
 </script>
 
-<Pane title="Runs" aside={namespace}>
+<PageHeader title="Runs" icon="control-runs" count={list.settled ? list.runs.length : undefined} {place}>
+  {#snippet actions()}
+    <label class="live">
+      <input type="checkbox" role="switch" bind:checked={live} />
+      <span class="track" aria-hidden="true"><span class="knob"></span></span>
+      Live
+    </label>
+  {/snippet}
+</PageHeader>
+
+<Pane title="" label="Runs of {namespace}">
   <div class="bar">
     <div class="chips" role="group" aria-label="State">
       {#each chips as chip (chip.label)}
@@ -130,7 +141,7 @@
     {/if}
     {#if bounded}
       <span class="bounds">
-        Created <span class="mono">{bounded}</span>
+        Created <span class="term">{bounded}</span>
         <button class="clear" aria-label="Show the last 24 hours again" onclick={() => narrow({ since: undefined, until: undefined, span: "24h" })}><Icon name="control-close" size={12} /></button>
       </span>
     {:else}
@@ -142,11 +153,6 @@
         <Icon name="control-expand" size={14} />
       </label>
     {/if}
-    <label class="live">
-      <input type="checkbox" role="switch" bind:checked={live} />
-      <span class="track" aria-hidden="true"><span class="knob"></span></span>
-      Live
-    </label>
   </div>
 
   {#if attention.length > 0}
@@ -159,10 +165,10 @@
       {#each attention as r (r.run)}
         <div class="failure">
           <StatePill state={r.state} />
-          <a class="mono" href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a>
-          <span class="mono name">{r.workflow}</span>
-          <span class="muted">{r.trigger_kind} by <span class="mono">{r.triggered_by}</span></span>
-          <time class="muted mono" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
+          <a class="code" href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a>
+          <span class="term name">{r.workflow}</span>
+          <span class="muted">{r.trigger_kind} by <span class="term">{r.triggered_by}</span></span>
+          <time class="muted term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
         </div>
       {/each}
     </section>
@@ -190,19 +196,19 @@
       {#each list.runs as r (r.run)}
         <tr data-run={r.run} class:chosen={r.run === selected} aria-selected={r.run === selected} onclick={() => (selected = r.run)}>
           <td><StatePill state={r.state} {live} /></td>
-          <td class="mono id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
-          <td class="mono name">
+          <td class="code id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
+          <td class="term name">
             {#if holds(me, "workflow:read", r.namespace, r.workflow)}
               {@const page = { kind: "namespace" as const, namespace: r.namespace, view: "workflows" as const, workflow: r.workflow }}
               <a class="workflow" href={place.href(page)} onclick={follow(place, page)}>{r.workflow}</a>
             {:else}{r.workflow}{/if}
           </td>
-          <td class="mono muted commit" title={r.commit}>{r.commit.slice(0, 7)}</td>
-          <td class="trigger" title={r.from ? `called by run ${r.from.run} at step ${r.from.step}` : undefined}><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="mono">{r.trigger_kind}</span></td>
+          <td class="code muted commit" title={r.commit}>{r.commit.slice(0, 7)}</td>
+          <td class="trigger" title={r.from ? `called by run ${r.from.run} at step ${r.from.step}` : undefined}><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="term">{r.trigger_kind}</span></td>
           <td><StepStrip steps={r.steps ?? []} {now} /></td>
-          <td class="mono by">{r.triggered_by}</td>
-          <td><time class="mono" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
-          <td class="number mono" class:going={r.state === "running"}>{duration(r)}</td>
+          <td class="term by">{r.triggered_by}</td>
+          <td><time class="term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
+          <td class="number term" class:going={r.state === "running"}>{duration(r)}</td>
         </tr>
       {:else}
         {#if !list.reading && !list.refused}
@@ -212,6 +218,7 @@
     </tbody>
   </table>
 
+  {#if list.settled}
   <footer>
     <span class="muted">
       Showing {list.runs.length === 1 ? "1 run" : `${list.runs.length} runs`}{retention ? ` · retention ${retention} days` : ""}
@@ -220,6 +227,7 @@
       <button class="control" disabled={list.reading} onclick={() => list.more()}>Load 25 more</button>
     {/if}
   </footer>
+  {/if}
 </Pane>
 
 <style>
