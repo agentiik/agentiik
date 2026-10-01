@@ -1,0 +1,17 @@
+# invalid: A language version the reader does not know. apiVersion is read
+#   before anything else, so a file cannot ask to be read by rules that do not
+#   exist.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v2
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    outputs: [out]

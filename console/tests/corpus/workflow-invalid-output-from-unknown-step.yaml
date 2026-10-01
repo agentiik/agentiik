@@ -1,0 +1,20 @@
+# invalid: A workflow output taken from a step the workflow does not declare.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+outputs:
+  invoices:
+    from: { step: publish, port: out }
+    retain: 90d
+
+steps:
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    outputs: [out]

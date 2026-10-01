@@ -1,0 +1,20 @@
+# invalid: A duration written as a bare number. A duration carries its unit,
+#   so that a file says 10m where a reader would otherwise have to work out
+#   what 600 means.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+defaults:
+  timeout: "600"
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

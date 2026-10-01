@@ -1,0 +1,26 @@
+# invalid: A tool input taken from a step port. A tool is a view of the
+#   workflow's own boundary, never of the graph, which is what keeps the graph
+#   free to change beneath a published tool.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+mcp:
+  name: invoicing
+  tools:
+    - name: create_invoice
+      description: Issue one invoice for a customer.
+      input:
+        from: { step: normalize, port: ok }
+      mode: sync
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    outputs: [ok, rejected]
