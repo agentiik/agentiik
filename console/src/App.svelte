@@ -12,6 +12,7 @@
   import PoolStatistics from "./views/PoolStatistics.svelte";
   import Refused from "./views/Refused.svelte";
   import Run from "./views/Run.svelte";
+  import RunDiff from "./views/RunDiff.svelte";
   import Runs from "./views/Runs.svelte";
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
   import Statistics from "./views/Statistics.svelte";
@@ -106,6 +107,8 @@
         <Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} />
       {:else if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
         <Refused />
+      {:else if route.kind === "namespace" && route.view === "runs" && route.run && route.against}
+        <RunDiff {api} {place} me={session.me} namespace={route.namespace} a={route.run} b={route.against} />
       {:else if route.kind === "namespace" && route.view === "runs" && route.run}
         <Run {api} {place} me={session.me} namespace={route.namespace} id={route.run} />
       {:else if route.kind === "namespace" && route.view === "runs"}
