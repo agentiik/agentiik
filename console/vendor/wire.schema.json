@@ -6789,6 +6789,86 @@
           "examples": [
             "2026-10-01T04:09:41Z"
           ]
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "step",
+              "verdict"
+            ],
+            "additionalProperties": false,
+            "description": "One step of the run, as the listing's strip draws it.",
+            "examples": [
+              {
+                "step": "normalize",
+                "verdict": "succeeded",
+                "started_at": "2026-09-30T05:40:12Z",
+                "finished_at": "2026-09-30T05:41:02Z"
+              }
+            ],
+            "properties": {
+              "step": {
+                "$ref": "#/$defs/identifier",
+                "description": "The step, by the name the workflow file gives it.",
+                "examples": [
+                  "normalize"
+                ]
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "running",
+                  "succeeded",
+                  "failed",
+                  "skipped",
+                  "cancelled"
+                ],
+                "description": "Where the step stands, as the run detail's steps say it.",
+                "examples": [
+                  "succeeded",
+                  "failed"
+                ]
+              },
+              "started_at": {
+                "$ref": "#/$defs/timestamp",
+                "description": "When its first attempt was dispatched. Absent before.",
+                "examples": [
+                  "2026-09-30T05:40:12Z"
+                ]
+              },
+              "finished_at": {
+                "$ref": "#/$defs/timestamp",
+                "description": "When it reached its verdict. Absent while it has none.",
+                "examples": [
+                  "2026-09-30T05:41:02Z"
+                ]
+              }
+            }
+          },
+          "description": "The run's steps in the order they started, those not started after them by name, each with its verdict and its times: what a listing draws as a strip whose segments are as wide as the steps took, so that where a run failed and how long each part lasted are read before its colours. Answered by a listing of runs; absent elsewhere.",
+          "examples": [
+            [
+              {
+                "step": "normalize",
+                "verdict": "succeeded",
+                "started_at": "2026-09-30T05:40:12Z",
+                "finished_at": "2026-09-30T05:41:02Z"
+              },
+              {
+                "step": "invoice",
+                "verdict": "failed",
+                "started_at": "2026-09-30T05:41:03Z",
+                "finished_at": "2026-09-30T05:44:10Z"
+              },
+              {
+                "step": "archive",
+                "verdict": "pending"
+              }
+            ]
+          ]
         }
       }
     }

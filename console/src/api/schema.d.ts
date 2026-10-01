@@ -972,7 +972,7 @@ export interface paths {
         };
         /**
          * List runs
-         * @description The runs of every workflow the caller holds run:read on, over its namespace or itself, newest first, each with its namespace, its trigger_kind and its triggered_by: where the console's runs view and a phone open. Every workflow it could list is asked about as one question, a namespace the caller holds nothing in included, so that a listing is no way of learning which namespaces and workflows exist, by what it answers or by how long it takes. Also served within one namespace as GET /api/v1/{ns}/runs, which reads the namespace from its path and no namespace from its query.
+         * @description The runs of every workflow the caller holds run:read on, over its namespace or itself, newest first, each with its namespace, its trigger_kind and its triggered_by, and from v0.6.0 its steps in the order they started with their verdicts and times, which the console draws as a strip: where the console's runs view and a phone open. Every workflow it could list is asked about as one question, a namespace the caller holds nothing in included, so that a listing is no way of learning which namespaces and workflows exist, by what it answers or by how long it takes. Also served within one namespace as GET /api/v1/{ns}/runs, which reads the namespace from its path and no namespace from its query.
          */
         get: operations["listRuns"];
         put?: never;
@@ -6399,7 +6399,21 @@ export interface components {
          *           "triggered_by": "alice",
          *           "created_at": "2026-10-01T05:41:03Z",
          *           "started_at": "2026-10-01T05:41:03Z",
-         *           "finished_at": "2026-10-01T05:42:55Z"
+         *           "finished_at": "2026-10-01T05:42:55Z",
+         *           "steps": [
+         *             {
+         *               "step": "normalize",
+         *               "verdict": "succeeded",
+         *               "started_at": "2026-09-30T05:40:12Z",
+         *               "finished_at": "2026-09-30T05:41:02Z"
+         *             },
+         *             {
+         *               "step": "invoice",
+         *               "verdict": "failed",
+         *               "started_at": "2026-09-30T05:41:03Z",
+         *               "finished_at": "2026-09-30T05:44:10Z"
+         *             }
+         *           ]
          *         },
          *         {
          *           "namespace": "finance",
@@ -6410,7 +6424,8 @@ export interface components {
          *           "trigger_kind": "webhook",
          *           "triggered_by": "finance/agentiik",
          *           "created_at": "2026-10-01T05:28:44Z",
-         *           "started_at": "2026-10-01T05:28:45Z"
+         *           "started_at": "2026-10-01T05:28:45Z",
+         *           "steps": []
          *         }
          *       ]
          *     }
@@ -6432,7 +6447,21 @@ export interface components {
              *         "triggered_by": "alice",
              *         "created_at": "2026-10-01T05:41:03Z",
              *         "started_at": "2026-10-01T05:41:03Z",
-             *         "finished_at": "2026-10-01T05:42:55Z"
+             *         "finished_at": "2026-10-01T05:42:55Z",
+             *         "steps": [
+             *           {
+             *             "step": "normalize",
+             *             "verdict": "succeeded",
+             *             "started_at": "2026-09-30T05:40:12Z",
+             *             "finished_at": "2026-09-30T05:41:02Z"
+             *           },
+             *           {
+             *             "step": "invoice",
+             *             "verdict": "failed",
+             *             "started_at": "2026-09-30T05:41:03Z",
+             *             "finished_at": "2026-09-30T05:44:10Z"
+             *           }
+             *         ]
              *       },
              *       {
              *         "namespace": "finance",
@@ -6443,7 +6472,8 @@ export interface components {
              *         "trigger_kind": "webhook",
              *         "triggered_by": "finance/agentiik",
              *         "created_at": "2026-10-01T05:28:44Z",
-             *         "started_at": "2026-10-01T05:28:45Z"
+             *         "started_at": "2026-10-01T05:28:45Z",
+             *         "steps": []
              *       }
              *     ]
              * @example []
@@ -9386,6 +9416,51 @@ export interface components {
              * @example 2026-10-01T04:09:41Z
              */
             finished_at?: components["schemas"]["timestamp"];
+            /**
+             * @description The run's steps in the order they started, those not started after them by name, each with its verdict and its times: what a listing draws as a strip whose segments are as wide as the steps took, so that where a run failed and how long each part lasted are read before its colours. Answered by a listing of runs; absent elsewhere.
+             * @example [
+             *       {
+             *         "step": "normalize",
+             *         "verdict": "succeeded",
+             *         "started_at": "2026-09-30T05:40:12Z",
+             *         "finished_at": "2026-09-30T05:41:02Z"
+             *       },
+             *       {
+             *         "step": "invoice",
+             *         "verdict": "failed",
+             *         "started_at": "2026-09-30T05:41:03Z",
+             *         "finished_at": "2026-09-30T05:44:10Z"
+             *       },
+             *       {
+             *         "step": "archive",
+             *         "verdict": "pending"
+             *       }
+             *     ]
+             */
+            steps?: {
+                /**
+                 * @description The step, by the name the workflow file gives it.
+                 * @example normalize
+                 */
+                step: components["schemas"]["identifier"];
+                /**
+                 * @description Where the step stands, as the run detail's steps say it.
+                 * @example succeeded
+                 * @example failed
+                 * @enum {string}
+                 */
+                verdict: "pending" | "running" | "succeeded" | "failed" | "skipped" | "cancelled";
+                /**
+                 * @description When its first attempt was dispatched. Absent before.
+                 * @example 2026-09-30T05:40:12Z
+                 */
+                started_at?: components["schemas"]["timestamp"];
+                /**
+                 * @description When it reached its verdict. Absent while it has none.
+                 * @example 2026-09-30T05:41:02Z
+                 */
+                finished_at?: components["schemas"]["timestamp"];
+            }[];
         } & unknown;
         /**
          * @description The run and the step that called this one, for a run whose trigger_kind is workflow. The caller may be in another namespace, and is named all the same: the callee's reader learns which run asked, and reading that run is still held to its own namespace's grants.
