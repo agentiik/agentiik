@@ -125,6 +125,8 @@ func (m Model) keyLine(t theme) string {
 		keys = [][2]string{{"y", "Replay from " + stepOf(m.run, m.step)}, {"any other key", "Keep it"}}
 	case m.listing:
 		keys = [][2]string{{"esc", "Close"}, {"q", "Quit"}}
+	case m.filtering && m.view == runsView:
+		keys = [][2]string{{"type", "Filter"}, {"↑↓", "Move"}, {"enter", "Keep"}, {"esc", "Clear"}}
 	case m.view == runView:
 		keys = [][2]string{{"↑↓", "Step"}, {"[]", "Port"}}
 		if m.mayCancel() {
@@ -137,7 +139,11 @@ func (m Model) keyLine(t theme) string {
 	case m.view == runnersView:
 		keys = [][2]string{{"↑↓", "Move"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
 	default:
-		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"q", "Quit"}, {"?", "Every key"}}
+		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"/", "Filter"}}
+		if m.filter != "" {
+			keys = append(keys, [2]string{"esc", "Clear"})
+		}
+		keys = append(keys, [2]string{"q", "Quit"}, [2]string{"?", "Every key"})
 	}
 	var parts []part
 	for i, k := range keys {
@@ -167,7 +173,9 @@ func (m Model) keysListed(t theme) []string {
 	case runnersView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runners"}, [2]string{"esc", "Back to the runs"})
 	default:
-		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"})
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"},
+			[2]string{"/", "Filter the runs as you type: words against what is loaded, and namespace=, workflow=, state=, since= and until= asked of the installation"},
+			[2]string{"esc", "Clear the filter"})
 	}
 	lines := []string{t.line(false, m.width, part{strong, "Every key of this view"}), t.line(false, m.width)}
 	for _, r := range rows {
@@ -207,25 +215,34 @@ func startOf(r db.ListedRun) time.Time {
 // are why the view is opened, then every run, newest first, the one selected drawn as the
 // selection.
 func (m Model) runsLines(t theme, height int) []string {
+	var lines []string
+	if m.filtering || m.filter != "" {
+		lines = append(lines, m.filterLine(t))
+	}
 	if !m.read {
 		if m.unanswered != "" {
-			return []string{t.line(false, m.width, part{failedText, "The runs could not be read: " + m.unanswered})}
+			return append(lines, t.line(false, m.width, part{failedText, "The runs could not be read: " + m.unanswered}))
 		}
-		return []string{t.line(false, m.width, part{quiet, "Reading the runs."})}
+		return append(lines, t.line(false, m.width, part{quiet, "Reading the runs."}))
 	}
-	if len(m.runs) == 0 {
-		return []string{t.line(false, m.width, part{quiet, "No run yet."})}
+	runs := m.shownRuns()
+	if len(runs) == 0 {
+		said := "No run yet."
+		if m.filter != "" {
+			said = "No run matches the filter."
+		}
+		return append(lines, t.line(false, m.width, part{quiet, said}))
 	}
 	now := m.o.Now()
-	var lines []string
 	var failed []db.ListedRun
-	for _, r := range m.runs {
+	for _, r := range runs {
 		if failing(r.State) {
 			failed = append(failed, r)
 		}
 	}
-	if len(failed) > 0 {
-		lines = append(lines, t.line(false, m.width, part{strong, fmt.Sprintf("Failed, %d of the last %d", len(failed), len(m.runs))}))
+	// A filter is what was asked for, and the band would take the room of what it found.
+	if len(failed) > 0 && m.filter == "" {
+		lines = append(lines, t.line(false, m.width, part{strong, fmt.Sprintf("Failed, %d of the last %d", len(failed), len(runs))}))
 		for _, r := range failed[:min(len(failed), 3)] {
 			lines = append(lines, t.line(false, m.width, m.row(r, now)...))
 		}
@@ -234,14 +251,14 @@ func (m Model) runsLines(t theme, height int) []string {
 	lines = append(lines, t.line(false, m.width, m.header()...))
 	room := height - len(lines)
 	at := 0
-	for i, r := range m.runs {
+	for i, r := range runs {
 		if string(r.Run) == m.selected {
 			at = i
 		}
 	}
-	first := min(max(0, at-room+1), max(0, len(m.runs)-room))
-	for i := first; i < len(m.runs) && i < first+room; i++ {
-		lines = append(lines, t.line(string(m.runs[i].Run) == m.selected, m.width, m.row(m.runs[i], now)...))
+	first := min(max(0, at-room+1), max(0, len(runs)-room))
+	for i := first; i < len(runs) && i < first+room; i++ {
+		lines = append(lines, t.line(string(runs[i].Run) == m.selected, m.width, m.row(runs[i], now)...))
 	}
 	return lines
 }
