@@ -1,0 +1,21 @@
+# invalid: A schedule's zone the time zone database does not hold. The name is
+#   well formed and names no zone, so no instant can be read from it.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: price-quotes
+  namespace: sales
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+      timezone: Mars/Olympus_Mons
+
+steps:
+  quote:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

@@ -1,0 +1,17 @@
+# invalid: A memory ceiling with no unit. Memory is a quantity with a binary
+#   suffix, so that 512Mi cannot be read as 512 bytes.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    resources: { cpu: "1", memory: "512" }
+    outputs: [out]

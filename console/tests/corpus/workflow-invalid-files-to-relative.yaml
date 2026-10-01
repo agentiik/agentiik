@@ -1,0 +1,22 @@
+# invalid: A file relocated to a relative path. Inside a container there is no
+#   directory a relative path could be relative to, the runner refuses one, and
+#   the task message holds that field to the same absolute grammar.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: order-loading
+  namespace: finance
+
+steps:
+
+  load:
+    image: postgres:17-alpine@sha256:8e21af18c6b590f2df7fa9bc364251212900a8d3493ed74f96bf418479a34b70
+    files:
+      - { from: ./certs/internal-ca.pem, to: etc/ssl/certs/internal-ca.pem }
+    script:
+      - psql -f /agk/repo/sql/orders.sql
+    outputs: [out]
