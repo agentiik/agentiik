@@ -45,7 +45,7 @@
 </script>
 
 <header class="bar">
-  <a class="brand" href={place.href(home)} onclick={follow(place, home)} aria-label="Agentiik, the runs you read">
+  <a class="brand" href={place.href(home)} onclick={follow(place, home)} aria-label="Agentiik, your home">
     <svg viewBox="0 0 16 14" aria-hidden="true"
       ><rect x="0" y="0" width="16" height="4" rx="1" /><g opacity="0.62"><rect x="0" y="6" width="7" height="4" rx="1" /><rect x="9" y="6" width="7" height="4" rx="1" /></g><g
         opacity="0.3"><rect x="0" y="12" width="16" height="2" rx="1" /></g
@@ -54,7 +54,7 @@
   </a>
 
   {#if namespaces.length > 0 || namespace}
-    <NamespaceSwitcher {namespaces} principal={me.principal} current={namespace} view={view ?? "runs"} {place} />
+    <NamespaceSwitcher {namespaces} principal={me.principal} current={namespace} view={view ?? "runs"} {place} every={place.route.kind === "landing"} />
   {/if}
 
   {#if namespace}
