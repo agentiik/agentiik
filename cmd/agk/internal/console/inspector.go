@@ -21,11 +21,12 @@ import (
 // and each port the step published, with the items in its envelope, and the envelope itself under
 // run:read_data alone, hidden rather than refused to anybody else.
 
-// principal is the caller as GET /api/v1/me gives it: who, whether an administrator, and what they
-// hold where, by scope as a grant writes it.
+// principal is the caller as GET /api/v1/me gives it: who, whether an administrator, the groups
+// they are in as a grant names them, and what they hold where, by scope as a grant writes it.
 type principal struct {
 	Principal     string              `json:"principal"`
 	Admin         bool                `json:"admin"`
+	Groups        []string            `json:"groups"`
 	Permissions   map[string][]string `json:"permissions"`
 	Notifications []notice            `json:"notifications"`
 }

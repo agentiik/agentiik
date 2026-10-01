@@ -18,6 +18,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
 )
@@ -83,6 +84,7 @@ const (
 	runnersView
 	graphView
 	workflowsView
+	sharingView
 )
 
 // Model is the console's state, as Bubble Tea holds it between one message and the next.
@@ -166,6 +168,20 @@ type Model struct {
 	graphFailed string
 	graphFrom   view
 	asList      bool
+
+	// The sharing view's: the scope whose grants are listed, the grants as last read and the scope
+	// they were read for, why they could not be, the members of every group where an administrator
+	// reads them, the grant chosen, the principal they are resolved for, and the filter over them
+	// and whether its line is open.
+	scope           string
+	grants          []access.Grant
+	grantsFor       string
+	grantsFailed    string
+	members         map[string][]string
+	grant           string
+	whom            string
+	grantsFilter    string
+	grantsFiltering bool
 
 	// The runners view's: the pools and the runners as last read, and the runner chosen.
 	pools       []api.Pool
@@ -271,6 +287,9 @@ func (m Model) readShown() tea.Cmd {
 	if m.view == workflowsView {
 		return m.readFlows()
 	}
+	if m.view == sharingView {
+		return m.readSharing()
+	}
 	if m.view == graphView && m.graphOf != "" {
 		return m.readWorkflowNamed(m.graphOf)
 	}
@@ -347,6 +366,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, cmds = m.noticed(msg.me)
 		if m.me.Admin && m.view == runView && m.runners == nil {
 			cmds = append(cmds, m.readRunners())
+		}
+		if m.view == sharingView && m.scope == "" {
+			// Opened before the principal was read, the view learns only now what it may list.
+			if m.scope = m.sharingScope(); m.scope != "" {
+				cmds = append(cmds, m.readSharing())
+			}
 		}
 		return m, tea.Batch(append(cmds, m.readChosen())...)
 	case meAgain:
@@ -484,6 +509,26 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.view == runnersView {
 			return m, m.later()
 		}
+	case sharingRead:
+		if msg.scope != m.scope {
+			// Read for a scope since left.
+			return m, nil
+		}
+		if msg.err != nil {
+			if m.grantsFor == m.scope {
+				m.unanswered = said(msg.err)
+			} else {
+				m.grantsFailed = said(msg.err)
+			}
+		} else {
+			m.unanswered, m.grantsFailed, m.grantsFor, m.grants = "", "", msg.scope, msg.grants
+			if msg.members != nil {
+				m.members = msg.members
+			}
+		}
+		if m.view == sharingView {
+			return m, m.later()
+		}
 	case again:
 		if msg.view == m.view && msg.shown == m.shown {
 			return m, m.readShown()
@@ -496,6 +541,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.filtering && m.view == runsView && m.asking == notAsking && !m.listing {
 			return m.typing(msg)
+		}
+		if m.grantsFiltering && m.view == sharingView && !m.listing {
+			return m.typingGrants(msg)
 		}
 		return m.press(msg.String())
 	}
@@ -566,12 +614,21 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 			return m.showing(workflowsView)
 		}
 		return m, nil
+	case "3":
+		if m.view != sharingView {
+			m.scope = m.sharingScope()
+			return m.showing(sharingView)
+		}
+		return m, nil
 	case "4":
 		// The runners are an administrator's alone, and the key is nobody else's either.
 		if m.me.Admin && m.view != runnersView {
 			return m.showing(runnersView)
 		}
 		return m, nil
+	}
+	if m.view == sharingView {
+		return m.sharingPress(key)
 	}
 	if m.view == workflowsView {
 		switch key {
@@ -712,6 +769,9 @@ func (m Model) showing(v view) (tea.Model, tea.Cmd) {
 	}
 	if v != graphView {
 		m.graphOf = ""
+	}
+	if v == sharingView && m.grantsFor != m.scope {
+		m.grants, m.grantsFor, m.grantsFailed = nil, "", ""
 	}
 	if m.graphOf != "" && m.graphFor != m.graphOf {
 		m.graph, m.graphFor, m.graphFailed = nil, m.graphOf, ""

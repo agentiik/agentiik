@@ -23,11 +23,13 @@ type command struct {
 	act              func(Model) (tea.Model, tea.Cmd)
 }
 
-// palette is the palette open, and whether it lists the notifications rather than the commands.
+// palette is the palette open. A chooser lists what among gives in place of the commands, under
+// its own prompt, saying none where there is nothing: the notifications, a scope, a principal.
 type palette struct {
-	query   string
-	chosen  int
-	notices bool
+	query        string
+	chosen       int
+	among        func(Model) []command
+	prompt, none string
 }
 
 // recentlyUsed is how many commands the palette opens on.
@@ -70,14 +72,25 @@ func (m Model) commands() []command {
 		out = append(out, pressing("Back to the runs", "esc"))
 	case workflowsView:
 		out = append(out, pressing("Graph of the workflow chosen", "enter"), pressing("Back to the runs", "esc"))
+	case sharingView:
+		if m.grantsFor == m.scope && m.scope != "" {
+			out = append(out, pressing("Resolve the grants for…", "enter"))
+		}
+		out = append(out, pressing("Choose the scope whose grants are listed", "s"), pressing("Filter the grants", "/"))
+		if m.grantsFilter != "" {
+			out = append(out, pressing("Clear the grants' filter", "esc"))
+		} else {
+			out = append(out, pressing("Back to the runs", "esc"))
+		}
 	}
 	out = append(out, command{label: "Runs", key: "1", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("1") }},
-		command{label: "Workflows", key: "2", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("2") }})
+		command{label: "Workflows", key: "2", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("2") }},
+		command{label: "Sharing", key: "3", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("3") }})
 	if m.me.Admin {
 		out = append(out, command{label: "Runners", key: "4", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("4") }})
 	}
 	out = append(out, command{label: "Notifications", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) {
-		m.palette = &palette{notices: true}
+		m.palette = &palette{among: Model.noticeCommands, prompt: "notifications: ", none: "No notification."}
 		return m, nil
 	}})
 	out = append(out, pressing("Every key", "?"), pressing("Quit", "q"))
@@ -158,12 +171,12 @@ func (m Model) noticeCommands() []command {
 // with nothing typed, the commands used last, then the rest of the view's.
 func (m Model) listed() []command {
 	all := m.commands()
-	if m.palette.notices {
-		all = m.noticeCommands()
+	if m.palette.among != nil {
+		all = m.palette.among(m)
 	}
 	words := strings.Fields(m.palette.query)
 	if len(words) == 0 {
-		if m.palette.notices {
+		if m.palette.among != nil {
 			return all
 		}
 		var first []command
@@ -261,15 +274,15 @@ func (m Model) withPalette(t theme, screen string) string {
 	room := max(1, min(len(listed), m.height-8))
 	first := min(max(0, m.palette.chosen-room+1), max(0, len(listed)-room))
 	prompt := ": "
-	if m.palette.notices {
-		prompt = "notifications: "
+	if m.palette.among != nil {
+		prompt = m.palette.prompt
 	}
 	var rows []string
 	rows = append(rows, t.line(false, inner, part{strong, prompt}, part{plain, m.palette.query}, part{strong, "▏"}))
 	if len(listed) == 0 {
 		said := "Nothing matches."
-		if m.palette.notices {
-			said = "No notification."
+		if m.palette.among != nil && m.palette.query == "" {
+			said = m.palette.none
 		}
 		rows = append(rows, t.line(false, inner, part{quiet, said}))
 	}

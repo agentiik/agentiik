@@ -48,6 +48,8 @@ func (m Model) screen() string {
 		lines = m.graphLines(t, body)
 	case m.view == workflowsView:
 		lines = m.workflowsLines(t, body)
+	case m.view == sharingView:
+		lines = m.sharingLines(t, body)
 	default:
 		lines = m.runsLines(t, body)
 	}
@@ -105,10 +107,10 @@ type tab struct {
 	view      view
 }
 
-// tabs are the views a digit turns to, the one shown in bold: the runs, the workflows, and the
-// runners to an administrator. Sharing takes 3 once the console draws it.
+// tabs are the views a digit turns to, the one shown in bold: the runs, the workflows, the sharing,
+// and the runners to an administrator.
 func (m Model) tabs() []part {
-	tabs := []tab{{"1", "Runs", runsView}, {"2", "Workflows", workflowsView}}
+	tabs := []tab{{"1", "Runs", runsView}, {"2", "Workflows", workflowsView}, {"3", "Sharing", sharingView}}
 	if m.me.Admin {
 		tabs = append(tabs, tab{"4", "Runners", runnersView})
 	}
@@ -161,6 +163,8 @@ func (m Model) keyLine(t theme) string {
 		keys = append(keys, [2]string{"g", written}, [2]string{"esc", back}, [2]string{"q", "Quit"}, [2]string{"?", "Every key"})
 	case m.view == workflowsView:
 		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Graph"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
+	case m.view == sharingView:
+		keys = m.sharingKeys()
 	default:
 		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"g", "Graph"}, {"/", "Filter"}}
 		if m.filter != "" {
@@ -180,7 +184,7 @@ func (m Model) keyLine(t theme) string {
 
 // keysListed is every key of the view, which ? opens over it.
 func (m Model) keysListed(t theme) []string {
-	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}, {":", "Open the command palette: commands, views, runs, workflows and namespaces"}, {"1", "The runs"}, {"2", "The workflows"}}
+	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}, {":", "Open the command palette: commands, views, runs, workflows and namespaces"}, {"1", "The runs"}, {"2", "The workflows"}, {"3", "The sharing of a namespace or a workflow, read only"}}
 	if m.me.Admin {
 		rows = append(rows, [2]string{"4", "The runners and their pools"})
 	}
@@ -195,6 +199,11 @@ func (m Model) keysListed(t theme) []string {
 		}
 	case runnersView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runners"}, [2]string{"esc", "Back to the runs"})
+	case sharingView:
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the grants"}, [2]string{"enter", "Resolve the grants for a principal, the chosen grant's first"},
+			[2]string{"s", "Choose the namespace or workflow whose grants are listed"},
+			[2]string{"/", "Filter the grants as you type, by principal, role, permission or scope; the resolution still reads them all"},
+			[2]string{"esc", "Clear the filter, or back to the runs"})
 	case workflowsView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the workflows"}, [2]string{"enter, g", "The graph of the workflow chosen"}, [2]string{"esc", "Back to the runs"})
 	case graphView:
