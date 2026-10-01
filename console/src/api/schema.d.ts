@@ -1043,7 +1043,7 @@ export interface paths {
         put?: never;
         /**
          * Replay a run
-         * @description Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only or a step above never ended.
+         * @description Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.
          */
         post: operations["replayRun"];
         delete?: never;
@@ -1235,6 +1235,54 @@ export interface paths {
          * @description Per pool and per runner, per bucket: the slots in use and the capacity; and each silence between heartbeats of 20 s or more, with its length and the tasks it cost. Administrator only. Served at this path alone, so that a namespace named stats made before v0.3.0 reserved the word keeps every route it has.
          */
         get: operations["getPoolStatistics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{id}/outputs/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+                /** @description A workflow output, by the name the workflow's outputs block gives it. */
+                name: components["parameters"]["outputName"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read a workflow output of a run
+         * @description The envelope a workflow output names: the one its step published on the port the output is a view of, read back from the object store and held to its digest. Recorded once the run has ended with every output it declares published, and a name the workflow does not declare is answered as an output there is nothing of yet. The envelope lives by the run's defaults.retain, so it may still be read after an output declaring a short retain or a fetch budget has lost its files, which then answer 410. Envelope contents, so it requires run:read_data on the run's workflow.
+         */
+        get: operations["getRunOutput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/{uri}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The artifact's agk:// URI, as an envelope's file names it, percent-encoded as one path segment, so that a proxy in front passes %2F undecoded. */
+                uri: components["parameters"]["artifactUri"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Fetch an artifact
+         * @description Fetches one artifact by the URI an envelope names it with: a redirect to a presigned URL good for 5 minutes where it has no fetch budget, so that the bytes never touch the control plane; the bytes themselves where it has one, since a redirect would spend a fetch on a client that never arrived. A fetch counts when the transfer completes, is held while it goes and given back where it does not; one held while every fetch left is being served is answered 409. Expired, or with its budget spent, it is 410 rather than 404, so that a client tells this existed and is finished from this never existed, and the run detail keeps showing it. A HEAD is answered what a GET would be, bytes aside, and spends nothing. A Range is not honoured. Requires run:read_data on the workflow of the run that published it, a run of another namespace answered as one that does not exist.
+         */
+        get: operations["getArtifact"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6470,7 +6518,7 @@ export interface components {
              */
             step: components["schemas"]["identifier"];
             /**
-             * @description Where the step stands: pending before it starts, or while it waits for another attempt; running while a shard of it is in flight; succeeded once it published its ports; failed, which continue_on_error does not change; skipped where its if was false; cancelled with its run.
+             * @description Where the step stands: pending before it starts, or while it waits for another attempt; running while a shard of it is in flight; succeeded once it published its ports; failed, which continue_on_error does not change; skipped where its if was false; cancelled with its run, where it was under way when the run was cancelled or timed out, a step nobody reached staying pending.
              * @example succeeded
              * @example failed
              * @enum {string}
@@ -6710,6 +6758,19 @@ export interface components {
          *             }
          *           }
          *         }
+         *       ],
+         *       "artifacts": [
+         *         {
+         *           "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
+         *           "step": "archive",
+         *           "port": "out",
+         *           "name": "invoices.zip",
+         *           "media_type": "application/zip",
+         *           "size": 481233,
+         *           "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+         *           "status": "live",
+         *           "expires_at": "2026-12-29T05:44:10Z"
+         *         }
          *       ]
          *     }
          */
@@ -6942,6 +7003,37 @@ export interface components {
              *     ]
              */
             tasks: components["schemas"]["taskSummary"][];
+            /**
+             * @description The files the run's steps published, live or retired, by step, port and name: what each envelope's files name, with where each stands in its retention. Empty for a run that published none.
+             * @example [
+             *       {
+             *         "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
+             *         "step": "archive",
+             *         "port": "out",
+             *         "name": "invoices.zip",
+             *         "media_type": "application/zip",
+             *         "size": 481233,
+             *         "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+             *         "status": "live",
+             *         "expires_at": "2026-12-29T05:44:10Z"
+             *       },
+             *       {
+             *         "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/render/out/payslips.pdf",
+             *         "step": "render",
+             *         "port": "out",
+             *         "name": "payslips.pdf",
+             *         "media_type": "application/pdf",
+             *         "size": 88412,
+             *         "sha256": "9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+             *         "status": "collected",
+             *         "expires_at": "2026-10-02T05:44:10Z",
+             *         "retired_at": "2026-10-01T09:12:00Z",
+             *         "fetches_left": 0
+             *       }
+             *     ]
+             * @example []
+             */
+            artifacts: components["schemas"]["runArtifact"][];
         };
         /**
          * Run asked
@@ -7010,6 +7102,94 @@ export interface components {
              * @example invoice
              */
             replay_from?: components["schemas"]["identifier"];
+        };
+        /**
+         * Run artifact
+         * @description One file a step of the run published on a port, as its reference holds it: what the envelope's file names, and where it stands in its retention. The reference outlives the bytes, so that a file fetched past its retention answers 410 rather than 404 and the run keeps showing its name, size and digest with its collection recorded.
+         * @example {
+         *       "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip",
+         *       "step": "archive",
+         *       "port": "out",
+         *       "name": "invoices.zip",
+         *       "media_type": "application/zip",
+         *       "size": 481233,
+         *       "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+         *       "status": "live",
+         *       "expires_at": "2026-12-29T05:44:10Z"
+         *     }
+         * @example {
+         *       "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/render/out/payslips.pdf",
+         *       "step": "render",
+         *       "port": "out",
+         *       "name": "payslips.pdf",
+         *       "media_type": "application/pdf",
+         *       "size": 88412,
+         *       "sha256": "9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+         *       "status": "collected",
+         *       "expires_at": "2026-10-02T05:44:10Z",
+         *       "retired_at": "2026-10-01T09:12:00Z",
+         *       "fetches_left": 0
+         *     }
+         */
+        runArtifact: {
+            /**
+             * @description The URI the envelope names it by, which GET /api/v1/artifacts/{uri} fetches it with.
+             * @example agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/out/invoices.zip
+             */
+            uri: components["schemas"]["uri"];
+            /**
+             * @description The step that published it.
+             * @example archive
+             */
+            step: components["schemas"]["identifier"];
+            /**
+             * @description The port it was published on.
+             * @example out
+             */
+            port: components["schemas"]["identifier"];
+            /**
+             * @description Its name on that port, the last segment of its URI.
+             * @example invoices.zip
+             */
+            name: components["schemas"]["properties-name"];
+            /**
+             * @description What the bytes are.
+             * @example application/zip
+             */
+            media_type: components["schemas"]["media_type"];
+            /**
+             * @description How many bytes it holds, kept once the bytes are gone.
+             * @example 481233
+             */
+            size: components["schemas"]["size"];
+            /**
+             * @description The SHA-256 digest of its bytes, kept once the bytes are gone.
+             * @example c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b
+             */
+            sha256: components["schemas"]["sha256"];
+            /**
+             * @description live while it may be fetched; expired once its duration ran out; collected once the fetches its budget allowed were spent. A retired reference is kept rather than deleted, which is what the run detail reads.
+             * @example live
+             * @example collected
+             * @enum {string}
+             */
+            status: "live" | "expired" | "collected";
+            /**
+             * @description When it stops being fetchable, its retain capped by the namespace's max_retention_days when it was written: an output's own retain where it declares one, defaults.retain otherwise.
+             * @example 2026-12-29T05:44:10Z
+             */
+            expires_at: components["schemas"]["timestamp"];
+            /**
+             * @description When it stopped being live. Absent while it is.
+             * @example 2026-10-01T09:12:00Z
+             */
+            retired_at?: components["schemas"]["timestamp"];
+            /**
+             * @description What remains of a fetch budget, which only a workflow output declaring retain with fetches carries. Absent where there is none.
+             * @example 1
+             * @example 0
+             */
+            fetches_left?: number;
         };
         /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
@@ -9223,6 +9403,35 @@ export interface components {
             of: number;
         };
         /**
+         * Format: uri
+         * @description Where the artifact is addressed from, in the logical form agk://run/<run>/<step>/<port>/<name>. The logical URI resolves to the physical key sha256/<digest>, so two steps producing identical bytes store one copy and a replay that recomputes the same content writes nothing. Deduplication is scoped per namespace, and the URI is never handed to the consuming container, which sees a mounted path instead.
+         * @example agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf
+         */
+        uri: string;
+        /**
+         * @description What the artifact is called on this port, and the last segment of its URI. It is the name the consuming container finds under its input mount, and the name the run detail keeps showing after the artifact has expired or been collected.
+         * @example purchase-order.pdf
+         */
+        "properties-name": string;
+        /**
+         * @description What the bytes are, as an IANA media type. A consumer decides how to read the file from this rather than from the ending of its name, and a brick that emits several kinds of artifact on one port is legible because of it.
+         * @example application/pdf
+         * @example application/json
+         * @example text/csv
+         */
+        media_type: string;
+        /**
+         * @description How many bytes the artifact holds. It lets a consumer decide before it fetches, and it is what the run detail shows beside the name and the digest once the artifact itself is gone. The engine setting artifact_max_bytes caps what may be written and is not a bound on this field.
+         * @example 481233
+         * @example 1284
+         */
+        size: number;
+        /**
+         * @description The SHA-256 digest of the artifact's bytes, which is also its address: this is the <digest> the physical key sha256/<digest> is built from. A consumer checks its transfer against it, and the engine recognises content it already holds by it, which is how a replay avoids rewriting what it recomputed identically. It is written out in full, sixty-four lowercase hexadecimal characters: the documentation elides the middle of a digest for the page, and that elision is typography rather than a value.
+         * @example c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b
+         */
+        sha256: string;
+        /**
          * Identifier
          * @description A name given in the workflow file and carried here unchanged: a step or a port. It is the same grammar the workflow file writes and the brick manifest declares, because this document is where that name actually travels: a port name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space, and is at most 255 characters, the most a directory or a file name holds. A port is written at most 250 in the workflow file and the manifest, since it becomes the file <name>.json, and taken here up to 255, since the engine carries one of 251 to 255 until v0.4.0 refuses it where it is written, as the documentation says.
          * @example normalize
@@ -9764,6 +9973,10 @@ export interface components {
         dispatchShard: number;
         /** @description The id of the last event a stream gave, <task_id>/<seq>/<line>, which a browser's EventSource sends by itself when it reconnects: the stream resumes after it, sending the dispatch_end it had sent last where it was cut between that and what follows. */
         lastEventId: string;
+        /** @description A workflow output, by the name the workflow's outputs block gives it. */
+        outputName: components["schemas"]["identifier"];
+        /** @description The artifact's agk:// URI, as an envelope's file names it, percent-encoded as one path segment, so that a proxy in front passes %2F undecoded. */
+        artifactUri: string;
     };
     requestBodies: never;
     headers: {
@@ -11879,7 +12092,7 @@ export interface operations {
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
             404: components["responses"]["notFound"];
-            /** @description The run is not over, what its steps publish being undecided; or, from a step, the run is replayable from the start only, or a step above the one named never ended. */
+            /** @description The run is not over, what its steps publish being undecided; or, from a step, the run is replayable from the start only, or a step above the one named never ended or was cancelled with its run, and published nothing to reuse. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12262,6 +12475,112 @@ export interface operations {
             401: components["responses"]["unauthorised"];
             /** @description A caller who is not an administrator, or a session that may only enrol. */
             403: components["responses"]["forbidden"];
+        };
+    };
+    getRunOutput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+                /** @description A workflow output, by the name the workflow's outputs block gives it. */
+                name: components["parameters"]["outputName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The envelope. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["envelope.schema"];
+                };
+            };
+            401: components["responses"]["unauthorised"];
+            /** @description No such run, or not the caller's; or no output of that name recorded, a run's outputs being recorded when it ends with every one of them published. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The output's envelope existed and its bytes were purged with the run's retention: the run still shows its digest. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            503: components["responses"]["unavailable"];
+        };
+    };
+    getArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The artifact's agk:// URI, as an envelope's file names it, percent-encoded as one path segment, so that a proxy in front passes %2F undecoded. */
+                uri: components["parameters"]["artifactUri"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bytes of an artifact with a fetch budget, as an attachment, with nosniff; the fetch spent once they have all gone and matched their digest. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Where an artifact with no fetch budget is read: a presigned URL of the object store, good for 5 minutes, which no cache may keep. */
+            302: {
+                headers: {
+                    /** @description The presigned URL. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["unauthorised"];
+            /** @description No such artifact, never written or in a run the caller may not read. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description Every fetch its budget has left is being served right now; one comes back where its transfer does not complete. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description It existed and is finished: past its retain, or its fetches spent. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            503: components["responses"]["unavailable"];
         };
     };
 }

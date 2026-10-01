@@ -157,6 +157,35 @@ type RunDetail struct {
 
 	Steps []StepSummary `json:"steps"`
 	Tasks []TaskSummary `json:"tasks"`
+
+	// Artifacts are the files the run's steps published, live or retired: "the run detail keeps
+	// showing the artifact's name, size and digest with its collection recorded", so that one
+	// fetched past its retention is told from one that never existed.
+	Artifacts []ArtifactSummary `json:"artifacts"`
+}
+
+// ArtifactSummary is one file a step published on a port, as its reference holds it: what the
+// envelope's file names, and where it stands in its retention, which the bytes behind it may
+// have outlived or not.
+type ArtifactSummary struct {
+	URI       agk.URI  `json:"uri"`
+	Step      agk.Step `json:"step"`
+	Port      agk.Port `json:"port"`
+	Name      string   `json:"name"`
+	MediaType string   `json:"media_type"`
+	Size      int64    `json:"size"`
+	// SHA256 is the sixty-four hexadecimal characters the envelope's file carries.
+	SHA256 string `json:"sha256"`
+
+	// Status is live while the artifact may be fetched, expired once its duration ran out, and
+	// collected once its fetches were spent; RetiredAt is when it stopped being live.
+	Status    string    `json:"status"`
+	ExpiresAt time.Time `json:"expires_at"`
+	RetiredAt time.Time `json:"retired_at,omitzero"`
+
+	// FetchesLeft is what remains of a fetch budget, which only a workflow output may declare,
+	// and nil where there is none.
+	FetchesLeft *int `json:"fetches_left,omitempty"`
 }
 
 // summaries reads the rows of a listing.
@@ -236,7 +265,41 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	if d.Tasks, err = n.tasks(ctx, run); err != nil {
 		return RunDetail{}, err
 	}
+	if d.Artifacts, err = n.artifacts(ctx, run); err != nil {
+		return RunDetail{}, err
+	}
 	return d, nil
+}
+
+// artifacts reads the references of a run's files, by step, port and name, never empty-handed:
+// a run that published none answers an empty list.
+func (n *NS) artifacts(ctx context.Context, run agk.RunID) ([]ArtifactSummary, error) {
+	rows, err := n.tx.Query(ctx, `
+		select step, port, name, media_type, size_bytes, digest, status, expires_at, retired_at, fetches_left
+		from artifacts where namespace = $1 and run_id = $2
+		order by step, port, name`, n.namespace, string(run))
+	if err != nil {
+		return nil, fmt.Errorf("db: the artifacts of run %s could not be read: %w", run, err)
+	}
+	defer rows.Close()
+	out := []ArtifactSummary{}
+	for rows.Next() {
+		var a ArtifactSummary
+		var step, port, digest string
+		var retired *time.Time
+		if err := rows.Scan(&step, &port, &a.Name, &a.MediaType, &a.Size, &digest, &a.Status, &a.ExpiresAt, &retired, &a.FetchesLeft); err != nil {
+			return nil, fmt.Errorf("db: an artifact of run %s could not be read: %w", run, err)
+		}
+		a.Step, a.Port = agk.Step(step), agk.Port(port)
+		a.URI = agk.URI{Run: run, Step: a.Step, Port: a.Port, Name: a.Name}
+		a.SHA256 = strings.TrimPrefix(digest, "sha256:")
+		a.ExpiresAt = a.ExpiresAt.UTC()
+		if retired != nil {
+			a.RetiredAt = retired.UTC()
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // RunInclude is one workflow include of the version a run pinned: the repository and the ref the

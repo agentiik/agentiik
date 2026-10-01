@@ -1,13 +1,14 @@
 <script lang="ts">
   import type { API } from "../api/client";
-  import { filesOf, readEnvelope, shown, tokens, type Envelope, type Side } from "../lib/envelope";
+  import { filesOf, readEnvelope, readOutput, shown, tokens, type Envelope, type Side } from "../lib/envelope";
   import { bytes } from "../lib/stats";
   import Icon from "./Icon.svelte";
 
   // One envelope, drawn for a principal who holds run:read_data on the run's workflow: its count and
   // when it was produced, its items as coloured JSON on the sunken ground, the first ones at once and
   // more on asking, and the files those items carry by name, media type, size and digest. Copy and
-  // Download take the whole envelope as the API answered it, never only what is drawn.
+  // Download take the whole envelope as the API answered it, never only what is drawn. Given an
+  // output, it is that workflow output of the run, which names the step and the port it is a view of.
   let {
     api,
     run,
@@ -15,7 +16,8 @@
     port,
     side,
     task,
-  }: { api: API; run: string; step: string; port: string; side: Side; task?: { attempt: number; shard?: { index: number } } } = $props();
+    output,
+  }: { api: API; run: string; step: string; port: string; side: Side; task?: { attempt: number; shard?: { index: number } }; output?: string } = $props();
 
   // How many items are drawn at once, and how many more each ask draws.
   const batch = 20;
@@ -26,11 +28,11 @@
   let copied = $state(false);
 
   $effect(() => {
-    const asked = { run, step, port, side, attempt: task?.attempt, shard: task?.shard?.index };
+    const asked = { run, step, port, side, attempt: task?.attempt, shard: task?.shard?.index, output };
     envelope = null;
     refused = "";
     drawn = batch;
-    readEnvelope(api, asked.run, asked.step, asked.port, asked.side, task).then(
+    (asked.output ? readOutput(api, asked.run, asked.output) : readEnvelope(api, asked.run, asked.step, asked.port, asked.side, task)).then(
       (e) => {
         envelope = e;
       },
@@ -55,20 +57,20 @@
     if (!envelope) return;
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" }));
-    link.download = `${run}-${step}-${side}-${port}.json`;
+    link.download = output ? `${run}-output-${output}.json` : `${run}-${step}-${side}-${port}.json`;
     link.click();
     URL.revokeObjectURL(link.href);
   }
 </script>
 
-<section class="envelope" aria-label="The envelope on {port}">
+<section class="envelope" aria-label={output ? `The envelope of the output ${output}` : `The envelope on ${port}`}>
   {#if refused}
     <p class="problem" role="alert">{refused}</p>
   {:else if !envelope || !view}
     <p class="muted">Reading the envelope.</p>
   {:else}
     <div class="head">
-      <span class="mono name">{port}</span>
+      <span class="mono name">{output ?? port}</span>
       <span class="muted">{envelope.meta.count} {envelope.meta.count === 1 ? "item" : "items"} · produced <time class="mono" datetime={envelope.meta.produced_at}>{envelope.meta.produced_at}</time></span>
       <span class="spacer"></span>
       <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy"}</button>

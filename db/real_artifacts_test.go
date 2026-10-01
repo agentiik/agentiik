@@ -901,3 +901,58 @@ func TestAHeldFetchIsSpentOnlyByATransferThatCompleted(t *testing.T) {
 		t.Errorf("a budget of two, both spent, answers %v", err)
 	}
 }
+
+// "The run detail keeps showing the artifact's name, size and digest with its collection
+// recorded": a live file with its expiry and the fetches left of its budget, and a retired one
+// with when it was retired, each by the URI an envelope names it with, and none of another run's.
+func TestARunDetailShowsItsArtifactsLiveAndRetired(t *testing.T) {
+	pool, super := opened(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	for _, stmt := range []string{
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by) values ('finance', '` + financeRun + `', 'monthly-invoicing', '` + strings.Repeat("a", 40) + `', 'succeeded', 'manual', 'alice') on conflict do nothing`,
+		`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at, fetches_left)
+		 values ('finance', '` + financeRun + `', 'render', 'ok', 'payslip.pdf', 'sha256:` + digestOf("b") + `', 2048, 'application/pdf', '2026-10-02T06:00:00Z', 1)`,
+		`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at, status, retired_at)
+		 values ('finance', '` + financeRun + `', 'archive', 'out', 'invoices.zip', 'sha256:` + digestOf("a") + `', 4096, 'application/zip', '2026-10-31T06:00:00Z', 'collected', '2026-10-01T07:00:00Z')`,
+		`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at)
+		 values ('team-ops', '` + opsRun + `', 'archive', 'out', 'elsewhere.zip', 'sha256:` + digestOf("c") + `', 1, 'application/zip', '2026-10-31T06:00:00Z')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seeding: %s", err)
+		}
+	}
+
+	var d RunDetail
+	if err := pool.In(ctx, "finance", func(ctx context.Context, ns *NS) error {
+		var err error
+		d, err = ns.RunDetail(ctx, financeRun)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Artifacts) != 2 {
+		t.Fatalf("the run reads %d artifacts: %+v", len(d.Artifacts), d.Artifacts)
+	}
+	collected, live := d.Artifacts[0], d.Artifacts[1]
+	if collected.URI.String() != "agk://run/"+financeRun+"/archive/out/invoices.zip" || collected.Status != "collected" ||
+		!collected.RetiredAt.Equal(time.Date(2026, 10, 1, 7, 0, 0, 0, time.UTC)) || collected.FetchesLeft != nil ||
+		collected.SHA256 != digestOf("a") || collected.Size != 4096 || collected.MediaType != "application/zip" {
+		t.Errorf("the collected file reads %+v", collected)
+	}
+	if live.Name != "payslip.pdf" || live.Step != "render" || live.Port != "ok" || live.Status != "live" || !live.RetiredAt.IsZero() ||
+		live.FetchesLeft == nil || *live.FetchesLeft != 1 || !live.ExpiresAt.Equal(time.Date(2026, 10, 2, 6, 0, 0, 0, time.UTC)) {
+		t.Errorf("the live file reads %+v", live)
+	}
+	written, err := json.Marshal(collected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(written), `"uri":"agk://run/`+financeRun+`/archive/out/invoices.zip"`) || strings.Contains(string(written), "fetches_left") {
+		t.Errorf("the collected file is answered as %s", written)
+	}
+}

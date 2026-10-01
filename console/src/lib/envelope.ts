@@ -13,6 +13,21 @@ export type Envelope = { meta: components["schemas"]["meta"]; items: Item[] };
 
 export type Side = "output" | "input";
 
+// readOutput reads a workflow output of the run: the envelope its step published on the port the
+// output is a view of, recorded once the run has ended with every output it declares published.
+export async function readOutput(api: API, run: string, name: string): Promise<Envelope> {
+  const answer = await api.GET("/api/v1/runs/{id}/outputs/{name}", { params: { path: { id: run, name } } });
+  if (answer.data) {
+    return answer.data;
+  }
+  return Promise.reject(purgedOr(refusal(answer.response, answer.error)));
+}
+
+// purgedOr is a refusal said for a person, the envelope purged with the run's retention said as such.
+function purgedOr(r: Refusal): Refusal {
+  return r.status === 410 ? new Refusal(410, `This envelope was purged with the run's retention: ${r.message}`) : r;
+}
+
 // readEnvelope reads one envelope: the one the step published on port, or, for the input side, the
 // one the task was handed on port, by its attempt and its shard.
 export async function readEnvelope(
@@ -33,12 +48,8 @@ export async function readEnvelope(
   if (answer.data) {
     return answer.data;
   }
-  const r = refusal(answer.response, answer.error);
   // Purged with the run's retention: the run still shows its digest, and the bytes are gone.
-  if (r.status === 410) {
-    return Promise.reject(new Refusal(410, `This envelope was purged with the run's retention: ${r.message}`));
-  }
-  return Promise.reject(r);
+  return Promise.reject(purgedOr(refusal(answer.response, answer.error)));
 }
 
 // shown is the envelope with its first count items, which is what the pane draws at once: an
