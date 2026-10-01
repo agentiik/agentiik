@@ -213,7 +213,7 @@
     if (replaying && chosenStep) {
       const from = chosenStep;
       return [
-        { keys: ["y"], effect: `Replay from ${from}`, does: () => ((replaying = false), void replay(from)) },
+        { keys: ["y"], effect: "Replay from this step", does: () => ((replaying = false), void replay(from)) },
         { keys: ["n", "Escape"], effect: "Keep it", does: () => (replaying = false) },
       ];
     }
@@ -223,7 +223,7 @@
       out.push({ keys: ["[", "]"], effect: "Port", does: (key) => choose({ pane: tab, port: moved(openable, port, key === "]" ? "ArrowDown" : "ArrowUp")! }) });
     }
     if (mayRun && !reader.ended) out.push({ keys: ["c"], effect: "Cancel run", does: () => (confirming = true) });
-    if (mayRun && reader.ended && chosenStep && !run.replay_from_start_only) out.push({ keys: ["p"], effect: `Replay from ${chosenStep}`, does: () => (replaying = true) });
+    if (mayRun && reader.ended && chosenStep && !run.replay_from_start_only) out.push({ keys: ["p"], effect: "Replay from this step", does: () => (replaying = true) });
     out.push({ keys: ["Escape"], effect: `All runs of ${namespace}`, does: () => place.go(runs) });
     return out;
   });
