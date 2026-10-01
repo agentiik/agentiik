@@ -15,6 +15,7 @@
   import { band } from "../lib/exit";
   import { between, clock, took } from "../lib/format";
   import { moved, useKeys, type Binding } from "../lib/keys.svelte";
+  import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { lastAttempt, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
@@ -39,17 +40,15 @@
     untrack(() => r.read());
   });
 
-  // Read again every five seconds until the run has ended, and move the durations every second.
+  // Read again each time the live connection says the run changed, and move the durations every
+  // second.
+  const changes = useLive();
   $effect(() => {
     const r = reader;
-    const reading = setInterval(() => {
-      if (!r.ended && document.visibilityState === "visible") {
-        r.read();
-      }
-    }, 5000);
+    const reading = changes.when((c) => c.kind === "run" && c.run === id, () => r.read());
     const ticking = setInterval(() => (now = Date.now()), 1000);
     return () => {
-      clearInterval(reading);
+      reading();
       clearInterval(ticking);
     };
   });

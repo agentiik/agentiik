@@ -2752,6 +2752,54 @@
         }
       }
     },
+    "/api/v1/me/live": {
+      "get": {
+        "operationId": "openLiveConnection",
+        "tags": [
+          "me"
+        ],
+        "summary": "Be told what changed, over a WebSocket",
+        "description": "A WebSocket, RFC 6455, telling its caller as it happens what changed among what it may read, so that a console reads again what it shows when it changes rather than on a clock. Each message is a text frame holding one liveChange: a run created or moved on, or one of whose steps or tasks did, sent where the caller holds run:read on that run's workflow; the caller's notifications, told or dismissed; the runners, to an administrator, for a runner or a pool changed, a heartbeat included; and all, where a change may have been missed, which reads everything again. What changed within a quarter of a second is sent once. A message holds an identifier and never a record, and what it names is read through the route that answers it, under that route's permissions. The client sends nothing but the protocol's own frames, a message from it closing the connection with 1008, and the API pings every 15 seconds. A session's handshake carries the installation's Origin, since a page of another site sharing its domain could otherwise open one with the cookie. A permission revoked stops its messages within 30 seconds, when it is asked again; a credential that no longer identifies its caller closes the connection with 1008, and the API stopping closes it with 1001, after which a client connects again and reads again what it shows. Under /api/v1/me, a word already reserved, since what it tells is the caller's own. Any authenticated principal.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "101": {
+            "description": "Switching Protocols: the connection is a WebSocket from then on, whose text frames each hold one liveChange."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A handshake RFC 6455 refuses: a version other than 13, or not one Sec-WebSocket-Key of 16 bytes in base64. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session's handshake carrying another Origin than the public URL's, or none; or a session that may only enrol."
+          },
+          "426": {
+            "description": "A request that asks for no WebSocket, with Upgrade: websocket in the answer, as RFC 9110 has it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no upgrade": {
+                    "summary": "a plain GET",
+                    "value": {
+                      "error": "GET /api/v1/me/live is a WebSocket: the request asks for the connection to be upgraded, with Upgrade: websocket and Connection: Upgrade"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/namespaces": {
       "post": {
         "operationId": "createNamespace",
@@ -5487,6 +5535,97 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/workflows/{name}/refs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/workflow"
+        }
+      ],
+      "get": {
+        "operationId": "listWorkflowRefs",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List a workflow's branches and tags",
+        "description": "The branches and tags the workflow's repository holds, for the console's ref switcher, which could otherwise offer only the default branch and the versions of its history: git's advertisement lists them, and git's routes take an API token and never a session. Each ref is named in full, in git's order, byte by byte, with the commit it points at, an annotated tag peeled to its commit, and null for the default branch while it is unborn; whether it is protected; and who last moved it and when, absent while it is unborn. Every commit a ref points at is a version, which the tree route reads at it. Listed whole and not paged, since the advertisement lists every ref to whoever may clone, which is whoever may read. Requires workflow:read.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "200": {
+            "description": "Every branch and tag of the repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/refs"
+                },
+                "examples": {
+                  "held": {
+                    "summary": "the default branch, a branch holding a slash and a tag",
+                    "value": {
+                      "refs": [
+                        {
+                          "name": "refs/heads/feature/vat-rounding",
+                          "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                          "protected": false,
+                          "moved_by": "chloe",
+                          "moved_at": "2026-09-30T15:02:00Z"
+                        },
+                        {
+                          "name": "refs/heads/main",
+                          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                          "protected": true,
+                          "moved_by": "alice",
+                          "moved_at": "2026-09-28T10:12:00Z"
+                        },
+                        {
+                          "name": "refs/tags/v2.1.0",
+                          "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                          "protected": false,
+                          "moved_by": "bob",
+                          "moved_at": "2026-09-20T16:40:00Z"
+                        }
+                      ]
+                    }
+                  },
+                  "unborn": {
+                    "summary": "a repository nothing was pushed to yet",
+                    "value": {
+                      "refs": [
+                        {
+                          "name": "refs/heads/main",
+                          "commit": null,
+                          "protected": true
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such workflow, or one the caller cannot read: the same answer."
           }
         }
       }
@@ -8578,6 +8717,104 @@
         "examples": [
           "assertion",
           "registration"
+        ]
+      },
+      "liveChange": {
+        "title": "Live change",
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false,
+        "description": "One message of the live connection, GET /api/v1/me/live: what changed, named and never held.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "run",
+              "notifications",
+              "runners",
+              "all"
+            ],
+            "description": "What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; or anything, where a change may have been missed.",
+            "examples": [
+              "run",
+              "all"
+            ]
+          },
+          "namespace": {
+            "$ref": "wire.schema.json#/$defs/namespace",
+            "description": "The namespace of the run, for a run alone.",
+            "examples": [
+              "finance"
+            ]
+          },
+          "workflow": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The workflow of the run, for a run alone.",
+            "examples": [
+              "monthly-invoicing"
+            ]
+          },
+          "run": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "The run, for a run alone.",
+            "examples": [
+              "01JMZ8W4K2R7AAAAAAAAAAAAAA"
+            ]
+          }
+        },
+        "if": {
+          "properties": {
+            "kind": {
+              "const": "run"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "namespace",
+            "workflow",
+            "run"
+          ]
+        },
+        "else": {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "namespace"
+                ]
+              },
+              {
+                "required": [
+                  "workflow"
+                ]
+              },
+              {
+                "required": [
+                  "run"
+                ]
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "kind": "run",
+            "namespace": "finance",
+            "workflow": "monthly-invoicing",
+            "run": "01JMZ8W4K2R7AAAAAAAAAAAAAA"
+          },
+          {
+            "kind": "notifications"
+          },
+          {
+            "kind": "runners"
+          },
+          {
+            "kind": "all"
+          }
         ]
       },
       "sessionKind": {
@@ -12379,6 +12616,93 @@
             "mode": "0755",
             "size": 1532,
             "sha256": "a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a"
+          }
+        ]
+      },
+      "refs": {
+        "title": "Refs",
+        "type": "object",
+        "required": [
+          "refs"
+        ],
+        "additionalProperties": false,
+        "description": "A workflow repository's branches and tags, as GET /api/v1/{ns}/workflows/{name}/refs answers them.",
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/ref"
+            },
+            "minItems": 1,
+            "description": "Every branch and tag, in git's order, byte by byte. Never empty, since the default branch is held from the repository's creation, without a commit until something is pushed to it.",
+            "examples": [
+              [
+                {
+                  "name": "refs/heads/feature/vat-rounding",
+                  "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                  "protected": false,
+                  "moved_by": "chloe",
+                  "moved_at": "2026-09-30T15:02:00Z"
+                },
+                {
+                  "name": "refs/heads/main",
+                  "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                  "protected": true,
+                  "moved_by": "alice",
+                  "moved_at": "2026-09-28T10:12:00Z"
+                },
+                {
+                  "name": "refs/tags/v2.1.0",
+                  "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                  "protected": false,
+                  "moved_by": "bob",
+                  "moved_at": "2026-09-20T16:40:00Z"
+                }
+              ],
+              [
+                {
+                  "name": "refs/heads/main",
+                  "commit": null,
+                  "protected": true
+                }
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "refs": [
+              {
+                "name": "refs/heads/feature/vat-rounding",
+                "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                "protected": false,
+                "moved_by": "chloe",
+                "moved_at": "2026-09-30T15:02:00Z"
+              },
+              {
+                "name": "refs/heads/main",
+                "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                "protected": true,
+                "moved_by": "alice",
+                "moved_at": "2026-09-28T10:12:00Z"
+              },
+              {
+                "name": "refs/tags/v2.1.0",
+                "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                "protected": false,
+                "moved_by": "bob",
+                "moved_at": "2026-09-20T16:40:00Z"
+              }
+            ]
+          },
+          {
+            "refs": [
+              {
+                "name": "refs/heads/main",
+                "commit": null,
+                "protected": true
+              }
+            ]
           }
         ]
       },

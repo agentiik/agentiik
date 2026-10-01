@@ -10,6 +10,7 @@
 //
 //     node tests/serve.js tests/fixtures/alice.json [port] [path]
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
@@ -113,10 +114,32 @@ export function serve({ scenario, port = 0, prefix = "/" }) {
     res.end(body);
   });
 
+  // The live connection, upgraded and held open, saying nothing: the stand-in's answers never change
+  // by themselves, and a test that changes the scenario reads again as the console would on a
+  // change. Every other upgrade is refused.
+  state.sockets = [];
+  server.on("upgrade", (req, socket) => {
+    const url = new URL(req.url ?? "/", "http://stand-in");
+    const key = req.headers["sec-websocket-key"];
+    if (url.pathname !== `${root}api/v1/me/live` || typeof key !== "string") {
+      socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+    const accept = createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    socket.on("error", () => {});
+    state.sockets.push(socket);
+  });
+
   return new Promise((resolve) => {
     server.listen(port, "127.0.0.1", () => {
       const { port: bound } = server.address();
-      resolve({ url: `http://127.0.0.1:${bound}${root}`, state, close: () => new Promise((done) => server.close(done)) });
+      const close = () =>
+        new Promise((done) => {
+          for (const socket of state.sockets) socket.destroy();
+          server.close(done);
+        });
+      resolve({ url: `http://127.0.0.1:${bound}${root}`, state, close });
     });
   });
 }

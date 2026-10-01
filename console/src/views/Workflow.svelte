@@ -16,6 +16,7 @@
   import { clock, took } from "../lib/format";
   import { authOf, layout, triggers } from "../lib/graph";
   import { moved, useKeys } from "../lib/keys.svelte";
+  import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { RunReader } from "../lib/run.svelte";
@@ -56,12 +57,26 @@
       const file = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: commit }, query: { path: "agentiik.yaml" } }, parseAs: "text" });
       text = typeof file.data === "string" ? file.data : null;
     }
+    await readLatest();
+  }
+
+  // The workflow's latest run, which the graph shows where the address names none.
+  async function readLatest() {
     const runs = await api.GET("/api/v1/runs", { params: { query: { namespace, workflow, limit: 1 } } });
     latest = runs.data?.runs.find((r) => r.workflow === workflow)?.run;
   }
 
   $effect(() => {
     untrack(() => read());
+  });
+
+  // A run of the workflow started or moved on, as the live connection says: which is its latest is
+  // read again, and the run laid over the graph below.
+  const changes = useLive();
+  $effect(() => {
+    const ns = namespace;
+    const name = workflow;
+    return changes.when((c) => c.kind === "run" && c.namespace === ns && c.workflow === name, () => readLatest());
   });
 
   async function more() {
@@ -73,18 +88,16 @@
     }
   }
 
-  // The run laid over the graph, read again every five seconds while it has not ended.
+  // The run laid over the graph, read again each time the live connection says it changed.
   // None on the files or the tools, which draw no run.
   const shownRun = $derived(tab === "files" || tab === "mcp" ? undefined : (place.query.get("run") ?? latest));
   const reader = $derived(shownRun ? new RunReader(api, shownRun) : null);
   $effect(() => {
     const r = reader;
+    const id = shownRun;
     if (!r) return;
     untrack(() => r.read());
-    const reading = setInterval(() => {
-      if (!r.ended && document.visibilityState === "visible") r.read();
-    }, 5000);
-    return () => clearInterval(reading);
+    return changes.when((c) => c.kind === "run" && c.run === id, () => r.read());
   });
   const run = $derived(reader?.run && reader.run.workflow === workflow && reader.run.namespace === namespace ? reader.run : null);
 

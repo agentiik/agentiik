@@ -517,6 +517,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Be told what changed, over a WebSocket
+         * @description A WebSocket, RFC 6455, telling its caller as it happens what changed among what it may read, so that a console reads again what it shows when it changes rather than on a clock. Each message is a text frame holding one liveChange: a run created or moved on, or one of whose steps or tasks did, sent where the caller holds run:read on that run's workflow; the caller's notifications, told or dismissed; the runners, to an administrator, for a runner or a pool changed, a heartbeat included; and all, where a change may have been missed, which reads everything again. What changed within a quarter of a second is sent once. A message holds an identifier and never a record, and what it names is read through the route that answers it, under that route's permissions. The client sends nothing but the protocol's own frames, a message from it closing the connection with 1008, and the API pings every 15 seconds. A session's handshake carries the installation's Origin, since a page of another site sharing its domain could otherwise open one with the cookie. A permission revoked stops its messages within 30 seconds, when it is asked again; a credential that no longer identifies its caller closes the connection with 1008, and the API stopping closes it with 1001, after which a client connects again and reads again what it shows. Under /api/v1/me, a word already reserved, since what it tells is the caller's own. Any authenticated principal.
+         */
+        get: operations["openLiveConnection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/namespaces": {
         parameters: {
             query?: never;
@@ -985,6 +1005,31 @@ export interface paths {
          * @description The manual trigger: a run of the commit the request names, or reaches through a ref, or of the default branch's head, or while it is unborn the latest version a tree push recorded, with the workflow inputs bound against that version's declaration as agk run --local binds them and recorded as bound. Attributed to the caller, trigger_kind manual. The run is pinned to its commit whatever the ref or the branch does next. Counted against the namespace's max_runs_per_hour before it is written. Requires workflow:run.
          */
         post: operations["startRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/workflows/{name}/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a workflow's branches and tags
+         * @description The branches and tags the workflow's repository holds, for the console's ref switcher, which could otherwise offer only the default branch and the versions of its history: git's advertisement lists them, and git's routes take an API token and never a session. Each ref is named in full, in git's order, byte by byte, with the commit it points at, an annotated tag peeled to its commit, and null for the default branch while it is unborn; whether it is protected; and who last moved it and when, absent while it is unborn. Every commit a ref points at is a version, which the tree route reads at it. Listed whole and not paged, since the advertisement lists every ref to whoever may clone, which is whoever may read. Requires workflow:read.
+         */
+        get: operations["listWorkflowRefs"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1518,6 +1563,49 @@ export interface components {
          * @enum {string}
          */
         ceremony: "registration" | "assertion";
+        /**
+         * Live change
+         * @description One message of the live connection, GET /api/v1/me/live: what changed, named and never held.
+         * @example {
+         *       "kind": "run",
+         *       "namespace": "finance",
+         *       "workflow": "monthly-invoicing",
+         *       "run": "01JMZ8W4K2R7AAAAAAAAAAAAAA"
+         *     }
+         * @example {
+         *       "kind": "notifications"
+         *     }
+         * @example {
+         *       "kind": "runners"
+         *     }
+         * @example {
+         *       "kind": "all"
+         *     }
+         */
+        liveChange: {
+            /**
+             * @description What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; or anything, where a change may have been missed.
+             * @example run
+             * @example all
+             * @enum {string}
+             */
+            kind: "run" | "notifications" | "runners" | "all";
+            /**
+             * @description The namespace of the run, for a run alone.
+             * @example finance
+             */
+            namespace?: components["schemas"]["namespace"];
+            /**
+             * @description The workflow of the run, for a run alone.
+             * @example monthly-invoicing
+             */
+            workflow?: components["schemas"]["identifier"];
+            /**
+             * @description The run, for a run alone.
+             * @example 01JMZ8W4K2R7AAAAAAAAAAAAAA
+             */
+            run?: components["schemas"]["ulid"];
+        };
         /**
          * Session kind
          * @description What a session may do, as it was when it opened; what it may do is read again from the policy at every request. full reaches every route the principal's grants allow. enrolment is a session a password opened where the policy that applies to the account requires a passkey, whatever passkeys it holds: it registers passkeys, sets the password that opened it and signs out, and nothing else, so it cannot read a workflow, start a run or mint a token. The server records the credential that opened each session, so the difference is known to it rather than kept by convention.
@@ -4388,6 +4476,80 @@ export interface components {
              * @example a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a
              */
             sha256: string;
+        };
+        /**
+         * Refs
+         * @description A workflow repository's branches and tags, as GET /api/v1/{ns}/workflows/{name}/refs answers them.
+         * @example {
+         *       "refs": [
+         *         {
+         *           "name": "refs/heads/feature/vat-rounding",
+         *           "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+         *           "protected": false,
+         *           "moved_by": "chloe",
+         *           "moved_at": "2026-09-30T15:02:00Z"
+         *         },
+         *         {
+         *           "name": "refs/heads/main",
+         *           "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *           "protected": true,
+         *           "moved_by": "alice",
+         *           "moved_at": "2026-09-28T10:12:00Z"
+         *         },
+         *         {
+         *           "name": "refs/tags/v2.1.0",
+         *           "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+         *           "protected": false,
+         *           "moved_by": "bob",
+         *           "moved_at": "2026-09-20T16:40:00Z"
+         *         }
+         *       ]
+         *     }
+         * @example {
+         *       "refs": [
+         *         {
+         *           "name": "refs/heads/main",
+         *           "commit": null,
+         *           "protected": true
+         *         }
+         *       ]
+         *     }
+         */
+        refs: {
+            /**
+             * @description Every branch and tag, in git's order, byte by byte. Never empty, since the default branch is held from the repository's creation, without a commit until something is pushed to it.
+             * @example [
+             *       {
+             *         "name": "refs/heads/feature/vat-rounding",
+             *         "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+             *         "protected": false,
+             *         "moved_by": "chloe",
+             *         "moved_at": "2026-09-30T15:02:00Z"
+             *       },
+             *       {
+             *         "name": "refs/heads/main",
+             *         "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+             *         "protected": true,
+             *         "moved_by": "alice",
+             *         "moved_at": "2026-09-28T10:12:00Z"
+             *       },
+             *       {
+             *         "name": "refs/tags/v2.1.0",
+             *         "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+             *         "protected": false,
+             *         "moved_by": "bob",
+             *         "moved_at": "2026-09-20T16:40:00Z"
+             *       }
+             *     ]
+             * @example [
+             *       {
+             *         "name": "refs/heads/main",
+             *         "commit": null,
+             *         "protected": true
+             *       }
+             *     ]
+             */
+            refs: components["schemas"]["ref"][];
         };
         /**
          * Tree
@@ -10647,6 +10809,68 @@ export interface components {
             };
         };
         /**
+         * Ref name
+         * @description A ref as git writes it in full: refs/heads/<branch> for a branch and refs/tags/<tag> for a tag, the only two kinds a workflow repository holds, the name after the prefix on the rules of $defs/branch save the two git keeps for a branch's short name, a leading - and @ alone. Full, so that a branch and a tag of one short name are two refs rather than one ambiguity.
+         * @example refs/heads/main
+         * @example refs/tags/v2.1.0
+         * @example refs/heads/feature/vat-rounding
+         */
+        refName: string;
+        /**
+         * Ref
+         * @description One branch or tag of a workflow repository: a row of the database rather than a file beside the objects, so that moving it is an ordinary transaction beside every other piece of state. Only branches and tags are held; HEAD is the default branch, answered on the repository and never stored as a ref.
+         * @example {
+         *       "name": "refs/heads/main",
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "protected": true,
+         *       "moved_by": "alice",
+         *       "moved_at": "2026-09-28T10:12:00Z"
+         *     }
+         * @example {
+         *       "name": "refs/tags/v2.1.0",
+         *       "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+         *       "protected": false,
+         *       "moved_by": "bob",
+         *       "moved_at": "2026-09-20T16:40:00Z"
+         *     }
+         * @example {
+         *       "name": "refs/heads/main",
+         *       "commit": null,
+         *       "protected": true
+         *     }
+         */
+        ref: {
+            /**
+             * @description The ref in full, as git writes it.
+             * @example refs/heads/main
+             * @example refs/tags/v2.1.0
+             */
+            name: components["schemas"]["refName"];
+            /**
+             * @description The commit it points at, an annotated tag peeled to the commit it names; null for an unborn branch, the default branch of a repository nothing was pushed to yet, which is the one ref held without a commit.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             * @example null
+             */
+            commit: components["schemas"]["commit"] | null;
+            /**
+             * @description Whether pushing to it takes grant:manage rather than workflow:write. Only the default branch is protected, and only where its repository is. A force-push and a deletion take grant:manage on any ref, protected or not.
+             * @example true
+             * @example false
+             */
+            protected: boolean;
+            /**
+             * @description Who last moved it: the principal whose push created, moved or forced it. Absent on an unborn branch, which nobody has moved.
+             * @example alice
+             * @example finance/nightly-sync
+             */
+            moved_by?: components["schemas"]["actor"];
+            /**
+             * @description When it last moved, in the transaction that accepted the push. Absent exactly when moved_by is.
+             * @example 2026-09-28T10:12:00Z
+             */
+            moved_at?: components["schemas"]["timestamp"];
+        };
+        /**
          * Run state
          * @description Where a run is, as the documentation fixes the vocabulary. Every component reads this one enumeration: the controller writes it, the API serves it, the console colours it and a phone notifies on it, and a seventh state invented in one of them would be a state the others cannot render.
          * @example running
@@ -12804,6 +13028,38 @@ export interface operations {
             413: components["responses"]["tooLarge"];
         };
     };
+    openLiveConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Switching Protocols: the connection is a WebSocket from then on, whose text frames each hold one liveChange. */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A handshake RFC 6455 refuses: a version other than 13, or not one Sec-WebSocket-Key of 16 bytes in base64. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session's handshake carrying another Origin than the public URL's, or none; or a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description A request that asks for no WebSocket, with Upgrade: websocket in the answer, as RFC 9110 has it. */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
     listNamespaces: {
         parameters: {
             query?: never;
@@ -13947,6 +14203,38 @@ export interface operations {
                     "application/json": components["schemas"]["error"];
                 };
             };
+        };
+    };
+    listWorkflowRefs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every branch and tag of the repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["refs"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, or one the caller cannot read: the same answer. */
+            404: components["responses"]["notFound"];
         };
     };
     getWorkflowTree: {
