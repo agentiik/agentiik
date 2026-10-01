@@ -450,6 +450,9 @@ steps:
 	if len(plan.Stop) != 1 || plan.Stop[0].Reason != StopDeadline {
 		t.Fatalf("the plan stops %#v, want the task still running, at the deadline", plan.Stop)
 	}
+	if ss := e.State().Steps["invoice"]; ss.Verdict != agk.VerdictCancelled || ss.Reason == "" {
+		t.Errorf("the step running at the deadline is %s, %q, want cancelled with its run, saying why", ss.Verdict, ss.Reason)
+	}
 	// What happened to the run is not rewritten by what happens after it.
 	record(t, e, Result{Task: plan.Stop[0].Task, State: agk.TaskCancelled}, runAt.Add(4*time.Hour))
 	if got := next(t, e, runAt.Add(5*time.Hour)); len(got.Stop) != 0 || len(got.Start) != 0 {
@@ -759,6 +762,40 @@ func TestACancelledRunNamesWhatIsStillRunning(t *testing.T) {
 
 	e.Cancel(runAt.Add(time.Minute))
 	plan = next(t, e, runAt.Add(time.Minute))
+	if len(plan.Stop) != 1 || plan.Stop[0].Reason != StopCancelled {
+		t.Fatalf("the plan stops %#v, want the task in flight, cancelled", plan.Stop)
+	}
+	if e.State().Run.State != agk.Cancelled {
+		t.Errorf("the run is %s, want cancelled", e.State().Run.State)
+	}
+}
+
+// A step is "cancelled with its run": the one under way ends as the run does, saying why, while
+// its shards keep what they were doing for the stops to name. A step already over keeps its
+// verdict, and one nobody reached stays pending.
+func TestACancelledRunEndsTheStepsNotOver(t *testing.T) {
+	e := started(t, inALine, Options{})
+	plan := next(t, e, runAt)
+	record(t, e, succeeded(plan.Start[0], ports("ok", item("a1"))), runAt)
+	plan = next(t, e, runAt)
+	record(t, e, Result{Task: plan.Start[0].ID, State: agk.TaskRunning}, runAt)
+
+	at := runAt.Add(time.Minute)
+	e.Cancel(at)
+	steps := e.State().Steps
+	if v := steps["normalize"].Verdict; v != agk.VerdictSucceeded {
+		t.Errorf("normalize is %s, and a step over keeps its verdict", v)
+	}
+	if ss := steps["invoice"]; ss.Verdict != agk.VerdictCancelled || !ss.Since.Equal(at) || ss.Reason == "" {
+		t.Errorf("invoice is %s since %s, %q, want cancelled with its run, saying why", ss.Verdict, ss.Since, ss.Reason)
+	}
+	if v := steps["archive"].Verdict; v != agk.VerdictPending {
+		t.Errorf("archive is %s, and a step nobody reached stays pending", v)
+	}
+	if sh := steps["invoice"].Shards[0]; sh.Task != agk.TaskRunning {
+		t.Errorf("the shard in flight is %s, and it stays as it was for the plan to stop it", sh.Task)
+	}
+	plan = next(t, e, at)
 	if len(plan.Stop) != 1 || plan.Stop[0].Reason != StopCancelled {
 		t.Fatalf("the plan stops %#v, want the task in flight, cancelled", plan.Stop)
 	}
@@ -1156,6 +1193,27 @@ steps:
     image: ` + image + `
     needs:
       - { step: normalize, port: ok, as: orders }
+    outputs: [ok]
+`
+
+// inALine is three steps, each reading the one before it.
+const inALine = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+steps:
+  normalize:
+    image: ` + image + `
+    outputs: [ok]
+  invoice:
+    image: ` + image + `
+    needs:
+      - { step: normalize, port: ok, as: orders }
+    outputs: [ok]
+  archive:
+    image: ` + image + `
+    needs:
+      - { step: invoice, port: ok, as: orders }
     outputs: [ok]
 `
 
