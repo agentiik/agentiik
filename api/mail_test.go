@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +25,12 @@ import (
 // module for mail, or holds a mail transport, a provider's name, the word email or a mailto: link.
 // Test files and testdata are not read: they ship nowhere, and a test may name what it refuses, as
 // this one does.
+//
+// What //go:embed puts in agentiik-api includes the web console's build, console/dist, so where the
+// console has been built this reads the scripts a browser is sent, its dependencies' code included,
+// since a mailer the console imported would be there and nowhere in its own sources. The api jobs of
+// test.yml do not build the console, and there dist/ holds only its committed .gitignore; console.yml
+// runs this test again once it has built it, which is where what agentiik-api carries is checked.
 func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 	// What no shipped file holds, whatever the case of its letters: the protocol mail is sent
 	// with, the program that sends it on a host, a link that opens a message to be sent, the word
@@ -35,7 +42,7 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 
 	read := map[string]bool{}
 	var embedded []string
-	goFiles, pageFiles, migrations := 0, 0, 0
+	goFiles, pageFiles, migrations, consoleScripts := 0, 0, 0, 0
 	check := func(path string) error {
 		if read[path] {
 			return nil
@@ -45,7 +52,16 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		lower := bytes.ToLower(b)
+		// The console validates a run's inputs and a workflow against JSON Schema with
+		// @cfworker/json-schema, whose table of the format names a schema may give a string has a
+		// check under email, beside hostname, ipv4 and ipv6: a format a schema can name, which tests
+		// the shape of a string and sends nothing. So in the console's build the word is read past
+		// where it keys that table, and nowhere else, and every other word is read as before.
+		text := b
+		if strings.HasPrefix(filepath.ToSlash(path), "../console/dist/") {
+			text = withoutEmailFormat(b)
+		}
+		lower := bytes.ToLower(text)
 		for _, word := range words {
 			// Git's author, committer and tagger lines carry an email address, and git names its
 			// own checks of them for it, missingEmail and badEmail among them. Package repo reads
@@ -110,6 +126,8 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 			migrations++
 		case strings.Contains(filepath.ToSlash(path), "api/signin/"):
 			pageFiles++
+		case strings.HasPrefix(filepath.ToSlash(path), "../console/dist/") && strings.HasSuffix(name, ".js"):
+			consoleScripts++
 		}
 		return nil
 	}
@@ -149,4 +167,41 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 	if goFiles < 150 || pageFiles < 5 || migrations < 30 || len(embedded) < migrations+pageFiles {
 		t.Fatalf("read %d files, %d of them Go, %d of the sign-in page's and %d migrations, %d embedded, and the module ships more than that", len(read), goFiles, pageFiles, migrations, len(embedded))
 	}
+	// Where the console is built, agentiik-api carries it, and a walk that read none of its scripts
+	// would pass in console.yml without reading what a browser is sent.
+	if _, err := os.Stat("../console/dist/index.html"); err == nil && consoleScripts == 0 {
+		t.Fatal("console/dist holds a build and none of its scripts was read")
+	}
+}
+
+// emailFormat is the word email as the key of an object, quoted or not, and formatNames are the
+// keys a table of JSON Schema format names holds beside it. Each is spelled as the format is, in
+// lower case, which is how the table keys it: an Email keying anything is not that table's.
+var (
+	emailFormat = regexp.MustCompile(`[{,\s]["']?(email)["']?\s*:`)
+	formatNames = []*regexp.Regexp{
+		regexp.MustCompile(`[{,\s]["']?hostname["']?\s*:`),
+		regexp.MustCompile(`[{,\s]["']?ipv4["']?\s*:`),
+		regexp.MustCompile(`[{,\s]["']?ipv6["']?\s*:`),
+	}
+)
+
+// withoutEmailFormat blanks the word email out of b wherever it keys a check in a table of JSON
+// Schema format names: an object's key, with hostname, ipv4 and ipv6 keyed within a few hundred
+// bytes of it, as @cfworker/json-schema's table has them whether a bundler has minified it or not.
+// The window is that wide because a table left as written spreads its keys over lines. Nothing else
+// is touched, so the word anywhere else, or as the key of anything but that table, is still found.
+func withoutEmailFormat(b []byte) []byte {
+	out := bytes.Clone(b)
+	for _, m := range emailFormat.FindAllSubmatchIndex(b, -1) {
+		around := b[max(m[0]-256, 0):min(m[1]+256, len(b))]
+		table := true
+		for _, name := range formatNames {
+			table = table && name.Match(around)
+		}
+		if table {
+			copy(out[m[2]:m[3]], bytes.Repeat([]byte{' '}, m[3]-m[2]))
+		}
+	}
+	return out
 }
