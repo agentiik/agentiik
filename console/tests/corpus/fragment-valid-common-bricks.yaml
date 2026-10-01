@@ -1,0 +1,17 @@
+# valid: the included file the documentation prints, hidden blocks and nothing
+#   else, merged into an entry point by include: [{ path: ./common-bricks.yaml }].
+# covers: hidden blocks at the root of an included file, a matrix in a block.
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+.api-brick:
+  timeout: 2m
+  retry: { max: 3, on: [transient] }
+  network: egress
+  resources: { cpu: "0.5", memory: 256Mi }
+
+.region-matrix:
+  strategy:
+    matrix:
+      region: [fr, be, ch]
+      profile: [standard, reduced]
+    max_parallel: 3

@@ -1,0 +1,20 @@
+# invalid: A webhook path with a .. segment. Normalised by a proxy on its way in,
+#   it would climb out of the namespace's prefix.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: price-quotes
+  namespace: sales
+
+on:
+  webhook:
+    - path: /quotes/../admin
+
+steps:
+  quote:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]
