@@ -4,6 +4,7 @@
   import type { Route } from "../lib/route";
   import { said } from "../lib/notifications";
   import { apply, chosen, type Ground } from "../lib/theme";
+  import Avatar from "./Avatar.svelte";
   import Icon from "./Icon.svelte";
   import Popover from "./Popover.svelte";
 
@@ -72,7 +73,6 @@
   });
 
   const name = $derived(me.user?.display_name ?? me.principal);
-  const initial = $derived(name.trim().charAt(0).toUpperCase());
 </script>
 
 <header class="bar">
@@ -123,7 +123,7 @@
     <Popover label="You, {me.principal}" align="end" width={240}>
       {#snippet button()}
         <span class="who">
-          <span class="avatar" aria-hidden="true">{initial}</span>
+          <Avatar {name} size={24} />
           <span class="login">{name}</span>
           <Icon name="control-expand" size={14} />
         </span>
@@ -257,19 +257,6 @@
     color: var(--muted);
   }
 
-  .avatar {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border: var(--border-hairline) solid var(--accentLine);
-    border-radius: var(--radius-round);
-    background: var(--accentDim);
-    color: var(--accent);
-    font-size: 11.5px;
-    font-weight: 600;
-  }
 
   .login {
     color: var(--text);

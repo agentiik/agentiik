@@ -1,10 +1,11 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import type { API, Me, Namespace } from "../api/client";
+  import Avatar from "../components/Avatar.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
-  import { added, boundsOf, dayOf, failures, grid, lastWeek, months, said, shades, total, weeks, yearOf, type RunsSeries, type Square } from "../lib/activity";
+  import { added, boundsOf, dayOf, failures, grid, lastWeek, months, said, shades, together, total, weeks, yearOf, type RunsSeries, type Square } from "../lib/activity";
   import { clock, took } from "../lib/format";
   import { useKeys } from "../lib/keys.svelte";
   import { holdsSomewhereIn, ordered } from "../lib/permissions";
@@ -135,9 +136,27 @@
   const lasted = (r: Run) => (r.started_at ? took(Math.max(0, (r.finished_at ? Date.parse(r.finished_at) : now) - Date.parse(r.started_at))) : "");
   const weekdays = ["Mon", "", "Wed", "", "Fri", "", ""];
   const name = $derived(me.user?.display_name ?? me.principal);
+
+  // The figures under the caller's name: the last seven days of every namespace read, added up.
+  const week = $derived(together(read.map((n) => series.get(n.name)).filter((s) => s !== undefined).map((s) => lastWeek(s, now))));
+  const share = $derived(week.ended ? `${Math.round((week.succeeded / week.ended) * 1000) / 10}%` : "none ended");
 </script>
 
-<h1 class="hello">{name}</h1>
+<header class="profile">
+  <Avatar {name} size={64} />
+  <div class="who">
+    <h1>{name}</h1>
+    <p class="muted"><span class="term">{me.principal}</span>{#if me.admin}<span class="role">administrator</span>{/if}</p>
+  </div>
+</header>
+
+<!-- Drawn at their size before the series answer, each value said once they have. -->
+<ul class="figures" aria-label="The last seven days">
+  <li><span class="label">Runs</span><span class="value term">{reading ? "\u00a0" : week.runs}</span><span class="faint">last 7 days</span></li>
+  <li><span class="label">Failed or timed out</span><span class="value term" class:failed={!reading && week.failures > 0}>{reading ? "\u00a0" : week.failures}</span><span class="faint">last 7 days</span></li>
+  <li><span class="label">Succeeded</span><span class="value term">{reading ? "\u00a0" : share}</span><span class="faint">of the runs that ended</span></li>
+  <li><span class="label">Namespaces</span><span class="value term">{read.length}</span><span class="faint">whose runs you read</span></li>
+</ul>
 
 <Pane title="Activity" aside={reading ? "reading" : `${yearTotal} ${by === "runs" ? (yearTotal === 1 ? "run" : "runs") : yearTotal === 1 ? "failure" : "failures"} in the last year, ${read.length} ${read.length === 1 ? "namespace" : "namespaces"}`}>
   {#if unread.length}<p class="refused">Not read: {unread.join(", ")}</p>{/if}
@@ -257,10 +276,74 @@
 </div>
 
 <style>
-  .hello {
-    margin: 0 0 calc(var(--unit) * 6);
-    font-size: var(--type-sectionTitle-size);
+  .profile {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--unit) * 8);
+    margin: 0 0 calc(var(--unit) * 10);
+  }
+
+  .who h1 {
+    margin: 0;
+    font-family: var(--type-pageTitle-font);
+    font-size: 22px;
+    font-weight: var(--type-pageTitle-weight);
+    line-height: 1.25;
+  }
+
+  .who p {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--unit) * 4);
+    margin: calc(var(--unit) * 1) 0 0;
+  }
+
+  .role {
+    padding: 0 calc(var(--unit) * 3);
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-chip);
+    font-size: 12.5px;
+  }
+
+  /* Four figures in a row of cards, as a profile's counts are on the forges people know. */
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: calc(var(--unit) * 8);
+    margin: 0 0 calc(var(--unit) * 9);
+    padding: 0;
+    list-style: none;
+  }
+
+  .figures li {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--unit) * 1);
+    padding: calc(var(--unit) * 7) calc(var(--unit) * 8);
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-card);
+    background: var(--surface);
+  }
+
+  .figures .label {
+    color: var(--muted);
+    font-size: var(--type-control-size);
+    font-weight: 500;
+  }
+
+  .figures .value {
+    min-height: 34px;
+    font-size: 26px;
     font-weight: 600;
+    line-height: 34px;
+  }
+
+  .figures .value.failed {
+    color: var(--failed);
+  }
+
+  .figures .faint {
+    font-size: 12.5px;
   }
 
   .by {
