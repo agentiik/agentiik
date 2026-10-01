@@ -322,6 +322,22 @@
     text-align: left;
   }
 
+  /* uPlot sets its own leading of 1.5 and a marker of 1em, both fractions at 13.5px: the console's
+     leading in whole units, and a marker of 12px centred on a 20px line, put them on pixels. */
+  .plot :global(.uplot) {
+    line-height: round(calc(var(--leading) * 1em), var(--unit));
+  }
+
+  .plot :global(.u-legend th > *) {
+    vertical-align: top;
+  }
+
+  .plot :global(.u-legend .u-marker) {
+    width: 12px;
+    height: 12px;
+    margin-top: 4px;
+  }
+
   .plot :global(.u-legend .u-value) {
     color: var(--text);
     font-variant-numeric: tabular-nums;
@@ -400,7 +416,7 @@
   th,
   td {
     padding: calc(var(--unit) * 2) calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     text-align: left;
   }
 

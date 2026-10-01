@@ -145,7 +145,7 @@
     background: var(--sunken);
     font-family: var(--type-identifier-font);
     font-size: 12px;
-    line-height: 1.55;
+    --leading: 1.55;
   }
 
   .t-key {
@@ -176,7 +176,7 @@
 
   .files td {
     padding: calc(var(--unit) * 2) calc(var(--unit) * 3);
-    border-top: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
   }
 
   .files .number {

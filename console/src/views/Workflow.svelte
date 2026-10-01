@@ -320,7 +320,7 @@
   .tab {
     display: inline-flex;
     align-items: center;
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid transparent;
     border-radius: var(--radius-control);
@@ -407,7 +407,7 @@
   .history th,
   .history td {
     padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     text-align: left;
   }
 

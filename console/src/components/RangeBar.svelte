@@ -50,7 +50,8 @@
 
   .preset {
     flex: none;
-    height: 25px;
+    /* The frame around the presets is a control high: 2px of padding and a hairline on each side. */
+    height: calc(var(--control-height) - 6px);
     white-space: nowrap;
     padding: 0 calc(var(--unit) * 5);
     border: var(--border-hairline) solid transparent;
@@ -92,16 +93,16 @@
 
   .track {
     position: relative;
-    width: 29px;
-    height: 17px;
+    width: 30px;
+    height: 18px;
     border-radius: var(--radius-round);
     background: var(--lineStrong);
   }
 
   .knob {
     position: absolute;
-    top: 2.5px;
-    left: 2.5px;
+    top: 3px;
+    left: 3px;
     width: 12px;
     height: 12px;
     border-radius: var(--radius-round);
@@ -113,7 +114,7 @@
   }
 
   .compare input:checked + .track .knob {
-    left: 14.5px;
+    left: 15px;
   }
 
   .compare input:focus-visible + .track {

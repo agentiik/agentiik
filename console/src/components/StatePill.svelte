@@ -50,18 +50,14 @@
     border-radius: var(--radius-pill);
     font-size: 12.5px;
     font-weight: 500;
-    line-height: 1;
+    --leading: 1;
     white-space: nowrap;
-  }
-
-  .word {
-    padding-top: 1px;
   }
 
   .dot,
   .ring {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: var(--radius-round);
     flex: none;
   }

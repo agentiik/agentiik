@@ -387,7 +387,7 @@
     min-height: 420px;
     resize: vertical;
     font-size: var(--type-identifier-size-min);
-    line-height: 1.5;
+    --leading: 1.5;
     tab-size: 2;
   }
 

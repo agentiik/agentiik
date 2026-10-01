@@ -53,7 +53,7 @@
     border-radius: var(--radius-control);
     background: var(--sunken);
     font-size: 12.5px;
-    line-height: 1.6;
+    --leading: 1.6;
     list-style: none;
   }
 

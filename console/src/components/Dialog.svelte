@@ -106,7 +106,7 @@
     justify-content: space-between;
     min-height: 50px;
     padding: 0 calc(var(--unit) * 4) 0 var(--padding-panel);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
   }
 
   h2 {
