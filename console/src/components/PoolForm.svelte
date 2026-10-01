@@ -123,6 +123,11 @@
     gap: calc(var(--unit) * 5);
   }
 
+  .ceilings input {
+    width: 100%;
+    min-width: 0;
+  }
+
   .wrong {
     color: var(--failed);
     font-size: var(--type-identifier-size-min);
