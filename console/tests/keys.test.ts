@@ -31,7 +31,7 @@ describe("the key line", () => {
   it("names the keys of the runs view by their effect, and the console's own", async () => {
     open("/finance/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
-    expect(line()).toEqual(["↑↓ Move", "enter Open", "123 Runs, statistics, settings", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Move", "enter Open", "1234 Runs, workflows, statistics, settings", "? Every key"]);
   });
 
   it("moves the selection over the runs and opens the one selected", async () => {
@@ -89,7 +89,7 @@ describe("the inspector's keys", () => {
   it("moves between the steps and goes back to the runs", async () => {
     const { place, asked } = open(`/finance/runs/${failed}`);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
-    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from invoice", "esc All runs of finance", "123 Runs, statistics, settings", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from invoice", "esc All runs of finance", "1234 Runs, workflows, statistics, settings", "? Every key"]);
     await press("ArrowUp");
     expect(place.query.get("step")).toBe("normalize");
     await press("Escape");
@@ -184,7 +184,7 @@ describe("the workflow page's keys", () => {
   it("move between the steps as the graph draws them, and go back to the workflow's runs", async () => {
     const { place } = open("/finance/workflows/monthly-invoicing");
     await screen.findByRole("button", { name: /^Step normalize/ });
-    expect(line()).toEqual(["↑↓ Step", "esc Runs of monthly-invoicing", "123 Runs, statistics, settings", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "esc Runs of monthly-invoicing", "1234 Runs, workflows, statistics, settings", "? Every key"]);
     await press("j");
     expect(place.query.get("step")).toBe("invoice");
     await press("ArrowDown");
