@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -24,10 +24,12 @@ describe("the console", () => {
     expect(place.route).toEqual({ kind: "landing" });
   });
 
-  it("lists a namespace's runs, and those that failed in the last hour apart", async () => {
-    open("/finance/runs");
+  it("lists a workflow's runs in a tab of the workflow, and offers no list of the namespace's runs", async () => {
+    open("/finance/workflows/monthly-invoicing/runs");
     expect(await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A")).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "Runs" }).getAttribute("aria-current")).toBe("page");
+    const tabs = within(screen.getByRole("navigation", { name: "monthly-invoicing, what is shown" }));
+    expect(tabs.getByRole("link", { name: "Runs" }).getAttribute("aria-current")).toBe("page");
+    expect(within(screen.getByRole("list", { name: "Views of finance" })).queryByRole("link", { name: "Runs" })).toBeNull();
     await fireEvent.click(screen.getByRole("button", { name: "You, alice" }));
     expect(screen.getByText("agentiik v0.6.0")).toBeTruthy();
   });
@@ -51,7 +53,7 @@ describe("the console", () => {
 
 describe("a run's steps and commit in the list", () => {
   it("draws each run's steps as a strip, said in words, and its pinned commit", async () => {
-    open("/finance/runs");
+    open("/finance/workflows/monthly-invoicing/runs");
     const strip = await screen.findByRole("img", { name: /^Steps: normalize succeeded in 50s, invoice failed in 3m 07s, archive not reached$/ });
     const segments = strip.querySelectorAll(".segment");
     expect(segments).toHaveLength(3);
@@ -64,7 +66,7 @@ describe("a run's steps and commit in the list", () => {
   });
 
   it("says a run that reached no step yet has none", async () => {
-    open("/finance/runs");
+    open("/finance/workflows/monthly-invoicing/runs");
     expect(await screen.findByRole("img", { name: "No step has been reached" })).toBeTruthy();
   });
 });

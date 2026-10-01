@@ -11,6 +11,7 @@
   import { holds } from "../lib/permissions";
   import { useKeys } from "../lib/keys.svelte";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt } from "../lib/route";
   import { canonical, diffSteps, exits, firstDifference, paramsOf, sameItems, summed } from "../lib/run-diff";
   import { RunReader, type RunDetail } from "../lib/run.svelte";
 
@@ -49,11 +50,20 @@
     compared = {};
   }
 
-  const route = (run: string) => ({ kind: "namespace" as const, namespace, view: "runs" as const, run });
-  const swapped = $derived({ kind: "namespace" as const, namespace, view: "runs" as const, run: b, against: a });
+  const route = (run: string) => runAt(namespace, x?.workflow, run);
+  const swapped = $derived(runAt(namespace, x?.workflow, b, a));
+
+  // Reached by the address it had before runs were put under their workflow, the comparison is
+  // written under the workflow once the first run is read.
+  $effect(() => {
+    const at = place.route;
+    if (x && at.kind === "namespace" && at.run === a && at.against === b && at.workflow === undefined) {
+      place.go(runAt(namespace, x.workflow, a, b), true, place.query);
+    }
+  });
 
   // Back to the first run, whose inspector the comparison was opened from.
-  useKeys(() => [{ keys: ["Escape"], effect: "Back to the first run", does: () => place.go({ kind: "namespace", namespace, view: "runs", run: a }) }]);
+  useKeys(() => [{ keys: ["Escape"], effect: "Back to the first run", does: () => place.go(runAt(namespace, x?.workflow, a)) }]);
 
   function lasted(r: RunDetail | { started_at?: string; finished_at?: string } | undefined): string {
     const ms = between(r?.started_at, r?.finished_at, Date.now());
@@ -230,7 +240,7 @@
         {/if}
         <p class="open">
           {#each [x, y] as r, i (r.run)}
-            {@const at = { kind: "namespace" as const, namespace, view: "runs" as const, run: r.run }}
+            {@const at = runAt(namespace, r.workflow, r.run)}
             <a href={place.href(at) + `?step=${encodeURIComponent(chosen.step)}`} onclick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); place.go(at, false, new URLSearchParams({ step: chosen.step })); }}>Open {chosen.step} in the {i === 0 ? "first" : "second"} run</a>
           {/each}
         </p>

@@ -4,6 +4,7 @@
   import { refusal, type API } from "../api/client";
   import { clock } from "../lib/format";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt } from "../lib/route";
   import { candidates } from "../lib/run-diff";
   import type { RunDetail } from "../lib/run.svelte";
 
@@ -30,7 +31,7 @@
     chosen = listed[0]?.run ?? "";
   }
 
-  const target = $derived({ kind: "namespace" as const, namespace: run.namespace, view: "runs" as const, run: run.run, against: chosen });
+  const target = $derived(runAt(run.namespace, run.workflow, run.run, chosen));
 </script>
 
 {#if !open}

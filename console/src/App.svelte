@@ -98,7 +98,6 @@
   // The views of a namespace, each shown to a caller who holds what reading it takes there, and to no
   // other: a view the caller cannot use is left out of the bar rather than drawn disabled.
   const all: { view: View; label: string; shows: (ns: string) => boolean }[] = [
-    { view: "runs", label: "Runs", shows: (ns) => (session.me ? holdsSomewhereIn(session.me, "run:read", ns) : false) },
     { view: "workflows", label: "Workflows", shows: (ns) => (session.me ? holdsSomewhereIn(session.me, "workflow:read", ns) : false) },
     { view: "statistics", label: "Statistics", shows: (ns) => (session.me ? inNamespace(session.me, ns) : false) },
     { view: "sharing", label: "Sharing", shows: (ns) => (session.me ? holdsSomewhereIn(session.me, "grant:manage", ns) : false) },
@@ -106,7 +105,7 @@
   ];
 
   // Built so far: the views the console draws in this release. The others arrive with theirs.
-  const built = new Set<View>(["runs", "workflows", "statistics", "sharing", "settings"]);
+  const built = new Set<View>(["workflows", "statistics", "sharing", "settings"]);
 
   const known = $derived(namespace !== undefined && session.namespaces.some((n) => n.name === namespace));
   const shown = $derived(namespace && known ? all.filter((v) => built.has(v.view) && v.shows(namespace)) : []);
@@ -118,6 +117,11 @@
   const workflowStatistics = $derived(
     route.kind === "namespace" && route.view === "workflows" && route.workflow !== undefined && route.tab === "statistics" && known && !!session.me && holdsSomewhereIn(session.me, "run:read", route.namespace),
   );
+
+  // A workflow's runs, a run and two runs compared, open as its statistics are to whoever reads runs
+  // somewhere in the namespace, since the API answers a run the caller cannot read as one that does
+  // not exist. A run reached by its address of before has no workflow in it yet.
+  const runs = $derived(route.kind === "namespace" && route.view === "workflows" && (route.run !== undefined || (route.workflow !== undefined && route.tab === "runs")) && known && !!session.me && holdsSomewhereIn(session.me, "run:read", route.namespace));
 
   // The console's own keys, beside those of the view drawn: a digit for each view of the top bar,
   // in its order there, as agk console numbers its views, and ? for every key of the view.
@@ -184,18 +188,18 @@
       <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
         <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} shares={holds(session.me, "grant:manage", route.namespace, route.workflow)} />
-      {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
+      {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && route.run === undefined && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
         <!-- A workflow's page: the API answers one the
              caller cannot read as one that does not exist, and the page says no more. -->
         <Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} tab={route.tab} />
-      {:else if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view))}
-        <Refused />
-      {:else if route.kind === "namespace" && route.view === "runs" && route.run && route.against}
+      {:else if route.kind === "namespace" && runs && route.run && route.against}
         <RunDiff {api} {place} me={session.me} namespace={route.namespace} a={route.run} b={route.against} />
-      {:else if route.kind === "namespace" && route.view === "runs" && route.run}
+      {:else if route.kind === "namespace" && runs && route.run}
         <Run {api} {place} me={session.me} namespace={route.namespace} id={route.run} />
-      {:else if route.kind === "namespace" && route.view === "runs"}
-        <Runs {api} {place} me={session.me} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
+      {:else if route.kind === "namespace" && runs && route.workflow}
+        <Runs {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} record={session.namespaces.find((n) => n.name === route.namespace)} />
+      {:else if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view) || route.run !== undefined || route.tab === "runs")}
+        <Refused />
       {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow === undefined}
         <Workflows {api} {place} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "sharing"}

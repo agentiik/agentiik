@@ -13,12 +13,19 @@
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
+  import { workflowTabs } from "../lib/page";
+  import { runAt } from "../lib/route";
 
-  // The runs view, the screen the console opens on: a namespace's runs, newest first and kept live,
-  // the ones that failed lifted into a band above the list, since they are why the page is opened.
-  let { api, place, me, namespace, record }: { api: API; place: Place; me: Me; namespace: string; record: Namespace | undefined } = $props();
+  // A workflow's runs, a tab of the workflow: newest first and kept live, the ones that failed lifted
+  // into a band above the list, since they are why the page is opened. A run is always some
+  // workflow's, so its runs are listed with it rather than in a list of the namespace's.
+  // graph says whether the caller reads the workflow itself, which its graph takes and its runs do
+  // not: the tab is left out for one who reads only its runs.
+  let { api, place, me, namespace, workflow, record }: { api: API; place: Place; me: Me; namespace: string; workflow: string; record: Namespace | undefined } = $props();
 
-  const filters = $derived(filtersOf(place.query));
+  const filters = $derived({ ...filtersOf(place.query), workflow });
+  const graph = $derived(holds(me, "workflow:read", namespace, workflow));
+  const tabs = $derived(workflowTabs(namespace, workflow, "runs", { shares: holds(me, "grant:manage", namespace, workflow), mcp: false, go: (r, q) => place.go(r, false, q) }).filter((t) => graph || t.label !== "Graph"));
   const list = $derived(new RunList(api, namespace, filters));
 
   let live = $state(true);
@@ -38,7 +45,7 @@
       return;
     }
     const l = list;
-    const reading = changes.when((c) => c.kind === "run" && c.namespace === namespace, () => {
+    const reading = changes.when((c) => c.kind === "run" && c.namespace === namespace && c.workflow === workflow, () => {
       if (!l.reading) l.read();
     });
     const ticking = setInterval(() => (now = Date.now()), 1000);
@@ -49,7 +56,7 @@
   });
 
   function narrow(change: Partial<Filters>) {
-    place.narrow(queryOf({ ...filters, ...change }));
+    place.narrow(queryOf({ ...filters, ...change, workflow: undefined }));
   }
 
   const bounded = $derived(filters.since && filters.until ? `${filters.since.slice(0, 16).replace("T", " ")} to ${filters.until.slice(11, 16)} UTC` : "");
@@ -60,9 +67,6 @@
   const attention = $derived(
     list.runs.filter((r) => (r.state === "failed" || r.state === "timed_out") && now - Date.parse(r.created_at) < 3_600_000 && !setAside.has(r.run)),
   );
-
-  // The workflows a reader can narrow to: those of the runs read, and the one the list is narrowed to.
-  const workflows = $derived([...new Set([...list.runs.map((r) => r.workflow), ...(filters.workflow ? [filters.workflow] : [])])].sort());
 
   const chips: { state: RunState | undefined; label: string }[] = [
     { state: undefined, label: "All" },
@@ -76,9 +80,9 @@
 
   const retention = $derived(record?.quotas?.max_retention_days);
 
-  // opened is the inspector of one run, under the namespace the run is in.
+  // opened is the inspector of one run, under its workflow.
   function opened(r: Run) {
-    return { kind: "namespace" as const, namespace: r.namespace, view: "runs" as const, run: r.run };
+    return runAt(r.namespace, r.workflow, r.run);
   }
 
   // The run selected with the keys, by its identifier, so that a list read again keeps it.
@@ -112,7 +116,7 @@
   }
 </script>
 
-<PageHeader title="Runs" icon="control-runs" count={list.settled ? list.runs.length : undefined} {place}>
+<PageHeader title={workflow} icon="control-workflows" {place} {tabs}>
   {#snippet actions()}
     <label class="live">
       <input type="checkbox" role="switch" bind:checked={live} />
@@ -122,25 +126,13 @@
   {/snippet}
 </PageHeader>
 
-<Pane title="" label="Runs of {namespace}">
+<Pane title="" label="Runs of {workflow}">
   <div class="bar">
     <div class="chips" role="group" aria-label="State">
       {#each chips as chip (chip.label)}
         <button class="chip" aria-pressed={filters.state === chip.state} onclick={() => narrow({ state: chip.state })}>{chip.label}</button>
       {/each}
     </div>
-    <label class="select">
-      <span class="unseen">Workflow</span>
-      <select value={filters.workflow ?? ""} onchange={(e) => narrow({ workflow: e.currentTarget.value || undefined })}>
-        <option value="">Every workflow</option>
-        {#each workflows as w (w)}<option value={w}>{w}</option>{/each}
-      </select>
-      <Icon name="control-expand" size={14} />
-    </label>
-    {#if filters.workflow}
-      {@const statistics = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow: filters.workflow, tab: "statistics" }}
-      <a class="link" href={place.href(statistics)} onclick={follow(place, statistics)}>Its statistics</a>
-    {/if}
     {#if bounded}
       <span class="bounds">
         Created <span class="term">{bounded}</span>
@@ -168,7 +160,6 @@
         <div class="failure">
           <StatePill state={r.state} />
           <a class="code" href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a>
-          <span class="term name">{r.workflow}</span>
           <span class="muted">{r.trigger_kind} by <span class="term">{r.triggered_by}</span></span>
           <time class="muted term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time>
         </div>
@@ -186,7 +177,6 @@
       <tr>
         <th>State</th>
         <th>Run</th>
-        <th>Workflow</th>
         <th>Commit</th>
         <th>Trigger</th>
         <th>Steps</th>
@@ -200,12 +190,6 @@
         <tr data-run={r.run} class:chosen={r.run === selected} aria-selected={r.run === selected} onclick={() => (selected = r.run)}>
           <td><StatePill state={r.state} {live} /></td>
           <td class="code id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
-          <td class="term name">
-            {#if holds(me, "workflow:read", r.namespace, r.workflow)}
-              {@const page = { kind: "namespace" as const, namespace: r.namespace, view: "workflows" as const, workflow: r.workflow }}
-              <a class="workflow" href={place.href(page)} onclick={follow(place, page)}>{r.workflow}</a>
-            {:else}{r.workflow}{/if}
-          </td>
           <td class="code muted commit" title={r.commit}>{r.commit.slice(0, 7)}</td>
           <td class="trigger" title={r.from ? `called by run ${r.from.run} at step ${r.from.step}` : undefined}><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="term">{r.trigger_kind}</span></td>
           <td><StepStrip steps={r.steps ?? []} {now} /></td>
@@ -215,7 +199,7 @@
         </tr>
       {:else}
         {#if !list.reading && !list.refused}
-          <tr><td class="empty" colspan="9">No runs</td></tr>
+          <tr><td class="empty" colspan="8">No runs</td></tr>
         {/if}
       {/each}
     </tbody>
@@ -447,20 +431,6 @@
 
   .number {
     text-align: right;
-  }
-
-  .name {
-    font-weight: 600;
-  }
-
-  .workflow {
-    color: inherit;
-    text-decoration: none;
-  }
-
-  .workflow:hover {
-    color: var(--accent);
-    text-decoration: underline;
   }
 
   .id {

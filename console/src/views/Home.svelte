@@ -14,6 +14,7 @@
   import { useLive } from "../lib/live.svelte";
   import { paced } from "../lib/installation";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt } from "../lib/route";
   import type { Run } from "../lib/runs.svelte";
 
   // The console's root, laid out as a forge's home is: who you are, four counts, what needs you, a
@@ -181,8 +182,8 @@
     ...(chosen ? [{ keys: ["Escape"], effect: "Close the day", does: () => choose(undefined) }] : []),
   ]);
 
-  const runRoute = (r: Run) => ({ kind: "namespace" as const, namespace: r.namespace, view: "runs" as const, run: r.run });
-  const runsOf = (ns: string) => ({ kind: "namespace" as const, namespace: ns, view: "runs" as const });
+  const runRoute = (r: Run) => runAt(r.namespace, r.workflow, r.run);
+  const runsOf = (ns: string) => ({ kind: "namespace" as const, namespace: ns, view: "workflows" as const });
   // The latest runs by the day they were made on, where the reader is, each day as a person names it.
   const byDay = $derived.by(() => {
     const groups: { day: string; name: string; runs: Run[] }[] = [];
