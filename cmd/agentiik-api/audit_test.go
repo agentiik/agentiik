@@ -56,7 +56,7 @@ var reads = []string{
 	"GET /api/v1/{namespace}/grants", "GET /api/v1/{namespace}/workflows/{workflow}/grants",
 	"GET /api/v1/{namespace}/workflows/{workflow}/images", "GET /api/v1/{namespace}/workflows/{workflow}/triggers",
 	"GET /{namespace}/{repository}/info/refs",
-	"GET /api/v1/{namespace}/workflows/{workflow}", "GET /api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
+	"GET /api/v1/{namespace}/workflows/{workflow}", "GET /api/v1/{namespace}/workflows/{workflow}/refs", "GET /api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
 	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/me/avatar", "GET /api/v1/users/{login}/avatar",
 	"GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
 	"GET /auth/sign-in", "GET /auth/enrol", "GET /auth/assets/{name}", "GET /objects/{key...}",

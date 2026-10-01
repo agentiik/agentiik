@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
 import { Place } from "../src/lib/place.svelte";
+import { offers } from "../src/lib/refs";
 import { Session } from "../src/lib/session.svelte";
 import { answering, scenario, type Scenario } from "./scenario";
 
@@ -63,6 +64,34 @@ describe("a workflow's files", () => {
 
     place.narrow(new URLSearchParams({ ref: "nowhere" }));
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "No branch, tag or version of monthly-invoicing is named nowhere.");
+  });
+
+  it("offer the default branch, the other branches and the tags the repository holds, then the versions", async () => {
+    const asked: string[] = [];
+    open("/finance/workflows/monthly-invoicing/files", "", scenario("alice"), [], asked);
+    await screen.findByRole("region", { name: "Files at main" });
+    await waitFor(() => expect(document.querySelectorAll("#files-refs option").length).toBeGreaterThan(4));
+    const options = [...document.querySelectorAll<HTMLOptionElement>("#files-refs option")].map((o) => [o.value, o.textContent]);
+    expect(options.slice(0, 4)).toEqual([
+      ["main", "the default branch"],
+      ["feature/vat-rounding", expect.stringMatching(/^branch, moved by carol at /)],
+      ["try-retries", expect.stringMatching(/^branch, moved by alice at /)],
+      ["v2.1.0", expect.stringMatching(/^tag, moved by bob at /)],
+    ]);
+    expect(options.slice(4).map(([v]) => v)).toContain(head);
+    expect(asked).toContain("GET /api/v1/finance/workflows/monthly-invoicing/refs");
+  });
+
+  it("offer a name that is both a branch and a tag in full, and nothing for a branch not yet born", () => {
+    const at = "2026-09-30T15:02:00Z";
+    const refs = [
+      { name: "refs/heads/main", commit: head, protected: true, moved_by: "alice", moved_at: at },
+      { name: "refs/heads/release", commit: older, protected: false, moved_by: "bob", moved_at: at },
+      { name: "refs/tags/release", commit: head, protected: false, moved_by: "bob", moved_at: at },
+      { name: "refs/heads/unborn", commit: null, protected: false },
+    ];
+    expect(offers(refs, "main", [{ commit: older, subject: "older" }], Date.parse(at)).map((o) => o.value)).toEqual(["main", "refs/heads/release", "refs/tags/release", older]);
+    expect(offers([...refs, { name: "refs/tags/main", commit: head, protected: false, moved_by: "bob", moved_at: at }], "main", [], 0)[0]).toEqual({ value: "refs/heads/main", label: "the default branch" });
   });
 
   it("compare two refs over the whole tree, and the file chosen line by line", async () => {

@@ -4,6 +4,7 @@
   import type { components } from "../api/schema";
   import { clock } from "../lib/format";
   import type { Place } from "../lib/place.svelte";
+  import { offers, type Ref } from "../lib/refs";
   import { binary, changes, folders, foldersOf, hunks, lineDiff, shownUpTo, sizeOf, type Change, type Entry, type Node } from "../lib/tree";
   import type { Problem } from "../lib/workflow-check";
   import Icon from "./Icon.svelte";
@@ -37,6 +38,18 @@
   let typed = $state("");
   let comparing = $state("");
   let opened = $state<Set<string>>(new Set());
+
+  // The branches and tags the field offers, read once for the workflow. Where they cannot be read,
+  // the field offers the default branch and the versions alone, and takes any ref typed.
+  let refs = $state<Ref[]>([]);
+  $effect(() => {
+    const path = { ns: namespace, name: workflow };
+    untrack(async () => {
+      const { data } = await api.GET("/api/v1/{ns}/workflows/{name}/refs", { params: { path } });
+      if (path.ns === namespace && path.name === workflow) refs = data?.refs ?? [];
+    });
+  });
+  const offered = $derived(offers(refs, repository.default_branch, history.flatMap((h) => (h.version ? [{ commit: h.commit, subject: h.subject }] : [])), Date.now()));
 
   // tree reads the listing a ref names, saying a ref that names nothing as the API answers it: a 404
   // is no branch, tag or version of that name, whatever the caller may read, since the workflow
@@ -217,8 +230,7 @@
     <button class="control" type="submit">Show</button>
   </form>
   <datalist id="files-refs">
-    <option value={repository.default_branch}>the default branch</option>
-    {#each history.filter((h) => h.version) as h (h.commit)}<option value={h.commit}>{h.subject ?? h.commit.slice(0, 7)}</option>{/each}
+    {#each offered as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
   </datalist>
   {#if listing}<span class="faint code" title={listing.commit}>{listing.commit.slice(0, 7)}</span>{/if}
   <form class="pick" onsubmit={compare}>
