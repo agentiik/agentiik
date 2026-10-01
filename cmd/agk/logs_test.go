@@ -309,3 +309,28 @@ func TestWhatIsSaidAboutALogNamesItsDispatch(t *testing.T) {
 		}
 	}
 }
+
+// agk console follows a step's log with agk logs' own follower: its lines as agk logs prints them,
+// nil once the log is over, and a refusal said and answered as a log not read to its end.
+func TestTheConsoleFollowsALogAsAgkLogsDoes(t *testing.T) {
+	s := &streamStandIn{resumed: map[string][]string{}, scripts: map[string][]func(http.ResponseWriter, *http.Request){
+		"normalize": {streaming(dispatchEvent(firstDispatch, 2), lineEvent(firstDispatch, 1, 1, "read 3 orders"), endOf(firstDispatch, 1, false), stepOver)},
+	}}
+	srv := httptest.NewServer(http.HandlerFunc(s.serve))
+	t.Cleanup(srv.Close)
+	quickly(t)
+	at := remote{base: srv.URL, token: "the-token"}
+
+	var out, said strings.Builder
+	if err := at.followLog(t.Context(), aRun, "normalize", &out, &said); err != nil {
+		t.Errorf("a log read to its end answered %v: %s", err, said.String())
+	}
+	if out.String() != "normalize, attempt 2 | read 3 orders\n" {
+		t.Errorf("the console was handed %q", out.String())
+	}
+
+	out.Reset()
+	if err := at.followLog(t.Context(), aRun, "nowhere", &out, &said); err == nil || !strings.Contains(said.String(), "has no such step") {
+		t.Errorf("a refused log answered %v, and said %q", err, said.String())
+	}
+}

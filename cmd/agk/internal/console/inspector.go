@@ -421,7 +421,7 @@ func (m Model) runLines(t theme, height int) []string {
 		detail = append(detail, t.line(false, right, within(l, right)...))
 	}
 	if !m.wide() {
-		return append(append(append(lines, steps...), t.line(false, m.width)), detail...)
+		return m.withLog(t, append(append(append(lines, steps...), t.line(false, m.width)), detail...), step, height)
 	}
 	gap := t.line(false, 2)
 	for i := 0; i < max(len(steps), len(detail)); i++ {
@@ -434,5 +434,21 @@ func (m Model) runLines(t theme, height int) []string {
 		}
 		lines = append(lines, l+gap+r)
 	}
-	return lines
+	return m.withLog(t, lines, step, height)
+}
+
+// withLog puts the log of the step chosen beneath the run, taking what the run leaves and never
+// under a third of the window, the run cut where it would take more: the log is what is read while
+// a step runs, and the run is read again on its own when the window is larger.
+func (m Model) withLog(t theme, lines []string, step string, height int) []string {
+	if m.o.Follow == nil {
+		return lines
+	}
+	room := max(6, height/3)
+	if len(lines)+1+room <= height {
+		room = height - len(lines) - 1
+	} else {
+		lines = lines[:max(0, height-room-1)]
+	}
+	return append(append(lines, t.line(false, m.width)), m.logLines(t, step, room)...)
 }

@@ -82,6 +82,7 @@ func consoleVerb(ctx context.Context, e Env, args []string) int {
 		Namespace:    *namespace,
 		Run:          run,
 		Read:         at.getJSON,
+		Follow:       at.followLog,
 		Now:          e.now,
 		Getenv:       e.getenv,
 		Theme:        theme,
