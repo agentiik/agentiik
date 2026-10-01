@@ -57,6 +57,13 @@ type GrantScope struct {
 	Inputs  []GrantInput  `json:"inputs,omitempty"`
 	Secrets []GrantSecret `json:"secrets,omitempty"`
 
+	// Params are the task's parameters as the controller resolved them, a secret as the reference
+	// it is and never its value. A redemption answers none of them, since the task message carries
+	// them to the runner; they are kept so that the run can say what each task was dispatched with,
+	// "so an incident is reproducible without extra instrumentation", and are absent from a grant
+	// written before they were kept.
+	Params map[string]any `json:"params,omitempty"`
+
 	// Files are the step's files, which narrow and relocate the tree the redemption answers:
 	// none is the whole tree. Written with the version rather than read off its graph at
 	// redemption for the reason Workflow and Commit are, and absent from a grant written before

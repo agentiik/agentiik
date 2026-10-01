@@ -270,7 +270,12 @@
               "size": 312,
               "items": 0
             }
-          }
+          },
+          "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+          "output_ports": [
+            "ok",
+            "rejected"
+          ]
         },
         {
           "step": "invoice",
@@ -289,12 +294,27 @@
               "size": 4212,
               "items": 3
             }
-          }
+          },
+          "image": "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
+          "input_ports": [
+            "in"
+          ],
+          "output_ports": [
+            "out",
+            "error"
+          ]
         },
         {
           "step": "archive",
           "verdict": "pending",
-          "attempts": 0
+          "attempts": 0,
+          "image": "ghcr.io/acme/agk-archive@sha256:c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+          "input_ports": [
+            "invoices"
+          ],
+          "output_ports": [
+            "ok"
+          ]
         }
       ],
       "tasks": [
@@ -501,6 +521,12 @@
               "digest": "sha256:3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b",
               "size": 10412,
               "items": 27
+            }
+          },
+          "params": {
+            "currency": "EUR",
+            "vat_api_key": {
+              "secret": "vat-api"
             }
           }
         }

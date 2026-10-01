@@ -6553,6 +6553,30 @@ export interface components {
             ports?: {
                 [key: string]: components["schemas"]["envelopeReference"];
             };
+            /**
+             * @description The image the step runs, by digest, as the version the run pinned resolved it: an image the file named by a tag is the digest the tag was resolved to when the version was pushed. Absent for a workflow step, which runs no container, and where the version can no longer be read.
+             * @example ghcr.io/acme/agk-invoice@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0
+             */
+            image?: components["schemas"]["imageRef"];
+            /**
+             * @description The input ports the step declares, by name, sorted: those its edges feed and those its inputs keyword feeds, each handed to a task as an envelope, empty ones included. Absent for a step that reads nothing.
+             * @example [
+             *       "orders"
+             *     ]
+             * @example [
+             *       "customers",
+             *       "orders"
+             *     ]
+             */
+            input_ports?: components["schemas"]["identifier"][];
+            /**
+             * @description The output ports the step declares, in the order the file writes them: each is published once, when the step ends, an empty envelope where nothing was written to it, which is what ports carries from then on.
+             * @example [
+             *       "out",
+             *       "error"
+             *     ]
+             */
+            output_ports?: components["schemas"]["identifier"][];
         };
         /**
          * Task summary
@@ -6663,6 +6687,16 @@ export interface components {
             inputs?: {
                 [key: string]: components["schemas"]["envelopeReference"];
             };
+            /**
+             * @description The parameters the task was dispatched with, resolved: every expression evaluated and the matrix combination in, as the container read them from /agk/params.json, a secret written as {"secret": name} and never as its value. An expression may carry envelope contents into them, so they are answered only to a caller holding run:read_data on the run's workflow, and otherwise left out; absent for a task never dispatched, a cache hit and a call.
+             * @example {
+             *       "currency": "EUR",
+             *       "vat_api_key": {
+             *         "secret": "vat-api"
+             *       }
+             *     }
+             */
+            params?: Record<string, never>;
         };
         /**
          * Run detail
@@ -6718,7 +6752,15 @@ export interface components {
          *               "size": 212,
          *               "items": 3
          *             }
-         *           }
+         *           },
+         *           "image": "ghcr.io/acme/agk-invoice@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+         *           "input_ports": [
+         *             "orders"
+         *           ],
+         *           "output_ports": [
+         *             "out",
+         *             "error"
+         *           ]
          *         },
          *         {
          *           "step": "archive",

@@ -91,6 +91,14 @@ type StepSummary struct {
 	// Ports are the envelope digests the step published, which is what the database keeps of
 	// them. Never the items.
 	Ports map[agk.Port]Envelope `json:"ports,omitempty"`
+
+	// Image, InputPorts and OutputPorts are what the version the run pinned declares of the step:
+	// the image it runs, by digest, and the ports it reads and publishes. The API reads them from
+	// that version's graph, which the database holds as the document it was built from rather than
+	// as a second copy that could disagree with it.
+	Image       string     `json:"image,omitempty"`
+	InputPorts  []agk.Port `json:"input_ports,omitempty"`
+	OutputPorts []agk.Port `json:"output_ports,omitempty"`
 }
 
 // TaskSummary is one task, which is one shard of one attempt.
@@ -120,6 +128,11 @@ type TaskSummary struct {
 	// Inputs are the envelopes the task was handed on its input ports, by digest as a step's
 	// ports are, from the grant it was dispatched with. A task never dispatched has none.
 	Inputs map[agk.Port]Envelope `json:"inputs,omitempty"`
+
+	// Params are the parameters it was dispatched with, resolved, from the same grant. An
+	// expression may carry envelope contents into them, so the API answers them under
+	// run:read_data alone, as it does a run's inputs.
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // RunDetail is a run and what became of every part of it.
@@ -388,16 +401,17 @@ func (n *NS) steps(ctx context.Context, run agk.RunID) ([]StepSummary, error) {
 }
 
 func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
-	// The inputs of the grant issued last, since every grant of one row names what the one
-	// dispatch it was prepared for was handed.
+	// The inputs and the parameters of the grant issued last, since every grant of one row names
+	// what the one dispatch it was prepared for was handed.
 	rows, err := n.tx.Query(ctx, `
 		select t.idempotency_key, t.step, t.state, t.attempt, t.shard_index, t.shard_of,
 		       t.runner, t.exit_code, t.started_at, t.finished_at, t.memoised_from, coalesce(t.called_run, ''),
-		       (select g.scope->'inputs' from task_grants g
-		        where g.namespace = t.namespace and g.task_id = t.id
-		        order by g.created_at desc limit 1),
+		       g.scope->'inputs', g.scope->'params',
 		       s.envelopes_purged_at
 		from tasks t join steps s on s.namespace = t.namespace and s.run_id = t.run_id and s.step = t.step
+		left join lateral (select scope from task_grants
+		                   where namespace = t.namespace and task_id = t.id
+		                   order by created_at desc limit 1) g on true
 		where t.namespace = $1 and t.run_id = $2
 		order by t.step, t.attempt, t.shard_index nulls first, t.requeue`,
 		n.namespace, string(run))
@@ -413,13 +427,18 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		var index, of *int
 		var runner, memoised *string
 		var started, finished, purged *time.Time
-		var handed []byte
+		var handed, params []byte
 		if err := rows.Scan(&t.Task, &t.Step, &state, &t.Attempt, &index, &of,
-			&runner, &t.ExitCode, &started, &finished, &memoised, &t.Called, &handed, &purged); err != nil {
+			&runner, &t.ExitCode, &started, &finished, &memoised, &t.Called, &handed, &params, &purged); err != nil {
 			return nil, err
 		}
 		if t.Inputs, err = inputsHanded(handed, purged); err != nil {
 			return nil, fmt.Errorf("db: the inputs of task %s could not be read: %w", t.Task, err)
+		}
+		if len(params) > 0 && string(params) != "null" {
+			if err := asWritten(params, &t.Params); err != nil {
+				return nil, fmt.Errorf("db: the parameters of task %s could not be read: %w", t.Task, err)
+			}
 		}
 		if err := t.State.UnmarshalText([]byte(state)); err != nil {
 			return nil, err

@@ -811,7 +811,7 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 // controller resolves a commit to a tree", and a runner that named its own would reach every
 // version in the namespace.
 func scopeOf(t graph.Task, inputs map[agk.Port]InputRef) db.GrantScope {
-	scope := db.GrantScope{Run: t.Run, Step: t.Step, Workflow: t.Workflow, Commit: t.Commit}
+	scope := db.GrantScope{Run: t.Run, Step: t.Step, Workflow: t.Workflow, Commit: t.Commit, Params: t.Params}
 	ports := make([]agk.Port, 0, len(inputs))
 	for port := range inputs {
 		ports = append(ports, port)
