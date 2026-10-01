@@ -28,6 +28,11 @@ require (
 	// Charm package too, so that agk run --local stays the code path it was.
 	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
+	// Charm's colour profiles, used by package cmd/agk/internal/console alone and already here as a
+	// dependency of the two above: the type Bubble Tea takes the terminal's depth in, which the
+	// console reads from NO_COLOR, COLORTERM and TERM as the documentation's table does and hands
+	// it, so that the renderer neither converts a colour the console chose nor guesses again.
+	github.com/charmbracelet/colorprofile v0.4.3
 	// YAML 1.2, used to read the two documents of the language: the workflow entry point
 	// in package graph and the brick manifest in package brick. The version of YAML is
 	// the reason for the choice rather than the API. A YAML 1.1 parser reads the bare key
@@ -124,7 +129,6 @@ require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
-	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
 	github.com/charmbracelet/x/ansi v0.11.8 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect

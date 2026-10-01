@@ -11,14 +11,6 @@ import (
 	"github.com/agentiik/agentiik/db"
 )
 
-// The emphases the screen is drawn with until the design system's palette is (#624): bold, faint
-// and reverse, which every terminal has and NO_COLOR keeps, and a state is always its word.
-var (
-	strong   = lipgloss.NewStyle().Bold(true)
-	faint    = lipgloss.NewStyle().Faint(true)
-	selected = lipgloss.NewStyle().Reverse(true)
-)
-
 func (m Model) View() tea.View {
 	v := tea.NewView(m.screen())
 	v.AltScreen = true
@@ -26,52 +18,64 @@ func (m Model) View() tea.View {
 	return v
 }
 
-// screen is the whole window as text: the top line, the view, and the line of its keys.
+// screen is the whole window as text: the top line, the view, and the line of its keys, every
+// line as wide as the window so that the ground is painted under all of it.
 func (m Model) screen() string {
 	if m.width == 0 {
 		return ""
 	}
+	t := m.theme()
 	if m.width < leastWidth || m.height < leastHeight {
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		asked := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			fmt.Sprintf("The window is %d by %d: agk console needs %d by %d.\nMake it larger, or press q to quit.", m.width, m.height, leastWidth, leastHeight))
+		lines := strings.Split(asked, "\n")
+		for i, l := range lines {
+			lines[i] = t.line(false, m.width, part{plain, l})
+		}
+		return strings.Join(lines, "\n")
 	}
 	body := m.height - 2
 	var lines []string
 	switch {
 	case m.listing:
-		lines = m.keysListed()
+		lines = m.keysListed(t)
 	case m.view == runView:
-		lines = m.runLines()
+		lines = m.runLines(t)
 	default:
-		lines = m.runsLines(body)
+		lines = m.runsLines(t, body)
 	}
 	for len(lines) < body {
-		lines = append(lines, "")
+		lines = append(lines, t.line(false, m.width))
 	}
-	return strings.Join(append(append([]string{m.topLine()}, lines[:body]...), m.keyLine()), "\n")
+	return strings.Join(append(append([]string{m.topLine(t)}, lines[:body]...), m.keyLine(t)), "\n")
 }
 
+// theme is how the screen is drawn now: the terminal's depth, on the ground its background asked
+// for once it has answered.
+func (m Model) theme() theme { return theme{depth: m.depth, light: m.light} }
+
 // topLine names the installation, the namespace shown, the principal, and whether the
-// installation answers: one that stops answering is said so here and asked again, since somebody
-// is watching.
-func (m Model) topLine() string {
+// installation answers: a green dot and the word while it does, and in words, asked again, once
+// it stops, since somebody is watching.
+func (m Model) topLine(t theme) string {
 	where := m.o.Namespace
 	if where == "" {
 		where = "every namespace"
 	}
-	left := strong.Render("agentiik") + "  " + m.o.Installation + "  " + where
+	rest := "  " + m.o.Installation + "  " + where
 	if m.principal != "" {
-		left += "  " + m.principal
+		rest += "  " + m.principal
 	}
-	right := "live"
+	left := []part{{strong, "agentiik"}, {muted, rest}}
+	right := []part{{succeededText, "●"}, {plain, " live"}}
 	if m.unanswered != "" {
-		right = "not answering, asked again: " + m.unanswered
+		right = []part{{failedText, "not answering, asked again: " + m.unanswered}}
 	}
-	return fitted(left, right, m.width)
+	return t.line(false, m.width, fitted(left, right, m.width)...)
 }
 
 // keyLine names the keys of the view by their effect, as the documentation's bottom line does.
-func (m Model) keyLine() string {
+func (m Model) keyLine(t theme) string {
 	var keys [][2]string
 	switch {
 	case m.listing:
@@ -81,32 +85,35 @@ func (m Model) keyLine() string {
 	default:
 		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"q", "Quit"}, {"?", "Every key"}}
 	}
-	parts := make([]string, len(keys))
+	var parts []part
 	for i, k := range keys {
-		parts[i] = strong.Render(k[0]) + " " + k[1]
+		if i > 0 {
+			parts = append(parts, part{plain, "   "})
+		}
+		parts = append(parts, part{strong, k[0]}, part{muted, " " + k[1]})
 	}
-	return truncated(strings.Join(parts, "   "), m.width)
+	return t.line(false, m.width, within(parts, m.width)...)
 }
 
 // keysListed is every key of the view, which ? opens over it.
-func (m Model) keysListed() []string {
+func (m Model) keysListed(t theme) []string {
 	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}}
 	if m.view == runView {
 		rows = append(rows, [2]string{"esc", "Back to the runs"})
 	} else {
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"})
 	}
-	lines := []string{strong.Render("Every key of this view"), ""}
+	lines := []string{t.line(false, m.width, part{strong, "Every key of this view"}), t.line(false, m.width)}
 	for _, r := range rows {
-		lines = append(lines, fmt.Sprintf("  %-12s %s", r[0], r[1]))
+		lines = append(lines, t.line(false, m.width, part{plain, "  "}, part{strong, fmt.Sprintf("%-12s", r[0])}, part{plain, " " + r[1]}))
 	}
 	return lines
 }
 
-// The runs view's columns, as wide as their widest value, the workflow taking what is left:
-// timed_out, terraform, and the longest of the durations Took writes.
+// The runs view's columns, as wide as their widest value, the workflow taking what is left: a dot
+// and timed_out, terraform, and the longest of the durations Took writes.
 const (
-	stateWidth   = 9
+	stateWidth   = 11
 	triggerWidth = 9
 	tookWidth    = 7
 )
@@ -117,26 +124,31 @@ func (m Model) startedWidth() int {
 	now := m.o.Now()
 	width := len("STARTED")
 	for _, r := range m.runs {
-		at := r.StartedAt
-		if at.IsZero() {
-			at = r.CreatedAt
-		}
-		width = max(width, lipgloss.Width(clock(at, now)))
+		width = max(width, lipgloss.Width(clock(startOf(r), now)))
 	}
 	return width
 }
 
+// startOf is when a run started, or was created where it has not started.
+func startOf(r db.ListedRun) time.Time {
+	if r.StartedAt.IsZero() {
+		return r.CreatedAt
+	}
+	return r.StartedAt
+}
+
 // runsLines is the runs view: the runs that failed lifted into a band above the list, since they
-// are why the view is opened, then every run, newest first, the one selected in reverse.
-func (m Model) runsLines(height int) []string {
+// are why the view is opened, then every run, newest first, the one selected drawn as the
+// selection.
+func (m Model) runsLines(t theme, height int) []string {
 	if !m.read {
 		if m.unanswered != "" {
-			return []string{"The runs could not be read: " + m.unanswered}
+			return []string{t.line(false, m.width, part{failedText, "The runs could not be read: " + m.unanswered})}
 		}
-		return []string{faint.Render("Reading the runs.")}
+		return []string{t.line(false, m.width, part{quiet, "Reading the runs."})}
 	}
 	if len(m.runs) == 0 {
-		return []string{faint.Render("No run yet.")}
+		return []string{t.line(false, m.width, part{quiet, "No run yet."})}
 	}
 	now := m.o.Now()
 	var lines []string
@@ -147,13 +159,13 @@ func (m Model) runsLines(height int) []string {
 		}
 	}
 	if len(failed) > 0 {
-		lines = append(lines, strong.Render(fmt.Sprintf("Failed, %d of the last %d", len(failed), len(m.runs))))
+		lines = append(lines, t.line(false, m.width, part{strong, fmt.Sprintf("Failed, %d of the last %d", len(failed), len(m.runs))}))
 		for _, r := range failed[:min(len(failed), 3)] {
-			lines = append(lines, m.row(r, now))
+			lines = append(lines, t.line(false, m.width, m.row(r, now)...))
 		}
-		lines = append(lines, "")
+		lines = append(lines, t.line(false, m.width))
 	}
-	lines = append(lines, faint.Render(m.header()))
+	lines = append(lines, t.line(false, m.width, m.header()...))
 	room := height - len(lines)
 	at := 0
 	for i, r := range m.runs {
@@ -163,11 +175,7 @@ func (m Model) runsLines(height int) []string {
 	}
 	first := min(max(0, at-room+1), max(0, len(m.runs)-room))
 	for i := first; i < len(m.runs) && i < first+room; i++ {
-		row := m.row(m.runs[i], now)
-		if string(m.runs[i].Run) == m.selected {
-			row = selected.Render(padded(row, m.width))
-		}
-		lines = append(lines, row)
+		lines = append(lines, t.line(string(m.runs[i].Run) == m.selected, m.width, m.row(m.runs[i], now)...))
 	}
 	return lines
 }
@@ -177,38 +185,39 @@ func (m Model) runsLines(height int) []string {
 // list keeps the columns a run is told apart and judged by, and the workflow keeps room to be read.
 func (m Model) wide() bool { return m.width >= 120 }
 
-// cell is one column of a row: its text, its width, and whether it is set against its right edge,
-// as a duration is so that a column of them lines up.
+// cell is one column of a row: what it holds, its width, and whether it is set against its right
+// edge, as a duration is so that a column of them lines up.
 type cell struct {
-	text  string
+	parts []part
 	width int
 	right bool
 }
 
-func (m Model) header() string {
-	return m.columns("STATE", "RUN", "WORKFLOW", "TRIGGER", "STARTED", "TOOK", "BY")
+func (m Model) header() []part {
+	h := func(s string) []part { return []part{{quiet, s}} }
+	return m.columns(h("STATE"), h("RUN"), h("WORKFLOW"), h("TRIGGER"), h("STARTED"), h("TOOK"), h("BY"))
 }
 
-func (m Model) row(r db.ListedRun, now time.Time) string {
-	started := r.StartedAt
-	if started.IsZero() {
-		started = r.CreatedAt
-	}
-	return m.columns(r.State.String(), string(r.Run), r.Namespace+"/"+r.Workflow, r.Trigger.String(), clock(started, now), lasted(r.RunSummary, now), r.TriggeredBy)
+// row is one run as the list draws it: its state a word beside a dot in the state's colour, so
+// that the state is never its colour alone.
+func (m Model) row(r db.ListedRun, now time.Time) []part {
+	p := func(s string) []part { return []part{{plain, s}} }
+	return m.columns(
+		[]part{{stateRole(r.State), "●"}, {plain, " " + r.State.String()}},
+		[]part{{muted, string(r.Run)}},
+		p(r.Namespace+"/"+r.Workflow), p(r.Trigger.String()), p(clock(startOf(r), now)), p(lasted(r.RunSummary, now)), p(r.TriggeredBy))
 }
 
 // columns lays one row out at the view's widths, cutting what is too long rather than wrapping it,
 // since a list read line by line is no longer one where a line runs onto the next. A run's
 // identifier is shown in full where there is room, and by its first twelve characters otherwise,
 // which still tell two runs of one day apart.
-func (m Model) columns(state, run, workflow, trigger, started, took, by string) string {
+func (m Model) columns(state, run, workflow, trigger, started, took, by []part) []part {
 	cells := []cell{{state, stateWidth, false}, {run, 12, false}, {workflow, 0, false}}
+	byWidth := 10
 	if m.wide() {
 		cells[1].width = 26
 		cells = append(cells, cell{trigger, triggerWidth, false})
-	}
-	byWidth := 10
-	if m.wide() {
 		byWidth = 14
 	}
 	cells = append(cells, cell{started, m.startedWidth(), false}, cell{took, tookWidth, true}, cell{by, byWidth, false})
@@ -218,72 +227,82 @@ func (m Model) columns(state, run, workflow, trigger, started, took, by string) 
 	}
 	cells[2].width = max(12, m.width-taken)
 
-	parts := make([]string, len(cells))
+	var parts []part
 	for i, c := range cells {
-		text := cut(c.text, c.width)
+		if i > 0 {
+			parts = append(parts, part{plain, " "})
+		}
+		fit := within(c.parts, c.width)
+		gap := part{plain, strings.Repeat(" ", c.width-widthOf(fit))}
 		if c.right {
-			parts[i] = strings.Repeat(" ", c.width-lipgloss.Width(text)) + text
+			parts = append(append(parts, gap), fit...)
 		} else {
-			parts[i] = text + strings.Repeat(" ", c.width-lipgloss.Width(text))
+			parts = append(append(parts, fit...), gap)
 		}
 	}
-	return strings.TrimRight(strings.Join(parts, " "), " ")
+	return parts
 }
 
 // runLines is the run view: how the run stands, in agk status's words, until the inspector draws
 // it (#609).
-func (m Model) runLines() []string {
-	head := strong.Render("Run " + m.selected)
+func (m Model) runLines(t theme) []string {
+	head := t.line(false, m.width, part{strong, "Run " + m.selected})
 	switch {
 	case m.runFailed != "":
-		return []string{head, "", "The run could not be read: " + m.runFailed}
+		return []string{head, t.line(false, m.width), t.line(false, m.width, part{failedText, "The run could not be read: " + m.runFailed})}
 	case !m.runRead:
-		return []string{head, "", faint.Render("Reading the run.")}
+		return []string{head, t.line(false, m.width), t.line(false, m.width, part{quiet, "Reading the run."})}
 	}
 	var b strings.Builder
 	m.o.Describe(&b, *m.run, m.o.Now())
-	lines := []string{head, ""}
+	lines := []string{head, t.line(false, m.width)}
 	for _, l := range strings.Split(strings.TrimRight(b.String(), "\n"), "\n") {
-		lines = append(lines, truncated(l, m.width))
+		lines = append(lines, t.line(false, m.width, within([]part{{plain, l}}, m.width)...))
 	}
 	return lines
 }
 
-// cut shortens a cell to its width, its last character an ellipsis where something was left out.
-func cut(s string, width int) string {
-	if lipgloss.Width(s) <= width {
-		return s
+// widthOf is how many columns parts take.
+func widthOf(parts []part) int {
+	w := 0
+	for _, p := range parts {
+		w += lipgloss.Width(p.text)
 	}
-	r := []rune(s)
-	for len(r) > 0 && lipgloss.Width(string(r))+1 > width {
-		r = r[:len(r)-1]
-	}
-	return string(r) + "…"
+	return w
 }
 
-// truncated is a line no wider than the window.
-func truncated(s string, width int) string {
-	if lipgloss.Width(s) <= width {
-		return s
+// within is parts cut to width, the last character an ellipsis where something was left out.
+func within(parts []part, width int) []part {
+	if widthOf(parts) <= width {
+		return parts
 	}
-	return lipgloss.NewStyle().MaxWidth(width).Render(s)
-}
-
-// padded is a line as wide as the window, so that a row selected is reversed across it.
-func padded(s string, width int) string {
-	if w := lipgloss.Width(s); w < width {
-		return s + strings.Repeat(" ", width-w)
+	if width <= 0 {
+		return nil
 	}
-	return s
+	var out []part
+	used := 0
+	for _, p := range parts {
+		w := lipgloss.Width(p.text)
+		if used+w <= width-1 {
+			out = append(out, p)
+			used += w
+			continue
+		}
+		r := []rune(p.text)
+		for len(r) > 0 && used+lipgloss.Width(string(r)) > width-1 {
+			r = r[:len(r)-1]
+		}
+		return append(out, part{p.role, string(r) + "…"})
+	}
+	return out
 }
 
 // fitted puts left and right on one line as wide as the window, the right cut first where both
-// do not fit.
-func fitted(left, right string, width int) string {
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 2 {
-		right = cut(right, max(0, width-lipgloss.Width(left)-2))
-		gap = max(2, width-lipgloss.Width(left)-lipgloss.Width(right))
+// do not fit, then the left.
+func fitted(left, right []part, width int) []part {
+	if room := width - widthOf(left) - 2; widthOf(right) > room {
+		right = within(right, max(0, room))
 	}
-	return truncated(left+strings.Repeat(" ", gap)+right, width)
+	gap := max(2, width-widthOf(left)-widthOf(right))
+	return within(append(append(left, part{plain, strings.Repeat(" ", gap)}), right...), width)
 }

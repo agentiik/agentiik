@@ -38,6 +38,13 @@ func consoleVerb(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintln(e.Err, "agk console opens on one run at most, by its identifier, or on the runs where none is named")
 		return exitUsage
 	}
+	// AGENTIIK_THEME settles the ground for a terminal that never says what its background is,
+	// and a value that is neither is refused before anything is asked, as a wrong flag is.
+	theme := e.getenv(themeVariable)
+	if theme != "" && theme != "light" && theme != "dark" {
+		fmt.Fprintf(e.Err, "%s is light or dark, and %q is neither\n", themeVariable, theme)
+		return exitUsage
+	}
 	at, ok := reach(e, *server)
 	if !ok {
 		return exitUsage
@@ -79,6 +86,8 @@ func consoleVerb(ctx context.Context, e Env, args []string) int {
 		Read:         at.getJSON,
 		Now:          e.now,
 		Describe:     func(w io.Writer, d db.RunDetail, now time.Time) { describe(w, d, now, false) },
+		Getenv:       e.getenv,
+		Theme:        theme,
 	})
 	if err != nil {
 		fmt.Fprintf(e.Err, "the console stopped: %s\n", err)
@@ -86,6 +95,10 @@ func consoleVerb(ctx context.Context, e Env, args []string) int {
 	}
 	return exitSucceeded
 }
+
+// themeVariable names the ground agk console draws on, light or dark, where the terminal does not
+// answer the question of its background, as some multiplexers never do.
+const themeVariable = "AGENTIIK_THEME"
 
 // plainly prints once the view the console would have opened, for wherever there is no screen.
 func plainly(ctx context.Context, e Env, at remote, run, namespace string) int {
