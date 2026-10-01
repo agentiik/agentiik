@@ -1172,7 +1172,7 @@ export interface paths {
         put?: never;
         /**
          * Replay a run
-         * @description Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.
+         * @description Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, and with the namespace variables it read, however they changed since, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.
          */
         post: operations["replayRun"];
         delete?: never;
@@ -1491,6 +1491,62 @@ export interface paths {
          * @description Removes the declaration and, where the built-in store keeps one, its value, so that declaring the name again later does not bring back a credential somebody meant to be gone. Requires secret:write at namespace scope, and is audited as secret.delete.
          */
         delete: operations["removeSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a namespace's variables
+         * @description Every variable of the namespace, sorted by name, whole and not paged, each with its value, its visibility and, where it is selected, the workflows that read it, and who wrote it last and when. Requires workflow:read at namespace scope, which reading the workflows these variables are shown to takes; a grant on one workflow reads none, since a variable serves every workflow it is shown to.
+         */
+        get: operations["listVariables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/variables/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+                name: components["parameters"]["variable"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read one variable
+         * @description One variable, as the list gives it. Requires workflow:read at namespace scope.
+         */
+        get: operations["readVariable"];
+        /**
+         * Create or replace one variable
+         * @description Writes the variable whole, its value, its visibility and for selected the workflows that read it, creating it or replacing what it held. One variable per request, so that two Terraform applies each setting their own never drop each other's change. A run created afterwards reads it; a run created before reads what it read when it was created, and so does its replay. A name its workflow's file writes in vars takes the file's value. Requires workflow:write at namespace scope, since a variable changes what the workflows reading it do, as pushing a version does, and is audited as variable.write with the visibility, the workflows, whether it was created and the SHA-256 of the value, never the value itself, which every run that read it keeps.
+         */
+        put: operations["writeVariable"];
+        post?: never;
+        /**
+         * Remove one variable
+         * @description Removes the variable. A run created afterwards no longer reads it; one created before, and its replay, read what it read. Requires workflow:write at namespace scope, and is audited as variable.delete.
+         */
+        delete: operations["removeVariable"];
         options?: never;
         head?: never;
         patch?: never;
@@ -8608,6 +8664,100 @@ export interface components {
             encoding?: "utf-8" | "base64";
         };
         /**
+         * Variable list
+         * @description A namespace's variables, by name, whole and not paged: a namespace holds at most 1,000.
+         * @example {
+         *       "variables": [
+         *         {
+         *           "name": "ledger_url",
+         *           "value": "https://ledger.example.com/api",
+         *           "visibility": "all",
+         *           "updated_by": "alice",
+         *           "updated_at": "2026-10-01T09:10:00Z"
+         *         },
+         *         {
+         *           "name": "reminder_days",
+         *           "value": [
+         *             7,
+         *             14,
+         *             30
+         *           ],
+         *           "visibility": "selected",
+         *           "workflows": [
+         *             "payment-reminders"
+         *           ],
+         *           "updated_by": "alice",
+         *           "updated_at": "2026-10-01T09:12:00Z"
+         *         }
+         *       ]
+         *     }
+         * @example {
+         *       "variables": []
+         *     }
+         */
+        variableList: {
+            /**
+             * @description Every variable of the namespace, sorted by name, each with its value.
+             * @example [
+             *       {
+             *         "name": "ledger_url",
+             *         "value": "https://ledger.example.com/api",
+             *         "visibility": "all",
+             *         "updated_by": "alice",
+             *         "updated_at": "2026-10-01T09:10:00Z"
+             *       }
+             *     ]
+             */
+            variables: components["schemas"]["namespaceVariable"][];
+        };
+        /**
+         * Variable written
+         * @description What a PUT writes: the whole variable, its value, its visibility and for selected its workflows, each written every time, so that a PUT changing only the value never leaves the visibility to a default that could widen a variable selected for one workflow to every workflow of the namespace.
+         * @example {
+         *       "value": "https://ledger.example.com/api",
+         *       "visibility": "all"
+         *     }
+         * @example {
+         *       "value": [
+         *         7,
+         *         14,
+         *         30
+         *       ],
+         *       "visibility": "selected",
+         *       "workflows": [
+         *         "payment-reminders"
+         *       ]
+         *     }
+         */
+        variableWrite: {
+            /**
+             * @description Any JSON value, null among them, at most 64 KiB written as compact JSON. A number is held as a run's inputs are: one no 64-bit float holds, or written past 340 digits from the point, is refused, and one written with an exponent is written out with a point, 1e3 as 1000.0, so that it reads back a double. U+0000 in a string or a name is refused, since PostgreSQL does not keep it in JSON.
+             * @example https://ledger.example.com/api
+             * @example [
+             *       7,
+             *       14,
+             *       30
+             *     ]
+             * @example 45
+             */
+            value: unknown;
+            /**
+             * @description all, read by every workflow of the namespace, or selected, read by those workflows names.
+             * @example all
+             * @example selected
+             * @enum {string}
+             */
+            visibility: "all" | "selected";
+            /**
+             * @description For selected alone, and required with it, the workflows that read it, each once, in any order, kept sorted; [] for none. Required rather than taken as none where left out, so that a PUT forgetting it does not empty the list, and refused beside all.
+             * @example [
+             *       "payment-reminders"
+             *     ]
+             * @example []
+             */
+            workflows?: components["schemas"]["identifier"][];
+        };
+        /**
          * Runner
          * @description One runner as the inventory holds it: its identifier, pool and labels, what the host has, what the installation and the runner each say of its state, and who took it out of service and when. Never the host it runs on, nor the key it joined with, which proves it rather than lists it: a runner is a name, a pool and labels, so that a host can be reimaged or moved while what is written against the fleet stays true.
          * @example {
@@ -11926,6 +12076,94 @@ export interface components {
             };
         };
         /**
+         * Namespace variable
+         * @description A variable a namespace keeps beside those its workflows' files write, read through the vars context by the workflows it is shown to as a file's own are read, a name the file writes taking the file's value. A run reads the variables shown to its workflow once, when it is created, and keeps those its file does not write, so that a controller taking it over and a replay read what it read rather than what is true now. Not a secret: the value is answered to whoever reads the namespace's workflows, kept in clear on every run that read it and masked nowhere; a credential is a secret. Written whole, one variable per request, by whoever holds workflow:write at namespace scope.
+         * @example {
+         *       "name": "ledger_url",
+         *       "value": "https://ledger.example.com/api",
+         *       "visibility": "all",
+         *       "updated_by": "alice",
+         *       "updated_at": "2026-10-01T09:10:00Z"
+         *     }
+         * @example {
+         *       "name": "reminder_days",
+         *       "value": [
+         *         7,
+         *         14,
+         *         30
+         *       ],
+         *       "visibility": "selected",
+         *       "workflows": [
+         *         "payment-reminders"
+         *       ],
+         *       "updated_by": "alice",
+         *       "updated_at": "2026-10-01T09:12:00Z"
+         *     }
+         * @example {
+         *       "name": "dunning_days",
+         *       "value": 45,
+         *       "visibility": "selected",
+         *       "workflows": [],
+         *       "updated_by": "finance/nightly-sync",
+         *       "updated_at": "2026-10-01T09:15:30Z"
+         *     }
+         */
+        namespaceVariable: {
+            /**
+             * @description The variable's name, read as vars.<name>: the grammar a workflow file's vars names its keys with, so that an expression reads either alike, at most 255 characters.
+             * @example ledger_url
+             * @example reminder_days
+             */
+            name: components["schemas"]["identifier"];
+            /**
+             * @description Any JSON value, as a workflow file's vars holds any value YAML writes, at most 64 KiB written as compact JSON. A number keeps the way it was written: one with no fraction and no exponent is an int in an expression, and any other a double, as a number of the file or of a run's inputs is, an exponent written out with a point.
+             * @example https://ledger.example.com/api
+             * @example 30
+             * @example 2.5
+             * @example [
+             *       7,
+             *       14,
+             *       30
+             *     ]
+             * @example {
+             *       "currency": "EUR",
+             *       "rounding": "half-even"
+             *     }
+             * @example null
+             */
+            value: unknown;
+            /**
+             * @description Which workflows of the namespace read it: all, every one of them, or selected, those workflows names and no other. It says which workflows read the variable and nothing about which people may: reading the variables takes workflow:read at namespace scope whatever their visibility.
+             * @example all
+             * @example selected
+             * @enum {string}
+             */
+            visibility: "all" | "selected";
+            /**
+             * @description For selected alone, the workflows that read it, by name, sorted and each once, matched when a run is created: a rename rewrites the name in every list of the namespace, and a workflow deleted or moved leaves its name, read by whatever is created under it again. Empty is read by none, which keeps a variable aside without removing it. Absent for all.
+             * @example [
+             *       "payment-reminders"
+             *     ]
+             * @example [
+             *       "monthly-invoicing",
+             *       "payment-reminders"
+             *     ]
+             * @example []
+             */
+            workflows?: components["schemas"]["identifier"][];
+            /**
+             * @description Who wrote it last.
+             * @example alice
+             * @example finance/nightly-sync
+             */
+            updated_by: components["schemas"]["actor"];
+            /**
+             * @description When it was written last.
+             * @example 2026-10-01T09:12:00Z
+             */
+            updated_at: components["schemas"]["timestamp"];
+        };
+        /**
          * Runner identifier
          * @description The identifier the API minted for this machine, and the name it answers to everywhere afterwards: the runner field of every task result it publishes, the runner inventory, the console. It is minted here rather than chosen on the host, because a name a machine picks for itself is a name two machines can pick. Lowercase words joined by hyphens, the grammar a namespace and a pool are written in, so the same string reads correctly in a message, in a URL and in a queue name.
          * @example runner-dmz-02
@@ -12384,6 +12622,8 @@ export interface components {
         artifactUri: string;
         /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
         secret: string;
+        /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+        variable: components["schemas"]["identifier"];
         /** @description Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it. */
         avatarVersion: string;
         /** @description The runner pool, by its name, its only identity. */
@@ -15586,6 +15826,150 @@ export interface operations {
             /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
             403: components["responses"]["forbidden"];
             /** @description No such declaration, no such namespace, or one where the caller does not hold secret:write: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    listVariables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The variables. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["variableList"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    readVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+                name: components["parameters"]["variable"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The variable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["namespaceVariable"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such variable, no such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    writeVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+                name: components["parameters"]["variable"];
+            };
+            cookie?: never;
+        };
+        /** @description The whole variable. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["variableWrite"];
+            };
+        };
+        responses: {
+            /** @description Replaced: the variable as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["namespaceVariable"];
+                };
+            };
+            /** @description Created: the variable, and Location naming it. */
+            201: {
+                headers: {
+                    /** @description Where the variable is read. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["namespaceVariable"];
+                };
+            };
+            /** @description A name the workflow file could not write, no value or no visibility, a visibility that is neither all nor selected, selected without workflows or workflows beside all, a workflow's name the file could not write or one named twice, a number no 64-bit float holds or written past 340 digits from the point, U+0000 in a string, a field the route does not read, or two credentials. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, or one where the caller does not hold workflow:write at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+            /** @description A variable created in a namespace holding 1,000 already, or a value taking the namespace's variables past 4 MiB or 100,000 values in all, the bounds a run's inputs are held to, since a run keeps those it reads and the controller reads them at every decision: nothing is written. */
+            409: components["responses"]["conflict"];
+            /** @description A value past 64 KiB written as compact JSON, workflows past 1,024 names, or a body past 512 KiB. */
+            413: components["responses"]["tooLarge"];
+        };
+    };
+    removeVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+                name: components["parameters"]["variable"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such variable, no such namespace, or one where the caller does not hold workflow:write at namespace scope: the same answer. */
             404: components["responses"]["notFound"];
         };
     };

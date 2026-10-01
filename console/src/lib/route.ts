@@ -14,9 +14,9 @@
 // workflows, and a run as itself with its workflow not yet known, which its screen writes into the
 // address once it has read the run.
 
-export type View = "workflows" | "statistics" | "sharing" | "settings";
+export type View = "workflows" | "statistics" | "sharing" | "variables" | "settings";
 
-export const views: readonly View[] = ["workflows", "statistics", "sharing", "settings"];
+export const views: readonly View[] = ["workflows", "statistics", "sharing", "variables", "settings"];
 
 export type Route =
   | { kind: "landing" }

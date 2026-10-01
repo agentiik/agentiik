@@ -13,8 +13,9 @@
 create table namespace_variables (
   -- Removed with its namespace, as its grants and its authentication policy are: a variable is a
   -- setting of the namespace and nobody's work, which a namespace refusing removal while it held one
-  -- would treat it as.
-  namespace   text not null references namespaces (name) on delete cascade,
+  -- would treat it as. Carried with its namespace's name where the namespace is renamed, as every key
+  -- onto namespaces is.
+  namespace   text not null references namespaces (name) on delete cascade on update cascade,
   -- Read as vars.<name>, on the grammar a file's vars names its keys with.
   name        identifier not null,
 

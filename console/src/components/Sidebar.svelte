@@ -41,7 +41,7 @@
     ondismiss: (id: string) => void;
   } = $props();
 
-  const icon: Record<View, string> = { workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", settings: "control-settings" };
+  const icon: Record<View, string> = { workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", variables: "control-variables", settings: "control-settings" };
   const home = { kind: "landing" as const };
   const admin = [
     { kind: "runners" as const, label: "Runners", icon: "control-runners" },

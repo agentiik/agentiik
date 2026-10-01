@@ -25,6 +25,7 @@
   import RunDiff from "./views/RunDiff.svelte";
   import Runs from "./views/Runs.svelte";
   import Settings from "./views/Settings.svelte";
+  import Variables from "./views/Variables.svelte";
   import Sharing from "./views/Sharing.svelte";
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
   import Statistics from "./views/Statistics.svelte";
@@ -101,11 +102,12 @@
     { view: "workflows", label: "Workflows", shows: (ns) => (session.me ? holdsSomewhereIn(session.me, "workflow:read", ns) : false) },
     { view: "statistics", label: "Statistics", shows: (ns) => (session.me ? inNamespace(session.me, ns) : false) },
     { view: "sharing", label: "Sharing", shows: (ns) => (session.me ? holdsSomewhereIn(session.me, "grant:manage", ns) : false) },
+    { view: "variables", label: "Variables", shows: (ns) => (session.me ? holds(session.me, "workflow:read", ns) : false) },
     { view: "settings", label: "Settings", shows: (ns) => (session.me ? inNamespace(session.me, ns) : false) },
   ];
 
   // Built so far: the views the console draws in this release. The others arrive with theirs.
-  const built = new Set<View>(["workflows", "statistics", "sharing", "settings"]);
+  const built = new Set<View>(["workflows", "statistics", "sharing", "variables", "settings"]);
 
   const known = $derived(namespace !== undefined && session.namespaces.some((n) => n.name === namespace));
   const shown = $derived(namespace && known ? all.filter((v) => built.has(v.view) && v.shows(namespace)) : []);
@@ -204,6 +206,8 @@
         <Workflows {api} {place} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "sharing"}
         <Sharing {api} {place} me={session.me} namespace={route.namespace} />
+      {:else if route.kind === "namespace" && route.view === "variables"}
+        <Variables {api} {place} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "settings"}
         <Settings {api} {place} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "statistics"}
