@@ -119,6 +119,20 @@ func logs(ctx context.Context, e Env, args []string) int {
 	return worst
 }
 
+// followLog follows one step's log as agk logs does, for agk console: each line to out, what is
+// said about the log to said, and nil where it was read to its end.
+func (at remote) followLog(ctx context.Context, run, step string, out, said io.Writer) error {
+	s := &stepLog{at: at, run: run, step: step, out: out, errs: said}
+	if s.follow(ctx) != exitSucceeded || ctx.Err() != nil {
+		return errNotToItsEnd
+	}
+	return nil
+}
+
+// errNotToItsEnd is a log a follower stopped short of: refused, given up on, or no longer asked
+// for.
+var errNotToItsEnd = errors.New("the log was not read to its end")
+
 // positional reads flags and the words between them, in any order, so that agk logs <run> --server
 // <url> reads as it is typed: flag stops at the first word that is not a flag.
 func positional(fs *flag.FlagSet, args []string) ([]string, int, bool) {

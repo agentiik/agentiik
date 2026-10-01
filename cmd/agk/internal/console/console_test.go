@@ -155,12 +155,20 @@ func send(t *testing.T, m tea.Model, msg tea.Msg) tea.Model {
 }
 
 // run carries out a command and the batches it holds, leaving out the quit, which the test asks
-// about itself.
+// about itself, and a command still waiting after a moment, as one waiting for a live log's next
+// line does, which is left to wait.
 func run(cmd tea.Cmd) []tea.Msg {
 	if cmd == nil {
 		return nil
 	}
-	msg := cmd()
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	var msg tea.Msg
+	select {
+	case msg = <-done:
+	case <-time.After(waited):
+		return nil
+	}
 	if batch, ok := msg.(tea.BatchMsg); ok {
 		var msgs []tea.Msg
 		for _, c := range batch {
@@ -173,6 +181,9 @@ func run(cmd tea.Cmd) []tea.Msg {
 	}
 	return []tea.Msg{msg}
 }
+
+// waited is how long a test waits on a command before leaving it waiting.
+const waited = 200 * time.Millisecond
 
 var ansi = regexp.MustCompile("\x1b\\[[0-9;?]*[A-Za-z]")
 

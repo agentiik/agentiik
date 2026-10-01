@@ -36,6 +36,9 @@ type Options struct {
 	Read Reader
 	Now  func() time.Time
 
+	// Follow follows a step's log as agk logs does, and is nil where no log is to be shown.
+	Follow Follower
+
 	// Every is how often what is shown is read again, so that a run going on is seen going: five
 	// seconds where it is not set, as the web console reads its runs and a run until it ends.
 	Every time.Duration
@@ -99,6 +102,10 @@ type Model struct {
 	port     int
 	payloads map[string]payloadRead
 	runners  map[string]db.Runner
+
+	// logs are the logs of the steps chosen, by run and step, and follow the one followed now.
+	logs   map[string]logBook
+	follow *following
 
 	// The runners view's: the pools and the runners as last read, and the runner chosen.
 	pools       []api.Pool
@@ -281,7 +288,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.unanswered, m.runFailed, m.run, m.runRead = "", "", msg.run, true
 			m.step = stepOf(m.run, m.step)
 		}
-		var cmds []tea.Cmd
+		var follow tea.Cmd
+		m, follow = m.followChosen(false)
+		cmds := []tea.Cmd{follow}
 		if m.view == runView && (m.run == nil || !m.run.State.Terminal()) {
 			cmds = append(cmds, m.later())
 		}
@@ -290,6 +299,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.readChosen())
 		return m, tea.Batch(cmds...)
+	case logRead:
+		return m.kept(msg)
+	case logEnded:
+		return m.ended(msg), nil
 	case fleetRead:
 		if msg.err != nil {
 			if m.fleetRead {
@@ -397,7 +410,9 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 					by = -1
 				}
 				m.step, m.port = movedStep(m.run, m.step, by), 0
-				return m, m.readChosen()
+				var follow tea.Cmd
+				m, follow = m.followChosen(true)
+				return m, tea.Batch(m.readChosen(), follow)
 			}
 		case "[", "]":
 			if m.run != nil {
@@ -429,6 +444,7 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 // forgotten, and opened again from the runs.
 func (m Model) showing(v view) (tea.Model, tea.Cmd) {
 	if m.view == runView {
+		m = m.unfollow()
 		m.run, m.runRead, m.runFailed, m.step, m.port, m.payloads = nil, false, "", "", 0, nil
 	}
 	m.view = v
