@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
+import { fetchable, retention, type Artifact } from "../src/lib/artifacts";
 import { filesOf, tokens } from "../src/lib/envelope";
 import { streamsFrom, type Source } from "../src/lib/logs.svelte";
 import { Place } from "../src/lib/place.svelte";
@@ -222,5 +223,81 @@ describe("an envelope's JSON", () => {
 
   it("lists every file the items carry, beside the item", () => {
     expect(filesOf(envelope.items).map((f) => `${f.item}:${f.file.name}`)).toEqual(["01JMZ8V1PB2C3D4E5:request.json"]);
+  });
+});
+
+describe("the files of a step and the outputs of a run", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("lists the files the step published with where each stands, and fetches a live one after asking the route", async () => {
+    const heads: { url: string; init?: RequestInit }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      heads.push({ url, init });
+      return new Response(null, { status: 200 });
+    });
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.href);
+    });
+    open(`/finance/runs/${failed}?step=invoice&pane=files`);
+    const row = (await screen.findByText("request.json")).closest("tr")!;
+    expect(row.textContent).toContain("c1f4a91dd878");
+    expect(row.textContent).toMatch(/until .*2026-10-07/);
+    await fireEvent.click(screen.getByRole("button", { name: /Download/ }));
+    const uri = `agk://run/${failed}/invoice/error/request.json`;
+    await waitFor(() => expect(clicked.map((href) => new URL(href).pathname)).toEqual([`/api/v1/artifacts/${encodeURIComponent(uri)}`]));
+    expect(heads).toHaveLength(1);
+    expect(heads[0]!.init?.method).toBe("HEAD");
+    expect(heads[0]!.init?.redirect).toBe("manual");
+  });
+
+  it("says a file that went since the run was read is finished, rather than missing", async () => {
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 410 }));
+    const clicked = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    open(`/finance/runs/${failed}?step=invoice&pane=files`);
+    await fireEvent.click(await screen.findByRole("button", { name: /Download/ }));
+    expect(await screen.findByText(/This file existed and is finished/)).toBeTruthy();
+    expect(clicked).not.toHaveBeenCalled();
+  });
+
+  it("keeps a collected file in the list, its collection said, with nothing to fetch", async () => {
+    open(`/finance/runs/${failed}?step=normalize&pane=files`);
+    const row = (await screen.findByText("orders.csv")).closest("tr")!;
+    expect(row.textContent).toMatch(/collected .*, its fetches spent/);
+    expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
+  });
+
+  it("lists the files to a principal without run:read_data and offers none of them", async () => {
+    open(`/finance/runs/${failed}?step=invoice&pane=files`, withPermissions(["workflow:read", "run:read"]));
+    expect(await screen.findByText("request.json")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
+    expect(screen.getByText(/The files are listed and not fetched/)).toBeTruthy();
+  });
+
+  it("opens a workflow output's envelope through the run's outputs route", async () => {
+    const s = scenario("alice");
+    const detail = s[`GET /api/v1/runs/${failed}`]!.body as { outputs?: Record<string, unknown> };
+    detail.outputs = { normalised: { step: "normalize", port: "ok", count: 211 } };
+    s[`GET /api/v1/runs/${failed}/outputs/normalised`] = { status: 200, body: { ...envelope, meta: { ...envelope.meta, step: "normalize", port: "ok" } } };
+    const { asked, place } = open(`/finance/runs/${failed}`, s);
+    const row = (await screen.findByRole("button", { name: "normalised" })).closest("tr")!;
+    expect(row.textContent).toMatch(/normalize\.ok/);
+    expect(row.textContent).toMatch(/1 · collected/);
+    await fireEvent.click(screen.getByRole("button", { name: "normalised" }));
+    expect(await screen.findByRole("region", { name: "The envelope of the output normalised" })).toBeTruthy();
+    expect(await screen.findByText('"VAT number not recognised"')).toBeTruthy();
+    expect(asked.some((a) => a.key === `GET /api/v1/runs/${failed}/outputs/normalised`)).toBe(true);
+    expect(place.query.get("output")).toBe("normalised");
+  });
+
+  it("says where a file stands, and what a HEAD answered", async () => {
+    const live = { status: "live", expires_at: "2026-10-07T05:42:55Z", fetches_left: 1 } as Artifact;
+    expect(retention(live, Date.parse("2026-01-01T00:00:00Z"))).toMatch(/^until .*, 1 fetch left$/);
+    expect(await fetchable(async () => Object.defineProperty(new Response(null, { status: 200 }), "type", { value: "opaqueredirect" }), "x")).toBe("");
+    expect(await fetchable(async () => new Response(null, { status: 409 }), "x")).toMatch(/being served/);
+    expect(await fetchable(async () => new Response(null, { status: 404 }), "x")).toBe("No such file, or not yours.");
   });
 });

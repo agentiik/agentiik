@@ -8,6 +8,7 @@
   import StatePill from "../components/StatePill.svelte";
   import Refused from "./Refused.svelte";
   import { cancelRun, replayRun } from "../lib/actions";
+  import { address, fetchable, retention } from "../lib/artifacts";
   import { band } from "../lib/exit";
   import { between, clock, took } from "../lib/format";
   import { holds } from "../lib/permissions";
@@ -71,16 +72,42 @@
 
   // The step pane's tab and the port chosen in it, which the address keeps beside the step and the
   // task: what one engineer sends another is the screen they are looking at.
-  type Tab = "output" | "input" | "logs";
+  type Tab = "output" | "input" | "files" | "logs";
   const tab = $derived.by((): Tab => {
     const named = place.query.get("pane");
-    return named === "input" || named === "logs" ? named : "output";
+    return named === "input" || named === "files" || named === "logs" ? named : "output";
   });
   const ports = $derived<Record<string, EnvelopeReference>>((tab === "input" ? task?.inputs : step?.ports) ?? {});
   const port = $derived.by(() => {
     const named = place.query.get("port");
     return named && named in ports ? named : Object.keys(ports)[0];
   });
+
+  // The files the step chosen published, and the workflow output whose envelope is open, which the
+  // address keeps too.
+  const files = $derived(run && chosenStep ? run.artifacts.filter((a) => a.step === chosenStep) : []);
+  const output = $derived.by(() => {
+    const named = place.query.get("output");
+    return readsData && named && run?.outputs && named in run.outputs ? named : undefined;
+  });
+
+  // Fetching a file asks the route first, which spends nothing, so that one gone since the run was
+  // read is said to be finished rather than opening the API's refusal in place of the console.
+  let unfetched = $state("");
+
+  async function fetchFile(uri: string, name: string) {
+    unfetched = "";
+    const url = new URL(address(uri), document.baseURI).href;
+    const why = await fetchable(globalThis.fetch.bind(globalThis), url);
+    if (why) {
+      unfetched = why;
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+  }
 
   // What was last asked of the run, and why it was refused where it was. Cancelling asks once more
   // before it is sent, since it stops the tasks in flight.
@@ -230,12 +257,26 @@
         </ul>
         {#if run.outputs && Object.keys(run.outputs).length > 0}
           <h3>Workflow outputs</h3>
-          <dl class="outputs">
-            {#each Object.entries(run.outputs) as [name, out] (name)}
-              <dt class="mono">{name}</dt>
-              <dd class="muted mono">{out.step}.{out.port} · {out.count} items</dd>
-            {/each}
-          </dl>
+          <table class="outputs">
+            <thead><tr><th>Output</th><th>From</th><th class="number">Items</th><th>Files</th></tr></thead>
+            <tbody>
+              {#each Object.entries(run.outputs) as [name, out] (name)}
+                {@const held = run.artifacts.filter((a) => a.step === out.step && a.port === out.port)}
+                <tr class:chosen={name === output}>
+                  <td class="mono">
+                    {#if readsData}
+                      <button class="link" aria-pressed={name === output} onclick={() => choose({ output: name })}>{name}</button>
+                    {:else}
+                      {name}
+                    {/if}
+                  </td>
+                  <td class="mono muted">{out.step}.{out.port}</td>
+                  <td class="number mono">{out.count}</td>
+                  <td class="muted">{#if held.length === 0}none{:else}{held.length} · {retention(held[0]!, now)}{/if}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {/if}
       </Pane>
 
@@ -276,9 +317,39 @@
             <div class="sides" role="tablist" aria-label="What the step pane shows">
               <button role="tab" aria-selected={tab === "output"} onclick={() => choose({ pane: "output" })}>Output</button>
               <button role="tab" aria-selected={tab === "input"} onclick={() => choose({ pane: "input" })}>Input</button>
+              <button role="tab" aria-selected={tab === "files"} onclick={() => choose({ pane: "files" })}>Files</button>
               <button role="tab" aria-selected={tab === "logs"} onclick={() => choose({ pane: "logs" })}>Logs</button>
             </div>
-            {#if tab === "logs"}
+            {#if tab === "files"}
+              {#if files.length === 0}
+                <p class="muted">The step has published no file.</p>
+              {:else}
+                <table class="files">
+                  <thead><tr><th>File</th><th>Port</th><th>Media type</th><th class="number">Size</th><th>SHA-256</th><th>Retention</th><th></th></tr></thead>
+                  <tbody>
+                    {#each files as f (f.uri)}
+                      <tr class={f.status}>
+                        <td class="mono">{f.name}</td>
+                        <td class="mono muted port {f.port}">{f.port}</td>
+                        <td class="mono muted">{f.media_type}</td>
+                        <td class="number mono">{bytes(f.size)}</td>
+                        <td class="mono muted" title={f.sha256}>{f.sha256.slice(0, 12)}</td>
+                        <td class="muted">{retention(f, now)}</td>
+                        <td class="end">
+                          {#if readsData && f.status === "live"}
+                            <button class="control" onclick={() => fetchFile(f.uri, f.name)}><Icon name="control-download" size={14} />Download</button>
+                          {/if}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+                {#if unfetched}<p class="refused" role="alert">{unfetched}</p>{/if}
+                {#if !readsData}
+                  <p class="faint">The files are listed and not fetched: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+                {/if}
+              {/if}
+            {:else if tab === "logs"}
               {#if task}
                 <LogPane {api} run={run.run} step={step.step} task={task.task} />
               {:else}
@@ -310,13 +381,19 @@
                 <EnvelopePane {api} run={run.run} step={step.step} {port} side={tab} task={tab === "input" ? task : undefined} />
               {/if}
             {/if}
-            {#if !readsData && tab !== "logs"}
+            {#if !readsData && (tab === "output" || tab === "input")}
               <p class="faint">What the envelopes hold is not shown: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
             {/if}
           </div>
         </Pane>
       {/if}
     </div>
+
+    {#if output && run.outputs?.[output]}
+      <Pane title="Workflow output {output}" aside="{run.outputs[output].step}.{run.outputs[output].port}">
+        <EnvelopePane {api} run={run.run} step={run.outputs[output].step} port={run.outputs[output].port} side="output" {output} />
+      </Pane>
+    {/if}
   </div>
 {/if}
 
@@ -332,10 +409,6 @@
   .control.danger {
     border-color: var(--failed);
     color: var(--failed);
-  }
-
-  .envelopes tr.chosen td {
-    background: var(--raised);
   }
 
   .inspector {
@@ -490,15 +563,21 @@
   }
 
   .outputs {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: calc(var(--unit) * 2) calc(var(--unit) * 6);
-    margin: 0;
-    font-size: var(--type-identifier-size-min);
+    margin-bottom: calc(var(--unit) * 6);
   }
 
-  .outputs dd {
-    margin: 0;
+  .envelopes tr.chosen td,
+  .outputs tr.chosen td {
+    background: var(--raised);
+  }
+
+  .files tr.expired td,
+  .files tr.collected td {
+    color: var(--faint);
+  }
+
+  .end {
+    text-align: right;
   }
 
   .exit {
