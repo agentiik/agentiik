@@ -13,6 +13,7 @@
   import { address, fetchable, retention } from "../lib/artifacts";
   import { band } from "../lib/exit";
   import { between, clock, took } from "../lib/format";
+  import { moved, useKeys, type Binding } from "../lib/keys.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { lastAttempt, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
@@ -26,7 +27,10 @@
   // principal without it is shown neither.
   let { api, place, me, namespace, id }: { api: API; place: Place; me: Me; namespace: string; id: string } = $props();
 
-  const reader = $derived(new RunReader(api, id));
+  // The run is read again when the address names another one, and not when it names another step
+  // of the same: the identifier is held apart, a derived value moving only when it changes.
+  const which = $derived(id);
+  const reader = $derived(new RunReader(api, which));
   let now = $state(Date.now());
 
   $effect(() => {
@@ -186,6 +190,41 @@
   }
 
   const runs = $derived({ kind: "namespace" as const, namespace, view: "runs" as const });
+
+  // Replaying from a key asks first, as agk console's p does, since a key is pressed by mistake
+  // more easily than a button naming the step is clicked.
+  let replaying = $state(false);
+
+  // The ports of the side shown that hold an envelope, which [ and ] move between.
+  const openable = $derived(readsData && (tab === "output" || tab === "input") ? portNames.filter((n) => n in ports) : []);
+
+  // The keys of the inspector, each beside the button or the link that does the same: a question
+  // asked answers to y and to n, and any other key leaves it asked.
+  useKeys((): Binding[] => {
+    if (!run || !here) return [];
+    if (confirming) {
+      return [
+        { keys: ["y"], effect: "Cancel run", does: () => void cancel() },
+        { keys: ["n", "Escape"], effect: "Keep it running", does: () => (confirming = false) },
+      ];
+    }
+    if (replaying && chosenStep) {
+      const from = chosenStep;
+      return [
+        { keys: ["y"], effect: `Replay from ${from}`, does: () => ((replaying = false), void replay(from)) },
+        { keys: ["n", "Escape"], effect: "Keep it", does: () => (replaying = false) },
+      ];
+    }
+    const steps = run.steps.map((s) => s.step);
+    const out: Binding[] = [{ keys: ["ArrowUp", "ArrowDown", "k", "j"], brief: ["ArrowUp", "ArrowDown"], effect: "Step", does: (key) => choose({ step: moved(steps, chosenStep, key)! }) }];
+    if (openable.length > 1) {
+      out.push({ keys: ["[", "]"], effect: "Port", does: (key) => choose({ pane: tab, port: moved(openable, port, key === "]" ? "ArrowDown" : "ArrowUp")! }) });
+    }
+    if (mayRun && !reader.ended) out.push({ keys: ["c"], effect: "Cancel run", does: () => (confirming = true) });
+    if (mayRun && reader.ended && chosenStep && !run.replay_from_start_only) out.push({ keys: ["p"], effect: `Replay from ${chosenStep}`, does: () => (replaying = true) });
+    out.push({ keys: ["Escape"], effect: `All runs of ${namespace}`, does: () => place.go(runs) });
+    return out;
+  });
 </script>
 
 {#if reader.missing || (run && !here)}
@@ -222,6 +261,10 @@
             {:else}
               <button class="control" disabled={acting} onclick={() => (confirming = true)}><Icon name="control-cancel" size={14} />Cancel run</button>
             {/if}
+          {:else if mayRun && replaying && chosenStep && !run.replay_from_start_only}
+            <span>Replay this run from {chosenStep}? A new run starts there.</span>
+            <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
+            <button class="control" disabled={acting} onclick={() => (replaying = false)}>Keep it</button>
           {:else if mayRun}
             {#if chosenStep && !run.replay_from_start_only}
               <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
