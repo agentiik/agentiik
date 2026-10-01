@@ -5491,6 +5491,97 @@
         }
       }
     },
+    "/api/v1/{ns}/workflows/{name}/refs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/workflow"
+        }
+      ],
+      "get": {
+        "operationId": "listWorkflowRefs",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List a workflow's branches and tags",
+        "description": "The branches and tags the workflow's repository holds, for the console's ref switcher, which could otherwise offer only the default branch and the versions of its history: git's advertisement lists them, and git's routes take an API token and never a session. Each ref is named in full, in git's order, byte by byte, with the commit it points at, an annotated tag peeled to its commit, and null for the default branch while it is unborn; whether it is protected; and who last moved it and when, absent while it is unborn. Every commit a ref points at is a version, which the tree route reads at it. Listed whole and not paged, since the advertisement lists every ref to whoever may clone, which is whoever may read. Requires workflow:read.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "200": {
+            "description": "Every branch and tag of the repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/refs"
+                },
+                "examples": {
+                  "held": {
+                    "summary": "the default branch, a branch holding a slash and a tag",
+                    "value": {
+                      "refs": [
+                        {
+                          "name": "refs/heads/feature/vat-rounding",
+                          "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                          "protected": false,
+                          "moved_by": "chloe",
+                          "moved_at": "2026-09-30T15:02:00Z"
+                        },
+                        {
+                          "name": "refs/heads/main",
+                          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                          "protected": true,
+                          "moved_by": "alice",
+                          "moved_at": "2026-09-28T10:12:00Z"
+                        },
+                        {
+                          "name": "refs/tags/v2.1.0",
+                          "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                          "protected": false,
+                          "moved_by": "bob",
+                          "moved_at": "2026-09-20T16:40:00Z"
+                        }
+                      ]
+                    }
+                  },
+                  "unborn": {
+                    "summary": "a repository nothing was pushed to yet",
+                    "value": {
+                      "refs": [
+                        {
+                          "name": "refs/heads/main",
+                          "commit": null,
+                          "protected": true
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such workflow, or one the caller cannot read: the same answer."
+          }
+        }
+      }
+    },
     "/api/v1/{ns}/workflows/{name}/tree/{ref}": {
       "parameters": [
         {
@@ -12379,6 +12470,93 @@
             "mode": "0755",
             "size": 1532,
             "sha256": "a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a"
+          }
+        ]
+      },
+      "refs": {
+        "title": "Refs",
+        "type": "object",
+        "required": [
+          "refs"
+        ],
+        "additionalProperties": false,
+        "description": "A workflow repository's branches and tags, as GET /api/v1/{ns}/workflows/{name}/refs answers them.",
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/ref"
+            },
+            "minItems": 1,
+            "description": "Every branch and tag, in git's order, byte by byte. Never empty, since the default branch is held from the repository's creation, without a commit until something is pushed to it.",
+            "examples": [
+              [
+                {
+                  "name": "refs/heads/feature/vat-rounding",
+                  "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                  "protected": false,
+                  "moved_by": "chloe",
+                  "moved_at": "2026-09-30T15:02:00Z"
+                },
+                {
+                  "name": "refs/heads/main",
+                  "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                  "protected": true,
+                  "moved_by": "alice",
+                  "moved_at": "2026-09-28T10:12:00Z"
+                },
+                {
+                  "name": "refs/tags/v2.1.0",
+                  "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                  "protected": false,
+                  "moved_by": "bob",
+                  "moved_at": "2026-09-20T16:40:00Z"
+                }
+              ],
+              [
+                {
+                  "name": "refs/heads/main",
+                  "commit": null,
+                  "protected": true
+                }
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "refs": [
+              {
+                "name": "refs/heads/feature/vat-rounding",
+                "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+                "protected": false,
+                "moved_by": "chloe",
+                "moved_at": "2026-09-30T15:02:00Z"
+              },
+              {
+                "name": "refs/heads/main",
+                "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                "protected": true,
+                "moved_by": "alice",
+                "moved_at": "2026-09-28T10:12:00Z"
+              },
+              {
+                "name": "refs/tags/v2.1.0",
+                "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                "protected": false,
+                "moved_by": "bob",
+                "moved_at": "2026-09-20T16:40:00Z"
+              }
+            ]
+          },
+          {
+            "refs": [
+              {
+                "name": "refs/heads/main",
+                "commit": null,
+                "protected": true
+              }
+            ]
           }
         ]
       },

@@ -17708,6 +17708,41 @@
       ]
     }
   },
+  "GET /api/v1/finance/workflows/monthly-invoicing/refs": {
+    "status": 200,
+    "body": {
+      "refs": [
+        {
+          "name": "refs/heads/feature/vat-rounding",
+          "commit": "c4e6a8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2",
+          "protected": false,
+          "moved_by": "carol",
+          "moved_at": "2026-09-30T15:02:00Z"
+        },
+        {
+          "name": "refs/heads/main",
+          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+          "protected": true,
+          "moved_by": "alice",
+          "moved_at": "2026-09-28T10:12:00Z"
+        },
+        {
+          "name": "refs/heads/try-retries",
+          "commit": "d1e3f5a7b9c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8",
+          "protected": false,
+          "moved_by": "alice",
+          "moved_at": "2026-09-29T09:40:00Z"
+        },
+        {
+          "name": "refs/tags/v2.1.0",
+          "commit": "9b1f3d5e7a0c2e4f6b8d0a1c3e5f7b9d2a4c6e8f",
+          "protected": false,
+          "moved_by": "bob",
+          "moved_at": "2026-09-20T16:40:00Z"
+        }
+      ]
+    }
+  },
   "GET /api/v1/finance/workflows/monthly-invoicing/tree/a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f?path=agentiik.yaml": {
     "status": 200,
     "text": "# finance/monthly-invoicing\napiVersion: agentiik.dev/v1\nkind: Workflow\n\nmetadata:\n  name: monthly-invoicing\n  namespace: finance\n\ninclude:\n  - path: ./common-bricks.yaml\n\ninputs:\n  orders:\n    schema: { type: array, items: { type: object } }\n    required: true\n  customers:\n    schema: { type: array }\n    default: []\n\noutputs:\n  invoices: { from: { step: archive, port: ok }, retain: 90d }\n  errors: { from: { step: invoice, port: error }, retain: { for: 7d, fetches: 3 } }\n\non:\n  schedule:\n    - cron: \"0 6 1 * *\"\n      timezone: Europe/Paris\n  webhook:\n    - path: /invoicing/rerun\n\nconcurrency:\n  group: monthly-invoicing\n\ntimeout: 6h\n\nsteps:\n\n  normalize:\n    image: ghcr.io/acme/agk-normalize:1.4.0\n    inputs:\n      orders: ${{ workflow.inputs.orders }}\n      customers: ${{ workflow.inputs.customers }}\n    params:\n      currency: ${{ vars.currency }}\n    outputs: [ok, rejected]\n\n  invoice:\n    extends: .api-brick\n    image: ghcr.io/acme/agk-invoice:3.2.1\n    needs:\n      - { step: normalize, port: ok, as: in }\n    if: ${{ inputs.in.count > 0 }}\n    strategy:\n      fan_out: item\n      max_parallel: 8\n    params:\n      rounding: per_line\n    secrets: [billing]\n    outputs: [out, error]\n\n  archive:\n    image: ghcr.io/acme/agk-archive:0.9.0\n    needs:\n      - { step: invoice, port: out, as: invoices }\n      - { step: normalize, port: rejected, as: rejected }\n    merge: wait_all\n    cache: true\n    outputs: [ok]\n"

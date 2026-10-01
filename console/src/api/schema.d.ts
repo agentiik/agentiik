@@ -991,6 +991,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/{ns}/workflows/{name}/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a workflow's branches and tags
+         * @description The branches and tags the workflow's repository holds, for the console's ref switcher, which could otherwise offer only the default branch and the versions of its history: git's advertisement lists them, and git's routes take an API token and never a session. Each ref is named in full, in git's order, byte by byte, with the commit it points at, an annotated tag peeled to its commit, and null for the default branch while it is unborn; whether it is protected; and who last moved it and when, absent while it is unborn. Every commit a ref points at is a version, which the tree route reads at it. Listed whole and not paged, since the advertisement lists every ref to whoever may clone, which is whoever may read. Requires workflow:read.
+         */
+        get: operations["listWorkflowRefs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/workflows/{name}/tree/{ref}": {
         parameters: {
             query?: never;
@@ -4388,6 +4413,80 @@ export interface components {
              * @example a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a
              */
             sha256: string;
+        };
+        /**
+         * Refs
+         * @description A workflow repository's branches and tags, as GET /api/v1/{ns}/workflows/{name}/refs answers them.
+         * @example {
+         *       "refs": [
+         *         {
+         *           "name": "refs/heads/feature/vat-rounding",
+         *           "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+         *           "protected": false,
+         *           "moved_by": "chloe",
+         *           "moved_at": "2026-09-30T15:02:00Z"
+         *         },
+         *         {
+         *           "name": "refs/heads/main",
+         *           "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *           "protected": true,
+         *           "moved_by": "alice",
+         *           "moved_at": "2026-09-28T10:12:00Z"
+         *         },
+         *         {
+         *           "name": "refs/tags/v2.1.0",
+         *           "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+         *           "protected": false,
+         *           "moved_by": "bob",
+         *           "moved_at": "2026-09-20T16:40:00Z"
+         *         }
+         *       ]
+         *     }
+         * @example {
+         *       "refs": [
+         *         {
+         *           "name": "refs/heads/main",
+         *           "commit": null,
+         *           "protected": true
+         *         }
+         *       ]
+         *     }
+         */
+        refs: {
+            /**
+             * @description Every branch and tag, in git's order, byte by byte. Never empty, since the default branch is held from the repository's creation, without a commit until something is pushed to it.
+             * @example [
+             *       {
+             *         "name": "refs/heads/feature/vat-rounding",
+             *         "commit": "9c2e4a6b8d0f1e3c5a7b9d1f3e5c7a9b1d3f5e7c",
+             *         "protected": false,
+             *         "moved_by": "chloe",
+             *         "moved_at": "2026-09-30T15:02:00Z"
+             *       },
+             *       {
+             *         "name": "refs/heads/main",
+             *         "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+             *         "protected": true,
+             *         "moved_by": "alice",
+             *         "moved_at": "2026-09-28T10:12:00Z"
+             *       },
+             *       {
+             *         "name": "refs/tags/v2.1.0",
+             *         "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+             *         "protected": false,
+             *         "moved_by": "bob",
+             *         "moved_at": "2026-09-20T16:40:00Z"
+             *       }
+             *     ]
+             * @example [
+             *       {
+             *         "name": "refs/heads/main",
+             *         "commit": null,
+             *         "protected": true
+             *       }
+             *     ]
+             */
+            refs: components["schemas"]["ref"][];
         };
         /**
          * Tree
@@ -10647,6 +10746,68 @@ export interface components {
             };
         };
         /**
+         * Ref name
+         * @description A ref as git writes it in full: refs/heads/<branch> for a branch and refs/tags/<tag> for a tag, the only two kinds a workflow repository holds, the name after the prefix on the rules of $defs/branch save the two git keeps for a branch's short name, a leading - and @ alone. Full, so that a branch and a tag of one short name are two refs rather than one ambiguity.
+         * @example refs/heads/main
+         * @example refs/tags/v2.1.0
+         * @example refs/heads/feature/vat-rounding
+         */
+        refName: string;
+        /**
+         * Ref
+         * @description One branch or tag of a workflow repository: a row of the database rather than a file beside the objects, so that moving it is an ordinary transaction beside every other piece of state. Only branches and tags are held; HEAD is the default branch, answered on the repository and never stored as a ref.
+         * @example {
+         *       "name": "refs/heads/main",
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "protected": true,
+         *       "moved_by": "alice",
+         *       "moved_at": "2026-09-28T10:12:00Z"
+         *     }
+         * @example {
+         *       "name": "refs/tags/v2.1.0",
+         *       "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+         *       "protected": false,
+         *       "moved_by": "bob",
+         *       "moved_at": "2026-09-20T16:40:00Z"
+         *     }
+         * @example {
+         *       "name": "refs/heads/main",
+         *       "commit": null,
+         *       "protected": true
+         *     }
+         */
+        ref: {
+            /**
+             * @description The ref in full, as git writes it.
+             * @example refs/heads/main
+             * @example refs/tags/v2.1.0
+             */
+            name: components["schemas"]["refName"];
+            /**
+             * @description The commit it points at, an annotated tag peeled to the commit it names; null for an unborn branch, the default branch of a repository nothing was pushed to yet, which is the one ref held without a commit.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             * @example null
+             */
+            commit: components["schemas"]["commit"] | null;
+            /**
+             * @description Whether pushing to it takes grant:manage rather than workflow:write. Only the default branch is protected, and only where its repository is. A force-push and a deletion take grant:manage on any ref, protected or not.
+             * @example true
+             * @example false
+             */
+            protected: boolean;
+            /**
+             * @description Who last moved it: the principal whose push created, moved or forced it. Absent on an unborn branch, which nobody has moved.
+             * @example alice
+             * @example finance/nightly-sync
+             */
+            moved_by?: components["schemas"]["actor"];
+            /**
+             * @description When it last moved, in the transaction that accepted the push. Absent exactly when moved_by is.
+             * @example 2026-09-28T10:12:00Z
+             */
+            moved_at?: components["schemas"]["timestamp"];
+        };
+        /**
          * Run state
          * @description Where a run is, as the documentation fixes the vocabulary. Every component reads this one enumeration: the controller writes it, the API serves it, the console colours it and a phone notifies on it, and a seventh state invented in one of them would be a state the others cannot render.
          * @example running
@@ -13947,6 +14108,38 @@ export interface operations {
                     "application/json": components["schemas"]["error"];
                 };
             };
+        };
+    };
+    listWorkflowRefs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every branch and tag of the repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["refs"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, or one the caller cannot read: the same answer. */
+            404: components["responses"]["notFound"];
         };
     };
     getWorkflowTree: {
