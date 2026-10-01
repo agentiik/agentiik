@@ -176,8 +176,10 @@ type drawing struct {
 // one for a fan-out's shards or what merge and when say, inside its frame.
 const boxHeight = 5
 
-// layout places the graph's steps, inputs and outputs, and draws it.
-func (m Model) layout(g *flowGraph) *drawing {
+// arranged are the graph's steps, inputs and outputs in layers, each layer ordered against the one
+// before it, as both directions draw them: the inputs' pills first, each step one past the furthest
+// it needs, the outputs' pills last.
+func (m Model) arranged(g *flowGraph) (layers [][]*node, nodes map[string]*node, inputNames []string) {
 	layerOf := map[string]int{}
 	// The inputs' pills take the first layer, so a step fed by nothing else is in the second, and
 	// each step one past the furthest it needs, since it runs once what it needs has published.
@@ -192,8 +194,8 @@ func (m Model) layout(g *flowGraph) *drawing {
 	for _, l := range layerOf {
 		last = max(last, l)
 	}
-	layers := make([][]*node, last+2)
-	nodes := map[string]*node{}
+	layers = make([][]*node, last+2)
+	nodes = map[string]*node{}
 	boxWidth := 18
 	for _, step := range g.Order {
 		boxWidth = max(boxWidth, len([]rune(step))+6)
@@ -204,7 +206,7 @@ func (m Model) layout(g *flowGraph) *drawing {
 		nodes[step] = n
 		layers[n.layer] = append(layers[n.layer], n)
 	}
-	var inputNames, outputNames []string
+	var outputNames []string
 	for _, fed := range g.Order {
 		for _, e := range g.Steps[fed].Inputs {
 			if name := inputOf(e); name != "" && !slices.Contains(inputNames, name) {
@@ -268,7 +270,12 @@ func (m Model) layout(g *flowGraph) *drawing {
 			n.slot = j
 		}
 	}
+	return layers, nodes, inputNames
+}
 
+// layout places the graph left to right, each layer a column, and draws it.
+func (m Model) layout(g *flowGraph) *drawing {
+	layers, nodes, inputNames := m.arranged(g)
 	rows := 0
 	for _, layer := range layers {
 		rows = max(rows, len(layer))

@@ -176,14 +176,22 @@ func (m Model) keyLine(t theme) string {
 		default:
 			keys = append(keys, [2]string{"↑↓", "Step"}, [2]string{"[]", "Port"})
 		}
-		keys = append(keys, [2]string{"g", "Graph"})
+		if m.runTab == "graph" {
+			keys = append(keys, [2]string{"g", "Full screen"})
+		} else {
+			keys = append(keys, [2]string{"g", "Graph"})
+		}
 		if m.mayCancel() {
 			keys = append(keys, [2]string{"c", "Cancel run"})
 		}
 		if m.mayReplay() {
 			keys = append(keys, [2]string{"p", "Replay from step"})
 		}
-		keys = append(keys, [2]string{"esc", "Runs"}, [2]string{"q", "Quit"}, [2]string{"?", "Every key"})
+		back := "Runs"
+		if m.runTab == "graph" {
+			back = "Steps"
+		}
+		keys = append(keys, [2]string{"esc", back}, [2]string{"q", "Quit"}, [2]string{"?", "Every key"})
 	case m.view == runnersView:
 		keys = [][2]string{{"↑↓", "Move"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
 	case m.view == graphView:
@@ -230,7 +238,7 @@ func (m Model) keysListed(t theme) []string {
 			[2]string{"↑ ↓ in the ports", "Move between the ports of the step chosen, as [ ] do"},
 			[2]string{"↑ ↓ in the runs", "Move the selection over the runs; enter opens the run selected beside them"},
 			[2]string{"↑ ↓ in the log", "Scroll the log back, and forward to its end"})
-		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"g", "The graph of the run's workflow, its state laid over it"}, [2]string{"esc", "Back to the runs"})
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"g", "The graph of the run's workflow, its state laid over it: drawn in the run's pane where its rows allow, full screen where they do not or once it is drawn there"}, [2]string{"esc", "Back from the graph drawn in the run to its steps, and to the runs"})
 		if m.mayCancel() {
 			rows = append(rows, [2]string{"c", "Cancel the run, once a prompt naming it is answered y"})
 		}
