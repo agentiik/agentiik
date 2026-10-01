@@ -23,10 +23,12 @@ type stepsAnswer struct {
 	By       string `json:"by,omitempty"`
 	Workflow string `json:"workflow"`
 	Steps    []struct {
-		Step     string        `json:"step"`
-		Buckets  []stepsBucket `json:"buckets,omitempty"`
-		Hours    []stepsHour   `json:"hours,omitempty"`
-		Previous []stepsBucket `json:"previous,omitempty"`
+		Step            string        `json:"step"`
+		Buckets         []stepsBucket `json:"buckets,omitempty"`
+		Overall         *stepsBucket  `json:"overall,omitempty"`
+		Hours           []stepsHour   `json:"hours,omitempty"`
+		Previous        []stepsBucket `json:"previous,omitempty"`
+		PreviousOverall *stepsBucket  `json:"previous_overall,omitempty"`
 	} `json:"steps"`
 }
 
@@ -168,8 +170,14 @@ func TestASeriesOfStepsCountsEachStepsAttempts(t *testing.T) {
 				wantJSON, _ := json.MarshalIndent(want, "", "  ")
 				t.Errorf("%s came to\n%s\nwant\n%s", c.step, gotJSON, wantJSON)
 			}
-			if st.Hours != nil || st.Previous != nil {
-				t.Errorf("%s answered hours %v and the span before %v, neither of which was asked for", c.step, st.Hours, st.Previous)
+			// The half hour as one bucket: the first quarter's numbers, since the second ran nothing.
+			whole := c.want
+			whole.Until = stamp(30*time.Minute - time.Nanosecond)
+			if st.Overall == nil || !reflect.DeepEqual(*st.Overall, whole) {
+				t.Errorf("%s came to %+v over the range, want %+v", c.step, st.Overall, whole)
+			}
+			if st.Hours != nil || st.Previous != nil || st.PreviousOverall != nil {
+				t.Errorf("%s answered hours %v and the span before %v and %v, none of which was asked for", c.step, st.Hours, st.Previous, st.PreviousOverall)
 			}
 		}
 	}
@@ -181,13 +189,19 @@ func TestASeriesOfStepsCountsEachStepsAttempts(t *testing.T) {
 		if len(st.Buckets) != 1 || st.Buckets[0].Attempts != 0 || len(st.Previous) != 1 || st.Previous[0].Since != stamp(0) {
 			t.Errorf("%s answered %s as %+v, then %+v before", path, st.Step, st.Buckets, st.Previous)
 		}
+		if st.Overall == nil || !reflect.DeepEqual(*st.Overall, st.Buckets[0]) || st.PreviousOverall == nil || !reflect.DeepEqual(*st.PreviousOverall, st.Previous[0]) {
+			t.Errorf("%s answered %s as %+v over the range and %+v before, where each is its one bucket", path, st.Step, st.Overall, st.PreviousOverall)
+		}
 	}
 
 	w := statsOf(t, h, "alice", fmt.Sprintf("/api/v1/finance/stats/steps?workflow=monthly-invoicing&from=%s&to=%s&bucket=15m", stamp(0), stamp(15*time.Minute)), "text/csv")
 	want := "period,step,since,until,attempts,duration_p50_ms,duration_p95_ms,duration_p99_ms,items_per_minute\r\n" +
 		"current,normalize," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",3,3500,4850,4970,\r\n" +
 		"current,archive," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",2,45000,58500,59700,40\r\n" +
-		"current,legacy," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",1,1000,1000,1000,\r\n"
+		"current,legacy," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",1,1000,1000,1000,\r\n" +
+		"overall,normalize," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",3,3500,4850,4970,\r\n" +
+		"overall,archive," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",2,45000,58500,59700,40\r\n" +
+		"overall,legacy," + stamp(0) + "," + stamp(15*time.Minute-time.Nanosecond) + ",1,1000,1000,1000,\r\n"
 	if w.Code != http.StatusOK || w.Body.String() != want {
 		t.Errorf("the steps in CSV were answered %d\n%q\nwant\n%q", w.Code, w.Body, want)
 	}

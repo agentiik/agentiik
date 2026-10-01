@@ -97,6 +97,10 @@
       </select>
       <Icon name="control-expand" size={14} />
     </label>
+    {#if filters.workflow}
+      {@const statistics = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow: filters.workflow, tab: "statistics" }}
+      <a class="link" href={place.href(statistics)} onclick={follow(place, statistics)}>Its statistics</a>
+    {/if}
     {#if bounded}
       <span class="bounds">
         Created <span class="mono">{bounded}</span>

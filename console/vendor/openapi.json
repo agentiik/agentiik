@@ -5811,7 +5811,7 @@
           "statistics"
         ],
         "summary": "Read a namespace's runs as series",
-        "description": "Per bucket, the runs of the namespace's workflows by state, the p50, p95 and p99 of their duration and of their tasks' queue wait, and the attempts retried by exit code; with histogram, their durations over the range in bins. Counts only the workflows the caller holds run:read on, as GET /api/v1/runs lists them, and never asks run:read_data: a series carries counts, durations and exit codes, never an item. Computed from the run and task records rather than kept apart, so a range reaches back as far as the namespace keeps its runs, and no further.",
+        "description": "Per bucket, the runs of the namespace's workflows by state, the p50, p95 and p99 of their duration and of their tasks' queue wait, and the attempts retried by exit code, and the same over the whole range under overall; with histogram, their durations over the range in bins. Counts only the workflows the caller holds run:read on, as GET /api/v1/runs lists them, and never asks run:read_data: a series carries counts, durations and exit codes, never an item. Computed from the run and task records rather than kept apart, so a range reaches back as far as the namespace keeps its runs, and no further.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#console-statistics"
@@ -5911,7 +5911,36 @@
                           },
                           "retries": []
                         }
-                      ]
+                      ],
+                      "overall": {
+                        "since": "2026-09-30T06:00:00Z",
+                        "until": "2026-09-30T07:59:59.999999999Z",
+                        "runs": {
+                          "queued": 0,
+                          "running": 1,
+                          "waiting": 0,
+                          "succeeded": 20,
+                          "failed": 1,
+                          "cancelled": 0,
+                          "timed_out": 0
+                        },
+                        "duration_ms": {
+                          "p50": 215000,
+                          "p95": 298000,
+                          "p99": 308000
+                        },
+                        "queue_wait_ms": {
+                          "p50": 400,
+                          "p95": 1800,
+                          "p99": 2500
+                        },
+                        "retries": [
+                          {
+                            "exit_code": 108,
+                            "attempts": 3
+                          }
+                        ]
+                      }
                     }
                   },
                   "every workflow": {
@@ -5964,7 +5993,36 @@
                           },
                           "retries": []
                         }
-                      ]
+                      ],
+                      "overall": {
+                        "since": "2026-09-30T06:00:00Z",
+                        "until": "2026-09-30T07:59:59.999999999Z",
+                        "runs": {
+                          "queued": 0,
+                          "running": 0,
+                          "waiting": 0,
+                          "succeeded": 11,
+                          "failed": 1,
+                          "cancelled": 0,
+                          "timed_out": 0
+                        },
+                        "duration_ms": {
+                          "p50": 222000,
+                          "p95": 301000,
+                          "p99": 309000
+                        },
+                        "queue_wait_ms": {
+                          "p50": 420,
+                          "p95": 1900,
+                          "p99": 2600
+                        },
+                        "retries": [
+                          {
+                            "exit_code": 108,
+                            "attempts": 3
+                          }
+                        ]
+                      }
                     }
                   },
                   "compared": {
@@ -6029,6 +6087,35 @@
                           "retries": []
                         }
                       ],
+                      "overall": {
+                        "since": "2026-09-30T06:00:00Z",
+                        "until": "2026-09-30T07:59:59.999999999Z",
+                        "runs": {
+                          "queued": 0,
+                          "running": 1,
+                          "waiting": 0,
+                          "succeeded": 20,
+                          "failed": 1,
+                          "cancelled": 0,
+                          "timed_out": 0
+                        },
+                        "duration_ms": {
+                          "p50": 215000,
+                          "p95": 298000,
+                          "p99": 308000
+                        },
+                        "queue_wait_ms": {
+                          "p50": 400,
+                          "p95": 1800,
+                          "p99": 2500
+                        },
+                        "retries": [
+                          {
+                            "exit_code": 108,
+                            "attempts": 3
+                          }
+                        ]
+                      },
                       "histogram": [
                         {
                           "from_ms": 180000,
@@ -6108,7 +6195,36 @@
                               }
                             ]
                           }
-                        ]
+                        ],
+                        "overall": {
+                          "since": "2026-09-30T04:00:00Z",
+                          "until": "2026-09-30T05:59:59.999999999Z",
+                          "runs": {
+                            "queued": 0,
+                            "running": 0,
+                            "waiting": 0,
+                            "succeeded": 22,
+                            "failed": 0,
+                            "cancelled": 0,
+                            "timed_out": 1
+                          },
+                          "duration_ms": {
+                            "p50": 226000,
+                            "p95": 297000,
+                            "p99": 2870000
+                          },
+                          "queue_wait_ms": {
+                            "p50": 420,
+                            "p95": 2000,
+                            "p99": 2300
+                          },
+                          "retries": [
+                            {
+                              "exit_code": null,
+                              "attempts": 1
+                            }
+                          ]
+                        }
                       }
                     }
                   }
@@ -6117,15 +6233,15 @@
               "text/csv": {
                 "schema": {
                   "type": "string",
-                  "description": "The same numbers to Accept: text/csv, RFC 4180 with a header row, one row a bucket and a column a figure, empty where the JSON leaves a figure out, and period current or previous where compare=previous adds the span before. retried is the attempts retried, whatever their exit code; the histogram is not in the CSV.",
+                  "description": "The same numbers to Accept: text/csv, RFC 4180 with a header row, one row a bucket and a column a figure, empty where the JSON leaves a figure out, and period current or previous where compare=previous adds the span before, then overall, and previous_overall where it does, each the one row of its span taken as one bucket. retried is the attempts retried, whatever their exit code; the histogram is not in the CSV.",
                   "examples": [
-                    "period,since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,duration_p50_ms,duration_p95_ms,duration_p99_ms,queue_wait_p50_ms,queue_wait_p95_ms,queue_wait_p99_ms,retried\r\ncurrent,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,0,0,0,11,1,0,0,222000,301000,309000,420,1900,2600,3\r\ncurrent,2026-09-30T07:00:00Z,2026-09-30T07:59:59.999999999Z,0,1,0,9,0,0,0,208000,262000,266000,380,1500,1700,0\r\n"
+                    "period,since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,duration_p50_ms,duration_p95_ms,duration_p99_ms,queue_wait_p50_ms,queue_wait_p95_ms,queue_wait_p99_ms,retried\r\ncurrent,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,0,0,0,11,1,0,0,222000,301000,309000,420,1900,2600,3\r\ncurrent,2026-09-30T07:00:00Z,2026-09-30T07:59:59.999999999Z,0,1,0,9,0,0,0,208000,262000,266000,380,1500,1700,0\r\noverall,2026-09-30T06:00:00Z,2026-09-30T07:59:59.999999999Z,0,1,0,20,1,0,0,215000,298000,308000,400,1800,2500,3\r\n"
                   ]
                 },
                 "examples": {
                   "two hours": {
                     "summary": "two hours of one workflow",
-                    "value": "period,since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,duration_p50_ms,duration_p95_ms,duration_p99_ms,queue_wait_p50_ms,queue_wait_p95_ms,queue_wait_p99_ms,retried\r\ncurrent,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,0,0,0,11,1,0,0,222000,301000,309000,420,1900,2600,3\r\ncurrent,2026-09-30T07:00:00Z,2026-09-30T07:59:59.999999999Z,0,1,0,9,0,0,0,208000,262000,266000,380,1500,1700,0\r\n"
+                    "value": "period,since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,duration_p50_ms,duration_p95_ms,duration_p99_ms,queue_wait_p50_ms,queue_wait_p95_ms,queue_wait_p99_ms,retried\r\ncurrent,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,0,0,0,11,1,0,0,222000,301000,309000,420,1900,2600,3\r\ncurrent,2026-09-30T07:00:00Z,2026-09-30T07:59:59.999999999Z,0,1,0,9,0,0,0,208000,262000,266000,380,1500,1700,0\r\noverall,2026-09-30T06:00:00Z,2026-09-30T07:59:59.999999999Z,0,1,0,20,1,0,0,215000,298000,308000,400,1800,2500,3\r\n"
                   }
                 }
               }
@@ -6157,7 +6273,7 @@
           "statistics"
         ],
         "summary": "Read a workflow's steps as series",
-        "description": "Per step of one workflow, per bucket: the percentiles of its duration, its attempts and exit codes, and a fan-out's items a minute; with by=hour, its p50 by weekday and hour over the range. Requires run:read on the workflow.",
+        "description": "Per step of one workflow, per bucket: the percentiles of its duration, its attempts and exit codes, and a fan-out's items a minute, and the same over the whole range under overall; with by=hour, its p50 by weekday and hour over the range. Requires run:read on the workflow.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#console-statistics"
@@ -6239,7 +6355,23 @@
                                 }
                               ]
                             }
-                          ]
+                          ],
+                          "overall": {
+                            "since": "2026-09-30T06:00:00Z",
+                            "until": "2026-09-30T07:59:59.999999999Z",
+                            "duration_ms": {
+                              "p50": 1150,
+                              "p95": 1800,
+                              "p99": 2050
+                            },
+                            "attempts": 21,
+                            "exit_codes": [
+                              {
+                                "exit_code": 0,
+                                "attempts": 21
+                              }
+                            ]
+                          }
                         },
                         {
                           "step": "invoice",
@@ -6282,7 +6414,28 @@
                               ],
                               "items_per_minute": 81.0
                             }
-                          ]
+                          ],
+                          "overall": {
+                            "since": "2026-09-30T06:00:00Z",
+                            "until": "2026-09-30T07:59:59.999999999Z",
+                            "duration_ms": {
+                              "p50": 174000,
+                              "p95": 236000,
+                              "p99": 249000
+                            },
+                            "attempts": 24,
+                            "exit_codes": [
+                              {
+                                "exit_code": 0,
+                                "attempts": 20
+                              },
+                              {
+                                "exit_code": 108,
+                                "attempts": 4
+                              }
+                            ],
+                            "items_per_minute": 77.2
+                          }
                         }
                       ]
                     }
@@ -6326,15 +6479,15 @@
               "text/csv": {
                 "schema": {
                   "type": "string",
-                  "description": "The same numbers to Accept: text/csv, RFC 4180 with a header row, one row a bucket and a column a figure, empty where the JSON leaves a figure out, and period current or previous where compare=previous adds the span before. One row a step and a bucket, every step's buckets in turn; with by=hour, one a step, a weekday and an hour, under period, step, weekday, hour and duration_p50_ms. Exit codes are not in the CSV.",
+                  "description": "The same numbers to Accept: text/csv, RFC 4180 with a header row, one row a bucket and a column a figure, empty where the JSON leaves a figure out, and period current or previous where compare=previous adds the span before, then overall, and previous_overall where it does, a row a step of its span taken as one bucket. One row a step and a bucket, every step's buckets in turn; with by=hour, one a step, a weekday and an hour, under period, step, weekday, hour and duration_p50_ms. Exit codes are not in the CSV.",
                   "examples": [
-                    "period,step,since,until,attempts,duration_p50_ms,duration_p95_ms,duration_p99_ms,items_per_minute\r\ncurrent,normalize,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,12,1200,1900,2100,\r\ncurrent,invoice,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,15,178000,240000,251000,74.5\r\n"
+                    "period,step,since,until,attempts,duration_p50_ms,duration_p95_ms,duration_p99_ms,items_per_minute\r\ncurrent,normalize,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,12,1200,1900,2100,\r\ncurrent,invoice,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,15,178000,240000,251000,74.5\r\noverall,normalize,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,12,1200,1900,2100,\r\noverall,invoice,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,15,178000,240000,251000,74.5\r\n"
                   ]
                 },
                 "examples": {
                   "buckets": {
                     "summary": "two steps",
-                    "value": "period,step,since,until,attempts,duration_p50_ms,duration_p95_ms,duration_p99_ms,items_per_minute\r\ncurrent,normalize,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,12,1200,1900,2100,\r\ncurrent,invoice,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,15,178000,240000,251000,74.5\r\n"
+                    "value": "period,step,since,until,attempts,duration_p50_ms,duration_p95_ms,duration_p99_ms,items_per_minute\r\ncurrent,normalize,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,12,1200,1900,2100,\r\ncurrent,invoice,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,15,178000,240000,251000,74.5\r\noverall,normalize,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,12,1200,1900,2100,\r\noverall,invoice,2026-09-30T06:00:00Z,2026-09-30T06:59:59.999999999Z,15,178000,240000,251000,74.5\r\n"
                   }
                 }
               }
@@ -11509,7 +11662,8 @@
           "from",
           "to",
           "bucket",
-          "buckets"
+          "buckets",
+          "overall"
         ],
         "description": "The runs of a namespace's workflows, bucket by bucket, over the range: only the workflows the caller holds run:read on, as GET /api/v1/runs lists them, so that a chart shows nothing a list would not.",
         "properties": {
@@ -11611,6 +11765,41 @@
               ]
             ]
           },
+          "overall": {
+            "$ref": "#/components/schemas/statsRunsBucket",
+            "description": "The range as one bucket, from the first bucket's since to the last one's until: what its runs came to together, which a figure beside the charts reads. Its counts are the buckets' summed, and its percentiles are taken over the whole range rather than combined from the buckets', which percentiles do not combine into, so a client could not work them out.",
+            "examples": [
+              {
+                "since": "2026-09-30T06:00:00Z",
+                "until": "2026-09-30T07:59:59.999999999Z",
+                "runs": {
+                  "queued": 0,
+                  "running": 1,
+                  "waiting": 0,
+                  "succeeded": 20,
+                  "failed": 1,
+                  "cancelled": 0,
+                  "timed_out": 0
+                },
+                "duration_ms": {
+                  "p50": 215000,
+                  "p95": 298000,
+                  "p99": 308000
+                },
+                "queue_wait_ms": {
+                  "p50": 400,
+                  "p95": 1800,
+                  "p99": 2500
+                },
+                "retries": [
+                  {
+                    "exit_code": 108,
+                    "attempts": 3
+                  }
+                ]
+              }
+            ]
+          },
           "histogram": {
             "type": "array",
             "items": {
@@ -11689,7 +11878,8 @@
             "required": [
               "from",
               "to",
-              "buckets"
+              "buckets",
+              "overall"
             ],
             "properties": {
               "from": {
@@ -11768,6 +11958,41 @@
                       ]
                     }
                   ]
+                ]
+              },
+              "overall": {
+                "$ref": "#/components/schemas/statsRunsBucket",
+                "description": "The span before as one bucket, as overall is the range's: what a figure's change is worked out against.",
+                "examples": [
+                  {
+                    "since": "2026-09-30T04:00:00Z",
+                    "until": "2026-09-30T05:59:59.999999999Z",
+                    "runs": {
+                      "queued": 0,
+                      "running": 0,
+                      "waiting": 0,
+                      "succeeded": 22,
+                      "failed": 0,
+                      "cancelled": 0,
+                      "timed_out": 1
+                    },
+                    "duration_ms": {
+                      "p50": 226000,
+                      "p95": 297000,
+                      "p99": 2870000
+                    },
+                    "queue_wait_ms": {
+                      "p50": 420,
+                      "p95": 2000,
+                      "p99": 2300
+                    },
+                    "retries": [
+                      {
+                        "exit_code": null,
+                        "attempts": 1
+                      }
+                    ]
+                  }
                 ]
               },
               "histogram": {
@@ -11901,7 +12126,36 @@
                       }
                     ]
                   }
-                ]
+                ],
+                "overall": {
+                  "since": "2026-09-30T04:00:00Z",
+                  "until": "2026-09-30T05:59:59.999999999Z",
+                  "runs": {
+                    "queued": 0,
+                    "running": 0,
+                    "waiting": 0,
+                    "succeeded": 22,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "timed_out": 1
+                  },
+                  "duration_ms": {
+                    "p50": 226000,
+                    "p95": 297000,
+                    "p99": 2870000
+                  },
+                  "queue_wait_ms": {
+                    "p50": 420,
+                    "p95": 2000,
+                    "p99": 2300
+                  },
+                  "retries": [
+                    {
+                      "exit_code": null,
+                      "attempts": 1
+                    }
+                  ]
+                }
               }
             ],
             "description": "The span just before the range, in as many buckets of the same length, with its histogram where one was asked for. Present where compare=previous."
@@ -11967,7 +12221,36 @@
                 },
                 "retries": []
               }
-            ]
+            ],
+            "overall": {
+              "since": "2026-09-30T06:00:00Z",
+              "until": "2026-09-30T07:59:59.999999999Z",
+              "runs": {
+                "queued": 0,
+                "running": 1,
+                "waiting": 0,
+                "succeeded": 20,
+                "failed": 1,
+                "cancelled": 0,
+                "timed_out": 0
+              },
+              "duration_ms": {
+                "p50": 215000,
+                "p95": 298000,
+                "p99": 308000
+              },
+              "queue_wait_ms": {
+                "p50": 400,
+                "p95": 1800,
+                "p99": 2500
+              },
+              "retries": [
+                {
+                  "exit_code": 108,
+                  "attempts": 3
+                }
+              ]
+            }
           },
           {
             "from": "2026-09-30T06:00:00Z",
@@ -12017,7 +12300,36 @@
                 },
                 "retries": []
               }
-            ]
+            ],
+            "overall": {
+              "since": "2026-09-30T06:00:00Z",
+              "until": "2026-09-30T07:59:59.999999999Z",
+              "runs": {
+                "queued": 0,
+                "running": 0,
+                "waiting": 0,
+                "succeeded": 11,
+                "failed": 1,
+                "cancelled": 0,
+                "timed_out": 0
+              },
+              "duration_ms": {
+                "p50": 222000,
+                "p95": 301000,
+                "p99": 309000
+              },
+              "queue_wait_ms": {
+                "p50": 420,
+                "p95": 1900,
+                "p99": 2600
+              },
+              "retries": [
+                {
+                  "exit_code": 108,
+                  "attempts": 3
+                }
+              ]
+            }
           },
           {
             "from": "2026-09-30T06:00:00Z",
@@ -12079,6 +12391,35 @@
                 "retries": []
               }
             ],
+            "overall": {
+              "since": "2026-09-30T06:00:00Z",
+              "until": "2026-09-30T07:59:59.999999999Z",
+              "runs": {
+                "queued": 0,
+                "running": 1,
+                "waiting": 0,
+                "succeeded": 20,
+                "failed": 1,
+                "cancelled": 0,
+                "timed_out": 0
+              },
+              "duration_ms": {
+                "p50": 215000,
+                "p95": 298000,
+                "p99": 308000
+              },
+              "queue_wait_ms": {
+                "p50": 400,
+                "p95": 1800,
+                "p99": 2500
+              },
+              "retries": [
+                {
+                  "exit_code": 108,
+                  "attempts": 3
+                }
+              ]
+            },
             "histogram": [
               {
                 "from_ms": 180000,
@@ -12158,7 +12499,36 @@
                     }
                   ]
                 }
-              ]
+              ],
+              "overall": {
+                "since": "2026-09-30T04:00:00Z",
+                "until": "2026-09-30T05:59:59.999999999Z",
+                "runs": {
+                  "queued": 0,
+                  "running": 0,
+                  "waiting": 0,
+                  "succeeded": 22,
+                  "failed": 0,
+                  "cancelled": 0,
+                  "timed_out": 1
+                },
+                "duration_ms": {
+                  "p50": 226000,
+                  "p95": 297000,
+                  "p99": 2870000
+                },
+                "queue_wait_ms": {
+                  "p50": 420,
+                  "p95": 2000,
+                  "p99": 2300
+                },
+                "retries": [
+                  {
+                    "exit_code": null,
+                    "attempts": 1
+                  }
+                ]
+              }
             }
           }
         ]
@@ -12454,6 +12824,33 @@
                     ]
                   ]
                 },
+                "overall": {
+                  "$ref": "#/components/schemas/statsStepBucket",
+                  "description": "The range as one bucket, from the first bucket's since to the last one's until: what the step came to over the whole range, which a figure beside the charts reads. Its attempts and exit codes are the buckets' summed, and its percentiles and its items a minute are taken over the whole range, since neither combines from the buckets'. Absent with by=hour.",
+                  "examples": [
+                    {
+                      "since": "2026-09-30T06:00:00Z",
+                      "until": "2026-09-30T07:59:59.999999999Z",
+                      "duration_ms": {
+                        "p50": 174000,
+                        "p95": 236000,
+                        "p99": 249000
+                      },
+                      "attempts": 24,
+                      "exit_codes": [
+                        {
+                          "exit_code": 0,
+                          "attempts": 20
+                        },
+                        {
+                          "exit_code": 108,
+                          "attempts": 4
+                        }
+                      ],
+                      "items_per_minute": 77.2
+                    }
+                  ]
+                },
                 "hours": {
                   "type": "array",
                   "items": {
@@ -12509,6 +12906,29 @@
                       }
                     ]
                   ]
+                },
+                "previous_overall": {
+                  "$ref": "#/components/schemas/statsStepBucket",
+                  "description": "The span before as one bucket, as overall is the range's: what a figure's change is worked out against. Present where compare=previous.",
+                  "examples": [
+                    {
+                      "since": "2026-09-30T04:00:00Z",
+                      "until": "2026-09-30T05:59:59.999999999Z",
+                      "duration_ms": {
+                        "p50": 181000,
+                        "p95": 244000,
+                        "p99": 260000
+                      },
+                      "attempts": 22,
+                      "exit_codes": [
+                        {
+                          "exit_code": 0,
+                          "attempts": 22
+                        }
+                      ],
+                      "items_per_minute": 70.4
+                    }
+                  ]
                 }
               },
               "examples": [
@@ -12547,7 +12967,23 @@
                         }
                       ]
                     }
-                  ]
+                  ],
+                  "overall": {
+                    "since": "2026-09-30T06:00:00Z",
+                    "until": "2026-09-30T07:59:59.999999999Z",
+                    "duration_ms": {
+                      "p50": 1150,
+                      "p95": 1800,
+                      "p99": 2050
+                    },
+                    "attempts": 21,
+                    "exit_codes": [
+                      {
+                        "exit_code": 0,
+                        "attempts": 21
+                      }
+                    ]
+                  }
                 }
               ]
             },
@@ -12589,7 +13025,23 @@
                         }
                       ]
                     }
-                  ]
+                  ],
+                  "overall": {
+                    "since": "2026-09-30T06:00:00Z",
+                    "until": "2026-09-30T07:59:59.999999999Z",
+                    "duration_ms": {
+                      "p50": 1150,
+                      "p95": 1800,
+                      "p99": 2050
+                    },
+                    "attempts": 21,
+                    "exit_codes": [
+                      {
+                        "exit_code": 0,
+                        "attempts": 21
+                      }
+                    ]
+                  }
                 },
                 {
                   "step": "invoice",
@@ -12632,7 +13084,28 @@
                       ],
                       "items_per_minute": 81.0
                     }
-                  ]
+                  ],
+                  "overall": {
+                    "since": "2026-09-30T06:00:00Z",
+                    "until": "2026-09-30T07:59:59.999999999Z",
+                    "duration_ms": {
+                      "p50": 174000,
+                      "p95": 236000,
+                      "p99": 249000
+                    },
+                    "attempts": 24,
+                    "exit_codes": [
+                      {
+                        "exit_code": 0,
+                        "attempts": 20
+                      },
+                      {
+                        "exit_code": 108,
+                        "attempts": 4
+                      }
+                    ],
+                    "items_per_minute": 77.2
+                  }
                 }
               ]
             ]
@@ -12680,7 +13153,23 @@
                       }
                     ]
                   }
-                ]
+                ],
+                "overall": {
+                  "since": "2026-09-30T06:00:00Z",
+                  "until": "2026-09-30T07:59:59.999999999Z",
+                  "duration_ms": {
+                    "p50": 1150,
+                    "p95": 1800,
+                    "p99": 2050
+                  },
+                  "attempts": 21,
+                  "exit_codes": [
+                    {
+                      "exit_code": 0,
+                      "attempts": 21
+                    }
+                  ]
+                }
               },
               {
                 "step": "invoice",
@@ -12723,7 +13212,28 @@
                     ],
                     "items_per_minute": 81.0
                   }
-                ]
+                ],
+                "overall": {
+                  "since": "2026-09-30T06:00:00Z",
+                  "until": "2026-09-30T07:59:59.999999999Z",
+                  "duration_ms": {
+                    "p50": 174000,
+                    "p95": 236000,
+                    "p99": 249000
+                  },
+                  "attempts": 24,
+                  "exit_codes": [
+                    {
+                      "exit_code": 0,
+                      "attempts": 20
+                    },
+                    {
+                      "exit_code": 108,
+                      "attempts": 4
+                    }
+                  ],
+                  "items_per_minute": 77.2
+                }
               }
             ]
           },
