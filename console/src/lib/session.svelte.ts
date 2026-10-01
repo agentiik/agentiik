@@ -15,9 +15,7 @@ export class Session {
   me = $state<Me | null>(null);
   namespaces = $state<Namespace[]>([]);
 
-  // answering is whether the installation answered the console's last read, which the top bar says
-  // in words; failure is why it did not, told for a person.
-  answering = $state(true);
+  // failure is why the installation did not answer the console's last read, told for a person.
   failure = $state<Explained | null>(null);
 
   readonly #api: API;
@@ -35,7 +33,6 @@ export class Session {
       this.#unanswered(e);
       return;
     }
-    this.answering = true;
     switch (me.response.status) {
       case 401:
         this.me = null;
@@ -63,7 +60,6 @@ export class Session {
   }
 
   #unanswered(cause: unknown) {
-    this.answering = false;
     this.failure = explain("load your account", cause);
     if (this.standing === "reading") {
       this.standing = "unreachable";
