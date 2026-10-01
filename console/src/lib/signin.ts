@@ -19,7 +19,7 @@ type CredentialJSON = components["schemas"]["passkeyVerifyRequest"]["credential"
 // trusts, or on localhost.
 export function passkeysUnavailable(w: { isSecureContext: boolean; PublicKeyCredential?: unknown; navigator: { credentials?: unknown } }): string {
   if (!w.isSecureContext || !w.PublicKeyCredential || !w.navigator.credentials) {
-    return "Passkeys cannot be used on this page: a browser offers them only on a page served over https with a certificate it trusts (not one you clicked past a warning). Sign in with a password, or ask your administrator to serve this installation over https.";
+    return "Passkeys need HTTPS. Sign in with a password.";
   }
   return "";
 }
@@ -30,11 +30,11 @@ export function ceremonyProblem(e: unknown): string {
   switch (name) {
     case "NotAllowedError":
     case "AbortError":
-      return "The passkey request was cancelled, or it timed out. Try again when you are ready.";
+      return "Cancelled or timed out.";
     case "SecurityError":
-      return "The browser refused to use a passkey on this page. It does so only on a page served over https with a certificate it trusts (not one you clicked past a warning), at the address the installation is set up with.";
+      return "The browser refused the passkey on this page.";
   }
-  return `The browser could not use the passkey. It said: ${e instanceof Error ? e.message : String(e)}`;
+  return `The browser could not use the passkey: ${e instanceof Error ? e.message : String(e)}`;
 }
 
 // A sign-in the API refused because the policy that applies to the account forbids passwords, which
@@ -61,12 +61,12 @@ export class CeremonyFailed extends Told {}
 export function explainSignIn(how: "passkey" | "password", e: unknown): Explained {
   const failed = how === "passkey" ? "sign in with your passkey" : "sign in with a password";
   const told = explain(failed, e);
-  if (e instanceof PasswordsForbidden) return { ...told, why: "This installation does not allow your account to sign in with a password.", next: "Sign in with a passkey instead.", transient: false };
-  if (e instanceof TooManyAttempts) return { ...told, why: "Too many password sign-ins were tried for this account, or from this address, in the last 15 minutes.", next: (wait(e.after).trim() || "Try again later.") + " You can also sign in with a passkey.", transient: false };
+  if (e instanceof PasswordsForbidden) return { ...told, why: "Passwords are not allowed for your account.", next: "Use a passkey.", transient: false };
+  if (e instanceof TooManyAttempts) return { ...told, why: "Too many attempts.", next: wait(e.after).trim() || "Try again later.", transient: false };
   if (e instanceof Refusal && e.status === 401) {
     return how === "passkey"
-      ? { ...told, why: "This passkey is not registered on this installation, its account cannot sign in, or the sign-in took too long.", next: "Start the sign-in again, or use another passkey.", transient: false }
-      : { ...told, why: "The login, the password or the one-time code is wrong, or this account cannot sign in.", next: "Check them and try again. The code is needed only if you set up a one-time code generator.", transient: false };
+      ? { ...told, why: "This passkey was not accepted.", next: "Try again.", transient: false }
+      : { ...told, why: "Wrong login, password or code.", next: "", transient: false };
   }
   return told;
 }
@@ -84,7 +84,7 @@ export async function signInWithPasskey(api: API, credentials: CredentialsContai
     throw new CeremonyFailed(ceremonyProblem(e));
   }
   if (!credential || credential.type !== "public-key") {
-    throw new CeremonyFailed("The browser gave back no passkey. Try again, or choose another passkey.");
+    throw new CeremonyFailed("No passkey was returned.");
   }
   const verified = await api.POST("/api/v1/auth/passkey/verify", {
     body: { ceremony: "assertion", credential: credentialJSON(credential as PublicKeyCredential) as CredentialJSON },
@@ -121,7 +121,7 @@ export async function signInWithPassword(api: API, login: string, password: stri
 // as a Relying Party, said for a person, or the refusal as the API gave it.
 function unavailableOr(r: Refusal): Refusal {
   if (r.status === 409) {
-    return new Refusal(409, "Passkeys are unavailable on this installation: it is reached by an IP address, and browsers offer passkeys only for a domain name. Sign in with a password, or ask your administrator to give it a domain name.");
+    return new Refusal(409, "Passkeys need a domain name, not an IP address. Sign in with a password.");
   }
   return r;
 }

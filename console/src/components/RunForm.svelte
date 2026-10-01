@@ -61,7 +61,7 @@
       if (value !== undefined) inputs[f.name] = value;
     }
     if (Object.values(errors).some((list) => list.length > 0)) {
-      refused = refusedHere(`start ${workflow}`, "Some inputs do not match what the workflow expects, as said under each. Nothing was sent.");
+      refused = refusedHere(`start ${workflow}`, "Some inputs are invalid.");
       return;
     }
     sending = true;
@@ -75,7 +75,7 @@
     const named = error as { input?: string; error?: string } | undefined;
     if (response.status === 422 && named?.input && fields.some((f) => f.name === named.input)) {
       errors = { ...errors, [named.input]: [named.error ?? "refused"] };
-      refused = refusedHere(`start ${workflow}`, `The server refused the input ${named.input}, as said under it.`);
+      refused = refusedHere(`start ${workflow}`, `The input ${named.input} is invalid.`);
       return;
     }
     refused = explain(`start ${workflow}`, refusal(response, error));
@@ -108,10 +108,10 @@
       {#each errors[f.name] ?? [] as problem, i (i)}<p class="problem" role="alert">{problem}</p>{/each}
     </div>
   {:else}
-    <p class="muted">This workflow takes no input.</p>
+    <p class="muted">No inputs</p>
   {/each}
   <div class="field">
-    <label for="run-ref"><span>Ref</span><span class="muted">a branch, a tag or a commit; leave it empty for the latest commit of the default branch</span></label>
+    <label for="run-ref"><span>Ref</span></label>
     <input id="run-ref" class="term" type="text" bind:value={ref} placeholder={commit.slice(0, 7)} />
   </div>
   <div class="actions">

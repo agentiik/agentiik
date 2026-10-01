@@ -46,7 +46,7 @@
       const answer = await save(api, edits);
       if (answer.user) form = profileOf(answer.user);
       await reread();
-      return "Your profile is saved.";
+      return "Saved.";
     });
   }
 
@@ -87,7 +87,7 @@
     return act("set your photo", async () => {
       await setPhoto(api, file);
       await reread();
-      return "Your photo is set. You and the installation's administrators can see it.";
+      return "Photo updated.";
     });
   }
 
@@ -95,7 +95,7 @@
     return act("remove your photo", async () => {
       await removePhoto(api);
       await reread();
-      return "Your photo is removed. Your initial is shown instead.";
+      return "Photo removed.";
     });
   }
 </script>
@@ -105,11 +105,11 @@
 
 {#if !user}
   <Pane title="Profile">
-    <p class="muted">A service account has no profile: it is identified by its namespace and its name only.</p>
+    <p class="muted">Service accounts have no profile.</p>
   </Pane>
 {:else}
   <div class="columns">
-    <Pane title="Profile" aside="shown to the people you work with">
+    <Pane title="Profile">
       <form onsubmit={submit} aria-label="Your profile">
         <div class="pair">
           {#each ["given_name", "family_name"] as const as f (f)}
@@ -146,7 +146,7 @@
           <button class="control" disabled={working} onclick={() => picker?.click()}><Icon name="control-edit" size={14} />{photo ? "Change the photo" : "Choose a photo"}</button>
           {#if photo}<button class="control" disabled={working} onclick={remove}><Icon name="control-remove" size={14} />Remove it</button>{/if}
         </div>
-        <p class="faint">A PNG or JPEG file, 1 MiB at most. It is resized to 512 by 512 pixels at most, and its metadata is removed. Shown to you and to the administrators.</p>
+        <p class="faint">PNG or JPEG, 1 MiB max</p>
       </div>
     </Pane>
   </div>

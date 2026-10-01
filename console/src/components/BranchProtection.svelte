@@ -58,7 +58,7 @@
         repository = data;
         branch = data.default_branch;
         guarded = data.protected;
-        said = `Saved. ${data.default_branch} is the default branch${data.protected ? ", and it is protected: only people with grant:manage can push to it" : ", and it is not protected: anyone with workflow:write can push to it"}.`;
+        said = "Saved.";
       })
       .catch((e: unknown) => (problem = explain("save the default branch", e)))
       .finally(() => (working = false));
@@ -69,17 +69,16 @@
   {#if unread}
     <Problem explained={unread} onretry={read} />
   {:else if repository === null}
-    <p class="muted">Reading the workflow.</p>
+    <p class="muted">Loading</p>
   {:else}
     <form onsubmit={write} aria-label="Default branch of {namespace}/{workflow}">
       <label>
-        <span>The branch a run uses when it is not given a ref</span>
+        <span>Default branch</span>
         <input class="term" bind:value={branch} required autocomplete="off" spellcheck="false" />
       </label>
-      <label class="check"><input type="checkbox" bind:checked={guarded} />Protected: only people with <span class="term">grant:manage</span> can push to it. Force-pushing or deleting it always needs <span class="term">grant:manage</span>, protected or not.</label>
+      <label class="check"><input type="checkbox" bind:checked={guarded} />Protected</label>
       {#if problem}<Problem explained={problem} />{/if}
       {#if said}<p class="said" role="status">{said}</p>{/if}
-      <p class="note muted">People with <span class="term">workflow:write</span> push to another branch, and a change reaches the default branch only through someone who can share the workflow. If you change the default branch, the protection moves to the new one and the old one is no longer protected.</p>
       <p><button class="control primary" disabled={working || !changed}>Save</button></p>
     </form>
   {/if}
@@ -118,9 +117,5 @@
 
   form p {
     margin: 0;
-  }
-
-  .note {
-    font-size: var(--type-control-size);
   }
 </style>

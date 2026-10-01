@@ -85,7 +85,7 @@ describe("the visual editor", () => {
     expect(screen.getByRole("button", { name: /^Step archive/ })).toBeTruthy();
     await fireEvent.input(area, { target: { value: before.replace("  archive:\n", "  archived:\n").replace("step: archive,", "step: archived,") } });
     expect(await screen.findByRole("button", { name: /^Step archived/ })).toBeTruthy();
-    expect(screen.getByText("valid against workflow.schema.json")).toBeTruthy();
+    expect(screen.getByText("valid")).toBeTruthy();
   });
 
   it("is not offered to a reader who may not write the workflow, nor open from the address", async () => {

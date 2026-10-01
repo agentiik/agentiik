@@ -69,7 +69,7 @@
   {#if refused}
     <Problem explained={refused} />
   {:else if !envelope || !view}
-    <p class="muted">Reading the envelope.</p>
+    <p class="muted">Loading</p>
   {:else}
     <div class="head">
       <span class="term name">{output ?? port}</span>
@@ -79,7 +79,7 @@
       <button class="control" onclick={download}><Icon name="control-download" size={14} />Download</button>
     </div>
     {#if envelope.items.length === 0}
-      <p class="muted">Nothing was sent on this port: the step wrote nothing to it, or the step was skipped because its condition was false.</p>
+      <p class="muted">Empty</p>
     {:else}
       <pre class="json"><code>{#each coloured as t, i (i)}<span class="t-{t.kind}">{t.text}</span>{/each}</code></pre>
       {#if drawn < envelope.items.length}

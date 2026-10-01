@@ -1,7 +1,6 @@
 <script lang="ts">
   import PageHeader from "../components/PageHeader.svelte";
   import type { API, Me } from "../api/client";
-  import Pane from "../components/Pane.svelte";
   import SharingPanel from "../components/SharingPanel.svelte";
   import { holds } from "../lib/permissions";
   import type { Place } from "../lib/place.svelte";
@@ -55,10 +54,6 @@
   {#key `${namespace}/${workflow ?? ""}`}
     <SharingPanel {api} {me} {namespace} {workflow} />
   {/key}
-{:else}
-  <Pane title="Sharing" aside={namespace}>
-    <p class="muted">Choose a workflow above to see and change who has access to it.</p>
-  </Pane>
 {/if}
 
 <style>

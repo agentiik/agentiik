@@ -95,7 +95,7 @@
     return act("save the quotas", async () => {
       const { data, error, response } = await api.PUT("/api/v1/namespaces/{ns}/quotas", { params: { path: { ns } }, body: read.body });
       if (!data) throw refusal(response, error);
-      return `The quotas of ${ns} are saved: ${summary(data)}.`;
+      return "Quotas saved.";
     });
   }
 
@@ -112,7 +112,7 @@
       creating = false;
       name = "";
       owner = "";
-      return `${data.name} is created, owned by ${data.owner}, who holds the owner role on it from now.`;
+      return `${data.name} created.`;
     });
   }
 
@@ -125,7 +125,7 @@
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       asking = "";
       if (chosen === n.name) choose(undefined);
-      return `${n.name} is removed, with its grants and its authentication policy.`;
+      return `${n.name} removed.`;
     });
   }
 
@@ -153,7 +153,7 @@
   {#if unread}
     <Problem explained={unread} onretry={reread} />
   {:else if namespaces === null}
-    <p class="muted">Reading the namespaces.</p>
+    <p class="muted">Loading</p>
   {:else}
     <table>
       <thead><tr><th>Namespace</th><th>Kind</th><th>Owner</th><th>Quotas</th><th class="end"></th></tr></thead>
@@ -178,7 +178,6 @@
         {/each}
       </tbody>
     </table>
-    <p class="foot muted">Choose a namespace to set its quotas. A personal namespace is removed with its user. A shared one can be removed only once it is empty (no workflow, run, secret, stored file or service account); if it is not, you are told what is left in it.</p>
   {/if}
 </Pane>
 
@@ -210,12 +209,11 @@
           <label class="check">
             <input type="checkbox" checked={form.allowed_runner_pools.includes(p.name)} onchange={(e) => toggle(p.name, e.currentTarget.checked)} />
             <span class="term">{p.name}</span>
-            {#if !accepts(p, record.name)}<span class="muted">does not accept {record.name}, so it will take none of its work</span>{/if}
+            {#if !accepts(p, record.name)}<span class="muted">does not accept {record.name}</span>{/if}
           </label>
         {:else}
-          <p class="muted">No runner pool could be loaded.</p>
+          <p class="muted">No pools</p>
         {/each}
-        <p class="note muted">Tick none to let {record.name} use every pool that accepts it.</p>
       </fieldset>
       {#if wrong}<p class="problem" role="alert">{label[wrong.field]}: {wrong.problem}.</p>{/if}
       <p class="buttons">
@@ -237,7 +235,6 @@
       <span>Owner, a login or group:NAME</span>
       <input class="term" bind:value={owner} placeholder="group:finance-leads" required autocomplete="off" />
     </label>
-    <p class="note muted">The owner gets the owner role on it right away, so they can use it and share it. It starts with the default quotas.</p>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create the namespace</button></p>
   </form>
 </Dialog>
@@ -359,15 +356,6 @@
 
   form p {
     margin: 0;
-  }
-
-  .note,
-  .foot {
-    font-size: var(--type-control-size);
-  }
-
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
   }
 
   .buttons {

@@ -112,7 +112,7 @@ describe("the inspector's keys", () => {
     const { asked, place } = open(`/finance/runs/${failed}`, s);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     await press("p");
-    expect(screen.getByText("Replay this run from invoice? A new run starts there.")).toBeTruthy();
+    expect(screen.getByText("Replay this run from invoice?")).toBeTruthy();
     expect(line().slice(0, 2)).toEqual(["y Replay from invoice", "nesc Keep it"]);
     await press("x");
     await press("n");
@@ -132,12 +132,12 @@ describe("the inspector's keys", () => {
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     expect(line()).toContain("c Cancel run");
     await press("c");
-    expect(screen.getByText("Cancel this run? Its tasks in flight are stopped.")).toBeTruthy();
+    expect(screen.getByText("Cancel this run?")).toBeTruthy();
     await press("Escape");
     expect(screen.queryByText(/Its tasks in flight are stopped/)).toBeNull();
     await press("c");
     await press("y");
-    expect(await screen.findByText(/Cancel requested/)).toBeTruthy();
+    expect(await screen.findByText("Cancelling.")).toBeTruthy();
     expect(asked.filter((a) => a === `POST /api/v1/runs/${failed}/cancel`)).toHaveLength(1);
   });
 

@@ -103,7 +103,6 @@ describe("the runners and pools", () => {
     expect(revoked.textContent).toContain("results accepted until");
     const behind = within(revoked).getByText("0.5.2");
     expect(behind.getAttribute("title")).toBe("The installation runs 0.6.0");
-    expect(within(pane).getByText(/never by the machine it runs on/)).toBeTruthy();
   });
 
   it("narrow the runners to the pool chosen, kept in the address", async () => {
@@ -125,6 +124,6 @@ describe("the runners and pools", () => {
     cleanup();
 
     open("alice", "/runners");
-    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
   });
 });

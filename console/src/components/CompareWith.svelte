@@ -38,7 +38,7 @@
 {:else if refused}
   <Problem explained={refused} />
 {:else if listed && listed.length === 0}
-  <span class="muted">No other run of {run.workflow}@{run.commit.slice(0, 7)} has ended to compare it with.</span>
+  <span class="muted">No other run to compare with</span>
 {:else if listed}
   <label class="select">
     <span class="muted">Compare with</span>
@@ -48,7 +48,7 @@
   </label>
   <a class="control" href={place.href(target)} onclick={follow(place, target)}>Compare</a>
 {:else}
-  <span class="muted" role="status">Listing the runs of {run.workflow}@{run.commit.slice(0, 7)}</span>
+  <span class="muted" role="status">Loading</span>
 {/if}
 
 <style>

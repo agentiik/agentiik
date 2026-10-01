@@ -249,7 +249,7 @@
 {#if refused}
   <Failure explained={refused} />
 {:else if !listing}
-  <p class="muted" role="status">Reading the tree at <span class="term">{ref}</span>.</p>
+  <p class="muted" role="status">Loading</p>
 {:else if against && other}
   <div class="columns">
     <section class="list" aria-label="What differs">
@@ -268,7 +268,7 @@
       <section class="sheet" aria-label={change.path}>
         <p class="head"><span class="term">{change.path}</span>{#if counted}<span class="added">+{counted.added}</span><span class="removed">−{counted.removed}</span>{/if}{#if change.kind === "modified" && change.before.mode !== change.after.mode}<span class="muted">mode {change.before.mode} to {change.after.mode}</span>{/if}</p>
         {#if !sides}
-          <p class="muted" role="status">Reading both sides.</p>
+          <p class="muted" role="status">Loading</p>
         {:else if diffed}
           {#each diffed as hunk, i (i)}
             <ol class="diff code">
@@ -277,7 +277,7 @@
               {/each}
             </ol>
           {:else}
-            <p class="muted">The content is the same; only the file's permissions (its mode) changed.</p>
+            <p class="muted">Mode changed only</p>
           {/each}
         {:else}
           <p class="muted">Not drawn: {sides.before && "not" in sides.before ? sides.before.not : sides.after && "not" in sides.after ? sides.after.not : ""}.</p>
@@ -300,7 +300,7 @@
           <a class="right" href={download} download={entry.path.split("/").pop()}>Download</a>
         </p>
         {#if !content}
-          <p class="muted" role="status">Reading {entry.path}.</p>
+          <p class="muted" role="status">Loading</p>
         {:else if "not" in content}
           <p class="muted">Not drawn: {content.not}.</p>
         {:else}

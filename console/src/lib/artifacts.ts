@@ -42,13 +42,13 @@ export async function fetchable(fetcher: typeof fetch, url: string): Promise<str
   }
   switch (answer.status) {
     case 410:
-      return "This file is no longer available: the time it was kept for has run out, or it has been downloaded as many times as it may be.";
+      return "This file has expired.";
     case 409:
-      return "Every download this file has left is in progress for someone else right now. Try again once one of them finishes.";
+      return "Download limit reached. Try again shortly.";
     case 404:
-      return "This file does not exist, or you do not have access to it.";
+      return "File not found.";
     case 503:
-      return "This installation has no file storage set up, so it cannot serve files. Tell your administrator.";
+      return "File storage is not configured.";
   }
   return `The server refused to serve the file (it answered ${answer.status}${answer.statusText ? ` ${answer.statusText}` : ""}).`;
 }

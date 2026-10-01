@@ -111,7 +111,7 @@
     return act("remove the credential", async () => {
       await removeCredential(api, c.id);
       asking = "";
-      said = c.type === "password" ? "The password is removed, and so is your one-time code generator if you had one." : `${described(c)} is removed.`;
+      said = c.type === "password" ? "Password removed." : `${described(c)} removed.`;
       await reread();
     });
   }
@@ -121,7 +121,7 @@
     return act("remove the one-time code generator", async () => {
       await removeGenerator(api, code.trim());
       code = "";
-      said = "The one-time code generator is removed. Your password still works, without a code.";
+      said = "One-time code generator removed.";
       await reread();
     });
   }
@@ -144,7 +144,7 @@
         const made = await addPasskey(api, passkeys.credentials, label);
         again = false;
         label = "";
-        said = made ? `${made.label ? `“${made.label}”, a` : "A"} ${made.kind} passkey is added.` : "The passkey is added.";
+        said = "Passkey added.";
       } catch (e) {
         said = "";
         if (e instanceof SignInAgain) {
@@ -268,7 +268,7 @@
     return act("revoke the token", async () => {
       await revoke(api, t.id);
       revoking = "";
-      said = `The token ${t.device_label ? `“${t.device_label}”` : t.id} is revoked: it stops working from its next use.`;
+      said = "Token revoked.";
       await retokens();
     });
   }
@@ -306,9 +306,9 @@
       {#if unread}
         <Problem explained={unread} onretry={reread} />
       {:else if credentials === null}
-        <p class="muted">Reading what you sign in with.</p>
+        <p class="muted">Loading</p>
       {:else if credentials.length === 0}
-        <p class="muted">No passkey or password: a service account signs in with tokens only.</p>
+        <p class="muted">Tokens only</p>
       {:else}
         <table>
           <thead><tr><th>Credential</th><th>Kind</th><th>Enrolled</th><th>Last used</th><th class="end"></th></tr></thead>
@@ -350,19 +350,19 @@
         <p class="muted">{passkeys.unavailable}</p>
       {:else}
         <form onsubmit={add}>
-          <label for="passkey-label">A name for it, so that you can tell it from the others when a device is lost</label>
+          <label for="passkey-label">Name</label>
           <input id="passkey-label" maxlength="256" placeholder="work laptop" bind:value={label} />
           <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add a passkey</button></p>
         </form>
         {#if again}
           <div class="again">
-            <p>Adding a way in takes a sign-in in the last 10 minutes, so that a session left open is not enough to add one. Sign in again, and the passkey is added straight after.</p>
+            <p>Sign in again to add a passkey.</p>
             <p><button class="control" disabled={working} onclick={signInAgainWithPasskey}><Icon name="control-passkey" size={14} />Sign in again with a passkey</button></p>
             {#if holdsPassword}
               <form onsubmit={signInAgainWithPassword}>
                 <label for="again-password">Or with your password</label>
                 <input id="again-password" type="password" autocomplete="current-password" bind:value={password} />
-                <label for="again-totp">A code from your generator, where you enrolled one</label>
+                <label for="again-totp">One-time code</label>
                 <input id="again-totp" class="term" inputmode="numeric" autocomplete="one-time-code" maxlength="6" bind:value={totp} />
                 <p><button class="control" disabled={working || password === ""}>Sign in again with the password</button></p>
               </form>
@@ -370,7 +370,6 @@
           </div>
         {/if}
       {/if}
-      <p class="foot muted">To set a password or a one-time code generator, go to the <a href="auth/enrol">sign-in page</a>.</p>
     </Pane>
   </div>
 {:else}
@@ -378,7 +377,7 @@
     <Pane title="API tokens" aside={tokens ? String(tokens.length) : ""}>
       {#if issued}
         <div class="issued" role="status">
-          <p>The token for <span class="term">{issued.api_token.principal}</span>, shown this once: copy it now. Lose it and mint another.</p>
+          <p>Token for <span class="term">{issued.api_token.principal}</span>. Shown once: copy it now.</p>
           <p class="value code">{issued.token}</p>
           <p class="buttons">
             <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy"}</button>
@@ -389,9 +388,9 @@
       {#if untokened}
         <Problem explained={untokened} onretry={retokens} />
       {:else if tokens === null}
-        <p class="muted">Reading your tokens.</p>
+        <p class="muted">Loading</p>
       {:else if tokens.length === 0}
-        <p class="muted">You and your service accounts have no token.</p>
+        <p class="muted">No tokens</p>
       {:else}
         <table>
           <thead><tr><th>Token</th><th>Principal</th><th>Narrowed to</th><th>Created</th><th>Expires</th><th>Last used</th><th class="end"></th></tr></thead>
@@ -430,7 +429,7 @@
             <option value={`${a.namespace}/${a.name}`}>{a.namespace}/{a.name}</option>
           {/each}
         </select>
-        <label for="token-label">What it is for or on, so that the one on a lost machine can be revoked</label>
+        <label for="token-label">Label</label>
         <input id="token-label" maxlength="256" placeholder="deploy pipeline" bind:value={deviceLabel} />
         <label for="token-days">Expires in</label>
         <select id="token-days" bind:value={days}>
@@ -439,15 +438,14 @@
           {/each}
         </select>
         <fieldset>
-          <legend>Permissions it keeps, every one its principal holds where none is ticked</legend>
+          <legend>Permissions (all if none ticked)</legend>
           {#each permissions as p (p)}
             <label class="check"><input type="checkbox" checked={kept.includes(p)} onchange={(e) => toggle(p, e.currentTarget.checked)} /><span class="term">{p}</span></label>
           {/each}
         </fieldset>
-        <label for="token-within">Namespaces and workflows it reaches, everywhere its principal does where none is written</label>
+        <label for="token-within">Scope (everywhere if empty)</label>
         <input id="token-within" class="term" placeholder="finance, finance/monthly-invoicing" bind:value={within} />
         <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Mint the token</button></p>
-        <p class="foot muted">A token can do at most what its owner can do, and lasts a year at most.</p>
       </form>
     </Pane>
   </div>
@@ -574,11 +572,6 @@
     margin-top: calc(var(--unit) * 6);
     padding-top: calc(var(--unit) * 4);
     border-top: var(--border-hairline) solid var(--line);
-  }
-
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
-    font-size: var(--type-control-size);
   }
 
   .issued {

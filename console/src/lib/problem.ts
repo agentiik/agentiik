@@ -35,33 +35,33 @@ export function explain(failed: string, cause: unknown): Explained {
     const said = cause instanceof Error ? cause.message : String(cause);
     return {
       what,
-      why: "Agentiik did not answer: the request did not reach it, or its answer did not come back.",
-      next: "Check your connection and that this installation is running, then try again.",
-      detail: said ? `The browser said: ${said}` : "",
+      why: "Agentiik is not reachable.",
+      next: "Check your connection and try again.",
+      detail: said,
       transient: true,
     };
   }
-  const detail = `The server answered ${cause.status}${cause.message ? `: ${quoted(cause.message)}` : ""}.`;
+  const detail = `${cause.status}${cause.message ? ` ${quoted(cause.message)}` : ""}`;
   const told = (why: string, next: string, transient = false): Explained => ({ what, why, next, detail, transient });
   // Where the server's own sentence is the reason, it is the reason, and the detail keeps the status.
-  const toldBy = (why: string, next: string): Explained => ({ what, why, next, detail: `The server answered ${cause.status}.`, transient: false });
+  const toldBy = (why: string, next: string): Explained => ({ what, why, next, detail: String(cause.status), transient: false });
   switch (true) {
     case cause.status === 401:
       return told("Your session has ended.", "Sign in again.");
     case cause.status === 403:
-      return told("You do not have the permission this needs.", "Ask an owner of the namespace to grant it to you.");
+      return told("You do not have permission.", "");
     case cause.status === 404:
-      return told("It does not exist, or you do not have access to it.", "Check the address, or ask an owner of the namespace for access.");
+      return told("Not found, or not shared with you.", "");
     case cause.status === 409:
       return toldBy(sentence(cause.message), "");
     case cause.status === 413:
       return toldBy(`It is too large: ${lowered(cause.message)}`, "");
     case cause.status === 429:
-      return told("Too many attempts in a short time.", "Wait a moment, then try again.", true);
+      return told("Too many requests.", "Wait a moment and try again.", true);
     case cause.status >= 500:
-      return told("Agentiik ran into an error on its side: a fault of the server, not a mistake of yours.", "Try again in a moment. If it keeps failing, tell your administrator, with the time and the details below.", true);
+      return told("Server error.", "Try again. If it keeps failing, tell your administrator.", true);
     case cause.status === 400 || cause.status === 422:
-      return toldBy(sentence(cause.message), "Correct it, then try again.");
+      return toldBy(sentence(cause.message), "");
     default:
       return toldBy(sentence(cause.message), "");
   }

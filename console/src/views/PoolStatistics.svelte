@@ -124,7 +124,7 @@
 {#if pools}
   {#key pools}
     {#if drawn.length === 0}
-      <p class="muted">No pool held a runner over the range.</p>
+      <p class="muted">No data</p>
     {/if}
     <div class="grid">
       {#each drawn as p (p.pool)}
@@ -140,7 +140,7 @@
                 {#each p.runners as r (r.runner)}
                   <tr><td class="term">{r.runner}</td><td class="number term">{r.peak}</td><td class="number term">{r.capacity}</td><td class="number term">{r.silences}</td><td class="number term">{r.lost}</td></tr>
                 {:else}
-                  <tr><td colspan="5" class="muted">No runner was in the pool over the range.</td></tr>
+                  <tr><td colspan="5" class="muted">No runners</td></tr>
                 {/each}
               </tbody>
             </table>
@@ -150,10 +150,10 @@
     </div>
 
     <div class="gaps">
-      <Pane title="Heartbeat gaps" aside="silences of two intervals, 20 s, or more, by runner">
+      <Pane title="Heartbeat gaps">
         <p class="legend">
           <span><span class="swatch"></span>20 to 30 s</span>
-          <span><span class="swatch lost"></span>{declaredLost / 1000} s and over: its tasks declared lost</span>
+          <span><span class="swatch lost"></span>{declaredLost / 1000} s and over, tasks lost</span>
         </p>
         <div class="timeline" role="list" aria-label="Silences between heartbeats, by runner">
           {#each gaps as g (g.runner)}

@@ -84,7 +84,7 @@ export async function addPasskey(api: API, credentials: CredentialsContainer, la
     throw new CeremonyFailed(ceremonyProblem(e));
   }
   if (!made || made.type !== "public-key") {
-    throw new CeremonyFailed("No passkey was made. Try again, on this device or on a phone nearby.");
+    throw new CeremonyFailed("No passkey was created.");
   }
   const body: { ceremony: "registration"; credential: CredentialJSON; label?: string } = {
     ceremony: "registration",

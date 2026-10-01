@@ -97,6 +97,6 @@ describe("a namespace's statistics", () => {
 
   it("is not offered in a namespace the caller holds nothing in", async () => {
     open("/payroll/statistics");
-    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
   });
 });

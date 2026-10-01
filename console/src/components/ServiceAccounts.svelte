@@ -70,7 +70,7 @@
       const { data, error, response } = await api.POST("/api/v1/service-accounts", { body: { namespace, name: name.trim() } });
       if (!data) throw refusal(response, error);
       name = "";
-      return `${data.namespace}/${data.name} is created. It holds no grant and no token until one is written or minted for it.`;
+      return `${data.namespace}/${data.name} created.`;
     });
   }
 
@@ -83,7 +83,7 @@
       const answer = await api.DELETE("/api/v1/service-accounts/{ns}/{name}", { params: { path: { ns: a.namespace, name: a.name } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       asking = "";
-      return `${id(a)} is removed, with its tokens and its grants.`;
+      return `${id(a)} removed.`;
     });
   }
 
@@ -98,7 +98,7 @@
     {#if unread}
       <Problem explained={unread} onretry={reread} />
     {:else if accounts === null}
-      <p class="muted">Reading the service accounts.</p>
+      <p class="muted">Loading</p>
     {:else}
       <table>
         <thead><tr><th>Service account</th><th>Created</th><th class="end"></th></tr></thead>
@@ -107,7 +107,7 @@
             <tr>
               <td class="code">{id(a)}</td>
               <td class="muted">
-                {#if a.name === "agentiik"}built in: its namespace's scheduled, webhook and event runs are attributed to it{:else if a.created_by}by <span class="term">{a.created_by}</span>{#if a.created_at}, <time datetime={a.created_at} title={a.created_at}>{clock(a.created_at, now)}</time>{/if}{/if}
+                {#if a.name === "agentiik"}built in{:else if a.created_by}by <span class="term">{a.created_by}</span>{#if a.created_at}, <time datetime={a.created_at} title={a.created_at}>{clock(a.created_at, now)}</time>{/if}{/if}
               </td>
               <td class="end">
                 {#if a.name !== "agentiik"}
@@ -121,11 +121,10 @@
               </td>
             </tr>
           {:else}
-            <tr><td colspan="3" class="muted">You own no namespace, so you hold no service account.</td></tr>
+            <tr><td colspan="3" class="muted">No service accounts</td></tr>
           {/each}
         </tbody>
       </table>
-      <p class="foot muted">To create a token for one of them, go to API tokens and choose the service account.</p>
     {/if}
   </Pane>
 
@@ -142,11 +141,10 @@
           <span>Name</span>
           <input class="term" bind:value={name} placeholder="deploy-bot" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
         </label>
-        <p class="foot muted">Its full name is <span class="term">{namespace || "NS"}/{name.trim() || "NAME"}</span>. It can do nothing until you share something with it.</p>
         <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create it</button></p>
       </form>
     {:else}
-      <p class="muted">You can create a service account only in a namespace you own, and you own none.</p>
+      <p class="muted">You own no namespace.</p>
     {/if}
   </Pane>
 </div>
@@ -221,15 +219,6 @@
   }
 
   form p {
-    margin: 0;
-  }
-
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
-    font-size: var(--type-control-size);
-  }
-
-  form .foot {
     margin: 0;
   }
 

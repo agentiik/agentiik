@@ -96,11 +96,7 @@
       store === "builtin"
         ? { provider: store, ...(value ? { value, ...(base64 ? { encoding: "base64" as const } : {}) } : {}) }
         : { provider: store, path: path.trim() };
-    const done = rotating
-      ? `The value of ${n} is written. It is shown nowhere, and a run started from now reads it.`
-      : store === "builtin" && value
-        ? `${n} is declared and its value written. It is shown nowhere.`
-        : `${n} is declared, kept in ${store}.`;
+    const done = rotating ? `${n} updated.` : `${n} saved.`;
     return write(n, body, done);
   }
 
@@ -118,7 +114,7 @@
     return act("remove the secret", async () => {
       const answer = await api.DELETE("/api/v1/{ns}/secrets/{name}", { params: { path: { ns: namespace, name: d.name } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
-      said = `${d.name} is removed${d.provider === "builtin" ? ", and its value with it" : ""}. A run that uses it will now be refused.`;
+      said = `${d.name} removed.`;
       asking = "";
       await read();
     });
@@ -143,11 +139,11 @@
 
 <Pane title="Secrets" aside={secrets ? `${secrets.length} in ${namespace}` : namespace}>
   {#if !reads}
-    <p class="muted">Only people who can read every workflow of {namespace} (workflow:read on the namespace) can see its secrets.</p>
+    <p class="muted">Hidden (needs <span class="term">workflow:read</span>)</p>
   {:else if unread}
     <Problem explained={unread} onretry={read} />
   {:else if secrets === null}
-    <p class="muted">Reading the secrets.</p>
+    <p class="muted">Loading</p>
   {:else}
     <table>
       <thead><tr><th>Name</th><th>Kept in</th><th>Given to a step at</th><th>Declared</th><th class="end"></th></tr></thead>
@@ -209,14 +205,11 @@
           <span>Value</span>
           <textarea class="term" bind:value rows="3" spellcheck="false" autocomplete="off" required={rotating !== ""}></textarea>
         </label>
-        <label class="check"><input type="checkbox" bind:checked={base64} />Written as base64, for a value that is not text</label>
+        <label class="check"><input type="checkbox" bind:checked={base64} />Base64</label>
       {/if}
-      <p class="muted note">
-        {#if store === "builtin"}The value is stored and never shown again, here or anywhere. To change it, enter a new one.{#if !rotating}{" "}Leave it empty to keep the current value.{/if}{:else}The server reads this variable from its own environment, with the prefix this installation sets for {namespace}. It works only if the installation sets one.{/if}
-      </p>
       <span class="buttons">
-        <button class="control primary" disabled={working}>{rotating ? "Write the value" : "Declare it"}</button>
-        {#if rotating}<button class="control" type="button" onclick={() => (rotating = "")}>Keep the value it has</button>{/if}
+        <button class="control primary" disabled={working}>{rotating ? "Update" : "Save"}</button>
+        {#if rotating}<button class="control" type="button" onclick={() => (rotating = "")}>Cancel</button>{/if}
       </span>
     </form>
   </Dialog>
@@ -308,11 +301,6 @@
     border-radius: var(--radius-control);
     background: var(--raised);
     color: var(--text);
-    font-size: var(--type-control-size);
-  }
-
-  .note {
-    margin: 0;
     font-size: var(--type-control-size);
   }
 

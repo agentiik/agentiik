@@ -93,7 +93,7 @@
 
 <!-- The runners' pane is drawn once the pools above it are read, so that it is not pushed down. -->
 {#if pools === null && !refused}
-  <p class="muted" role="status">Reading the pools.</p>
+  <p class="muted" role="status">Loading</p>
 {:else}
 <Pane title="Pools" aside={pools ? `${pools.length} ${pools.length === 1 ? "pool" : "pools"}` : ""}>
   {#if pools}
@@ -107,7 +107,7 @@
             {@const reached = reachedBy(p, namespaces)}
             <tr class:chosen={chosen === p.name}>
               <td><button class="name term" aria-pressed={chosen === p.name} onclick={() => choose(p.name)}>{p.name}</button></td>
-              <td class="nowrap">{#each p.labels as l (l)}<span class="chip term">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
+              <td class="labels">{#each p.labels as l (l)}<span class="chip term">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
               <td>{#if p.namespaces.length}{@render names(p.namespaces)}{:else}<span class="muted">all namespaces</span>{/if}</td>
               <td class="term nowrap">{ceilings(p)}</td>
               <td class="term">{p.containment}</td>
@@ -121,7 +121,6 @@
         </tbody>
       </table>
     </div>
-    <p class="muted note">A namespace can use a pool when both allow it: the pool accepts the namespace, and the namespace's allowed_runner_pools lists the pool or is empty. "Takes at once" is the number of tasks the pool's ready runners can run together right now.</p>
   {/if}
 </Pane>
 
@@ -131,7 +130,7 @@
       <p class="narrowed">In <span class="term">{chosen}</span> alone. <button class="link" onclick={() => choose(undefined)}>Every pool</button></p>
     {/if}
     {#if runners === null}
-      <p class="muted">Reading the runners.</p>
+      <p class="muted">Loading</p>
     {:else}
       <div class="scroll">
         <table>
@@ -144,7 +143,7 @@
               <tr>
                 <td class="term nowrap">{r.runner}</td>
                 <td class="term">{r.pool}</td>
-                <td class="nowrap">{#each r.labels as l (l)}<span class="chip term">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
+                <td class="labels">{#each r.labels as l (l)}<span class="chip term">{l}</span>{:else}<span class="muted">no label</span>{/each}</td>
                 <td class="condition">
                   <span class="nowrap"><StatePill state={c} />{#if c !== r.reported_state && r.reported_state && r.state !== "revoked"}<span class="muted said">says {r.reported_state}</span>{/if}</span>
                   {#if r.revoked_by && r.revoked_at}
@@ -167,7 +166,6 @@
           </tbody>
         </table>
       </div>
-      <p class="muted note">A runner is shown by its identifier, pool and labels, never by the machine it runs on. When a runner has been silent for 30 seconds (three missed heartbeats), its tasks are marked lost.</p>
     {/if}
   </Pane>
 </div>
@@ -254,11 +252,6 @@
 
   .behind {
     color: var(--waiting);
-  }
-
-  .note {
-    margin: calc(var(--unit) * 4) 0 0;
-    font-size: var(--type-control-size);
   }
 
   .narrowed {

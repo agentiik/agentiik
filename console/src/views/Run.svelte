@@ -146,7 +146,7 @@
     return act("cancel the run", async () => {
       if (!run) return;
       await cancelRun(api, run.run);
-      said = "Cancel requested: the running tasks are being stopped, and the run will end as cancelled.";
+      said = "Cancelling.";
       await reader.read();
     });
   }
@@ -263,14 +263,14 @@
         <div class="actions">
           {#if mayRun && !reader.ended}
             {#if confirming}
-              <span>Cancel this run? Its tasks in flight are stopped.</span>
+              <span>Cancel this run?</span>
               <button class="control danger" disabled={acting} onclick={cancel}><Icon name="control-cancel" size={14} />Cancel run</button>
               <button class="control" disabled={acting} onclick={() => (confirming = false)}>Keep it running</button>
             {:else}
               <button class="control" disabled={acting} onclick={() => (confirming = true)}><Icon name="control-cancel" size={14} />Cancel run</button>
             {/if}
           {:else if mayRun && replaying && chosenStep && !run.replay_from_start_only}
-            <span>Replay this run from {chosenStep}? A new run starts there.</span>
+            <span>Replay this run from {chosenStep}?</span>
             <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
             <button class="control" disabled={acting} onclick={() => (replaying = false)}>Keep it</button>
           {:else if mayRun}
@@ -279,7 +279,7 @@
             {/if}
             <button class="control" disabled={acting} onclick={() => replay()}><Icon name="control-replay" size={14} />Replay from the start</button>
             {#if run.replay_from_start_only}
-              <span class="muted">Some saved step data has been deleted, so this run can only be replayed from the beginning.</span>
+              <span class="muted">from the start only</span>
             {/if}
           {/if}
           <!-- Reading a run against another needs nothing but run:read, which reading this one took. -->
@@ -378,7 +378,7 @@
               <pre class="json"><code>{#each tokens(task.params) as t, i (i)}<span class="t-{t.kind}">{t.text}</span>{/each}</code></pre>
             </details>
           {:else if task && !readsData && task.state !== "pending"}
-            <p class="faint">Parameters are hidden: viewing them needs run:read_data on {run.namespace}/{run.workflow}.</p>
+            <p class="faint">Parameters hidden (needs <span class="term">run:read_data</span>)</p>
           {/if}
 
           <table class="tasks">
@@ -399,7 +399,7 @@
                   <td class="number term">{lasted(t.started_at, t.finished_at)}</td>
                 </tr>
               {:else}
-                <tr><td colspan="5" class="muted empty">No task of this step has been created.</td></tr>
+                <tr><td colspan="5" class="muted empty">No tasks</td></tr>
               {/each}
             </tbody>
           </table>
@@ -413,7 +413,7 @@
             </div>
             {#if tab === "files"}
               {#if files.length === 0}
-                <p class="muted">The step has published no file.</p>
+                <p class="muted">No files</p>
               {:else}
                 <table class="files">
                   <thead><tr><th>File</th><th>Port</th><th>Media type</th><th class="number">Size</th><th>SHA-256</th><th>Retention</th><th></th></tr></thead>
@@ -437,14 +437,14 @@
                 </table>
                 {#if unfetched}<Problem explained={unfetched} />{/if}
                 {#if !readsData}
-                  <p class="faint">You can see the list of files but not download them: that needs run:read_data on {run.namespace}/{run.workflow}.</p>
+                  <p class="faint">Download hidden (needs <span class="term">run:read_data</span>)</p>
                 {/if}
               {/if}
             {:else if tab === "logs"}
               {#if task}
                 <LogPane {api} run={run.run} step={step.step} task={task.task} />
               {:else}
-                <p class="muted">This step has not started, so there is no log yet.</p>
+                <p class="muted">Not started</p>
               {/if}
             {:else if portNames.length === 0}
               <p class="muted">{tab === "output" ? "The step declares no output port." : "The step declares no input port."}</p>
@@ -478,7 +478,7 @@
               {/if}
             {/if}
             {#if !readsData && (tab === "output" || tab === "input")}
-              <p class="faint">The data passed between steps is hidden: viewing it needs run:read_data on {run.namespace}/{run.workflow}.</p>
+              <p class="faint">Data hidden (needs <span class="term">run:read_data</span>)</p>
             {/if}
           </div>
         </Pane>

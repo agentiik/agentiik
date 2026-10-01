@@ -73,7 +73,7 @@
       name = "";
       first = "";
       await reread();
-      return `group:${data.name} is created${data.members.length ? `, with ${data.members.join(", ")} in it` : ""}. It holds no grant until one is written for it.`;
+      return `group:${data.name} created.`;
     });
   }
 
@@ -88,7 +88,7 @@
       if (!data) throw refusal(response, error);
       adding[g.name] = "";
       await reread();
-      return `${login} is in group:${g.name}, and holds what its grants give from their next request.`;
+      return `${login} added.`;
     });
   }
 
@@ -97,7 +97,7 @@
       const { data, error, response } = await api.DELETE("/api/v1/groups/{group}/members/{login}", { params: { path: { group: g.name, login } } });
       if (!data) throw refusal(response, error);
       await reread();
-      return `${login} is out of group:${g.name}: what its grants gave them ends from their next request.`;
+      return `${login} removed.`;
     });
   }
 
@@ -110,7 +110,7 @@
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       asking = "";
       await reread();
-      return `group:${g.name} is removed, with its memberships and grants. Its members stay.`;
+      return `group:${g.name} removed.`;
     });
   }
 </script>
@@ -132,7 +132,7 @@
   {#if unread}
     <Problem explained={unread} onretry={reread} />
   {:else if groups === null}
-    <p class="muted">Reading the groups.</p>
+    <p class="muted">Loading</p>
   {:else}
     <table>
       <thead><tr><th>Group</th><th>Members</th><th>Add a member</th><th class="end"></th></tr></thead>
@@ -163,11 +163,10 @@
             </td>
           </tr>
         {:else}
-          <tr><td colspan="4" class="muted">No group yet.</td></tr>
+          <tr><td colspan="4" class="muted">No groups</td></tr>
         {/each}
       </tbody>
     </table>
-    <p class="foot muted">Adding someone to a group gives them everything the group has been granted, from their next action, and the owners of each namespace where this widens access are told. A group that owns a namespace cannot be removed until that namespace has another owner.</p>
   {/if}
 </Pane>
 
@@ -182,7 +181,6 @@
       <span>First members, by login</span>
       <input class="term" bind:value={first} placeholder="alice, bob" autocomplete="off" />
     </label>
-    <p class="foot muted">A new group has no access to anything yet, so adding people to it gives them nothing until something is shared with it. Its full name is <span class="term">group:NAME</span>.</p>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create the group</button></p>
   </form>
 </Dialog>
@@ -281,15 +279,6 @@
   }
 
   form p {
-    margin: 0;
-  }
-
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
-    font-size: var(--type-control-size);
-  }
-
-  form .foot {
     margin: 0;
   }
 

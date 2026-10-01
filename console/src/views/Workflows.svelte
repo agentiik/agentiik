@@ -55,7 +55,7 @@
     const { data, error, response } = await api.POST("/api/v1/{ns}/workflows", { params: { path: { ns: namespace } }, body });
     sending = false;
     if (!data) {
-      said = response.status === 409 ? refusedHere(`create ${body.name}`, `A workflow named ${body.name} already exists in ${namespace}, or one of that name was deleted and is still being removed. Choose another name.`) : explain(`create ${body.name}`, refusal(response, error));
+      said = response.status === 409 ? refusedHere(`create ${body.name}`, `${body.name} is already taken.`) : explain(`create ${body.name}`, refusal(response, error));
       return;
     }
     place.go({ kind: "namespace", namespace, view: "workflows", workflow: data.name, tab: "files" });
@@ -70,11 +70,11 @@
   {/snippet}
 </PageHeader>
 
-<Pane title="Named by the last 200 runs">
+<Pane title="Recently run">
   {#if refused}
     <Problem explained={refused} onretry={read} />
   {:else if !known}
-    <p class="muted" role="status">Reading the runs of {namespace}.</p>
+    <p class="muted" role="status">Loading</p>
   {:else}
     <table>
       <thead><tr><th>Workflow</th><th>Latest run</th><th>Created</th></tr></thead>
@@ -88,7 +88,7 @@
             <td class="term"><time datetime={k.created_at}>{clock(k.created_at, now)}</time></td>
           </tr>
         {:else}
-          <tr><td colspan="3" class="muted">No run of {namespace} yet.</td></tr>
+          <tr><td colspan="3" class="muted">No runs yet</td></tr>
         {/each}
       </tbody>
     </table>
@@ -98,11 +98,11 @@
 {#if mayCreate}
   <Dialog title="New workflow in {namespace}" bind:open={creating}>
     <form onsubmit={create} aria-label="New workflow">
-      <label for="new-name"><span>Name</span><span class="muted">also the name agentiik.yaml gives it, in metadata.name</span></label>
+      <label for="new-name"><span>Name</span></label>
       <input id="new-name" class="term" bind:value={name} required autocomplete="off" />
-      <label for="new-branch"><span>Default branch</span><span class="muted">the branch a run uses unless told otherwise; it is created by your first push</span></label>
+      <label for="new-branch"><span>Default branch</span></label>
       <input id="new-branch" class="term" bind:value={branch} autocomplete="off" />
-      <label class="check"><input type="checkbox" bind:checked={protect} /><span>Protect it: only people with <span class="term">grant:manage</span> can then push to it, rather than anyone with <span class="term">workflow:write</span></span></label>
+      <label class="check"><input type="checkbox" bind:checked={protect} /><span>Protected</span></label>
       {#if said}<Problem explained={said} />{/if}
       <button class="control primary" type="submit" disabled={sending || !name.trim()}>Create {name.trim() || "the workflow"}</button>
     </form>

@@ -173,7 +173,7 @@
 
 <RangeBar {ranged} bucket={runs?.bucket}>
   <label class="select">
-    <span class="muted">Export the series of</span>
+    <span class="muted">Export</span>
     <select bind:value={exporting}>
       {#each Object.entries(exports) as [key, e] (key)}<option value={key}>{e.label}</option>{/each}
     </select>
@@ -203,12 +203,12 @@
     </dl>
 
     <div class="grid">
-      <Pane title="Runs that did not succeed" aside="share of the runs of each bucket that ended; the rest succeeded">
+      <Pane title="Runs that did not succeed">
         <Chart title="Runs that failed, timed out or were cancelled, of those that ended" since={drawn.since} width={width(runs.bucket)} series={drawn.failing} stacked format={pct} onzoom={(f, t) => ranged.zoom(f, t)} onback={() => ranged.back()} onpick={(i) => open(runs?.buckets[i])} />
       </Pane>
       <Pane title={step ? `Exit codes of ${step.step}` : "Exit codes"} aside={step ? `${count(codes.reduce((a, c) => a + c.attempts, 0))} of ${count(attempts)} attempts failed` : undefined}>
         {#if codes.length === 0}
-          <p class="muted">No attempt of {step?.step ?? "a step"} ended other than with 0 over the range.</p>
+          <p class="muted">No failures</p>
         {:else}
           {@const most = codes[0]!.attempts}
           <ul class="codes">
@@ -222,18 +222,17 @@
               </li>
             {/each}
           </ul>
-          <p class="faint">The attempts that ended with a code other than 0 over the range, by the code of their last dispatch.</p>
         {/if}
       </Pane>
-      <Pane title="Duration" aside="the whole run, p50, p95 and p99 of the runs that ended">
+      <Pane title="Duration">
         <Chart title="How long the runs took" since={drawn.since} width={width(runs.bucket)} series={drawn.duration} format={ms} onzoom={(f, t) => ranged.zoom(f, t)} onback={() => ranged.back()} onpick={(i) => open(runs?.buckets[i])} />
       </Pane>
-      <Pane title="Queue wait" aside="from when a task could be handed out to its dispatch">
+      <Pane title="Queue wait">
         <Chart title="How long the tasks waited for a runner" since={drawn.since} width={width(runs.bucket)} series={drawn.wait} format={ms} onzoom={(f, t) => ranged.zoom(f, t)} onback={() => ranged.back()} onpick={(i) => open(runs?.buckets[i])} />
       </Pane>
-      <Pane title={step ? `${step.step} by hour of day` : "By hour of day"} aside="p50 duration of its attempts over the range, in UTC">
+      <Pane title={step ? `${step.step} by hour of day` : "By hour of day"} aside="UTC">
         {#if week.scale.levels.length === 0}
-          <p class="muted">No attempt of {step?.step ?? "a step"} ended over the range.</p>
+          <p class="muted">No data</p>
         {:else}
           <table class="heat tiled" aria-label="The p50 duration of {step?.step} by weekday and hour, in UTC">
             <thead>
@@ -276,7 +275,7 @@
       </Pane>
       <Pane title="Items refused" aside={items && items.lines.length > 0 ? `${count(items.rejected)} rejected, ${count(items.error)} to error, of ${count(items.of)}` : undefined}>
         {#if !items || items.lines.length === 0}
-          <p class="muted">No step published anything on a rejected or an error port over the range.</p>
+          <p class="muted">Nothing refused</p>
         {:else}
           <Chart title="The share of each step's items rejected or sent to error" since={portsSince} width={width(ports?.bucket)} series={itemLines} format={pct} onzoom={(f, t) => ranged.zoom(f, t)} onback={() => ranged.back()} onpick={(i) => open(runs?.buckets[i])} />
         {/if}

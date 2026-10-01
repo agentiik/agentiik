@@ -145,16 +145,16 @@
 </AdminTabs>
 
 {#if problem && !adding}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
-{#if removed}{#key removed}<Notice ondismiss={() => (removed = "")}><span class="term">{removed}</span> is removed, with their credentials, tokens, sessions, memberships and grants.</Notice>{/key}{/if}
+{#if removed}{#key removed}<Notice ondismiss={() => (removed = "")}><span class="term">{removed}</span> removed.</Notice>{/key}{/if}
 
 <Dialog title={issued ? `${issued.what === "recovery" ? "Recovery code" : "Enrolment link"} for ${issued.login}` : ""} open={issued !== null} onclose={() => (issued = null)}>
   {#if issued}
     <div class="issued" role="status">
       <p>
-        Shown this once and good until <time class="term" datetime={issued.expires_at}>{clock(issued.expires_at, now)}</time>. Hand it over yourself: it is never sent by mail.
+        Shown once. Expires <time class="term" datetime={issued.expires_at}>{clock(issued.expires_at, now)}</time>.
       </p>
       <p class="value code">{issued.link}</p>
-      {#if issued.code}<p class="muted">Or give them this code to type on the enrolment page: <span class="code">{issued.code}</span></p>{/if}
+      {#if issued.code}<p class="muted">Code: <span class="code">{issued.code}</span></p>{/if}
       <p class="buttons">
         <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy the link"}</button>
         <button class="control primary" onclick={() => (issued = null)}>Done</button>
@@ -167,7 +167,7 @@
   {#if unread}
     <Problem explained={unread} onretry={reread} />
   {:else if users === null}
-    <p class="muted">Reading the users.</p>
+    <p class="muted">Loading</p>
   {:else}
     <table>
       <thead><tr><th>Login</th><th>Name</th><th>Standing</th><th>Created</th><th>Last signed in</th><th class="end"></th></tr></thead>
@@ -177,14 +177,12 @@
             <td class="term nowrap"><span class="who"><Avatar name={u.display_name} src={userPhotoOf(u)} size={24} /><span class="login">{u.login}</span></span></td>
             <td>{u.display_name}{#if u.title}<span class="muted title">{u.title}</span>{/if}</td>
             <td class="muted">
-              {#if u.suspended}<span class="suspended">suspended{u.suspended_for === "no_passkey" ? ", holding no passkey the policy accepts" : ""}</span>{:else if u.admin}administrator{:else}user{/if}
+              {#if u.suspended}<span class="suspended">suspended{u.suspended_for === "no_passkey" ? " (no passkey)" : ""}</span>{:else if u.admin}administrator{:else}user{/if}
             </td>
             <td class="term muted nowrap">{#if u.created_at}<time datetime={u.created_at} title={u.created_at}>{clock(u.created_at, now)}</time>{/if}</td>
             <td class="term muted nowrap">{#if u.last_sign_in_at}<time datetime={u.last_sign_in_at} title={u.last_sign_in_at}>{clock(u.last_sign_in_at, now)}</time>{:else}never{/if}</td>
             <td class="end">
-              {#if u.login === own}
-                <span class="faint">Another administrator has to do this for you</span>
-              {:else}
+              {#if u.login !== own}
                 {#if asking === u.login}
                   <button class="control danger" disabled={working} onclick={() => remove(u)}>Remove {u.login}</button>
                   <button class="control" onclick={() => (asking = "")}>Keep</button>
@@ -202,7 +200,6 @@
         {/each}
       </tbody>
     </table>
-    <p class="foot muted">An enrolment link lets a user set up their first passkey or password. A recovery code lets them replace lost ones; it cancels any earlier code and is recorded under both your names. You cannot issue one for your own account: someone who took over your session could otherwise use it to get in.</p>
   {/if}
 </Pane>
 
@@ -218,7 +215,6 @@
       <input bind:value={displayName} placeholder="Dana Okafor" maxlength="256" autocomplete="off" />
     </label>
     <label class="check"><input type="checkbox" bind:checked={admin} />An administrator of the installation</label>
-    <p class="foot muted">The user is created with their personal namespace, and nothing to sign in with yet. Their enrolment link is shown once, here: send it to them, and they use it to set up how they sign in.</p>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add the user</button></p>
   </form>
 </Dialog>
@@ -308,11 +304,6 @@
 
   .suspended {
     color: var(--waiting);
-  }
-
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
-    font-size: var(--type-control-size);
   }
 
   .issued p {

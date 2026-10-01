@@ -55,16 +55,16 @@
       <pre class="json"><code>{#each tokens(schema ?? true) as tok, i (i)}<span class="t-{tok.kind}">{tok.text}</span>{/each}</code></pre>
       {#if t.output}
         <p class="label">
-          {#if out !== undefined}outputSchema, the schema of the output <span class="term">{t.output.from.output}</span>{:else}The output <span class="term">{t.output.from.output}</span> carries no schema, so none is published{/if}
+          {#if out !== undefined}outputSchema, the schema of the output <span class="term">{t.output.from.output}</span>{:else}no schema{/if}
         </p>
         {#if out !== undefined}<pre class="json"><code>{#each tokens(out) as tok, i (i)}<span class="t-{tok.kind}">{tok.text}</span>{/each}</code></pre>{/if}
       {/if}
     </section>
   {:else}
-    <p class="muted">The mcp block lists no tool, so AI clients see none.</p>
+    <p class="muted">No tools</p>
   {/each}
 {:else}
-  <p class="muted">This version has no mcp block, so this workflow offers no tools to AI clients: its MCP address answers 404.</p>
+  <p class="muted">No tools</p>
 {/if}
 
 <style>

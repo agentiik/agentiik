@@ -39,16 +39,8 @@
     apply(document.documentElement, globalThis.localStorage, g);
   }
 
-  // Whether what the screen shows is current, in a word and, on hover, in a sentence saying what it
-  // means for the reader: both connections are retried on their own, so there is nothing to do but
-  // know that the page may be behind.
-  const standing = $derived(
-    !answering
-      ? { word: "unreachable", told: "Agentiik is not answering. What you see may be out of date; the console keeps trying to reach it." }
-      : live
-        ? { word: "live", told: "Live: this page updates by itself as things change." }
-        : { word: "reconnecting", told: "Live updates are paused while the console reconnects. This page does not update by itself until then; reload it to see the latest." },
-  );
+  // Whether what the screen shows is current, in a word: both connections are retried on their own.
+  const standing = $derived(!answering ? "unreachable" : live ? "live" : "reconnecting");
 
   const labels: Record<string, string> = { runs: "Runs", workflows: "Workflows", statistics: "Statistics", sharing: "Sharing", settings: "Settings" };
   const tabs: Record<string, string> = { files: "Files", statistics: "Statistics", mcp: "MCP", graph: "Graph", profile: "Profile", credentials: "Sign-in methods", tokens: "API tokens", "service-accounts": "Service accounts" };
@@ -111,8 +103,8 @@
   </nav>
 
   <div class="end">
-    <span class="live" class:lost={!answering} class:waiting={answering && !live} role="status" title={standing.told}>
-      <span class="dot" aria-hidden="true"></span><span class="word">{standing.word}</span>
+    <span class="live" class:lost={!answering} class:waiting={answering && !live} role="status">
+      <span class="dot" aria-hidden="true"></span><span class="word">{standing}</span>
     </span>
 
     <Popover label={me.notifications.length === 0 ? "Notifications, none" : `Notifications, ${me.notifications.length}`} align="end" width={340}>

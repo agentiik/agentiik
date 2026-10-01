@@ -111,7 +111,7 @@ describe("a workflow's files", () => {
     const place = open("/finance/workflows/monthly-invoicing/files", `?against=${older}&path=scripts%2Fnormalize.py`);
     expect(place.query.get("path")).toBe("scripts/normalize.py");
     expect(await screen.findByText("mode 0644 to 0755")).toBeTruthy();
-    expect(await screen.findByText("The content is the same; only the file's permissions (its mode) changed.")).toBeTruthy();
+    expect(await screen.findByText("Mode changed only")).toBeTruthy();
   });
 
   it("run the ref shown, its name in the run form, under workflow:run", async () => {
@@ -130,7 +130,7 @@ describe("a workflow's files", () => {
 describe("a namespace's workflows", () => {
   it("are those its runs name, said as such, each with its latest run", async () => {
     open("/finance/workflows");
-    expect(await screen.findByRole("region", { name: "Named by the last 200 runs" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Recently run" })).toBeTruthy();
     expect((await screen.findByRole("link", { name: "monthly-invoicing" })).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
   });
 
@@ -152,7 +152,7 @@ describe("a namespace's workflows", () => {
     await fireEvent.click(await screen.findByRole("button", { name: "New workflow" }));
     await fireEvent.input(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "report" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create report" }));
-    expect(await screen.findByText(/A workflow named report already exists in alice, or one of that name was deleted and is still being removed\. Choose another name\./)).toBeTruthy();
+    expect(await screen.findByText(/report is already taken\./)).toBeTruthy();
   });
 });
 

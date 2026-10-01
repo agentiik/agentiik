@@ -85,7 +85,7 @@ describe("the home", () => {
   it("reads each namespace the caller reads runs in by the day, over the year", async () => {
     const { asked } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/in the last year, 3 namespaces/);
+    await within(activity).findByText(/runs, 12 months/);
     const series = asked.filter((a) => a.includes("/stats/runs"));
     expect(series.map((a) => a.split("?")[0])).toEqual(["GET /api/v1/alice/stats/runs", "GET /api/v1/finance/stats/runs", "GET /api/v1/team-ops/stats/runs"]);
     for (const a of series) {
@@ -111,7 +111,7 @@ describe("the home", () => {
   it("opens a day's runs across every namespace, as ?day= in the address, and closes it", async () => {
     const { asked, place } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/in the last year/);
+    await within(activity).findByText(/, 12 months/);
     const day = within(activity).getByRole("gridcell", { name: /Tuesday, 29 September 2026/ });
     await fireEvent.click(day);
     expect(place.query.get("day")).toBe("2026-09-29");
@@ -140,9 +140,9 @@ describe("the home", () => {
   it("shades by the runs that failed where asked", async () => {
     const { place } = open();
     const activity = await screen.findByRole("region", { name: "Activity" });
-    await within(activity).findByText(/failures in the last year|runs in the last year/);
+    await within(activity).findByText(/, 12 months/);
     await fireEvent.click(within(activity).getByRole("button", { name: "Failures" }));
     expect(place.query.get("by")).toBe("failures");
-    expect(await within(activity).findByText(/failures in the last year/)).toBeTruthy();
+    expect(await within(activity).findByText(/failures, 12 months/)).toBeTruthy();
   });
 });

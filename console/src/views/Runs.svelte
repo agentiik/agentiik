@@ -215,7 +215,7 @@
         </tr>
       {:else}
         {#if !list.reading && !list.refused}
-          <tr><td class="empty" colspan="9">No run {filters.state ? `in ${filters.state} ` : ""}{filters.workflow ? `of ${filters.workflow} ` : ""}was created in this span.</td></tr>
+          <tr><td class="empty" colspan="9">No runs</td></tr>
         {/if}
       {/each}
     </tbody>

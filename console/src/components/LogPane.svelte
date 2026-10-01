@@ -31,11 +31,11 @@
     {#if tail.refused}
       <Problem explained={tail.refused} />
     {:else if tail.reconnecting}
-      The connection was lost. Reconnecting: the log will continue from the last line received.
+      Reconnecting
     {:else if live}
-      <span class="dot" aria-hidden="true"></span> Showing new lines as they are written.
+      <span class="dot" aria-hidden="true"></span> Live
     {:else}
-      The step has finished: {tail.verdict}.
+      Finished: {tail.verdict}
     {/if}
   </p>
 
@@ -54,19 +54,19 @@
 </span>{/each}</code></pre>
     {/if}
     {#each d.gaps as g (g.first)}
-      <p class="gap">Lines {g.first} to {g.first + g.lines - 1} were written and cannot be read back: {g.reason}.</p>
+      <p class="gap">Lines {g.first} to {g.first + g.lines - 1} unavailable: {g.reason}</p>
     {/each}
     {#if d.over?.truncated}
-      <p class="muted">This log was cut short: it reached the size limit, log_max_bytes or log_max_lines.</p>
+      <p class="muted">Log truncated</p>
     {/if}
     {#if d.over && !d.over.final}
-      <p class="muted">The attempt was still running when the log stopped being sent.</p>
+      <p class="muted">Log incomplete</p>
     {/if}
   {:else}
     {#if !live && !tail.refused}
-      <p class="muted">This task has no log: it never started.</p>
+      <p class="muted">No log</p>
     {:else if !tail.refused}
-      <p class="muted">Waiting for this task to start.</p>
+      <p class="muted">Not started</p>
     {/if}
   {/each}
 </section>

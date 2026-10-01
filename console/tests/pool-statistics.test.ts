@@ -99,6 +99,6 @@ describe("the pools' statistics", () => {
     expect(await screen.findByText("Heartbeat gaps")).toBeTruthy();
 
     open("alice", "/runners/statistics");
-    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
   });
 });

@@ -164,7 +164,6 @@
 {:else if session.standing === "enrol-only"}
   <main class="alone">
     <Pane title="Set up a passkey">
-      <p>You are signed in, but only to set up a passkey: this installation asks for one before you can do anything else.</p>
       <p><a class="control primary" href="auth/enrol">Set up a passkey</a></p>
     </Pane>
   </main>

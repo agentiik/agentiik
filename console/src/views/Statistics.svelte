@@ -177,7 +177,7 @@
 {#if tab === "runs" && runSeries}
   {#key runSeries}
     <div class="grid">
-      <Pane title="Runs by state" aside="{runSeries.total} runs created over the range">
+      <Pane title="Runs by state" aside="{runSeries.total} runs">
         <Chart
           title="Runs created in each bucket, by where they stand"
           since={runSeries.since}
@@ -190,9 +190,9 @@
           onpick={(i) => buckets[i] && open(buckets[i])}
         />
       </Pane>
-      <Pane title="Retries by exit code" aside="attempts over the range">
+      <Pane title="Retries by exit code">
         {#if runSeries.retries.length === 0}
-          <p class="muted">No attempt was retried over the range.</p>
+          <p class="muted">No retries</p>
         {:else}
           {@const most = runSeries.retries[0]![1]}
           <ul class="codes">
@@ -206,10 +206,10 @@
           </ul>
         {/if}
       </Pane>
-      <Pane title="Duration" aside="p50, p95 and p99 of the runs that ended">
+      <Pane title="Duration">
         <Chart title="How long the runs took" since={runSeries.since} width={width(runs?.bucket)} series={runSeries.duration} format={ms} onzoom={zoom} onback={back} onpick={(i) => buckets[i] && open(buckets[i])} />
       </Pane>
-      <Pane title="Queue wait" aside="from when a task could be handed out to its dispatch">
+      <Pane title="Queue wait">
         <Chart title="How long the tasks waited for a runner" since={runSeries.since} width={width(runs?.bucket)} series={runSeries.wait} format={ms} onzoom={zoom} onback={back} onpick={(i) => buckets[i] && open(buckets[i])} />
       </Pane>
     </div>
@@ -218,7 +218,7 @@
   {#key quotaSeries}
     <div class="grid quotas">
       <div class="charts">
-        <Pane title="Runs created and refused" aside="against max_runs_per_hour">
+        <Pane title="Runs created and refused">
           <Chart
             title="Runs created in each bucket, and those refused for the quota"
             since={quotaSeries.since}
@@ -232,7 +232,7 @@
             onpick={(i) => buckets[i] && open(buckets[i])}
           />
         </Pane>
-        <Pane title="Tasks in flight" aside="the most at once in each bucket, against max_concurrent_tasks">
+        <Pane title="Tasks running">
           <Chart
             title="Tasks handed out and not yet ended, at most"
             since={quotaSeries.since}
@@ -244,7 +244,7 @@
             onback={back}
           />
         </Pane>
-        <Pane title="Artifact bytes" aside="held at each bucket's end, against max_artifact_bytes">
+        <Pane title="Artifact bytes">
           <Chart
             title="Artifact bytes the quota counts"
             since={quotaSeries.since}
@@ -258,14 +258,13 @@
           <Chart title="Artifact bytes written in each bucket" since={quotaSeries.since} width={width(quotas?.bucket)} series={quotaSeries.added} format={bytes} height={140} onzoom={zoom} onback={back} />
         </Pane>
       </div>
-      <Pane title="Quotas" aside="now">
+      <Pane title="Quotas">
         <dl class="limits">
           {#each Object.entries(limits ?? {}) as [name, value] (name)}
             <dt class="term">{name}</dt>
             <dd class="term">{Array.isArray(value) ? value.join(", ") : name.includes("bytes") ? bytes(Number(value)) : String(value)}</dd>
           {/each}
         </dl>
-        <p class="faint">Only an administrator can change these quotas.</p>
       </Pane>
     </div>
   {/key}

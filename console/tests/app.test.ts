@@ -33,13 +33,13 @@ describe("the console", () => {
 
   it("answers a namespace the caller holds nothing in as one that does not exist", async () => {
     const { asked } = open("/payroll/runs");
-    expect(await screen.findByText("This page does not exist, or you do not have access to it.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
     expect(asked.some((a) => a.includes("namespace=payroll"))).toBe(false);
   });
 
   it("asks to sign in where the API knows no session", async () => {
     open("/finance/runs", { "GET /api/v1/me": { status: 401, body: { error: "sign in first" } } });
-    expect(await screen.findByText("This browser is not signed in to this installation.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Sign in with a passkey" })).toBeTruthy();
   });
 
   it("sends a session that may only enrol to the enrolment page", async () => {
@@ -73,7 +73,7 @@ describe("refusing as the API does", () => {
   // addresses are compared on what the console says of them and not on what they spell.
   async function refusedAt(path: string, s: Scenario, named: string[]): Promise<string> {
     open(path, s);
-    await screen.findByText("This page does not exist, or you do not have access to it.");
+    await screen.findByText("This page does not exist, or is not shared with you.");
     const drawn = document.body.innerHTML.replaceAll(/\s+/g, " ");
     document.body.innerHTML = "";
     return named.reduce((html, n) => html.replaceAll(n, "?"), drawn);

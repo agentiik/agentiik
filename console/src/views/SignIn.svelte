@@ -93,11 +93,9 @@
 
 <main class="alone">
   <Pane title="Sign in">
-    <p>This browser is not signed in to this installation.</p>
     {#if offline}
       <p class="note">{offline}</p>
     {:else}
-      <p>Sign in with a passkey you set up, on this device or on a phone nearby.</p>
       <p><button class="control primary" disabled={working} onclick={withPasskey}>Sign in with a passkey</button></p>
     {/if}
 
@@ -109,7 +107,7 @@
           <input id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required bind:value={login} />
           <label for="secret">Password</label>
           <input id="secret" name="password" type="password" autocomplete="current-password" required bind:value={password} />
-          <label for="totp">One-time code <span class="muted">only if you set one up</span></label>
+          <label for="totp">One-time code</label>
           <input id="totp" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" bind:value={totp} />
           <p><button class="control" type="submit" disabled={working}>Sign in with a password</button></p>
         </form>
@@ -119,7 +117,7 @@
     <p class="status" role="status" aria-live="polite">{status}</p>
     {#if problem}<Problem explained={problem} />{/if}
 
-    <p class="foot muted">New here, or lost your passkey? <a href="auth/enrol">Set up a passkey</a> with the enrolment link or recovery code you were given.</p>
+    <p class="foot"><a href="auth/enrol">Set up a passkey</a></p>
   </Pane>
 </main>
 
