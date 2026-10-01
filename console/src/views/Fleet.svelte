@@ -5,6 +5,7 @@
   import StatePill from "../components/StatePill.svelte";
   import { capacity, ceilings, condition, counted, offered, reachedBy, type Pool, type Runner } from "../lib/fleet";
   import { clock, took } from "../lib/format";
+  import { moved, useKeys } from "../lib/keys.svelte";
   import { follow, type Place } from "../lib/place.svelte";
 
   // The installation's runners and their pools, an administrator's alone, from GET /api/v1/runners
@@ -40,12 +41,24 @@
   const chosen = $derived(place.query.get("pool") ?? undefined);
   const shown = $derived(runners?.filter((r) => chosen === undefined || r.pool === chosen) ?? []);
 
+  // choose narrows the runners to a pool, and to every pool again where it is the one chosen.
   function choose(pool: string | undefined) {
+    narrowTo(pool === chosen ? undefined : pool);
+  }
+
+  function narrowTo(pool: string | undefined) {
     const q = new URLSearchParams(place.query);
-    if (pool === undefined || pool === chosen) q.delete("pool");
+    if (pool === undefined) q.delete("pool");
     else q.set("pool", pool);
     place.narrow(q);
   }
+
+  useKeys(() => [
+    ...(pools?.length
+      ? [{ keys: ["ArrowUp", "ArrowDown", "k", "j"], brief: ["ArrowUp", "ArrowDown"], effect: "Pool", does: (key: string) => narrowTo(moved(pools!.map((p) => p.name), chosen, key)) }]
+      : []),
+    ...(chosen ? [{ keys: ["Escape"], effect: "Every pool", does: () => narrowTo(undefined) }] : []),
+  ]);
 
   const of = (pool: string) => runners?.filter((r) => r.pool === pool) ?? [];
   const statistics = { kind: "runners" as const, tab: "statistics" };

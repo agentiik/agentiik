@@ -182,3 +182,24 @@ func TestAConsoleOnADumbTerminalPrintsPlainLines(t *testing.T) {
 		t.Error("an Env that says nothing of a terminal is taken for one")
 	}
 }
+
+// AGENTIIK_THEME is light or dark, and anything else is refused before the installation is asked,
+// as a wrong flag is.
+func TestAThemeThatIsNeitherLightNorDarkIsRefused(t *testing.T) {
+	s := &consoleStandIn{}
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	errs := &strings.Builder{}
+	e := Env{
+		Out: &strings.Builder{}, Err: errs, Dir: t.TempDir(),
+		Getenv: func(k string) string {
+			return map[string]string{tokenVariable: "the-token", serverVariable: srv.URL, themeVariable: "solarized"}[k]
+		},
+	}
+	if code := run(t.Context(), e, []string{"console"}); code != exitUsage || !strings.Contains(errs.String(), `AGENTIIK_THEME is light or dark, and "solarized" is neither`) {
+		t.Errorf("AGENTIIK_THEME=solarized answered %d: %s", code, errs)
+	}
+	if len(s.asked) != 0 {
+		t.Errorf("a theme refused asked the installation %v", s.asked)
+	}
+}

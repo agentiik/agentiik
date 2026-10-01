@@ -43,12 +43,21 @@ type Options struct {
 	// Describe writes how a run stands, in agk status's words, which the run view shows until
 	// the inspector draws it.
 	Describe func(io.Writer, db.RunDetail, time.Time)
+
+	// Getenv reads the variables the screen is drawn by: NO_COLOR, COLORTERM and TERM for how
+	// many colours the terminal shows.
+	Getenv func(string) string
+
+	// Theme is AGENTIIK_THEME, light or dark, which settles the ground for a terminal that never
+	// says what its background is, and is empty where the terminal is asked.
+	Theme string
 }
 
 // Run draws the console until it is quit, and hands the screen back as it found it, an interrupt
 // included.
 func Run(ctx context.Context, o Options) error {
-	_, err := tea.NewProgram(New(ctx, o), tea.WithContext(ctx)).Run()
+	m := New(ctx, o)
+	_, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithColorProfile(m.depth.profile())).Run()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
 		return nil
 	}
@@ -95,6 +104,13 @@ type Model struct {
 	// tick is tea.Tick, which a test replaces with one that never fires, so that it reads what
 	// the console shows without waiting for it to be read again.
 	tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
+
+	// depth is how many colours the terminal shows, and light whether the ground is the light
+	// one, which settled says is final: once the terminal has answered, once a tenth of a second
+	// has passed without an answer, or from the start where AGENTIIK_THEME names it.
+	depth   depth
+	light   bool
+	settled bool
 }
 
 // New is the console as it opens: on the run Options names, or on the runs.
@@ -105,7 +121,17 @@ func New(ctx context.Context, o Options) Model {
 	if o.Every <= 0 {
 		o.Every = 5 * time.Second
 	}
-	m := Model{ctx: ctx, o: o, tick: tea.Tick}
+	m := Model{ctx: ctx, o: o, tick: tea.Tick, depth: depthOf(o.Getenv)}
+	switch o.Theme {
+	case "light":
+		m.light, m.settled = true, true
+	case "dark":
+		m.settled = true
+	}
+	if !m.theme().painted() {
+		// The ground is painted at 256 colours and above alone, so nothing else asks for it.
+		m.settled = true
+	}
 	if o.Run != "" {
 		m.view, m.selected = runView, o.Run
 	}
@@ -128,10 +154,21 @@ type (
 	}
 	// again asks for what is shown to be read again, once Every has passed since the last read.
 	again struct{ view view }
+	// silent is the tenth of a second a terminal is given to say what its background is, passed.
+	silent struct{}
 )
 
+// answerWithin is how long the terminal is given to say what its background is, after which it
+// is taken as dark, as most are: long enough for one over SSH, short enough not to be seen.
+const answerWithin = 100 * time.Millisecond
+
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.readMe(), m.readShown())
+	cmds := []tea.Cmd{m.readMe(), m.readShown()}
+	if !m.settled {
+		// The OSC 11 query Lip Gloss sends, its answer a tea.BackgroundColorMsg.
+		cmds = append(cmds, tea.RequestBackgroundColor, m.tick(answerWithin, func(time.Time) tea.Msg { return silent{} }))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) readMe() tea.Cmd {
@@ -179,6 +216,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+	case tea.BackgroundColorMsg:
+		// An answer after the tenth of a second is left: the screen is drawn on the dark ground
+		// by then, and turning it light would flash.
+		if !m.settled {
+			m.light, m.settled = !msg.IsDark(), true
+		}
+	case silent:
+		m.settled = true
 	case meRead:
 		if msg.err == nil {
 			m.principal = msg.principal
