@@ -8655,6 +8655,209 @@
         }
       }
     },
+    "/api/v1/runners/{runner}/drain": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runner"
+        }
+      ],
+      "post": {
+        "operationId": "drainRunner",
+        "tags": [
+          "runners"
+        ],
+        "summary": "Drain a runner",
+        "description": "Orders a runner to take nothing new and finish what it holds, from its next heartbeat, which answers drain: true with the reason; its results are accepted as usual and it stays up, so that a host can be taken down for maintenance without losing work. A runner already draining is answered as it stands, the order recorded as having changed nothing. Requires grant:manage at installation scope, audited as runner.drain with the reason, in the transaction of the order.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#registering-a-runner"
+        },
+        "requestBody": {
+          "description": "Why, handed to the runner at its next heartbeat.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/runnerOrder"
+              },
+              "examples": {
+                "reason": {
+                  "summary": "an order with its reason",
+                  "value": {
+                    "reason": "kernel update"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The runner as GET /api/v1/runners lists it, with the order it now carries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runner"
+                },
+                "examples": {
+                  "draining": {
+                    "summary": "a runner draining",
+                    "value": {
+                      "runner": "01jmz8x2d5f8qx7t2n5r8wd3hk",
+                      "pool": "dmz",
+                      "labels": [
+                        "zone=dmz",
+                        "arch=amd64"
+                      ],
+                      "cpu": 8,
+                      "memory_bytes": 34359738368,
+                      "disk_bytes": 214748364800,
+                      "architecture": "amd64",
+                      "agent_version": "0.6.0",
+                      "containment": {
+                        "runtime": "runc",
+                        "userns_remap": true
+                      },
+                      "reported_state": "ready",
+                      "concurrency": 4,
+                      "joined_at": "2026-09-20T08:14:02Z",
+                      "last_seen_at": "2026-10-01T06:41:57Z",
+                      "rotate_by": "2026-10-21T08:14:02Z",
+                      "state": "draining",
+                      "drain_reason": "kernel update",
+                      "drained_by": "dana",
+                      "drained_at": "2026-10-01T06:42:10Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The reason is refused: none, longer than 256 characters, or holding a line break or another control character. A request carrying two credentials is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No runner of that identifier: the caller is an administrator already, so this names the runner rather than hiding the route."
+          },
+          "409": {
+            "$ref": "#/components/responses/conflict",
+            "description": "The runner is revoked, which already takes nothing new: a drain would only undo part of that, and a revocation is not undone."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
+    "/api/v1/runners/{runner}/revoke": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/runner"
+        }
+      ],
+      "post": {
+        "operationId": "revokeRunner",
+        "tags": [
+          "runners"
+        ],
+        "summary": "Revoke a runner",
+        "description": "Orders a runner out: it takes nothing new from its next heartbeat, its results are accepted until the end of its grace, revocation_grace after the order, and its credential is refused everywhere after that, so that revoking a credential never destroys work already done. Its record stays for the audit log, and a host it ran on joins again as a new runner. A runner already revoked is answered as it stands, so that revoking it again gives it no more time. Requires grant:manage at installation scope, audited as runner.revoke with the reason and the end of the grace, in the transaction of the order.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#registering-a-runner"
+        },
+        "requestBody": {
+          "description": "Why, handed to the runner at its next heartbeat.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/runnerOrder"
+              },
+              "examples": {
+                "reason": {
+                  "summary": "an order with its reason",
+                  "value": {
+                    "reason": "kernel update"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The runner as GET /api/v1/runners lists it, with the order it now carries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runner"
+                },
+                "examples": {
+                  "revoked": {
+                    "summary": "a runner revoked, in its grace",
+                    "value": {
+                      "runner": "01jmz8x2d5f8qx7t2n5r8wd3hk",
+                      "pool": "dmz",
+                      "labels": [
+                        "zone=dmz",
+                        "arch=amd64"
+                      ],
+                      "cpu": 8,
+                      "memory_bytes": 34359738368,
+                      "disk_bytes": 214748364800,
+                      "architecture": "amd64",
+                      "agent_version": "0.6.0",
+                      "containment": {
+                        "runtime": "runc",
+                        "userns_remap": true
+                      },
+                      "reported_state": "draining",
+                      "concurrency": 4,
+                      "joined_at": "2026-09-20T08:14:02Z",
+                      "last_seen_at": "2026-10-01T06:41:57Z",
+                      "rotate_by": "2026-10-21T08:14:02Z",
+                      "state": "revoked",
+                      "drain_reason": "disk replaced",
+                      "revoked_by": "dana",
+                      "revoked_at": "2026-10-01T06:42:10Z",
+                      "results_accepted_until": "2026-10-01T07:42:10Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The reason is refused: none, longer than 256 characters, or holding a line break or another control character. A request carrying two credentials is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No runner of that identifier: the caller is an administrator already, so this names the runner rather than hiding the route."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
     "/api/v1/runner-pools": {
       "get": {
         "operationId": "listRunnerPools",
@@ -8757,6 +8960,231 @@
           "403": {
             "$ref": "#/components/responses/forbidden",
             "description": "The caller is not an administrator, or holds a session that may only enrol."
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRunnerPool",
+        "tags": [
+          "runners"
+        ],
+        "summary": "Create a runner pool",
+        "description": "A pool with its labels, the namespaces it accepts and the ceilings of one task on it, the first thing an administrator writes before any machine can join. Its labels, namespaces and resource_ceilings are written even when empty, each then meaning the widest thing, so that a pool open to every namespace is one somebody said so of; containment left out is hardened, the one tier this release gives. The pool's consumer on the bus is created in the same step, and a bus that refuses it answers 503 with no pool created, so that a pool never exists with nowhere for its runners to pull from. Administrator only, audited as runner_pool.create with the pool as it was created.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#registering-a-runner"
+        },
+        "requestBody": {
+          "description": "The pool, without a join token, which is issued from a pool that exists.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "wire.schema.json#/$defs/runnerPool"
+              },
+              "examples": {
+                "dmz": {
+                  "summary": "a pool for a zone, accepting one namespace, capping a task",
+                  "value": {
+                    "pool": {
+                      "name": "dmz",
+                      "labels": [
+                        "zone=dmz",
+                        "arch=amd64"
+                      ],
+                      "namespaces": [
+                        "finance"
+                      ],
+                      "resource_ceilings": {
+                        "cpu": "4",
+                        "memory": "8Gi",
+                        "pids": 512
+                      }
+                    }
+                  }
+                },
+                "lab": {
+                  "summary": "a pool accepting every namespace and capping nothing",
+                  "value": {
+                    "pool": {
+                      "name": "lab",
+                      "labels": [
+                        "zone=lab"
+                      ],
+                      "namespaces": [],
+                      "resource_ceilings": {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pool as it was created, its tier written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/runnerPool"
+                },
+                "examples": {
+                  "dmz": {
+                    "summary": "the pool created",
+                    "value": {
+                      "pool": {
+                        "name": "dmz",
+                        "labels": [
+                          "zone=dmz",
+                          "arch=amd64"
+                        ],
+                        "namespaces": [
+                          "finance"
+                        ],
+                        "resource_ceilings": {
+                          "cpu": "4",
+                          "memory": "8Gi",
+                          "pids": 512
+                        },
+                        "containment": "hardened"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The pool is refused: a name outside the grammar or longer than 255 characters, a label that is not key=value, a namespace outside its grammar, an entry written twice, a list or the ceilings left out, a ceiling outside its grammar or null, disk named as a ceiling, a tier other than hardened, or a join token written with it. A request carrying two credentials is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "409": {
+            "$ref": "#/components/responses/conflict",
+            "description": "A pool of that name exists already, and a pool's name is its only identity."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/unavailable",
+            "description": "The bus could not make the pool's queue ready, and no pool was created."
+          }
+        }
+      }
+    },
+    "/api/v1/runner-pools/{pool}/join-tokens": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/pool"
+        }
+      ],
+      "post": {
+        "operationId": "issueJoinToken",
+        "tags": [
+          "runners"
+        ],
+        "summary": "Issue a join token",
+        "description": "A join token of the pool: single use, an hour unless asked otherwise and never more than a day, only for labels the pool carries, and shown once, in this answer and nowhere else. A machine trades it for a runner's identity with agk-runner join, or agk-runner serve given it in AGK_RUNNER_JOIN_TOKEN. Issuing one is how a runner is added, and, with agk-runner join --replace on the same host, how a runner's labels are changed: it joins again as a new runner, and the one it replaces stays registered until it is revoked. Administrator only, audited as join_token.issue by its identifier, never by the token.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#registering-a-runner"
+        },
+        "requestBody": {
+          "description": "The labels the token permits and how long it lives, either left out.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/joinTokenRequest"
+              },
+              "examples": {
+                "dmz": {
+                  "summary": "a token for a machine claiming both of the pool's labels",
+                  "value": {
+                    "labels": [
+                      "zone=dmz",
+                      "arch=amd64"
+                    ]
+                  }
+                },
+                "default": {
+                  "summary": "a token for the pool default, which permits no label",
+                  "value": {}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pool the token was issued from, and the token, its secret written this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "wire.schema.json#/$defs/runnerPool"
+                },
+                "examples": {
+                  "dmz": {
+                    "summary": "a token of dmz",
+                    "value": {
+                      "pool": {
+                        "name": "dmz",
+                        "labels": [
+                          "zone=dmz",
+                          "arch=amd64"
+                        ],
+                        "namespaces": [
+                          "finance"
+                        ],
+                        "resource_ceilings": {
+                          "cpu": "4",
+                          "memory": "8Gi",
+                          "pids": 512
+                        },
+                        "containment": "hardened"
+                      },
+                      "join_token": {
+                        "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                        "token": "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ",
+                        "pool": "dmz",
+                        "labels": [
+                          "zone=dmz",
+                          "arch=amd64"
+                        ],
+                        "single_use": true,
+                        "issued_at": "2026-09-10T06:12:00Z",
+                        "expires_at": "2026-09-10T07:12:00Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The request is refused: a label written twice, a label the pool does not carry, or a life longer than a day. A request carrying two credentials is refused as well."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No runner pool of that name: the caller is an administrator already, so this names the pool rather than hiding the route."
+          },
+          "413": {
+            "$ref": "#/components/responses/tooLarge"
           }
         }
       }
@@ -18780,6 +19208,85 @@
             "display_name": "Alice Martin"
           }
         ]
+      },
+      "joinTokenRequest": {
+        "title": "Join token request",
+        "type": "object",
+        "additionalProperties": false,
+        "description": "What a join token is asked for with: the labels the machine it is meant for may claim, every one of them a label its pool carries, and how long the administrator needs to get it there. Both may be left out: a token permitting no label, which is what a runner of the pool default claims, and the default life of an hour.",
+        "properties": {
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/label"
+            },
+            "uniqueItems": true,
+            "maxItems": 1024,
+            "description": "The labels a runner joining with the token may claim, a subset of its pool's: a label reaches a machine only where an administrator wrote it on a pool first, and a token narrows that further to the one machine it is meant for.",
+            "examples": [
+              [
+                "zone=dmz",
+                "arch=amd64"
+              ],
+              []
+            ]
+          },
+          "expires_in_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "How long the token lives, at most a day, an hour where it is left out: a join token only has to survive the minutes between an administrator copying it and a machine presenting it.",
+            "examples": [
+              3600,
+              900
+            ]
+          }
+        },
+        "examples": [
+          {
+            "labels": [
+              "zone=dmz",
+              "arch=amd64"
+            ]
+          },
+          {},
+          {
+            "labels": [
+              "zone=lab"
+            ],
+            "expires_in_seconds": 900
+          }
+        ]
+      },
+      "runnerOrder": {
+        "title": "Runner order",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "description": "An administrator's order to a runner, drain or revoke, and why: the reason is handed to the runner at its next heartbeat, which writes it to its own log, since whoever owns the machine is rarely whoever gave the order.",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$",
+            "description": "Why, in one line of at most 256 characters: one line of a journal, which is where the runner writes it, and short enough for the console to show beside the runner.",
+            "examples": [
+              "kernel update",
+              "disk replaced"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "reason": "kernel update"
+          },
+          {
+            "reason": "disk replaced"
+          }
+        ]
       }
     },
     "parameters": {
@@ -19465,6 +19972,36 @@
           "set": {
             "summary": "the instant the photo was set",
             "value": "2026-09-28T10:15:00Z"
+          }
+        }
+      },
+      "pool": {
+        "name": "pool",
+        "in": "path",
+        "required": true,
+        "description": "The runner pool, by its name, its only identity.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/runnerPool/properties/pool/properties/name"
+        },
+        "examples": {
+          "dmz": {
+            "summary": "a pool for a zone",
+            "value": "dmz"
+          }
+        }
+      },
+      "runner": {
+        "name": "runner",
+        "in": "path",
+        "required": true,
+        "description": "The runner, by the identifier the API minted at its join.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/runnerRegistration/properties/response/properties/runner"
+        },
+        "examples": {
+          "runner": {
+            "summary": "a runner",
+            "value": "01jmz8x2d5f8qx7t2n5r8wd3hk"
           }
         }
       }
