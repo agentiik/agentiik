@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import type { API } from "./api/client";
   import KeyLine from "./components/KeyLine.svelte";
   import Pane from "./components/Pane.svelte";
@@ -7,6 +7,7 @@
   import TopBar from "./components/TopBar.svelte";
   import { Viewport } from "./lib/viewport.svelte";
   import { Keys, provide } from "./lib/keys.svelte";
+  import { Live, provideLive } from "./lib/live.svelte";
   import { holds, holdsSomewhereIn, inNamespace } from "./lib/permissions";
   import type { Place } from "./lib/place.svelte";
   import type { View } from "./lib/route";
@@ -36,6 +37,21 @@
 
   onMount(() => {
     session.read();
+  });
+
+  // The live connection, open while somebody is signed in: each screen reads again what it shows
+  // when told it changed, the caller's notifications are read again here, and a connection the API
+  // closes because its credential is gone reads who the console is signed in as.
+  const live = new Live(untrack(() => place.baseURI), () => session.read());
+  provideLive(live);
+  $effect(() => {
+    if (session.standing !== "signed-in") return;
+    live.start();
+    const reading = live.when((c) => c.kind === "notifications", () => session.read());
+    return () => {
+      reading();
+      live.stop();
+    };
   });
 
   const route = $derived(place.route);
@@ -168,7 +184,7 @@
       <div class="scrim" onclick={() => (drawer = false)}></div>
     {/if}
     <div class="top">
-      <TopBar me={session.me} {route} answering={session.answering} {place} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
+      <TopBar me={session.me} {route} answering={session.answering} live={live.open} {place} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
     </div>
     <main class="screen">
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}

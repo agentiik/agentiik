@@ -2752,6 +2752,54 @@
         }
       }
     },
+    "/api/v1/me/live": {
+      "get": {
+        "operationId": "openLiveConnection",
+        "tags": [
+          "me"
+        ],
+        "summary": "Be told what changed, over a WebSocket",
+        "description": "A WebSocket, RFC 6455, telling its caller as it happens what changed among what it may read, so that a console reads again what it shows when it changes rather than on a clock. Each message is a text frame holding one liveChange: a run created or moved on, or one of whose steps or tasks did, sent where the caller holds run:read on that run's workflow; the caller's notifications, told or dismissed; the runners, to an administrator, for a runner or a pool changed, a heartbeat included; and all, where a change may have been missed, which reads everything again. What changed within a quarter of a second is sent once. A message holds an identifier and never a record, and what it names is read through the route that answers it, under that route's permissions. The client sends nothing but the protocol's own frames, a message from it closing the connection with 1008, and the API pings every 15 seconds. A session's handshake carries the installation's Origin, since a page of another site sharing its domain could otherwise open one with the cookie. A permission revoked stops its messages within 30 seconds, when it is asked again; a credential that no longer identifies its caller closes the connection with 1008, and the API stopping closes it with 1001, after which a client connects again and reads again what it shows. Under /api/v1/me, a word already reserved, since what it tells is the caller's own. Any authenticated principal.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "101": {
+            "description": "Switching Protocols: the connection is a WebSocket from then on, whose text frames each hold one liveChange."
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A handshake RFC 6455 refuses: a version other than 13, or not one Sec-WebSocket-Key of 16 bytes in base64. Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A session's handshake carrying another Origin than the public URL's, or none; or a session that may only enrol."
+          },
+          "426": {
+            "description": "A request that asks for no WebSocket, with Upgrade: websocket in the answer, as RFC 9110 has it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no upgrade": {
+                    "summary": "a plain GET",
+                    "value": {
+                      "error": "GET /api/v1/me/live is a WebSocket: the request asks for the connection to be upgraded, with Upgrade: websocket and Connection: Upgrade"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/namespaces": {
       "post": {
         "operationId": "createNamespace",
@@ -8669,6 +8717,104 @@
         "examples": [
           "assertion",
           "registration"
+        ]
+      },
+      "liveChange": {
+        "title": "Live change",
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false,
+        "description": "One message of the live connection, GET /api/v1/me/live: what changed, named and never held.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "run",
+              "notifications",
+              "runners",
+              "all"
+            ],
+            "description": "What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; or anything, where a change may have been missed.",
+            "examples": [
+              "run",
+              "all"
+            ]
+          },
+          "namespace": {
+            "$ref": "wire.schema.json#/$defs/namespace",
+            "description": "The namespace of the run, for a run alone.",
+            "examples": [
+              "finance"
+            ]
+          },
+          "workflow": {
+            "$ref": "wire.schema.json#/$defs/identifier",
+            "description": "The workflow of the run, for a run alone.",
+            "examples": [
+              "monthly-invoicing"
+            ]
+          },
+          "run": {
+            "$ref": "wire.schema.json#/$defs/ulid",
+            "description": "The run, for a run alone.",
+            "examples": [
+              "01JMZ8W4K2R7AAAAAAAAAAAAAA"
+            ]
+          }
+        },
+        "if": {
+          "properties": {
+            "kind": {
+              "const": "run"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "namespace",
+            "workflow",
+            "run"
+          ]
+        },
+        "else": {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "namespace"
+                ]
+              },
+              {
+                "required": [
+                  "workflow"
+                ]
+              },
+              {
+                "required": [
+                  "run"
+                ]
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "kind": "run",
+            "namespace": "finance",
+            "workflow": "monthly-invoicing",
+            "run": "01JMZ8W4K2R7AAAAAAAAAAAAAA"
+          },
+          {
+            "kind": "notifications"
+          },
+          {
+            "kind": "runners"
+          },
+          {
+            "kind": "all"
+          }
         ]
       },
       "sessionKind": {

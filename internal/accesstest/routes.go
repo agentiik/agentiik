@@ -187,6 +187,10 @@ var Cases = []Case{
 	// every workflow listening to the namespace".
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/events", Permission: api.WorkflowRun, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
+	// The caller's live connection, which says a run changed to whoever holds run:read on its
+	// workflow, asked about each as it changes, as the listing asks. Asked here with no handshake,
+	// it answers 426 to whoever it lets through.
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/me/live", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/steps", Permission: api.RunRead, Scope: api.Workflow, Across: true}},

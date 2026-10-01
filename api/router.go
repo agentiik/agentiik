@@ -849,6 +849,17 @@ func (rt *Router) serveAcross(w http.ResponseWriter, r *http.Request, g guard, h
 		}
 		return rt.allowAmong(ctx, as, g.permission, over)
 	}))
+	// Such a route asks about each target itself, so what Still asks again is the credential alone:
+	// whether it still identifies the same principal. And whether the caller administers the
+	// installation, for a route that answers an administrator more.
+	request := r
+	r = r.WithContext(context.WithValue(r.Context(), stillKey{}, func(ctx context.Context) (bool, error) {
+		again, err := rt.identify(request.WithContext(ctx))
+		return err == nil && again.Principal == who, err
+	}))
+	r = r.WithContext(context.WithValue(r.Context(), administersKey{}, func(ctx context.Context) (bool, error) {
+		return rt.allow(ctx, as, GrantManage, Target{})
+	}))
 	h(w, r, who, within, func(ctx context.Context, over Target) (bool, error) {
 		if err := askable(over); err != nil {
 			return false, err
@@ -1011,7 +1022,8 @@ func refuse(w http.ResponseWriter, status int, message string) {
 
 // Still answers, for the route serving r, whether its caller still holds what the route was
 // authorised by: the request's credential identified again as the same principal, and the
-// authorizer asked again about the same permission and the same target.
+// authorizer asked again about the same permission and the same target. A route taking Across
+// asks about each target itself, and is answered about the credential alone.
 //
 // A request is authorised once, when it arrives, and deleting a grant "revokes one grant, from the
 // next request". A route whose answer goes on for as long as its caller reads, a log stream, is one
@@ -1026,6 +1038,20 @@ func Still(r *http.Request) func(context.Context) (bool, error) {
 
 // stillKey is where the router leaves the question Still asks.
 type stillKey struct{}
+
+// Administers answers, for a route taking Across, whether its caller administers the
+// installation, asked as every administrator's route asks it, as grant:manage at the installation
+// through a credential that carries it, and asked again each time. A request the router did not
+// serve is answered no.
+func Administers(r *http.Request) func(context.Context) (bool, error) {
+	if administers, ok := r.Context().Value(administersKey{}).(func(context.Context) (bool, error)); ok {
+		return administers
+	}
+	return func(context.Context) (bool, error) { return false, nil }
+}
+
+// administersKey is where the router leaves the question Administers asks.
+type administersKey struct{}
 
 // gitPath says whether an escaped path is a repository's as git addresses one, /{namespace}/{name}.git/
 // and at least one segment more: what git's smart HTTP asks for, and nothing any other route of

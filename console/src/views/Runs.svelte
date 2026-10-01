@@ -8,6 +8,7 @@
   import StepStrip from "../components/StepStrip.svelte";
   import { between, clock, took } from "../lib/format";
   import { moved, useKeys } from "../lib/keys.svelte";
+  import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
@@ -28,20 +29,20 @@
     untrack(() => l.read());
   });
 
-  // Live, the list is read again every five seconds while the page is in view, and the durations of
-  // the runs still going move every second.
+  // Live, the list is read again each time the live connection says a run it may list changed, and
+  // the durations of the runs still going move every second.
+  const changes = useLive();
   $effect(() => {
     if (!live) {
       return;
     }
-    const reading = setInterval(() => {
-      if (document.visibilityState === "visible" && !list.reading) {
-        list.read();
-      }
-    }, 5000);
+    const l = list;
+    const reading = changes.when((c) => c.kind === "run" && c.namespace === namespace, () => {
+      if (!l.reading) l.read();
+    });
     const ticking = setInterval(() => (now = Date.now()), 1000);
     return () => {
-      clearInterval(reading);
+      reading();
       clearInterval(ticking);
     };
   });

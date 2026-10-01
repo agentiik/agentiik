@@ -517,6 +517,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Be told what changed, over a WebSocket
+         * @description A WebSocket, RFC 6455, telling its caller as it happens what changed among what it may read, so that a console reads again what it shows when it changes rather than on a clock. Each message is a text frame holding one liveChange: a run created or moved on, or one of whose steps or tasks did, sent where the caller holds run:read on that run's workflow; the caller's notifications, told or dismissed; the runners, to an administrator, for a runner or a pool changed, a heartbeat included; and all, where a change may have been missed, which reads everything again. What changed within a quarter of a second is sent once. A message holds an identifier and never a record, and what it names is read through the route that answers it, under that route's permissions. The client sends nothing but the protocol's own frames, a message from it closing the connection with 1008, and the API pings every 15 seconds. A session's handshake carries the installation's Origin, since a page of another site sharing its domain could otherwise open one with the cookie. A permission revoked stops its messages within 30 seconds, when it is asked again; a credential that no longer identifies its caller closes the connection with 1008, and the API stopping closes it with 1001, after which a client connects again and reads again what it shows. Under /api/v1/me, a word already reserved, since what it tells is the caller's own. Any authenticated principal.
+         */
+        get: operations["openLiveConnection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/namespaces": {
         parameters: {
             query?: never;
@@ -1543,6 +1563,49 @@ export interface components {
          * @enum {string}
          */
         ceremony: "registration" | "assertion";
+        /**
+         * Live change
+         * @description One message of the live connection, GET /api/v1/me/live: what changed, named and never held.
+         * @example {
+         *       "kind": "run",
+         *       "namespace": "finance",
+         *       "workflow": "monthly-invoicing",
+         *       "run": "01JMZ8W4K2R7AAAAAAAAAAAAAA"
+         *     }
+         * @example {
+         *       "kind": "notifications"
+         *     }
+         * @example {
+         *       "kind": "runners"
+         *     }
+         * @example {
+         *       "kind": "all"
+         *     }
+         */
+        liveChange: {
+            /**
+             * @description What changed: a run, or one of its steps or tasks; the caller's notifications; the runners or their pools; or anything, where a change may have been missed.
+             * @example run
+             * @example all
+             * @enum {string}
+             */
+            kind: "run" | "notifications" | "runners" | "all";
+            /**
+             * @description The namespace of the run, for a run alone.
+             * @example finance
+             */
+            namespace?: components["schemas"]["namespace"];
+            /**
+             * @description The workflow of the run, for a run alone.
+             * @example monthly-invoicing
+             */
+            workflow?: components["schemas"]["identifier"];
+            /**
+             * @description The run, for a run alone.
+             * @example 01JMZ8W4K2R7AAAAAAAAAAAAAA
+             */
+            run?: components["schemas"]["ulid"];
+        };
         /**
          * Session kind
          * @description What a session may do, as it was when it opened; what it may do is read again from the policy at every request. full reaches every route the principal's grants allow. enrolment is a session a password opened where the policy that applies to the account requires a passkey, whatever passkeys it holds: it registers passkeys, sets the password that opened it and signs out, and nothing else, so it cannot read a workflow, start a run or mint a token. The server records the credential that opened each session, so the difference is known to it rather than kept by convention.
@@ -12963,6 +13026,38 @@ export interface operations {
             /** @description The bootstrap token or a service account, which have no profile or photo, or a token narrowed by a scope, which changes neither, each refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. */
             403: components["responses"]["forbidden"];
             413: components["responses"]["tooLarge"];
+        };
+    };
+    openLiveConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Switching Protocols: the connection is a WebSocket from then on, whose text frames each hold one liveChange. */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A handshake RFC 6455 refuses: a version other than 13, or not one Sec-WebSocket-Key of 16 bytes in base64. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session's handshake carrying another Origin than the public URL's, or none; or a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description A request that asks for no WebSocket, with Upgrade: websocket in the answer, as RFC 9110 has it. */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
         };
     };
     listNamespaces: {

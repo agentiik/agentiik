@@ -33,6 +33,13 @@ require (
 	// console reads from NO_COLOR, COLORTERM and TERM as the documentation's table does and hands
 	// it, so that the renderer neither converts a colour the console chose nor guesses again.
 	github.com/charmbracelet/colorprofile v0.4.3
+	// WebSocket, used by package api alone, for GET /api/v1/me/live, the live connection that tells
+	// a console what changed. The standard library has none, and golang.org/x/net/websocket's own
+	// documentation sends a reader to two packages more actively maintained, of which this is the
+	// one with no dependency of its own: written here, RFC 6455's framing, masking, fragmentation,
+	// close handshake and pings would be a protocol of the project's own to keep correct, on a
+	// route every console opens. Its licence is ISC.
+	github.com/coder/websocket v1.8.15
 	// YAML 1.2, used to read the two documents of the language: the workflow entry point
 	// in package graph and the brick manifest in package brick. The version of YAML is
 	// the reason for the choice rather than the API. A YAML 1.1 parser reads the bare key

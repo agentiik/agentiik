@@ -20,6 +20,8 @@ export class Place {
   // screen, so an address copied from the bar opens it filtered.
   query = $state(new URLSearchParams());
   readonly root: string;
+  // baseURI is the console's, which every address of the API's is made from.
+  readonly baseURI: string;
   readonly #where: Where;
   readonly #history: History;
 
@@ -27,6 +29,7 @@ export class Place {
     this.#where = where;
     this.#history = history;
     this.root = rootOf(where.baseURI);
+    this.baseURI = where.baseURI;
     this.route = read(where.pathname, this.root);
     this.query = new URLSearchParams(where.search ?? "");
   }

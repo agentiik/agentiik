@@ -16,6 +16,7 @@
     me,
     route,
     answering,
+    live,
     place,
     onsignout,
     ondismiss,
@@ -24,6 +25,7 @@
     me: Me;
     route: Route;
     answering: boolean;
+    live: boolean;
     place: Place;
     onsignout: () => void;
     ondismiss: (id: string) => void;
@@ -98,8 +100,8 @@
   </nav>
 
   <div class="end">
-    <span class="live" class:lost={!answering} role="status">
-      <span class="dot" aria-hidden="true"></span><span class="word">{answering ? "live" : "not answering"}</span>
+    <span class="live" class:lost={!answering} class:waiting={answering && !live} role="status">
+      <span class="dot" aria-hidden="true"></span><span class="word">{!answering ? "not answering" : live ? "live" : "not live"}</span>
     </span>
 
     <Popover label={me.notifications.length === 0 ? "Notifications, none" : `Notifications, ${me.notifications.length}`} align="end" width={340}>
@@ -280,6 +282,12 @@
 
   .live.lost {
     color: var(--failed);
+  }
+
+  /* Answering, and not telling what changed: what is shown is read again when the connection
+     opens, and until then stays as it was read. */
+  .live.waiting {
+    color: var(--muted);
   }
 
   .bell {

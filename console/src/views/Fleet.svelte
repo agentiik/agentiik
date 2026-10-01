@@ -7,6 +7,7 @@
   import { capacity, ceilings, condition, counted, offered, reachedBy, type Pool, type Runner } from "../lib/fleet";
   import { clock, took } from "../lib/format";
   import { moved, useKeys } from "../lib/keys.svelte";
+  import { useLive } from "../lib/live.svelte";
   import { follow, type Place } from "../lib/place.svelte";
 
   // The installation's runners and their pools, an administrator's alone, from GET /api/v1/runners
@@ -30,12 +31,18 @@
     now = Date.now();
   }
 
-  // Read again every heartbeat, so that a runner falling silent or a drain taking hold is seen
-  // without reloading the page.
+  // Read again each time the live connection says a runner or a pool changed, a heartbeat among
+  // them, so that a drain taking hold is seen without reloading the page; and the clock moved every
+  // second, since a runner falling silent is said by nothing but time passing.
+  const changes = useLive();
   $effect(() => {
     untrack(read);
-    const every = setInterval(read, 10_000);
-    return () => clearInterval(every);
+    const reading = changes.when((c) => c.kind === "runners", read);
+    const ticking = setInterval(() => (now = Date.now()), 1000);
+    return () => {
+      reading();
+      clearInterval(ticking);
+    };
   });
 
   // The pool the runners are narrowed to, named in the address as ?pool=.
