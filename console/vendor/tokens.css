@@ -72,7 +72,8 @@
 
   /* Gaps are 3, 4, 5, 7, 9 units: calc(var(--unit) * n). */
   --unit: 2px;
-  --window-min: 1280px;
+  --window-compact: 1100px;
+  --window-narrow: 760px;
   --bar-top: 52px;
   --bar-sub: 48px;
   --bar-keyLine: 32px;
