@@ -1,39 +1,23 @@
 <script lang="ts">
-  import type { Me } from "../api/client";
   import { follow, type Place } from "../lib/place.svelte";
-  import type { Route } from "../lib/route";
-  import { said } from "../lib/notifications";
+  import { runAt, runsOf, type Route } from "../lib/route";
   import Icon from "./Icon.svelte";
-  import Popover from "./Popover.svelte";
 
   // The line above the screen's own head: where the screen is, as a trail of links back up to the
-  // home, then whether the installation answers and the caller's notifications. It is the screen's
-  // first line rather than a bar of its own, so that it takes no room the screen could use; the caller
-  // is at the foot of the sidebar.
+  // home. It is the screen's first line rather than a bar of its own, so that it takes no room the
+  // screen could use; the caller and their notifications are in the sidebar.
   let {
-    me,
     route,
-    answering,
-    live,
     place,
-    ondismiss,
     onmenu,
   }: {
-    me: Me;
     route: Route;
-    answering: boolean;
-    live: boolean;
     place: Place;
-    ondismiss: (id: string) => void;
     onmenu?: () => void;
   } = $props();
 
-
-  // Whether what the screen shows is current, in a word: both connections are retried on their own.
-  const standing = $derived(!answering ? "unreachable" : live ? "live" : "reconnecting");
-
-  const labels: Record<string, string> = { runs: "Runs", workflows: "Workflows", statistics: "Statistics", sharing: "Sharing", settings: "Settings" };
-  const tabs: Record<string, string> = { files: "Files", statistics: "Statistics", mcp: "MCP", graph: "Graph", profile: "Profile", credentials: "Sign-in methods", tokens: "API tokens", "service-accounts": "Service accounts" };
+  const labels: Record<string, string> = { workflows: "Workflows", statistics: "Statistics", sharing: "Sharing", settings: "Settings" };
+  const tabs: Record<string, string> = { runs: "Runs", files: "Files", statistics: "Statistics", mcp: "MCP", graph: "Graph", profile: "Profile", credentials: "Sign-in methods", tokens: "API tokens", "service-accounts": "Service accounts" };
 
   // The trail: each step a link but the last, which is where the screen is.
   const trail = $derived.by((): { label: string; to?: Route; code?: boolean }[] => {
@@ -54,15 +38,18 @@
       case "unknown":
         return [{ label: "Nothing here" }];
       case "namespace": {
-        const out: { label: string; to?: Route; code?: boolean }[] = [{ label: r.namespace, to: { kind: "namespace", namespace: r.namespace, view: "runs" } }];
+        const out: { label: string; to?: Route; code?: boolean }[] = [{ label: r.namespace, to: { kind: "namespace", namespace: r.namespace, view: "workflows" } }];
         const deeper = r.workflow !== undefined || r.run !== undefined;
         out.push({ label: labels[r.view] ?? r.view, to: deeper ? { kind: "namespace", namespace: r.namespace, view: r.view } : undefined });
         if (r.workflow) {
-          out.push({ label: r.workflow, to: r.tab ? { kind: "namespace", namespace: r.namespace, view: "workflows", workflow: r.workflow } : undefined });
-          if (r.tab) out.push({ label: tabs[r.tab] ?? r.tab });
+          // A run is under its workflow's runs, each a link back up but the last.
+          const below = r.tab !== undefined || r.run !== undefined;
+          out.push({ label: r.workflow, to: below ? { kind: "namespace", namespace: r.namespace, view: "workflows", workflow: r.workflow } : undefined });
+          if (r.run) out.push({ label: "Runs", to: runsOf(r.namespace, r.workflow) });
+          else if (r.tab) out.push({ label: tabs[r.tab] ?? r.tab });
         }
         if (r.run) {
-          out.push({ label: r.run, code: true, to: r.against ? { kind: "namespace", namespace: r.namespace, view: "runs", run: r.run } : undefined });
+          out.push({ label: r.run, code: true, to: r.against ? runAt(r.namespace, r.workflow, r.run) : undefined });
           if (r.against) out.push({ label: `against ${r.against}`, code: true });
         }
         return out;
@@ -72,10 +59,14 @@
 
 </script>
 
+<!-- The home's trail would be its own name and nothing above it, so the home has none; on a phone the
+     bar is still drawn, holding the way to the navigation. -->
+{#if route.kind !== "landing" || onmenu}
 <header class="bar">
   {#if onmenu}
     <button class="menu-button" aria-label="Open the navigation" onclick={onmenu}><Icon name="control-sidebar" size={18} /></button>
   {/if}
+  {#if route.kind !== "landing"}
   <nav class="trail" aria-label="Where you are">
     <ol>
       {#each trail as step, i (i)}
@@ -90,38 +81,9 @@
       {/each}
     </ol>
   </nav>
-
-  <div class="end">
-    <span class="live" class:lost={!answering} class:waiting={answering && !live} role="status">
-      <span class="dot" aria-hidden="true"></span><span class="word">{standing}</span>
-    </span>
-
-    <Popover label={me.notifications.length === 0 ? "Notifications, none" : `Notifications, ${me.notifications.length}`} align="end" width={340}>
-      {#snippet button()}
-        <span class="bell">
-          <Icon name="control-notifications" />
-          {#if me.notifications.length > 0}<span class="count">{me.notifications.length}</span>{/if}
-        </span>
-      {/snippet}
-      {#snippet children()}
-        {#if me.notifications.length === 0}
-          <p class="empty">Nothing to tell you.</p>
-        {:else}
-          <ul class="notifications">
-            {#each me.notifications as notice (notice.id)}
-              <li>
-                <span class="said">{said(notice)}</span>
-                <time class="faint term" datetime={notice.at}>{notice.at}</time>
-                <button class="control" onclick={() => ondismiss(notice.id)}>Dismiss</button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      {/snippet}
-    </Popover>
-
-  </div>
+  {/if}
 </header>
+{/if}
 
 <style>
   .menu-button {
@@ -153,11 +115,11 @@
 
   /* On a phone the bar runs from one edge of the window to the other and stays at the top as the
      screen scrolls, since it holds the way to the navigation; the trail keeps where the screen is and
-     drops the way back up, which the drawer gives, and the installation's state keeps its dot. */
+     drops the way back up, which the drawer gives. */
   @media (max-width: 759px) {
     .bar {
       position: sticky;
-      top: -16px;
+      top: 0;
       z-index: 30;
       height: 48px;
       margin: -16px -16px 16px;
@@ -173,17 +135,7 @@
     .trail li:last-child .sep {
       display: none;
     }
-
-    .live .word {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
   }
-
 
   .trail {
     min-width: 0;
@@ -235,90 +187,18 @@
     color: var(--faint);
   }
 
-  .end {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 7);
-    margin-left: auto;
-  }
 
-  .live {
-    display: inline-flex;
-    align-items: center;
-    gap: calc(var(--unit) * 3);
-    color: var(--succeeded);
-    font-size: var(--type-control-size);
-    font-weight: 500;
-  }
 
-  .live .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: var(--radius-round);
-    background: currentColor;
-  }
 
-  .live.lost {
-    color: var(--failed);
-  }
 
   /* Answering, and not telling what changed: what is shown is read again when the connection
      opens, and until then stays as it was read. */
-  .live.waiting {
-    color: var(--muted);
-  }
 
-  .bell {
-    position: relative;
-    display: inline-flex;
-    color: var(--muted);
-  }
 
-  .count {
-    position: absolute;
-    top: -7px;
-    right: -8px;
-    min-width: 14px;
-    height: 14px;
-    padding: 0 3px;
-    border-radius: var(--radius-round);
-    background: var(--waiting);
-    color: var(--bg);
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 14px;
-    text-align: center;
-  }
 
-  .empty {
-    margin: calc(var(--unit) * 4);
-    color: var(--muted);
-  }
 
-  .notifications {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
 
-  .notifications li {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 2px calc(var(--unit) * 4);
-    padding: calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
-  }
 
-  .notifications li:last-child {
-    border-bottom: none;
-  }
 
-  .notifications .said {
-    --leading: 1.45;
-  }
 
-  .notifications button {
-    grid-row: span 2;
-    align-self: center;
-  }
 </style>

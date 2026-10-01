@@ -104,7 +104,7 @@ describe("the home", () => {
     const { asked } = open();
     const spaces = await screen.findByRole("region", { name: "Namespaces" });
     expect(within(spaces).getAllByRole("link").map((l) => l.textContent)).toEqual(["alice", "finance", "team-ops"]);
-    expect(within(spaces).getByRole("link", { name: "finance" }).getAttribute("href")).toBe("/finance/runs");
+    expect(within(spaces).getByRole("link", { name: "finance" }).getAttribute("href")).toBe("/finance/workflows");
     const last = screen.getByRole("region", { name: "Latest runs" });
     expect(await within(last).findAllByText(/^finance\//)).not.toHaveLength(0);
     expect(within(last).getByRole("region", { name: "Yesterday" })).toBeTruthy();

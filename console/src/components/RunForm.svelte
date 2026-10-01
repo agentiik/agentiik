@@ -6,6 +6,7 @@
   import { refusal, type API } from "../api/client";
   import type { Graph } from "../lib/graph";
   import type { Place } from "../lib/place.svelte";
+  import { runAt } from "../lib/route";
   import { fieldOf, initial, problems, read, validator, type Field } from "../lib/run-form";
   import Icon from "./Icon.svelte";
 
@@ -69,7 +70,7 @@
     const { data, error, response } = await api.POST("/api/v1/{ns}/workflows/{name}/runs", { params: { path: { ns: namespace, name: workflow } }, body });
     sending = false;
     if (data) {
-      place.go({ kind: "namespace", namespace, view: "runs", run: data.run });
+      place.go(runAt(namespace, workflow, data.run));
       return;
     }
     const named = error as { input?: string; error?: string } | undefined;

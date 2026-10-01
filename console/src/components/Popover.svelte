@@ -28,6 +28,40 @@
     }
   }
 
+  // layered is whether the browser has a top layer to draw the menu in; one without it, and the
+  // test's document among them, draws the menu fixed over the page instead.
+  const layered = typeof HTMLElement !== "undefined" && "showPopover" in HTMLElement.prototype;
+
+  // shown draws the menu in the browser's top layer, above every box of the page and clipped by
+  // none of them, the sidebar that scrolls its own list among them, and places it from its button
+  // again whenever the window is resized or anything under it scrolls.
+  function shown(menu: HTMLElement) {
+    const place = () => {
+      if (!trigger) return;
+      const at = trigger.getBoundingClientRect();
+      const page = document.documentElement;
+      const gap = 6;
+      if (align === "start") {
+        menu.style.left = `${Math.round(Math.max(gap, Math.min(at.left, page.clientWidth - width - gap)))}px`;
+      } else {
+        menu.style.right = `${Math.round(Math.max(gap, page.clientWidth - at.right))}px`;
+      }
+      if (side === "bottom") {
+        menu.style.top = `${Math.round(at.bottom + gap)}px`;
+      } else {
+        menu.style.bottom = `${Math.round(page.clientHeight - at.top + gap)}px`;
+      }
+    };
+    place();
+    if (layered) menu.showPopover();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }
+
   function key(event: KeyboardEvent) {
     if (open && event.key === "Escape") {
       event.stopPropagation();
@@ -43,7 +77,7 @@
     {@render button()}
   </button>
   {#if open}
-    <div class="menu {align} {side}" style:width="{width}px">
+    <div class="menu" popover={layered ? "manual" : undefined} style:width="{width}px" {@attach shown}>
       {@render children(close)}
     </div>
   {/if}
@@ -70,27 +104,19 @@
     width: 100%;
   }
 
+  /* The top layer's own placement, the middle of the window, is undone: the menu sits where shown
+     puts it, beside its button. */
   .menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    z-index: 20;
+    position: fixed;
+    inset: auto;
+    z-index: 70;
+    margin: 0;
     padding: calc(var(--unit) * 3);
+    overflow: visible;
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-card);
     background: var(--raised);
+    color: var(--text);
     box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
-  }
-
-  .menu.top {
-    top: auto;
-    bottom: calc(100% + 6px);
-  }
-
-  .menu.start {
-    left: 0;
-  }
-
-  .menu.end {
-    right: 0;
   }
 </style>
