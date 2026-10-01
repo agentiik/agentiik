@@ -1,7 +1,9 @@
 // A fetch answering from a recorded scenario, as tests/serve.js answers a browser: a route the
 // scenario does not hold is answered as the API answers what the caller may not see.
 
-export type Scenario = Record<string, { status: number; body?: unknown }>;
+// An answer is JSON where it records a body, and the bytes as written where it records text, as a
+// file of a repository's tree is answered.
+export type Scenario = Record<string, { status: number; body?: unknown; text?: string }>;
 
 const recorded = import.meta.glob("./fixtures/*.json", { eager: true, import: "default" }) as Record<string, Scenario>;
 
@@ -44,6 +46,9 @@ export function answering(s: Scenario, asked: string[] = []): typeof fetch {
     const key = `${request.method} ${url.pathname}`;
     asked.push(`${key}${url.search}`);
     const recorded = recordedFor(s, request.method, url.pathname, url.search) ?? { status: 404, body: { error: "no such thing, or not yours" } };
+    if (recorded.text !== undefined) {
+      return new Response(recorded.text, { status: recorded.status, headers: { "Content-Type": "application/octet-stream" } });
+    }
     const body = recorded.body === undefined ? null : JSON.stringify(recorded.body);
     return new Response(body, { status: recorded.status, headers: { "Content-Type": "application/json" } });
   };
