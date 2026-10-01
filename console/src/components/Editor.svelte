@@ -102,7 +102,9 @@
     }
   }
 
-  const sentenceOf = (s: string) => s.charAt(0).toUpperCase() + s.slice(1) + (s.endsWith(".") ? "" : ".");
+  // A refusal is said as written, ending with a full stop: one that begins with a step, a port or a
+  // key begins with it as the file spells it, never capitalised.
+  const sentenceOf = (s: string) => s + (s.endsWith(".") ? "" : ".");
 
   function undo() {
     const last = earlier.at(-1);

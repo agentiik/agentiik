@@ -119,7 +119,7 @@ export class YamlTree {
     if ("inline" in value) return this.add(map, key, value.inline);
     if (map.flow) throw new Refused(`${show(mapPath)} is written as a flow map, which a block does not go into`);
     const last = map.items[map.items.length - 1];
-    if (!last) throw new Refused("an empty block map has no indentation to follow");
+    if (!last) throw new Refused("An empty block map has no indentation to follow");
     const first = map.items[0]!.key as Node;
     const indent = " ".repeat(first.range![0] - lineStart(this.text, first.range![0]));
     const unit = this.unit();
@@ -140,7 +140,7 @@ ${indent}${unit.repeat(depth + 1)}${l.trimStart()}`;
     if (!seq || !isSeq(seq)) throw new Refused(`${show(seqPath)} is not a list written in the file`);
     if (seq.flow) {
       const close = seq.range![1] - 1;
-      if (this.text[close] !== "]") throw new Refused("the list is written in a way the editor does not add to");
+      if (this.text[close] !== "]") throw new Refused("The list is written in a way the editor does not add to");
       const inner = this.text.slice(seq.range![0] + 1, close);
       if (inner.trim() === "") return this.splice(seq.range![0], seq.range![1], `[${source}]`);
       const trailing = inner.match(/\s*$/)![0];
@@ -148,7 +148,7 @@ ${indent}${unit.repeat(depth + 1)}${l.trimStart()}`;
     }
     const items = seq.items as Node[];
     const last = items[items.length - 1];
-    if (!last?.range) throw new Refused("an empty block list has no indentation to follow");
+    if (!last?.range) throw new Refused("An empty block list has no indentation to follow");
     const dash = this.text.lastIndexOf("-", items[0]!.range![0]);
     const column = dash - lineStart(this.text, dash);
     const at = lineEnd(this.text, last.range[1]);
@@ -206,14 +206,14 @@ ${indent}${unit.repeat(depth + 1)}${l.trimStart()}`;
     const k = scalarSource(key);
     if (map.flow) {
       const close = map.range![1] - 1;
-      if (this.text[close] !== "}") throw new Refused("the map is written in a way the editor does not add to");
+      if (this.text[close] !== "}") throw new Refused("The map is written in a way the editor does not add to");
       const inner = this.text.slice(map.range![0] + 1, close);
       if (inner.trim() === "") return this.splice(map.range![0], map.range![1], `{ ${k}: ${source} }`);
       const trailing = inner.match(/\s*$/)![0];
       return this.splice(close - trailing.length, close - trailing.length, `, ${k}: ${source}`);
     }
     const last = map.items[map.items.length - 1];
-    if (!last) throw new Refused("an empty block map has no indentation to follow");
+    if (!last) throw new Refused("An empty block map has no indentation to follow");
     const first = map.items[0]!.key as Node;
     const indent = " ".repeat(first.range![0] - lineStart(this.text, first.range![0]));
     const at = lineEnd(this.text, endOf(last));

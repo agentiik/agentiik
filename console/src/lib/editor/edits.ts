@@ -28,11 +28,11 @@ function named(what: string, name: string): void {
 // addStep writes a step at the end of steps: its image and the ports it publishes.
 export function addStep(tree: YamlTree, graph: Graph, name: string, image: string, outputs: string[]): YamlTree {
   named("The step", name);
-  if (graph.steps[name] || tree.nodeAt(["steps", name])) throw new Refused(`the workflow has a step named ${name} already`);
-  if (image.trim() === "") throw new Refused("a step runs an image, which is not given");
-  if (outputs.length === 0) throw new Refused("a step publishes one port at least");
+  if (graph.steps[name] || tree.nodeAt(["steps", name])) throw new Refused(`The workflow has a step named ${name} already`);
+  if (image.trim() === "") throw new Refused("A step runs an image, which is not given");
+  if (outputs.length === 0) throw new Refused("A step publishes one port at least");
   for (const o of outputs) named("The port", o);
-  if (new Set(outputs).size !== outputs.length) throw new Refused("a port is named twice");
+  if (new Set(outputs).size !== outputs.length) throw new Refused("A port is named twice");
   const steps = tree.nodeAt(["steps"]);
   if (!steps || !isMap(steps)) throw new Refused("agentiik.yaml writes no steps block to add to");
   return tree.insert(["steps"], name, { block: [`image: ${scalarSource(image.trim())}`, `outputs: [${outputs.map((o) => scalarSource(o)).join(", ")}]`] });
@@ -44,7 +44,7 @@ export function removeStep(tree: YamlTree, graph: Graph, name: string): YamlTree
   const needing = graph.order.filter((s) => (graph.steps[s]?.needs ?? []).some((e) => e.step === name));
   if (needing.length) throw new Refused(`${needing.join(", ")} ${needing.length === 1 ? "needs" : "need"} ${name}: take ${needing.length === 1 ? "that edge" : "those edges"} away first`);
   const outputs = Object.entries(graph.outputs ?? {}).filter(([, o]) => o.from.step === name).map(([k]) => k);
-  if (outputs.length) throw new Refused(`the workflow's ${outputs.join(", ")} ${outputs.length === 1 ? "is" : "are"} read from ${name}`);
+  if (outputs.length) throw new Refused(`The workflow's ${outputs.join(", ")} ${outputs.length === 1 ? "is" : "are"} read from ${name}`);
   return tree.remove(["steps", name]);
 }
 
@@ -65,17 +65,17 @@ function reaches(graph: Graph, from: string, to: string): boolean {
 export function connect(tree: YamlTree, graph: Graph, from: { step: string; port: string }, to: { step: string; as: string }): YamlTree {
   writtenHere(tree, to.step);
   const source = graph.steps[from.step];
-  if (!source) throw new Refused(`the workflow has no step ${from.step}`);
+  if (!source) throw new Refused(`The workflow has no step ${from.step}`);
   if (!(source.outputs ?? ["out"]).includes(from.port)) throw new Refused(`${from.step} publishes no port ${from.port}`);
   named("The input port", to.as);
-  if (from.step === to.step) throw new Refused("a step does not need itself");
+  if (from.step === to.step) throw new Refused("A step does not need itself");
   if (reaches(graph, from.step, to.step)) throw new Refused(`${from.step} already needs ${to.step}, by way of its edges: the edge would make a cycle, which no run can start`);
   const target = graph.steps[to.step];
   if ((target?.needs ?? []).some((e) => e.step === from.step && e.port === from.port && e.as === to.as)) throw new Refused(`${to.step} has that edge already`);
   const edge = `{ step: ${scalarSource(from.step)}, port: ${scalarSource(from.port)}, as: ${scalarSource(to.as)} }`;
   const needs = tree.nodeAt(["steps", to.step, "needs"]);
   if (needs && isSeq(needs)) return tree.append(["steps", to.step, "needs"], edge);
-  if (needs) throw new Refused(`the needs of ${to.step} are not written as a list`);
+  if (needs) throw new Refused(`The needs of ${to.step} are not written as a list`);
   return tree.insert(["steps", to.step], "needs", { block: [`- ${edge}`] });
 }
 
@@ -135,7 +135,7 @@ export function setMaxParallel(tree: YamlTree, step: string, max: number | null)
 
 function setStrategy(tree: YamlTree, step: string, key: string, value: string | number | null, unwritten?: string): YamlTree {
   const strategy = tree.nodeAt(["steps", step, "strategy"]);
-  if (strategy && !isMap(strategy)) throw new Refused(`the strategy of ${step} is not written as a map`);
+  if (strategy && !isMap(strategy)) throw new Refused(`The strategy of ${step} is not written as a map`);
   if (!strategy) {
     if (value === null || value === unwritten) return tree;
     return tree.insert(["steps", step], "strategy", { block: [`${key}: ${scalarSource(value)}`] });

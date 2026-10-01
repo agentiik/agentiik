@@ -55,8 +55,8 @@ describe("an edit of the graph", () => {
     expect(refusal(() => connect(tree, g, { step: "invoice", port: "out" }, { step: "archive", as: "invoices" }))).toBe("archive has that edge already");
     expect(refusal(() => connect(tree, g, { step: "invoice", port: "out" }, { step: "archive", as: "two words" }))).toMatch(/not a name the language takes/);
     expect(refusal(() => removeStep(tree, g, "normalize"))).toBe("invoice, archive need normalize: take those edges away first");
-    expect(refusal(() => removeStep(tree, g, "archive"))).toBe("the workflow's invoices is read from archive");
-    expect(refusal(() => addStep(tree, g, "invoice", "x", ["ok"]))).toBe("the workflow has a step named invoice already");
+    expect(refusal(() => removeStep(tree, g, "archive"))).toBe("The workflow's invoices is read from archive");
+    expect(refusal(() => addStep(tree, g, "invoice", "x", ["ok"]))).toBe("The workflow has a step named invoice already");
   });
 
   it("takes an edge away, and needs with its last edge", () => {
