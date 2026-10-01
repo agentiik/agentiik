@@ -25,6 +25,7 @@
   import RunDiff from "./views/RunDiff.svelte";
   import Runs from "./views/Runs.svelte";
   import Settings from "./views/Settings.svelte";
+  import NewNamespace from "./components/NewNamespace.svelte";
   import Sharing from "./views/Sharing.svelte";
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
   import Statistics from "./views/Statistics.svelte";
@@ -79,6 +80,14 @@
           : undefined,
   );
   let sidebarFolded = $state(wasFolded(globalThis.localStorage));
+  // A namespace created from the switcher's foot, then opened once the list of namespaces holds it.
+  let creating = $state(false);
+
+  async function created(name: string) {
+    await session.read();
+    place.go({ kind: "namespace", namespace: name, view: "workflows" });
+  }
+
   function foldSidebar(value: boolean) {
     sidebarFolded = value;
     fold(globalThis.localStorage, value);
@@ -178,7 +187,7 @@
 {:else if session.me}
   <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer}>
     <div class="side" inert={viewport.narrow && !drawer}>
-      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} />
+      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} oncreate={session.me.user ? () => (creating = true) : undefined} />
     </div>
     {#if viewport.narrow && drawer}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -205,7 +214,7 @@
       {:else if route.kind === "namespace" && route.view === "sharing"}
         <Sharing {api} {place} me={session.me} namespace={route.namespace} />
       {:else if route.kind === "namespace" && route.view === "settings"}
-        <Settings {api} {place} me={session.me} namespace={route.namespace} />
+        <Settings {api} {place} me={session.me} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} changed={() => session.read()} />
       {:else if route.kind === "namespace" && route.view === "statistics"}
         <Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
       {:else if route.kind === "landing"}
@@ -228,6 +237,7 @@
     </main>
   </div>
   <KeyLine {keys} />
+  <NewNamespace {api} bind:open={creating} {created} />
 {/if}
 
 <style>

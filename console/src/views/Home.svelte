@@ -16,6 +16,8 @@
   import { follow, type Place } from "../lib/place.svelte";
   import { runAt } from "../lib/route";
   import type { Run } from "../lib/runs.svelte";
+  import NamespaceMark from "../components/NamespaceMark.svelte";
+  import { pictureOf } from "../lib/namespaces";
 
   // The console's root, laid out as a forge's home is: who you are, four counts, what needs you, a
   // year of activity and the latest runs, with the namespaces and workflows to go to and, to an
@@ -389,7 +391,7 @@
             {@const s = series.get(n.name)}
             {@const seven = s ? lastWeek(s, now) : undefined}
             <li>
-              <span class="tile initial" aria-hidden="true">{n.name.charAt(0).toUpperCase()}</span>
+              <NamespaceMark name={n.name} src={pictureOf(n)} />
               <a class="term" href={place.href(runsOf(n.name))} onclick={follow(place, runsOf(n.name))}>{n.name}</a>
               <span class="faint">{seven ? `${seven.runs} ${seven.runs === 1 ? "run" : "runs"}` : ""}</span>
             </li>
@@ -701,13 +703,6 @@
     border-radius: var(--radius-control);
     background: var(--sunken);
     color: var(--muted);
-  }
-
-  .tile.initial {
-    background: var(--accentDim);
-    color: var(--accent);
-    font-size: 13px;
-    font-weight: 700;
   }
 
   .links li.muted {
