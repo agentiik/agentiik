@@ -301,3 +301,30 @@ describe("the files of a step and the outputs of a run", () => {
     expect(await fetchable(async () => new Response(null, { status: 404 }), "x")).toBe("No such file, or not yours.");
   });
 });
+
+describe("the step header and its ports", () => {
+  it("names the image the step runs, the task chosen and its runner, and the parameters it was dispatched with", async () => {
+    open(`/finance/runs/${failed}?step=invoice`);
+    const image = await screen.findByText("ghcr.io/acme/agk-invoice@1ab74e66e796");
+    expect(image.getAttribute("title")).toBe("ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc");
+    expect(screen.getByText("attempt 2 · shard 3 of 8")).toBeTruthy();
+    await fireEvent.click(screen.getByText("Parameters it was dispatched with"));
+    expect(screen.getByText('"EUR"')).toBeTruthy();
+    expect(screen.getByText('"vat-api"')).toBeTruthy();
+  });
+
+  it("shows no parameters to a principal without run:read_data, whatever it is answered", async () => {
+    open(`/finance/runs/${failed}?step=invoice`, withPermissions(["workflow:read", "run:read"]));
+    expect(await screen.findByText(/The parameters it was dispatched with are not shown/)).toBeTruthy();
+    expect(screen.queryByText("Parameters it was dispatched with")).toBeNull();
+  });
+
+  it("lists every port the step declares, those nothing was published on yet included", async () => {
+    open(`/finance/runs/${failed}?step=archive`);
+    const row = (await screen.findByText("ok", { selector: "td.port" })).closest("tr")!;
+    expect(row.textContent).toContain("published when the step ends");
+    expect(row.querySelector("button")).toBeNull();
+    await fireEvent.click(screen.getByRole("tab", { name: "Input" }));
+    expect((await screen.findByText("invoices", { selector: "td.port" })).closest("tr")!.textContent).toContain("handed once a task is dispatched");
+  });
+});
