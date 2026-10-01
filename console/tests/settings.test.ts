@@ -57,21 +57,23 @@ describe("a namespace's secrets", () => {
     const s = scenario("alice");
     s["PUT /api/v1/alice/secrets/stripe-key"] = { status: 201, body: declared };
     const { asked } = open("/alice/settings", s);
-    const form = await screen.findByRole("form", { name: "Declare a secret" });
+    await fireEvent.click(await screen.findByRole("button", { name: "New secret" }));
+    const form = screen.getByRole("form", { name: "Declare a secret" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "stripe-key" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Value" }), { target: { value: "sk_live_never_shown" } });
     await fireEvent.submit(form);
     expect(await screen.findByText("stripe-key is declared and its value written. It is shown nowhere.")).toBeTruthy();
     expect(asked.find((a) => a.key === "PUT /api/v1/alice/secrets/stripe-key")!.body).toEqual({ provider: "builtin", value: "sk_live_never_shown" });
     expect(document.body.innerHTML).not.toContain("sk_live_never_shown");
-    expect((within(form).getByRole("textbox", { name: "Value" }) as HTMLTextAreaElement).value).toBe("");
+    expect(screen.queryByRole("form", { name: "Declare a secret" })).toBeNull();
   });
 
   it("declares one kept in the API's environment by the variable it is read from", async () => {
     const s = scenario("alice");
     s["PUT /api/v1/alice/secrets/smtp"] = { status: 201, body: { ...declared, name: "smtp", provider: "env", path: "AGK_DEV_ALICE_SMTP", mount: "/agk/secrets/smtp" } };
     const { asked } = open("/alice/settings", s);
-    const form = await screen.findByRole("form", { name: "Declare a secret" });
+    await fireEvent.click(await screen.findByRole("button", { name: "New secret" }));
+    const form = screen.getByRole("form", { name: "Declare a secret" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "smtp" } });
     await fireEvent.change(within(form).getByRole("combobox", { name: "Kept in" }), { target: { value: "env" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Variable" }), { target: { value: "AGK_DEV_ALICE_SMTP" } });
@@ -110,7 +112,8 @@ describe("a namespace's secrets", () => {
     const s = scenario("alice");
     s["PUT /api/v1/alice/secrets/smtp"] = { status: 400, body: { error: "env is not a store this installation reads the secrets of alice from" } };
     open("/alice/settings", s);
-    const form = await screen.findByRole("form", { name: "Declare a secret" });
+    await fireEvent.click(await screen.findByRole("button", { name: "New secret" }));
+    const form = screen.getByRole("form", { name: "Declare a secret" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "smtp" } });
     await fireEvent.change(within(form).getByRole("combobox", { name: "Kept in" }), { target: { value: "env" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Variable" }), { target: { value: "AGK_DEV_ALICE_SMTP" } });
