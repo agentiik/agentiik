@@ -44,24 +44,20 @@
     display: inline-flex;
     align-items: center;
     gap: calc(var(--unit) * 3);
-    height: 21px;
+    height: 22px;
     padding: 0 calc(var(--unit) * 4) 0 calc(var(--unit) * 4);
     border: var(--border-hairline) solid;
     border-radius: var(--radius-pill);
-    font-family: var(--type-identifier-font);
-    font-size: 11.5px;
-    line-height: 1;
+    font-size: 12.5px;
+    font-weight: 500;
+    --leading: 1;
     white-space: nowrap;
-  }
-
-  .word {
-    padding-top: 1px;
   }
 
   .dot,
   .ring {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: var(--radius-round);
     flex: none;
   }

@@ -393,7 +393,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	plan.Start = within
 
 	state := ev.State()
-	doc, err := Elide(ctx, state, e.Namespace, co.objects)
+	doc, err := Elide(ctx, state, storageOf(e), co.objects)
 	if err != nil {
 		return err
 	}
@@ -534,7 +534,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			return rewake(ctx, w, e, plan.Wake)
 		})
 	}
-	elided, err := Elide(ctx, state, e.Namespace, co.objects)
+	elided, err := Elide(ctx, state, storageOf(e), co.objects)
 	if err != nil {
 		return err
 	}
@@ -635,8 +635,11 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		// queued is waiting on, is the concurrency group's and arrives with it; until
 		// then a run starts the moment the controller reaches it.
 		//
-		// The vars are the workflow's own, as agk run --local starts a run with them:
-		// there are no namespace variables to merge in yet.
+		// The vars are the workflow's own laid over the namespace's variables the run kept
+		// when it was created, a name both write taking the file's value, so that this pass,
+		// a controller taking the run over and a replay read what the run read rather than
+		// what is true now. The document carries them from the first decision on. A run that
+		// kept none reads the file's own, as agk run --local starts a run with them.
 		//
 		// A replay from a step starts with the steps above it as the run it replays left them.
 		var reuse map[agk.Step]graph.StepState
@@ -654,7 +657,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger, TriggeredBy: e.TriggeredBy,
 		}, graph.Options{
-			Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound, Reuse: reuse,
+			Inputs: e.Inputs, Vars: g.Workflow().Vars.Over(e.NamespaceVars), Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound, Reuse: reuse,
 			// What fired the run, as it was frozen on the run when it was created: "the trigger
 			// root" and "the event root", which the state carries from here on.
 			Trigger: e.Context.Trigger, Event: e.Context.Event,
@@ -665,7 +668,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	if err := asWritten(e.Document, &doc); err != nil {
 		return nil, fmt.Errorf("controller: the document of run %s could not be read: %w", e.Run, err)
 	}
-	state, err := Rehydrate(ctx, doc, e.Namespace, co.objects, co.limits)
+	state, err := Rehydrate(ctx, doc, storageOf(e), co.objects, co.limits)
 	if err != nil {
 		return nil, err
 	}
@@ -730,6 +733,24 @@ func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan 
 	return sent, pools
 }
 
+// storageOf is the storage name of the namespace a run is of, which every object of it is kept
+// under: what reading the run answered, or the namespace's name where it answered none, as a run
+// built by hand for a test does, the two being one for a namespace never renamed.
+func storageOf(e db.Evaluation) string {
+	if e.Storage != "" {
+		return e.Storage
+	}
+	return e.Namespace
+}
+
+// storage is the storage name of the namespace named, read where no run of it was.
+func (co *Core) storage(ctx context.Context, namespace string) (string, error) {
+	if co.controller == nil || co.controller.pool == nil {
+		return namespace, nil
+	}
+	return co.controller.pool.Storage(ctx, namespace)
+}
+
 // dispatchOf turns a task the evaluator decided into everything that leaves this process.
 //
 // Three things are added here because only the controller can add them. The input envelopes are
@@ -751,9 +772,14 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 
 	// The bytes first. Content addressed, so a task republished after a refused publish
 	// writes nothing, and a shard whose inputs are the step's whole envelope shares the
-	// object the publication already put there.
+	// object the publication already put there. Under the namespace's storage name, which
+	// every object of it is kept under.
+	storage, err := co.storage(ctx, namespace)
+	if err != nil {
+		return Dispatch{}, err
+	}
 	for port, e := range t.Inputs {
-		ref, err := put(ctx, namespace, co.objects, e)
+		ref, err := put(ctx, storage, co.objects, e)
 		if err != nil {
 			return Dispatch{}, fmt.Errorf("the input on %s could not be written: %w", port, err)
 		}
@@ -761,7 +787,7 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 	}
 
 	var rewrite []string
-	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+	err = co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		// The pool's policy before the grant, so that a task no runner may be handed is
 		// given no credential either, and read in the transaction that issues it.
 		pool, resources, err := policed(ctx, w, namespace, t)
@@ -792,7 +818,7 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 			if ref.Digest != digest {
 				continue
 			}
-			if err := putAgain(ctx, namespace, co.objects, digest, t.Inputs[port]); err != nil {
+			if err := putAgain(ctx, storage, co.objects, digest, t.Inputs[port]); err != nil {
 				return Dispatch{}, fmt.Errorf("the input on %s could not be written again: %w", port, err)
 			}
 			break

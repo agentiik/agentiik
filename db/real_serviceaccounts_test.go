@@ -24,7 +24,7 @@ func withServiceAccounts(t *testing.T) *Pool {
 	pool := identity(t)
 	now := time.Now().UTC()
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
 		for _, s := range []ServiceAccount{

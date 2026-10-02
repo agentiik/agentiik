@@ -1,1 +1,3 @@
 node_modules/
+# What the screen tests write when one fails: its trace and the page as drawn.
+test-results/

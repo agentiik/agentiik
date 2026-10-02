@@ -48,9 +48,10 @@ const (
 // any a v0.2 controller finished while an upgrade replaced it. Each file the envelopes a run keeps
 // name, published or its shards', is recorded as an artifact of the run, expiring its namespace's
 // max_retention_days after the run finished, so that the purges retire it and the collection
-// deletes it in time, as they do any other. init and migrate call it at every run, before the
-// controller starts, and a run with nothing left to record reads one empty batch; the controller
-// that leads records what they left, a batch a call, in its passes.
+// deletes it in time, as they do any other; and kept for ever, as the run is, where the namespace
+// sets no bound. init and migrate call it at every run, before the controller starts, and a run
+// with nothing left to record reads one empty batch; the controller that leads records what they
+// left, a batch a call, in its passes.
 //
 // It goes runs at a time, the default where runs is zero, each batch one transaction of its own
 // once its envelopes are read, so that a large v0.2 store holds no transaction open for longer
@@ -128,8 +129,13 @@ func (b *backfilling) record(ctx context.Context, pool *db.Pool, objects artifac
 		run := [2]string{u.Namespace, string(u.Run)}
 		r := db.Recording{Namespace: u.Namespace, Run: u.Run}
 		var failed error
+		// Under the namespace's storage name, which every object of it is kept under.
+		storage, err := pool.Storage(ctx, u.Namespace)
+		if err != nil {
+			return db.Recorded{}, err
+		}
 		for _, digest := range u.Envelopes {
-			e, err := artifact.GetEnvelope(ctx, objects, u.Namespace, digest, agk.DefaultLimits())
+			e, err := artifact.GetEnvelope(ctx, objects, storage, digest, agk.DefaultLimits())
 			switch {
 			case errors.Is(err, fs.ErrNotExist), errors.Is(err, artifact.ErrNotAnEnvelope):
 				b.unread[[3]string{u.Namespace, string(u.Run), digest}] = true

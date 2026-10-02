@@ -22,7 +22,7 @@ func TestAChallengeIsTakenOnceAndNotPastItsMinutes(t *testing.T) {
 	challenge := func(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, login := range []string{"alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: login}); err != nil {
 				return err
 			}
 		}
@@ -97,7 +97,7 @@ func TestAUsersPasskeyHandleIsMintedOnce(t *testing.T) {
 	first, other := bytes.Repeat([]byte{7}, 32), bytes.Repeat([]byte{8}, 32)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, login := range []string{"alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: login}); err != nil {
 				return err
 			}
 		}
@@ -167,7 +167,7 @@ func TestARefusedCounterIsToldToThePasskeysUser(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
 		if err := w.AddCredential(ctx, Credential{ID: "a-passkey", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}); err != nil {

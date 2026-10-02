@@ -9,7 +9,7 @@
 
 <div class="refused">
   <Pane title="Not found">
-    <p>No such thing, or not yours.</p>
+    <p>This page does not exist, or is not shared with you.</p>
   </Pane>
 </div>
 

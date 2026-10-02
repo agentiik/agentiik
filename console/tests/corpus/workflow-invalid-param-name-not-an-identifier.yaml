@@ -1,0 +1,24 @@
+# invalid: A step parameter whose name is not an identifier. A parameter name
+#   is a key of /agk/params.json and is exported as AGK_PARAM_<NAME> when the
+#   step runs a script, so it cannot carry a hyphen. The brick manifest keys
+#   its own params by the same grammar; a step carrying a script has no
+#   manifest to be validated against, so this file is the only thing that
+#   catches the name at all.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: vat-check
+  namespace: finance
+
+steps:
+  check-vat:
+    image: alpine:3.21@sha256:5f8b1ea3d2c6b98e4a70f5d1c8e3b0472a915dc86f30ba5e2c749ef31d76c704
+    params:
+      my-endpoint: https://vat.example.com/v2
+    script:
+      - curl -sSf "$AGK_PARAM_MY_ENDPOINT/check"
+    outputs: [out]

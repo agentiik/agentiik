@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -258,6 +259,66 @@ func TestTheTreeAtARefIsListedAndAFileOfItRead(t *testing.T) {
 	} {
 		if w, _ := call(t, g.h, "GET", tree+"main?path="+path, "bob", nil); w.Code != want {
 			t.Errorf("?path=%s answered %d, not %d: %s", path, w.Code, want, w.Body)
+		}
+	}
+}
+
+// "The repository's branches and tags, for the console's ref switcher: each by its full name, in
+// git's order, byte by byte, with the commit it points at, an annotated tag peeled to its commit, and
+// null for the default branch while it is unborn; whether it is protected; and who last moved it and
+// when, left out while it is unborn. Requires workflow:read, 404 for a workflow that does not exist
+// and for one the caller cannot read alike."
+func TestTheBranchesAndTagsOfARepositoryAreListed(t *testing.T) {
+	g := servingGit(t, holdingRepositories())
+	const at = "/api/v1/finance/workflows/monthly-invoicing"
+	w, answer := call(t, g.h, "GET", at+"/refs", "bob", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the refs of an empty repository answered %d: %s", w.Code, w.Body)
+	}
+	unborn := map[string]any{"name": "refs/heads/main", "commit": nil, "protected": false}
+	if refs := answer["refs"].([]any); len(refs) != 1 || !reflect.DeepEqual(refs[0], unborn) {
+		t.Errorf("the refs of an empty repository are %v", refs)
+	}
+
+	work := g.newClone("alice")
+	work.write("agentiik.yaml", workflowDocument)
+	first := work.commit("first")
+	work.must("tag", "-a", "-m", "the first release", "v1.0.0")
+	work.must("checkout", "-q", "-b", "feature/rounding")
+	work.write("scripts/a.sh", "true\n")
+	second := work.commit("second")
+	work.must("push", "-q", "origin", "main", "feature/rounding", "v1.0.0")
+	if w, _ := call(t, g.h, "PATCH", at, "owner", map[string]any{"protected": true}); w.Code != http.StatusOK {
+		t.Fatalf("protecting the default branch answered %d: %s", w.Code, w.Body)
+	}
+
+	w, answer = call(t, g.h, "GET", at+"/refs", "bob", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the refs answered %d: %s", w.Code, w.Body)
+	}
+	want := []struct {
+		name, commit string
+		protected    bool
+	}{{"refs/heads/feature/rounding", second, false}, {"refs/heads/main", first, true}, {"refs/tags/v1.0.0", first, false}}
+	refs := answer["refs"].([]any)
+	if len(refs) != len(want) {
+		t.Fatalf("the refs are %v", refs)
+	}
+	for i, ref := range refs {
+		got := ref.(map[string]any)
+		if got["name"] != want[i].name || got["commit"] != want[i].commit || got["protected"] != want[i].protected || got["moved_by"] != "alice" {
+			t.Errorf("ref %d is %v, not %v moved by alice", i, got, want[i])
+		}
+		if moved, ok := got["moved_at"].(string); !ok {
+			t.Errorf("ref %d says no time it moved: %v", i, got)
+		} else if _, err := time.Parse(time.RFC3339, moved); err != nil {
+			t.Errorf("ref %d moved at %q: %v", i, moved, err)
+		}
+	}
+
+	for who, path := range map[string]string{"carol": at + "/refs", "bob": "/api/v1/finance/workflows/nothing/refs"} {
+		if w, _ := call(t, g.h, "GET", path, who, nil); w.Code != http.StatusNotFound {
+			t.Errorf("%s reading %s answered %d, not 404: %s", who, path, w.Code, w.Body)
 		}
 	}
 }

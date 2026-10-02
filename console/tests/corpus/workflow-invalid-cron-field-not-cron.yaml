@@ -1,0 +1,21 @@
+# invalid: A cron field written in a syntax no five-field cron reads. ? and L
+#   belong to other schedulers' grammars, and a schedule is read the same way by
+#   everyone who reads it.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: price-quotes
+  namespace: sales
+
+on:
+  schedule:
+    - cron: "0 6 ? * *"
+
+steps:
+  quote:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]
