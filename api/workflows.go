@@ -197,7 +197,33 @@ func (s *Server) registerWorkflows(rt *Router) error {
 			return err
 		}
 	}
-	return nil
+	// A namespace's workflows, to whoever reads the runs of one, asked about each workflow as the
+	// listing of runs asks: every role holds run:read, an operator among them, which finds here the
+	// workflows it may run without reading them, and nothing of their files is answered.
+	return rt.HandleAcross("GET", "/api/v1/{namespace}/workflows", Across{Permission: RunRead}, s.listWorkflows)
+}
+
+// listWorkflows answers GET /api/v1/{ns}/workflows: each workflow of the namespace whose runs the
+// caller reads, by name, with when it was created and its newest run, and nothing of its repository
+// or its file, which workflow:read guards. A namespace the caller reads nothing of lists nothing, as
+// one that does not exist, so a listing is no way of learning which workflows exist.
+func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request, _ Principal, within Target, _ Holds) {
+	readable, ok := s.readable(w, r, within.Namespace, "", "the workflows could not be read")
+	if !ok {
+		return
+	}
+	var listed []db.ListedWorkflow
+	err := s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		listed, err = wide.ListWorkflows(ctx, readable)
+		return err
+	})
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the workflows could not be read")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	write(w, http.StatusOK, map[string]any{"workflows": listed})
 }
 
 // repositoryOut is a workflow's repository as the wire writes it, its labels those the version at

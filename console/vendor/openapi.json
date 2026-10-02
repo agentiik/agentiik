@@ -5385,6 +5385,76 @@
           "$ref": "#/components/parameters/ns"
         }
       ],
+      "get": {
+        "operationId": "listWorkflows",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List a namespace's workflows",
+        "description": "The workflows of the namespace whose runs the caller reads, by name in byte order: each with its name, when it was created, and its newest run, absent where it was never run. Nothing of its repository or its file is answered, which workflow:read guards, so that the listing tells an operator, who runs a workflow without reading it, no more than the runs it follows do. A namespace the caller reads the runs of no workflow in lists nothing, as one that does not exist. Requires run:read, asked of each workflow as GET /api/v1/runs asks it.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "200": {
+            "description": "The workflows.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/workflowList"
+                },
+                "examples": {
+                  "listed": {
+                    "summary": "one run and one never run",
+                    "value": {
+                      "workflows": [
+                        {
+                          "name": "ledger-export",
+                          "created_at": "2026-09-30T14:00:00Z"
+                        },
+                        {
+                          "name": "monthly-invoicing",
+                          "created_at": "2026-09-28T09:00:00Z",
+                          "latest": {
+                            "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                            "state": "failed",
+                            "trigger_kind": "manual",
+                            "created_at": "2026-10-01T05:41:03Z",
+                            "finished_at": "2026-10-01T05:42:55Z"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "none": {
+                    "summary": "a namespace the caller reads nothing of",
+                    "value": {
+                      "workflows": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A request carrying two credentials, a bearer token beside the session cookie or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. A namespace the caller reads nothing of lists nothing."
+          }
+        }
+      },
       "post": {
         "operationId": "createWorkflow",
         "tags": [
@@ -20879,6 +20949,167 @@
             "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
             "inputs": {},
             "files": {}
+          }
+        ]
+      },
+      "latestRun": {
+        "type": "object",
+        "description": "A workflow's newest run, by when it was created, as its runs' readers read it in a listing: what it is, where it stands and when it was asked for and ended.",
+        "required": [
+          "run",
+          "state",
+          "trigger_kind",
+          "created_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The run's identifier.",
+            "examples": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+            ]
+          },
+          "state": {
+            "$ref": "wire.schema.json#/$defs/runState",
+            "description": "Where the run stands now.",
+            "examples": [
+              "failed",
+              "running"
+            ]
+          },
+          "trigger_kind": {
+            "$ref": "wire.schema.json#/$defs/triggerKind",
+            "description": "What started it.",
+            "examples": [
+              "manual",
+              "schedule"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the run was asked for.",
+            "examples": [
+              "2026-10-01T05:41:03Z"
+            ]
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it ended, absent while it has not.",
+            "examples": [
+              "2026-10-01T05:42:55Z"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+            "state": "failed",
+            "trigger_kind": "manual",
+            "created_at": "2026-10-01T05:41:03Z",
+            "finished_at": "2026-10-01T05:42:55Z"
+          }
+        ]
+      },
+      "listedWorkflow": {
+        "type": "object",
+        "description": "One workflow of a namespace as its listing answers it to whoever reads its runs: its name, when it was created and its newest run, and nothing of its repository or its file, which workflow:read guards.",
+        "required": [
+          "name",
+          "created_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The workflow's name in its namespace.",
+            "examples": [
+              "monthly-invoicing"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the workflow was created.",
+            "examples": [
+              "2026-09-28T09:00:00Z"
+            ]
+          },
+          "latest": {
+            "$ref": "#/components/schemas/latestRun",
+            "description": "Its newest run, absent where it was never run.",
+            "examples": [
+              {
+                "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                "state": "failed",
+                "trigger_kind": "manual",
+                "created_at": "2026-10-01T05:41:03Z",
+                "finished_at": "2026-10-01T05:42:55Z"
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "name": "monthly-invoicing",
+            "created_at": "2026-09-28T09:00:00Z",
+            "latest": {
+              "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+              "state": "failed",
+              "trigger_kind": "manual",
+              "created_at": "2026-10-01T05:41:03Z",
+              "finished_at": "2026-10-01T05:42:55Z"
+            }
+          },
+          {
+            "name": "ledger-export",
+            "created_at": "2026-09-30T14:00:00Z"
+          }
+        ]
+      },
+      "workflowList": {
+        "title": "Workflow list",
+        "type": "object",
+        "description": "A namespace's workflows as the caller may see them, by name.",
+        "required": [
+          "workflows"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/listedWorkflow"
+            },
+            "description": "Each workflow of the namespace whose runs the caller reads, by name in byte order. Empty where it reads the runs of none, a namespace that does not exist included.",
+            "examples": [
+              [
+                {
+                  "name": "ledger-export",
+                  "created_at": "2026-09-30T14:00:00Z"
+                },
+                {
+                  "name": "monthly-invoicing",
+                  "created_at": "2026-09-28T09:00:00Z",
+                  "latest": {
+                    "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                    "state": "failed",
+                    "trigger_kind": "manual",
+                    "created_at": "2026-10-01T05:41:03Z",
+                    "finished_at": "2026-10-01T05:42:55Z"
+                  }
+                }
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "workflows": []
           }
         ]
       }
