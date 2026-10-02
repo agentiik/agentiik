@@ -11,6 +11,14 @@
     // dashed draws the span before the range, behind the range's own series.
     dashed?: boolean;
   };
+
+  import { SvelteMap } from "svelte/reactivity";
+
+  // The width each chart drawn at once needs for its values' axis, its widest label and the gap
+  // beside it. Every chart takes the widest of them, so that charts one above the other start their
+  // plots on one line, and none keeps room its labels do not fill: a fixed 64px left a chart of
+  // single figures with 50px of nothing at its left.
+  const needs = new SvelteMap<symbol, number>();
 </script>
 
 <script lang="ts">
@@ -140,6 +148,29 @@
   // shape builds the chart again.
   const shapeOf = () => `${stacked} ${height} ${series.map((s) => `${s.label}/${s.kind}/${s.tone}/${s.dashed ?? false}`).join(" ")}`;
 
+  // gutter is the width of the values' axis: the widest label of this chart, measured in the axis'
+  // font, with uPlot's 5px gap and a pixel, or the widest any chart drawn with it needs; and at least
+  // 28px, so that the first time under the plot, centred on its left edge, is not cut.
+  const me = Symbol("chart");
+  const least = 28;
+  function gutter(u: uPlot, values: string[] | null): number {
+    if (values && values.length > 0) {
+      u.ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
+      const widest = Math.max(...values.map((v) => u.ctx.measureText(v).width)) / devicePixelRatio;
+      const need = Math.max(least, Math.ceil(widest) + 6);
+      if (needs.get(me) !== need) needs.set(me, need);
+    }
+    return Math.max(least, ...needs.values());
+  }
+
+  // Laid out again when another chart's labels widen or narrow the axis they share.
+  $effect(() => {
+    void [...needs.values()];
+    untrack(() => {
+      if (plot && holder) plot.setSize({ width: holder.clientWidth, height });
+    });
+  });
+
   function build(el: HTMLDivElement): uPlot {
     const bars = uPlot.paths.bars!({ size: [0.7, 60] });
     const stepped = uPlot.paths.stepped!({ align: 1 });
@@ -163,7 +194,7 @@
       scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * (limit ? 1 + 24 / Math.max(48, height - 60) : 1.08) || 1] } },
       axes: [
         { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "12px Archivo, sans-serif" },
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: 64, values: (_u, vals) => vals.map((v) => format(v)), font: "12px Archivo, sans-serif" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: (u, values) => gutter(u, values), values: (_u, vals) => vals.map((v) => format(v)), font: "12px Archivo, sans-serif" },
       ],
       series: [
         { label: "bucket", value: (_u, _v, _si, i) => (i === null || i === undefined ? "" : bounds(i)) },
@@ -283,6 +314,7 @@
       ground.disconnect();
       plot?.destroy();
       plot = undefined;
+      needs.delete(me);
     };
   });
 
