@@ -5,7 +5,8 @@ import App from "../src/App.svelte";
 import { Place } from "../src/lib/place.svelte";
 import { filtersOf } from "../src/lib/runs.svelte";
 import { Session } from "../src/lib/session.svelte";
-import { queryOfRange, rangeOf } from "../src/lib/stats";
+import { query } from "../src/lib/range.svelte";
+import { described, queryOfRange, rangeOf } from "../src/lib/stats";
 import { answering, scenario } from "./scenario";
 
 vi.mock("uplot", () => import("./plot"));
@@ -26,6 +27,15 @@ describe("a statistics page's range", () => {
     expect(r.preset).toBeUndefined();
     expect(queryOfRange(r, q).toString()).toBe("tab=quotas&from=2026-09-29T10%3A00%3A00.000Z&to=2026-09-29T14%3A00%3A00.000Z");
     expect(rangeOf(new URLSearchParams("from=2026-09-29T14:00:00Z&to=2026-09-29T10:00:00Z"), now).preset).toBe("24h");
+  });
+
+  it("is asked to the max with range=max and no from, and starts where the API answers it does", () => {
+    const r = rangeOf(new URLSearchParams("range=max"), now);
+    expect(r.preset).toBe("max");
+    expect(query(r)).toEqual({ range: "max", from: undefined, to: "2026-09-30T06:02:30.000Z", compare: undefined });
+    expect(query(rangeOf(new URLSearchParams("range=7d"), now))).toMatchObject({ range: undefined, from: "2026-09-23T06:02:30.000Z" });
+    expect(described(r, "1d", "2025-03-14T09:26:53Z")).toBe("2025-03-14 09:26 to 2026-09-30 06:02 UTC · a bucket a day");
+    expect(queryOfRange(r, new URLSearchParams()).toString()).toBe("range=max");
   });
 });
 
@@ -53,6 +63,15 @@ describe("a namespace's statistics", () => {
     expect(series).toContain("compare=previous");
     const q = new URL(`http://x${series!.slice(4)}`).searchParams;
     expect(Date.parse(q.get("to")!) - Date.parse(q.get("from")!)).toBe(7 * 86_400_000);
+  });
+
+  it("asks to the max with range=max where Max is chosen", async () => {
+    const { asked, place } = open("/finance/statistics");
+    expect(await screen.findByText("Retries by exit code")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Max" }));
+    expect(place.query.get("range")).toBe("max");
+    await vi.waitFor(() => expect(asked.some((a) => a.startsWith("GET /api/v1/finance/stats/runs") && a.includes("range=max") && !a.includes("from="))).toBe(true));
+    expect(screen.getByRole("button", { name: "Max" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("opens no runs from a bucket, since a namespace's runs are listed under each workflow", async () => {
