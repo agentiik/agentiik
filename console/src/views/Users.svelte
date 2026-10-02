@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Filter from "../components/Filter.svelte";
+  import { filtered } from "../lib/palette";
   import { explain, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
   import { refusal, type API, type Me } from "../api/client";
@@ -169,10 +171,13 @@
   }
 
   const own = $derived(me.user?.login ?? "");
+  // What the Filter field at the head leaves of the list, as typed into the address.
+  const usersShown = $derived(users ? filtered(users, place.query.get("q") ?? "", (u) => `${u.login} ${u.display_name} ${u.email}`) : []);
 </script>
 
 <AdminTabs {place} current="users">
   {#snippet actions()}
+    <Filter {place} label="Filter the users" />
     <button class="control primary" onclick={() => ((adding = true), (problem = null))}><Icon name="control-add" size={14} />Add a user</button>
   {/snippet}
 </AdminTabs>
@@ -205,7 +210,7 @@
     <table>
       <thead><tr><th>Login</th><th>Name</th><th>Email</th><th>Standing</th><th>Created</th><th>Last signed in</th><th class="end"></th></tr></thead>
       <tbody>
-        {#each users as u (u.login)}
+        {#each usersShown as u (u.login)}
           <tr>
             <td class="term nowrap"><span class="who"><Avatar name={u.display_name} src={userPhotoOf(u)} size={24} /><span class="login">{u.login}</span></span></td>
             <td class="nowrap">{u.display_name}{#if u.title}<span class="muted title">{u.title}</span>{/if}</td>
@@ -232,6 +237,8 @@
               {/if}
             </td>
           </tr>
+        {:else}
+          <tr><td colspan="7" class="muted">{users.length === 0 ? "No users" : "Nothing matches."}</td></tr>
         {/each}
       </tbody>
     </table>
