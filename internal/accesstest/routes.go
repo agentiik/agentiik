@@ -209,6 +209,7 @@ var Cases = []Case{
 	// it answers 426 to whoever it lets through.
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/me/live", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/steps", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/ports", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
