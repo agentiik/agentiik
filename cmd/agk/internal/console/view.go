@@ -56,7 +56,7 @@ func (m Model) screen() string {
 		// The prompt sits above the keys that answer it, over the last line of the view.
 		lines[body-1] = t.line(false, m.width, within([]part{{strong, m.question()}}, m.width)...)
 	}
-	return m.withToasts(t, strings.Join(append(append([]string{m.topLine(t)}, lines[:body]...), m.keyLine(t)), "\n"))
+	return m.withPalette(t, m.withToasts(t, strings.Join(append(append([]string{m.topLine(t)}, lines[:body]...), m.keyLine(t)), "\n")))
 }
 
 // theme is how the screen is drawn now: the terminal's depth, on the ground its background asked
@@ -125,6 +125,8 @@ func (m Model) tabs() []part {
 func (m Model) keyLine(t theme) string {
 	var keys [][2]string
 	switch {
+	case m.palette != nil:
+		keys = paletteKeys()
 	case m.asking == askingCancel:
 		keys = [][2]string{{"y", "Cancel run"}, {"any other key", "Keep it"}}
 	case m.asking == askingReplay:
@@ -173,7 +175,7 @@ func (m Model) keyLine(t theme) string {
 
 // keysListed is every key of the view, which ? opens over it.
 func (m Model) keysListed(t theme) []string {
-	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}, {"1", "The runs"}}
+	rows := [][2]string{{"q, ctrl+c", "Quit, handing the screen back as it was"}, {"?", "List every key, and close the list"}, {":", "Open the command palette: commands, views, runs, workflows and namespaces"}, {"1", "The runs"}}
 	if m.me.Admin {
 		rows = append(rows, [2]string{"4", "The runners and their pools"})
 	}

@@ -143,6 +143,11 @@ type Model struct {
 	seen   map[string]bool
 	toasts []toast
 
+	// palette is the command palette open, if any, and used the commands chosen in it, the last
+	// first, which it opens on.
+	palette *palette
+	used    []string
+
 	// The graph view's: the graph of the run's workflow, read for graphFor, or why it could not be;
 	// the view it was opened from, which esc goes back to; and whether it is written as a list.
 	graph       *flowGraph
@@ -440,6 +445,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case typedPaused:
 		return m.paused(msg)
 	case tea.KeyPressMsg:
+		if m.palette != nil && m.asking == notAsking {
+			return m.typingCommand(msg)
+		}
 		if m.filtering && m.view == runsView && m.asking == notAsking && !m.listing {
 			return m.typing(msg)
 		}
@@ -496,6 +504,9 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.listing = true
+		return m, nil
+	case ":":
+		m.palette = &palette{}
 		return m, nil
 	}
 	switch key {
