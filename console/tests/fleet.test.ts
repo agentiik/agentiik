@@ -117,7 +117,7 @@ describe("the runners and pools", () => {
 
   it("are reached from the sidebar, and offered to nobody else", async () => {
     const place = open("dana", "/dana/runs");
-    const installation = await screen.findByRole("list", { name: "Installation" });
+    const installation = await screen.findByRole("list", { name: "Administration" });
     await fireEvent.click(within(installation).getByRole("link", { name: "Runners" }));
     expect(place.route).toEqual({ kind: "runners" });
     expect(await screen.findByRole("region", { name: "Pools" })).toBeTruthy();

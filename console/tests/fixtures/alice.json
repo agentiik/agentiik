@@ -34496,5 +34496,29 @@
         }
       ]
     }
+  },
+  "GET /api/v1/auth/policy": {
+    "status": 200,
+    "body": {
+      "password": "allowed",
+      "passkey": "required",
+      "user_verification": "required",
+      "device_bound_only": false,
+      "min_passkeys": 2
+    }
+  },
+  "GET /api/v1/finance/auth/policy": {
+    "status": 200,
+    "body": {
+      "device_bound_only": true
+    }
+  },
+  "GET /api/v1/alice/auth/policy": {
+    "status": 200,
+    "body": {}
+  },
+  "GET /api/v1/team-ops/auth/policy": {
+    "status": 200,
+    "body": {}
   }
 }

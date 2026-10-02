@@ -209,7 +209,7 @@ describe("the namespaces, for an administrator", () => {
 
   it("are reached from the sidebar, and offered to nobody else", async () => {
     const { place } = open("/dana/runs");
-    const installation = await screen.findByRole("list", { name: "Installation" });
+    const installation = await screen.findByRole("list", { name: "Administration" });
     await fireEvent.click(within(installation).getByRole("link", { name: "Users" }));
     expect(place.route).toEqual({ kind: "users" });
     await fireEvent.click(within(installation).getByRole("link", { name: "Namespaces" }));
