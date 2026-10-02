@@ -4414,16 +4414,15 @@
         },
         "quotas": {
           "$ref": "#/$defs/quotas",
-          "description": "What this namespace may consume. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, so the API answers both; the other four appear where they are set, and absent bound nothing of the namespace's own.",
+          "description": "What this namespace may consume. max_concurrent_tasks always holds a value, 20 until an administrator sets another, so the API answers it; the other five appear where they are set, and absent bound nothing of the namespace's own.",
           "examples": [
             {
               "max_concurrent_tasks": 20,
               "max_runs_per_hour": 500,
-              "max_retention_days": 90
+              "max_retention_days": 365
             },
             {
-              "max_concurrent_tasks": 20,
-              "max_retention_days": 90
+              "max_concurrent_tasks": 20
             }
           ]
         },
@@ -4517,16 +4516,14 @@
           "kind": "personal",
           "owner": "alice",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         },
         {
           "name": "demo",
           "kind": "shared",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         },
         {
@@ -4534,8 +4531,7 @@
           "kind": "shared",
           "owner": "bob-martin",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           },
           "former_names": [
             "finance"
@@ -4544,9 +4540,138 @@
         }
       ]
     },
+    "auditEntry": {
+      "title": "Audit entry",
+      "description": "One entry of the audit log, as the export writes it on a line of its own and as GET /api/v1/auth/audit answers it: the act, who did it, where and to what, and the two hashes that chain it to the entry before. Every field is written as the hash covers it, so that a reader can check an entry it was handed without asking the installation anything more.",
+      "type": "object",
+      "required": [
+        "seq",
+        "at",
+        "actor",
+        "action",
+        "target",
+        "result",
+        "detail",
+        "prev_hash",
+        "hash"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The entry's number, from 1 with no gap, which the database gives it as it appends it under a lock: a number missing is an entry missing.",
+          "examples": [
+            4182
+          ]
+        },
+        "at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$",
+          "description": "When the act's transaction appended it, on the database's clock, in UTC to the microsecond, written exactly as the hash covers it.",
+          "examples": [
+            "2026-10-02T09:14:07.512903Z"
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "description": "Who did it: a principal as a grant names one, installation for what the installation did of itself, or operator for the bootstrap token.",
+          "examples": [
+            "carol",
+            "finance/deployer",
+            "installation"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "pattern": "^[a-z_]+\\.[a-z_]+$",
+          "description": "What was done, a thing and a verb, as the documentation lists them.",
+          "examples": [
+            "namespace.update",
+            "run.cancel",
+            "signin.fail"
+          ]
+        },
+        "namespace": {
+          "type": "string",
+          "description": "The namespace it was done in, left out for an act on the installation.",
+          "examples": [
+            "finance"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "What it was done to: a run, a namespace, a login, a runner, a grant, by the name or identifier its kind is known by.",
+          "examples": [
+            "finance",
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          ]
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "done",
+            "unchanged"
+          ],
+          "description": "done, or unchanged for an act asked of something already so, a second cancellation or a runner drained twice.",
+          "examples": [
+            "done",
+            "unchanged"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "description": "The act's particulars as the text of a JSON object, never a secret's value or a token: a string rather than an object, since a reader that re-encoded an object would reorder or respace the bytes the hash covers.",
+          "examples": [
+            "{\"quotas\":{\"max_concurrent_tasks\":7}}"
+          ]
+        },
+        "prev_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The hash of the entry before, 64 zeros before the first. Lowercase hexadecimal, 64 characters.",
+          "examples": [
+            "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a"
+          ]
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 over agentiik audit 1, the previous hash and the fields, as the documentation's Audit log sets out. Lowercase hexadecimal, 64 characters.",
+          "examples": [
+            "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "seq": 4182,
+          "at": "2026-10-02T09:14:07.512903Z",
+          "actor": "carol",
+          "action": "namespace.update",
+          "namespace": "finance",
+          "target": "finance",
+          "result": "done",
+          "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+          "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+          "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+        },
+        {
+          "seq": 4183,
+          "at": "2026-10-02T09:15:44.008112Z",
+          "actor": "dana",
+          "action": "runner.drain",
+          "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "result": "unchanged",
+          "detail": "{\"reason\":\"kernel update\"}",
+          "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+          "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        }
+      ]
+    },
     "quotas": {
       "title": "Quotas",
-      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, and a write leaving either out keeps the value it has: the two were a namespace's bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other four bound nothing until they are set, and a write leaving one out removes its bound. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
+      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks always holds a value, 20 until an administrator sets another, and a write leaving it out keeps the value it has: it was one of a namespace's two bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other five bound nothing until they are set, and a write leaving one out removes its bound: max_retention_days, v0.2's other bound, among them from v0.6.0, so that an installation keeps what it ran until somebody decides otherwise. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -4580,7 +4705,7 @@
         "max_retention_days": {
           "type": "integer",
           "minimum": 1,
-          "description": "The upper bound on how long the namespace may ask to keep what its runs produce.",
+          "description": "The upper bound on how long the namespace may ask to keep what its runs produce, and how long a workflow declaring no retain keeps it. Absent, it bounds nothing, and what a run of a workflow declaring no retain produces is kept for ever: an installation keeps what it ran until somebody decides otherwise, and a namespace that must forget, one whose logs hold personal data for instance, sets it.",
           "examples": [
             180,
             30
@@ -5762,7 +5887,7 @@
         },
         "retain": {
           "$ref": "#/$defs/duration",
-          "description": "The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding.",
+          "description": "The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding, and the run kept for ever where the namespace sets none either.",
           "examples": [
             "7d"
           ]
@@ -6247,7 +6372,7 @@
               },
               "retain": {
                 "$ref": "#/$defs/duration",
-                "description": "How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them.",
+                "description": "How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them. Absent where defaults.retain is, the namespace's max_retention_days then deciding, and the artifacts kept for ever where it sets none.",
                 "examples": [
                   "7d"
                 ]
