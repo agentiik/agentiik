@@ -278,7 +278,7 @@
     <div class="runform">
       <Pane title="Run {workflow}">
         {#key runRef}
-          <RunForm {api} {place} {namespace} {workflow} {graph} commit={detail.version.commit} ref={runRef} onclose={() => (running = false)} />
+          <RunForm {api} {place} {namespace} {workflow} ref={runRef} onclose={() => (running = false)} />
         {/key}
       </Pane>
     </div>
