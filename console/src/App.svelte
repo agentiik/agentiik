@@ -15,6 +15,7 @@
   import type { Session } from "./lib/session.svelte";
   import { firstNamespace, fold, folded as wasFolded, keepNamespace, lastNamespace } from "./lib/shell";
   import { titleOf } from "./lib/trail";
+  import { settles } from "./lib/page";
   import Unloaded from "./components/Unloaded.svelte";
   import Refused from "./views/Refused.svelte";
   import NewNamespace from "./components/NewNamespace.svelte";
@@ -224,11 +225,11 @@
       <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
       {#key screen}
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
-        {#await screens.WorkflowStatistics() then { default: WorkflowStatistics }}<WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} shares={holds(session.me, "grant:manage", route.namespace, route.workflow)} />{:catch}<Unloaded />{/await}
-      {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && route.run === undefined && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
+        {#await screens.WorkflowStatistics() then { default: WorkflowStatistics }}<WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} settles={settles(session.me, route.namespace, route.workflow)} />{:catch}<Unloaded />{/await}
+      {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && route.run === undefined && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files" || route.tab === "settings") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
         <!-- A workflow's page: the API answers one the
              caller cannot read as one that does not exist, and the page says no more. -->
-        {#await screens.Workflow() then { default: Workflow }}<Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} tab={route.tab} />{:catch}<Unloaded />{/await}
+        {#await screens.Workflow() then { default: Workflow }}<Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} tab={route.tab} namespaces={session.namespaces} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && runs && route.run && route.against}
         {#await screens.RunDiff() then { default: RunDiff }}<RunDiff {api} {place} me={session.me} namespace={route.namespace} a={route.run} b={route.against} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && runs && route.run}
