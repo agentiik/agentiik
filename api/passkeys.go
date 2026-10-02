@@ -382,7 +382,7 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 		}
 
 		o.RP.ID, o.RP.Name = s.rpID, rpName
-		o.User.ID, o.User.Name, o.User.DisplayName = b64.EncodeToString(handle), user.Login, user.DisplayName
+		o.User.ID, o.User.Name, o.User.DisplayName = b64.EncodeToString(handle), user.Login, user.DisplayName()
 		o.Challenge, o.Timeout, o.Attestation = b64.EncodeToString(value), timeout, "none"
 		for _, alg := range webauthn.Algorithms() {
 			o.PubKeyCredParams = append(o.PubKeyCredParams, credentialParameter{Type: "public-key", Alg: int(alg)})

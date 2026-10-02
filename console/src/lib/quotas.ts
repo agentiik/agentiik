@@ -40,7 +40,7 @@ export function formOf(q: Quotas | undefined): Form {
   const artifact = q?.max_artifact_bytes !== undefined ? inUnits(q.max_artifact_bytes) : undefined;
   return {
     max_concurrent_tasks: String(q?.max_concurrent_tasks ?? 20),
-    max_retention_days: String(q?.max_retention_days ?? 90),
+    max_retention_days: q?.max_retention_days !== undefined ? String(q.max_retention_days) : "",
     max_runs_per_hour: q?.max_runs_per_hour !== undefined ? String(q.max_runs_per_hour) : "",
     max_artifact: artifact ? String(artifact.amount) : "",
     max_artifact_unit: artifact?.unit ?? "GiB",
@@ -53,22 +53,18 @@ const whole = /^[1-9][0-9]*$/;
 const duration = /^[1-9][0-9]*(ms|s|m|h|d)$/;
 
 // bodyOf is what PUT /api/v1/namespaces/{ns}/quotas is sent, or the first field refused and why.
-// A bound left empty is left out, which is the API's way of saying it bounds nothing, except the two
-// that always hold a value; no pool ticked is no list, every pool that accepts the namespace.
+// A bound left empty is left out, which is the API's way of saying it bounds nothing, except the one
+// that always holds a value; no pool ticked is no list, every pool that accepts the namespace.
 export function bodyOf(f: Form): { body: Quotas } | { field: keyof Form; problem: string } {
-  for (const k of ["max_concurrent_tasks", "max_retention_days"] as const) {
-    if (!whole.test(f[k].trim())) return { field: k, problem: "a whole number from 1, which it always holds" };
-  }
-  for (const k of ["max_runs_per_hour", "max_artifact"] as const) {
+  if (!whole.test(f.max_concurrent_tasks.trim())) return { field: "max_concurrent_tasks", problem: "a whole number from 1, which it always holds" };
+  for (const k of ["max_retention_days", "max_runs_per_hour", "max_artifact"] as const) {
     if (f[k].trim() !== "" && !whole.test(f[k].trim())) return { field: k, problem: "a whole number from 1, or empty for no bound" };
   }
   if (f.max_run_duration.trim() !== "" && !duration.test(f.max_run_duration.trim())) {
     return { field: "max_run_duration", problem: "a length as a step's timeout writes it, such as 24h or 90m, or empty for no bound" };
   }
-  const body: Quotas = {
-    max_concurrent_tasks: Number(f.max_concurrent_tasks.trim()),
-    max_retention_days: Number(f.max_retention_days.trim()),
-  };
+  const body: Quotas = { max_concurrent_tasks: Number(f.max_concurrent_tasks.trim()) };
+  if (f.max_retention_days.trim()) body.max_retention_days = Number(f.max_retention_days.trim());
   if (f.max_runs_per_hour.trim()) body.max_runs_per_hour = Number(f.max_runs_per_hour.trim());
   if (f.max_artifact.trim()) body.max_artifact_bytes = bytesOf(Number(f.max_artifact.trim()), f.max_artifact_unit);
   if (f.max_run_duration.trim()) body.max_run_duration = f.max_run_duration.trim();
@@ -82,7 +78,7 @@ export function summary(q: Quotas | undefined): string {
   const parts = [`${q.max_concurrent_tasks ?? 20} tasks at once`];
   if (q.max_runs_per_hour !== undefined) parts.push(`${q.max_runs_per_hour} runs an hour`);
   if (q.max_artifact_bytes !== undefined) parts.push(`${bytes(q.max_artifact_bytes).replace(/\.0 /, " ")} of artifacts`);
-  parts.push(`kept ${q.max_retention_days ?? 90} days`);
+  if (q.max_retention_days !== undefined) parts.push(`kept ${q.max_retention_days} days`);
   if (q.max_run_duration !== undefined) parts.push(`runs ${q.max_run_duration} at most`);
   parts.push(q.allowed_runner_pools ? `pools ${q.allowed_runner_pools.join(", ")}` : "every pool accepting it");
   return parts.join(" · ");

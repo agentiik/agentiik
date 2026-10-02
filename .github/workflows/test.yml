@@ -11,8 +11,54 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # What needs no service: the build, vet and gofmt, which every package shares.
+  check:
     runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # The version go.mod requires. Pinned to the minor rather than to stable, so
+          # that a new Go release is a commit someone makes here and reads, and never a
+          # build that changes underneath a branch nobody touched.
+          go-version: '1.27'
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      # gofmt has no exit code of its own for this: it lists the files it would rewrite
+      # and succeeds either way, so the listing is what the job has to check.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would rewrite these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  # Every package but api, which the api job below runs in shards, in four groups run side by
+  # side, each on a runner of its own with a PostgreSQL, a NATS and the Docker image of its own.
+  # One runner held them all once, under -race on four cores, and the job lasted as long as its
+  # four slowest packages fighting for them: cmd/agentiik-api, controller, cmd/agentiik-controller
+  # and db, three minutes each or more, waited on together for seven. Each slow package is now
+  # alone with what it needs or beside one like it, and the rest share a runner as before. The
+  # groups are named rather than dealt, so that a slow package is moved by a line here; rest is
+  # every package the others do not name, so a package added anywhere is tested somewhere, and a
+  # package named that no longer exists fails the job rather than going untested.
+  packages:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # A failure in one group says nothing about the others, which run to the end all the same.
+      fail-fast: false
+      matrix:
+        group: [serve, control, store, rest]
 
     # A PostgreSQL, because the tests that hold the namespace rule are written against a real
     # one and skip without it. They skip so that a laptop with nothing installed still runs
@@ -32,7 +78,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
 
     steps:
       - uses: actions/checkout@v4
@@ -67,27 +112,25 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          # The version go.mod requires. Pinned to the minor rather than to stable, so
-          # that a new Go release is a commit someone makes here and reads, and never a
-          # build that changes underneath a branch nobody touched.
           go-version: '1.27'
-
-      - name: build
-        run: go build ./...
-
-      - name: vet
-        run: go vet ./...
 
       # The race detector is not optional here. The artifact store is written for
       # concurrent puts of one key, two steps computing identical bytes being the
       # ordinary case rather than a race to avoid, and that promise is only held if it
       # is tested under -race.
       - name: test
-        # Every package but api, which the job below runs in shards side by side: it holds some
-        # five hundred tests that each start a server over a database of their own, one after
-        # another, and it alone kept this job waiting twenty minutes after every other package
-        # had finished.
-        run: go test $(go list ./... | grep -vx 'github.com/agentiik/agentiik/api') -race -timeout 30m
+        run: |
+          case "${{ matrix.group }}" in
+            serve) packages="./cmd/agentiik-api" ;;
+            control) packages="./controller ./cmd/agentiik-controller" ;;
+            store) packages="./db ./bus ./bus/control ./purge" ;;
+            rest)
+              named="api cmd/agentiik-api controller cmd/agentiik-controller db bus bus/control purge"
+              packages=$(go list ./... | grep -vxF -f <(printf 'github.com/agentiik/agentiik/%s\n' $named))
+              ;;
+            *) echo "no group ${{ matrix.group }}"; exit 1 ;;
+          esac
+          go test $packages -race -timeout 30m
         env:
           # A superuser, because the tests create a database of their own, the schema, and
           # the unprivileged role the application connects as. What is under test is what
@@ -98,11 +141,45 @@ jobs:
           # missing has found a broken job rather than a laptop, and fails rather than skips.
           AGENTIIK_TEST_REQUIRE_DOCKER: '1'
 
-      # How long a refusal about something that does not exist takes, against one about something
-      # the caller may not reach: v0.3.0's fact says no timing tells them apart, and the tests that
-      # hold it measure only where AGENTIIK_TEST_TIMING asks them to, since a machine running other
-      # work measures that work. So they run here on their own, once the suite has finished, and
-      # without -race, whose instrumentation would be measured as much as the answers.
+  # How long a refusal about something that does not exist takes, against one about something
+  # the caller may not reach: v0.3.0's fact says no timing tells them apart, and the tests that
+  # hold it measure only where AGENTIIK_TEST_TIMING asks them to, since a machine running other
+  # work measures that work. So they run on a runner of their own, doing nothing else, and
+  # without -race, whose instrumentation would be measured as much as the answers. They waited
+  # once for the whole suite to finish on its runner, for the same quiet a runner of their own
+  # gives them at once.
+  timing:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: agk
+          POSTGRES_DB: agk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bus
+        run: |
+          docker run -d --name agk-nats -p 4222:4222 nats:alpine -js
+          for i in $(seq 1 30); do
+            if docker exec agk-nats nats-server --help >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
       - name: timing
         run: go test ./cmd/agentiik-api -count=1 -run 'TakeAsLongToRefuse|CannotEstablishThatItExists$'
         env:
@@ -110,16 +187,21 @@ jobs:
           AGENTIIK_TEST_DATABASE_URL: postgres://postgres:agk@127.0.0.1:5432/agk
           AGENTIIK_TEST_BUS_URL: nats://127.0.0.1:4222
 
-      # gofmt has no exit code of its own for this: it lists the files it would rewrite
-      # and succeeds either way, so the listing is what the job has to check.
-      - name: gofmt
+  # The four commands the README names, as one check: the build, vet and gofmt, and the tests
+  # of every package, whatever runner each ran on. A branch protection asks for it by this name.
+  test:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [check, packages, timing]
+    steps:
+      - name: every part passed
         run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "gofmt would rewrite these files:"
-            echo "$unformatted"
-            exit 1
-          fi
+          for result in "${{ needs.check.result }}" "${{ needs.packages.result }}" "${{ needs.timing.result }}"; do
+            if [ "$result" != success ]; then
+              echo "check ${{ needs.check.result }}, packages ${{ needs.packages.result }}, timing ${{ needs.timing.result }}"
+              exit 1
+            fi
+          done
 
   # The api package, its tests dealt in turn to three shards run side by side, each against a
   # PostgreSQL of its own. A test lands in one shard and only one, by its place in go test -list, so a

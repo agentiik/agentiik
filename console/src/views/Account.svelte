@@ -1,7 +1,13 @@
 <script lang="ts">
+  import { explain, Told, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { Refusal, type API, type Me } from "../api/client";
   import Icon from "../components/Icon.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
+  import Notice from "../components/Notice.svelte";
+  import Dialog from "../components/Dialog.svelte";
+  import ProfileForm from "../components/ProfileForm.svelte";
   import ServiceAccounts from "../components/ServiceAccounts.svelte";
   import {
     addPasskey,
@@ -44,25 +50,25 @@
     changed,
   }: { api: API; place: Place; me: Me; tab: string | undefined; passkeys: Passkeys; changed: () => Promise<void> } = $props();
 
-  const shown = $derived(tab === "tokens" || tab === "service-accounts" ? tab : "credentials");
+  const shown = $derived(tab === "profile" || tab === "tokens" || tab === "service-accounts" ? tab : "credentials");
   const now = Date.now();
 
   // What any act on the screen is doing, said, and what the API refused, said as it said it.
   let working = $state(false);
   let said = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
-  async function act(work: () => Promise<void>) {
+  async function act(failed: string, work: () => Promise<void>) {
     if (working) {
       return;
     }
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -71,19 +77,20 @@
   // The sign-in methods, and the policy that rules them.
   let credentials = $state<Credential[] | null>(null);
   let policy = $state<Policy | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
+  let untokened = $state<Explained | null>(null);
 
   async function reread() {
     try {
       credentials = await credentialsOf(api);
-      unread = "";
+      unread = null;
     } catch (e) {
       // A credential removed ends the sessions it opened, this one among them where it did.
       if (e instanceof Refusal && e.status === 401) {
         await changed();
         return;
       }
-      unread = sentence(e instanceof Error ? e.message : String(e));
+      unread = explain("load your passkeys and passwords", e);
     }
   }
 
@@ -102,25 +109,27 @@
   let code = $state("");
 
   function remove(c: Credential) {
-    return act(async () => {
+    return act("remove the credential", async () => {
       await removeCredential(api, c.id);
       asking = "";
-      said = c.type === "password" ? "The password is removed, with the one-time code generator beside it where there was one." : `${described(c)} is removed.`;
+      said = c.type === "password" ? "Password removed." : `${described(c)} removed.`;
       await reread();
     });
   }
 
   function removeTheGenerator(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("remove the one-time code generator", async () => {
       await removeGenerator(api, code.trim());
       code = "";
-      said = "The one-time code generator is removed. The password stays.";
+      said = "One-time code generator removed.";
       await reread();
     });
   }
 
-  // Adding a passkey, and signing in again first where the session is too old to add one.
+  // Adding a passkey, and signing in again first where the session is too old to add one, asked in
+  // a dialog opened from the screen's head, as everything the console creates is.
+  let adding = $state(false);
   let label = $state("");
   let again = $state(false);
   let password = $state("");
@@ -129,16 +138,17 @@
 
   function add(event?: SubmitEvent) {
     event?.preventDefault();
-    return act(async () => {
+    return act("add the passkey", async () => {
       if (!passkeys.credentials) {
-        throw new Error(passkeys.unavailable);
+        throw new Told(passkeys.unavailable);
       }
       said = "Waiting for your authenticator.";
       try {
         const made = await addPasskey(api, passkeys.credentials, label);
         again = false;
         label = "";
-        said = made ? `${made.label ? `“${made.label}”, a` : "A"} ${made.kind} passkey is added.` : "The passkey is added.";
+        adding = false;
+        said = "Passkey added.";
       } catch (e) {
         said = "";
         if (e instanceof SignInAgain) {
@@ -151,9 +161,9 @@
   }
 
   function signInAgainWithPasskey() {
-    return act(async () => {
+    return act("sign in again with your passkey", async () => {
       if (!passkeys.credentials) {
-        throw new Error(passkeys.unavailable);
+        throw new Told(passkeys.unavailable);
       }
       said = "Waiting for your passkey.";
       await signInWithPasskey(api, passkeys.credentials);
@@ -165,7 +175,7 @@
 
   function signInAgainWithPassword(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("sign in again with your password", async () => {
       await signInWithPassword(api, me.user?.login ?? me.principal, password, totp.trim());
       password = "";
       totp = "";
@@ -196,9 +206,9 @@
   async function retokens() {
     try {
       tokens = await tokensOf(api);
-      unread = "";
+      untokened = null;
     } catch (e) {
-      unread = sentence(e instanceof Error ? e.message : String(e));
+      untokened = explain("load your tokens", e);
     }
   }
 
@@ -215,6 +225,9 @@
   const permissions = ["workflow:read", "workflow:run", "workflow:write", "workflow:delete", "run:read", "run:read_data", "secret:use", "secret:write", "grant:manage"] as const;
   type Permission = (typeof permissions)[number];
 
+  // Minting a token, asked in a dialog as adding a passkey is; the token is shown once on the screen
+  // when the dialog closes on it.
+  let minting = $state(false);
   let whose = $state("");
   let deviceLabel = $state("");
   let days = $state(90);
@@ -223,7 +236,7 @@
 
   function mintOne(event: SubmitEvent) {
     event.preventDefault();
-    return act(async () => {
+    return act("create the token", async () => {
       const ask: TokenRequest = { expires_at: expiringIn(days, new Date()) };
       if (whose !== "") {
         ask.principal = whose;
@@ -242,6 +255,7 @@
         }
       }
       issued = await mint(api, ask);
+      minting = false;
       copied = false;
       deviceLabel = "";
       kept = [];
@@ -259,10 +273,10 @@
   }
 
   function revokeOne(t: Token) {
-    return act(async () => {
+    return act("revoke the token", async () => {
       await revoke(api, t.id);
       revoking = "";
-      said = `The token ${t.device_label ? `“${t.device_label}”` : t.id} is revoked from its next request.`;
+      said = "Token revoked.";
       await retokens();
     });
   }
@@ -272,229 +286,183 @@
   }
 
   const routes = {
+    profile: { kind: "account" as const, tab: "profile" },
     credentials: { kind: "account" as const },
     tokens: { kind: "account" as const, tab: "tokens" },
     accounts: { kind: "account" as const, tab: "service-accounts" },
   };
 </script>
 
-<nav class="sub" aria-label="Your account">
-  <span class="mono where">{me.principal}</span>
-  <a class="tab" aria-current={shown === "credentials" ? "page" : undefined} href={place.href(routes.credentials)} onclick={follow(place, routes.credentials)}>Sign-in methods</a>
-  <a class="tab" aria-current={shown === "tokens" ? "page" : undefined} href={place.href(routes.tokens)} onclick={follow(place, routes.tokens)}>API tokens</a>
-  <a class="tab" aria-current={shown === "service-accounts" ? "page" : undefined} href={place.href(routes.accounts)} onclick={follow(place, routes.accounts)}>Service accounts</a>
-</nav>
+<PageHeader title="Your account" icon="control-users" {place} tabs={[
+  { label: "Profile", icon: "control-users", to: routes.profile, current: shown === "profile" },
+  { label: "Sign-in methods", icon: "control-passkey", to: routes.credentials, current: shown === "credentials" },
+  { label: "API tokens", icon: "control-copy", to: routes.tokens, current: shown === "tokens" },
+  { label: "Service accounts", icon: "control-groups", to: routes.accounts, current: shown === "service-accounts" },
+]}>
+  {#snippet actions()}
+    {#if shown === "credentials" && !passkeys.unavailable}
+      <button class="control primary" onclick={() => ((adding = true), (problem = null), (again = false))}><Icon name="control-add" size={14} />Add a passkey</button>
+    {:else if shown === "tokens"}
+      <button class="control primary" onclick={() => ((minting = true), (problem = null))}><Icon name="control-add" size={14} />Mint a token</button>
+    {/if}
+  {/snippet}
+</PageHeader>
 
-{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
-{#if said}<p class="said" role="status">{said}</p>{/if}
+{#if problem && !adding && !minting}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
-{#if shown === "service-accounts"}
+{#if shown === "profile"}
+  <ProfileForm {api} {me} reread={changed} />
+{:else if shown === "service-accounts"}
   <ServiceAccounts {api} {me} />
 {:else if shown === "credentials"}
-  <div class="columns">
-    <Pane title="Sign-in methods" aside={credentials ? String(credentials.length) : ""}>
-      {#if policy}<p class="muted lead">{policyLine(policy)}</p>{/if}
-      {#if unread}
-        <p class="problem" role="alert">{unread}</p>
-      {:else if credentials === null}
-        <p class="muted">Reading what you sign in with.</p>
-      {:else if credentials.length === 0}
-        <p class="muted">You hold no credential: a service account signs in with tokens alone.</p>
-      {:else}
-        <table>
-          <thead><tr><th>Credential</th><th>Kind</th><th>Enrolled</th><th>Last used</th><th class="end"></th></tr></thead>
-          <tbody>
-            {#each credentials as c (c.id)}
-              <tr>
-                <td>{#if c.type === "passkey"}<Icon name="control-passkey" size={14} />{/if}{described(c)}</td>
-                <td class="muted">{c.type === "passkey" ? c.kind : c.type === "password" ? "password" : "one-time codes"}</td>
-                <td class="mono muted"><time datetime={c.created_at} title={c.created_at}>{clock(c.created_at, now)}</time></td>
-                <td class="mono muted">{#if c.last_used_at}<time datetime={c.last_used_at} title={c.last_used_at}>{clock(c.last_used_at, now)}</time>{:else}not used yet{/if}</td>
-                <td class="end">
-                  {#if c.type === "totp"}
-                    <form class="inline" onsubmit={removeTheGenerator}>
-                      <label class="unseen" for="generator-code">A code the generator shows now</label>
-                      <input id="generator-code" class="code mono" inputmode="numeric" autocomplete="one-time-code" placeholder="code it shows" maxlength="6" bind:value={code} />
-                      <button class="control" disabled={working || code.trim().length !== 6}>Remove</button>
-                    </form>
-                  {:else if asking === c.id}
-                    <span class="confirm">
-                      <button class="control danger" disabled={working} onclick={() => remove(c)}>Remove {c.type === "password" ? "the password" : "it"}</button>
-                      <button class="control" onclick={() => (asking = "")}>Keep it</button>
-                    </span>
-                  {:else}
-                    <button class="control" onclick={() => (asking = c.id)}><Icon name="control-remove" size={14} />Remove</button>
-                  {/if}
-                </td>
-              </tr>
-              {#if asking === c.id}
-                <tr class="asked"><td colspan="5" class="muted">{c.type === "password" ? "The password signs nobody in from now on, the generator beside it goes too, and the sessions it opened end." : "This passkey signs nobody in from now on, and the sessions it opened end."}</td></tr>
-              {/if}
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-    </Pane>
-
-    <Pane title="Add a passkey">
-      {#if passkeys.unavailable}
-        <p class="muted">{passkeys.unavailable}</p>
-      {:else}
-        <form onsubmit={add}>
-          <label for="passkey-label">A name for it, so that you can tell it from the others when a device is lost</label>
-          <input id="passkey-label" maxlength="256" placeholder="work laptop" bind:value={label} />
-          <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add a passkey</button></p>
-        </form>
-        {#if again}
-          <div class="again">
-            <p>Adding a way in takes a sign-in in the last 10 minutes, so that a session left open is not enough to add one. Sign in again, and the passkey is added straight after.</p>
-            <p><button class="control" disabled={working} onclick={signInAgainWithPasskey}><Icon name="control-passkey" size={14} />Sign in again with a passkey</button></p>
-            {#if holdsPassword}
-              <form onsubmit={signInAgainWithPassword}>
-                <label for="again-password">Or with your password</label>
-                <input id="again-password" type="password" autocomplete="current-password" bind:value={password} />
-                <label for="again-totp">A code from your generator, where you enrolled one</label>
-                <input id="again-totp" class="mono" inputmode="numeric" autocomplete="one-time-code" maxlength="6" bind:value={totp} />
-                <p><button class="control" disabled={working || password === ""}>Sign in again with the password</button></p>
-              </form>
+  <Pane title="Sign-in methods" aside={credentials ? String(credentials.length) : ""}>
+    {#if policy}<p class="muted lead">{policyLine(policy)}</p>{/if}
+    {#if passkeys.unavailable}<p class="muted lead">{passkeys.unavailable}</p>{/if}
+    {#if unread}
+      <Problem explained={unread} onretry={reread} />
+    {:else if credentials === null}
+      <p class="muted">Loading</p>
+    {:else if credentials.length === 0}
+      <p class="muted">Tokens only</p>
+    {:else}
+      <table>
+        <thead><tr><th>Credential</th><th>Kind</th><th>Enrolled</th><th>Last used</th><th class="end"></th></tr></thead>
+        <tbody>
+          {#each credentials as c (c.id)}
+            <tr>
+              <td>{#if c.type === "passkey"}<Icon name="control-passkey" size={14} />{/if}{described(c)}</td>
+              <td class="muted">{c.type === "passkey" ? c.kind : c.type === "password" ? "password" : "one-time codes"}</td>
+              <td class="term muted"><time datetime={c.created_at} title={c.created_at}>{clock(c.created_at, now)}</time></td>
+              <td class="term muted">{#if c.last_used_at}<time datetime={c.last_used_at} title={c.last_used_at}>{clock(c.last_used_at, now)}</time>{:else}not used yet{/if}</td>
+              <td class="end">
+                {#if c.type === "totp"}
+                  <form class="inline" onsubmit={removeTheGenerator}>
+                    <label class="unseen" for="generator-code">A code the generator shows now</label>
+                    <input id="generator-code" class="code term" inputmode="numeric" autocomplete="one-time-code" placeholder="code it shows" maxlength="6" bind:value={code} />
+                    <button class="control" disabled={working || code.trim().length !== 6}>Remove</button>
+                  </form>
+                {:else if asking === c.id}
+                  <span class="confirm">
+                    <button class="control" onclick={() => (asking = "")}>Keep</button>
+                    <button class="control danger" disabled={working} onclick={() => remove(c)}><Icon name="control-remove" size={14} />Remove</button>
+                  </span>
+                {:else}
+                  <button class="control" onclick={() => (asking = c.id)}><Icon name="control-remove" size={14} />Remove</button>
+                {/if}
+              </td>
+            </tr>
+            {#if asking === c.id}
+              <tr class="asked"><td colspan="5" class="muted">{c.type === "password" ? "The password signs nobody in from now on, the generator beside it goes too, and the sessions it opened end." : "This passkey signs nobody in from now on, and the sessions it opened end."}</td></tr>
             {/if}
-          </div>
-        {/if}
-      {/if}
-      <p class="foot muted">A password and a one-time code generator are set on the <a href="auth/enrol">sign-in page</a>.</p>
-    </Pane>
-  </div>
-{:else}
-  <div class="columns">
-    <Pane title="API tokens" aside={tokens ? String(tokens.length) : ""}>
-      {#if issued}
-        <div class="issued" role="status">
-          <p>The token for <span class="mono">{issued.api_token.principal}</span>, shown this once: copy it now. Lose it and mint another.</p>
-          <p class="value mono">{issued.token}</p>
-          <p class="buttons">
-            <button class="control" onclick={copy}><Icon name="control-copy" size={14} />{copied ? "Copied" : "Copy"}</button>
-            <button class="control" onclick={() => (issued = null)}>Done</button>
-          </p>
-        </div>
-      {/if}
-      {#if unread}
-        <p class="problem" role="alert">{unread}</p>
-      {:else if tokens === null}
-        <p class="muted">Reading your tokens.</p>
-      {:else if tokens.length === 0}
-        <p class="muted">No token is accepted for you or your service accounts.</p>
-      {:else}
-        <table>
-          <thead><tr><th>Token</th><th>Principal</th><th>Narrowed to</th><th>Created</th><th>Expires</th><th>Last used</th><th class="end"></th></tr></thead>
-          <tbody>
-            {#each tokens as t (t.id)}
-              <tr>
-                <td>{#if t.device_label}{t.device_label}{:else}<span class="mono muted">{t.id}</span>{/if}</td>
-                <td class="mono">{t.principal}</td>
-                <td class="muted">{scopeOf(t)}</td>
-                <td class="mono muted"><time datetime={t.created_at} title={t.created_at}>{clock(t.created_at, now)}</time></td>
-                <td class="mono muted"><time datetime={t.expires_at} title={t.expires_at}>{clock(t.expires_at, now)}</time></td>
-                <td class="mono muted">{#if t.last_used_at}<time datetime={t.last_used_at} title={t.last_used_at}>{clock(t.last_used_at, now)}</time>{:else}not used yet{/if}</td>
-                <td class="end">
-                  {#if revoking === t.id}
-                    <span class="confirm">
-                      <button class="control danger" disabled={working} onclick={() => revokeOne(t)}>Revoke it</button>
-                      <button class="control" onclick={() => (revoking = "")}>Keep it</button>
-                    </span>
-                  {:else}
-                    <button class="control" onclick={() => (revoking = t.id)}>Revoke</button>
-                  {/if}
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-    </Pane>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  </Pane>
 
-    <Pane title="Mint a token">
-      <form onsubmit={mintOne}>
-        <label for="token-for">For</label>
-        <select id="token-for" bind:value={whose}>
-          <option value="">you, {me.principal}</option>
-          {#each accounts as a (`${a.namespace}/${a.name}`)}
-            <option value={`${a.namespace}/${a.name}`}>{a.namespace}/{a.name}</option>
+  <Dialog title="Add a passkey" bind:open={adding}>
+    <form onsubmit={add}>
+      <label for="passkey-label">Name</label>
+      <input id="passkey-label" maxlength="256" placeholder="work laptop" bind:value={label} />
+      <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add a passkey</button></p>
+    </form>
+    {#if again}
+      <div class="again">
+        <p>Sign in again to add a passkey.</p>
+        <p><button class="control" disabled={working} onclick={signInAgainWithPasskey}><Icon name="control-passkey" size={14} />Sign in again with a passkey</button></p>
+        {#if holdsPassword}
+          <form onsubmit={signInAgainWithPassword}>
+            <label for="again-password">Or with your password</label>
+            <input id="again-password" type="password" autocomplete="current-password" bind:value={password} />
+            <label for="again-totp">One-time code</label>
+            <input id="again-totp" class="term" inputmode="numeric" autocomplete="one-time-code" maxlength="6" bind:value={totp} />
+            <p><button class="control" disabled={working || password === ""}>Sign in again with the password</button></p>
+          </form>
+        {/if}
+      </div>
+    {/if}
+    {#if problem}<Problem explained={problem} />{/if}
+  </Dialog>
+{:else}
+  <Pane title="API tokens" aside={tokens ? String(tokens.length) : ""}>
+    {#if issued}
+      <div class="issued" role="status">
+        <p>Token for <span class="term">{issued.api_token.principal}</span>. Shown once: copy it now.</p>
+        <p class="value code">{issued.token}</p>
+        <p class="buttons">
+          <button class="control" onclick={copy}><Icon name={copied ? "state-succeeded" : "control-copy"} size={14} />Copy</button>
+          <button class="control" onclick={() => (issued = null)}>Done</button>
+        </p>
+      </div>
+    {/if}
+    {#if untokened}
+      <Problem explained={untokened} onretry={retokens} />
+    {:else if tokens === null}
+      <p class="muted">Loading</p>
+    {:else if tokens.length === 0}
+      <p class="muted">No tokens</p>
+    {:else}
+      <table>
+        <thead><tr><th>Token</th><th>Principal</th><th>Narrowed to</th><th>Created</th><th>Expires</th><th>Last used</th><th class="end"></th></tr></thead>
+        <tbody>
+          {#each tokens as t (t.id)}
+            <tr>
+              <td>{#if t.device_label}{t.device_label}{:else}<span class="code muted">{t.id}</span>{/if}</td>
+              <td class="term">{t.principal}</td>
+              <td class="muted">{scopeOf(t)}</td>
+              <td class="term muted"><time datetime={t.created_at} title={t.created_at}>{clock(t.created_at, now)}</time></td>
+              <td class="term muted"><time datetime={t.expires_at} title={t.expires_at}>{clock(t.expires_at, now)}</time></td>
+              <td class="term muted">{#if t.last_used_at}<time datetime={t.last_used_at} title={t.last_used_at}>{clock(t.last_used_at, now)}</time>{:else}not used yet{/if}</td>
+              <td class="end">
+                {#if revoking === t.id}
+                  <span class="confirm">
+                    <button class="control" onclick={() => (revoking = "")}>Keep</button>
+                    <button class="control danger" disabled={working} onclick={() => revokeOne(t)}>Revoke</button>
+                  </span>
+                {:else}
+                  <button class="control" onclick={() => (revoking = t.id)}>Revoke</button>
+                {/if}
+              </td>
+            </tr>
           {/each}
-        </select>
-        <label for="token-label">What it is for or on, so that the one on a lost machine can be revoked</label>
-        <input id="token-label" maxlength="256" placeholder="deploy pipeline" bind:value={deviceLabel} />
-        <label for="token-days">Expires in</label>
-        <select id="token-days" bind:value={days}>
-          {#each [7, 30, 90, 180, 365] as d (d)}
-            <option value={d}>{d} days</option>
-          {/each}
-        </select>
-        <fieldset>
-          <legend>Permissions it keeps, every one its principal holds where none is ticked</legend>
-          {#each permissions as p (p)}
-            <label class="check"><input type="checkbox" checked={kept.includes(p)} onchange={(e) => toggle(p, e.currentTarget.checked)} /><span class="mono">{p}</span></label>
-          {/each}
-        </fieldset>
-        <label for="token-within">Namespaces and workflows it reaches, everywhere its principal does where none is written</label>
-        <input id="token-within" class="mono" placeholder="finance, finance/monthly-invoicing" bind:value={within} />
-        <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Mint the token</button></p>
-        <p class="foot muted">A token can only narrow what its principal holds, and none lasts more than a year.</p>
-      </form>
-    </Pane>
-  </div>
+        </tbody>
+      </table>
+    {/if}
+  </Pane>
+
+  <Dialog title="Mint a token" bind:open={minting}>
+    <form onsubmit={mintOne}>
+      <label for="token-for">For</label>
+      <select id="token-for" bind:value={whose}>
+        <option value="">you, {me.principal}</option>
+        {#each accounts as a (`${a.namespace}/${a.name}`)}
+          <option value={`${a.namespace}/${a.name}`}>{a.namespace}/{a.name}</option>
+        {/each}
+      </select>
+      <label for="token-label">Label</label>
+      <input id="token-label" maxlength="256" placeholder="deploy pipeline" bind:value={deviceLabel} />
+      <label for="token-days">Expires in</label>
+      <select id="token-days" bind:value={days}>
+        {#each [7, 30, 90, 180, 365] as d (d)}
+          <option value={d}>{d} days</option>
+        {/each}
+      </select>
+      <fieldset>
+        <legend>Permissions (all if none ticked)</legend>
+        {#each permissions as p (p)}
+          <label class="check"><input type="checkbox" checked={kept.includes(p)} onchange={(e) => toggle(p, e.currentTarget.checked)} /><span class="term">{p}</span></label>
+        {/each}
+      </fieldset>
+      <label for="token-within">Scope (everywhere if empty)</label>
+      <input id="token-within" class="term" placeholder="finance, finance/monthly-invoicing" bind:value={within} />
+      <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Mint the token</button></p>
+    </form>
+    {#if problem}<Problem explained={problem} />{/if}
+  </Dialog>
 {/if}
 
 <style>
-  .sub {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--unit) * 2);
-    margin: calc(var(--unit) * -3) 0 calc(var(--unit) * 7);
-  }
-
-  .where {
-    margin-right: calc(var(--unit) * 6);
-    font-weight: 600;
-  }
-
-  .tab {
-    display: inline-flex;
-    align-items: center;
-    height: 29px;
-    padding: 0 calc(var(--unit) * 5);
-    border: var(--border-hairline) solid transparent;
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: var(--type-navigation-size);
-    font-weight: 500;
-  }
-
-  .tab:hover {
-    text-decoration: none;
-    color: var(--text);
-  }
-
-  .tab[aria-current="page"] {
-    border-color: var(--accentLine);
-    background: var(--accentDim);
-    color: var(--accent);
-  }
-
-  .columns {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
-    gap: calc(var(--unit) * 8);
-    align-items: start;
-  }
-
-  .problem {
-    color: var(--failed);
-  }
-
-  .said,
-  .problem {
-    margin: 0 0 calc(var(--unit) * 6);
-  }
 
   .lead {
     margin: 0 0 calc(var(--unit) * 5);
@@ -515,8 +483,13 @@
 
   td {
     padding: calc(var(--unit) * 3);
-    border-top: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
     vertical-align: middle;
+  }
+
+  /* A name or a moment is one line, so that a date and its time are read together. */
+  td.term {
+    white-space: nowrap;
   }
 
   td :global(svg) {
@@ -530,7 +503,7 @@
   }
 
   tr.asked td {
-    border-top: none;
+    box-shadow: none;
     padding-top: 0;
     text-align: right;
   }
@@ -563,7 +536,7 @@
 
   input:not([type="checkbox"]),
   select {
-    height: 29px;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 3);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
@@ -608,11 +581,6 @@
     border-top: var(--border-hairline) solid var(--line);
   }
 
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
-    font-size: var(--type-control-size);
-  }
-
   .issued {
     margin-bottom: calc(var(--unit) * 6);
     padding: calc(var(--unit) * 4) calc(var(--unit) * 5);
@@ -639,5 +607,11 @@
     border-radius: var(--radius-control);
     background: var(--sunken);
     word-break: break-all;
+  }
+
+  @media (max-width: 759px) {
+    fieldset {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

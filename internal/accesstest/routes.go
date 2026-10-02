@@ -17,8 +17,8 @@ type Case struct {
 	Refused bool
 
 	// Makes is set where the route removes what it names and reads no body: each asking names a
-	// thing made for it by the owner of the namespace it is in, a grant, a secret, a token or a
-	// service account, removed again by its owner where the route did not remove it.
+	// thing made for it by the owner of the namespace it is in, a grant, a secret, a variable, a
+	// token or a service account, removed again by its owner where the route did not remove it.
 	Makes string
 
 	// Owned is set where the route is answered to the owners of the namespace it names, in its
@@ -44,7 +44,8 @@ type Case struct {
 // namespace's record is read "to an administrator and to a principal holding a grant in it", and
 // drain and revoke "require grant:manage at installation scope", which is what an administrator
 // holds there; a secret's declarations take workflow:read at namespace scope and writing one
-// secret:write there; a push workflow:write, and secret:use where it names a secret; recording a
+// secret:write there; a namespace's variables workflow:read at namespace scope and writing one
+// workflow:write there; a push workflow:write, and secret:use where it names a secret; recording a
 // repository's image pins and brick manifests workflow:write, and reading them workflow:read;
 // reading what a workflow has armed workflow:read, and writing a webhook's credential workflow:write;
 // starting a run and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
@@ -54,7 +55,8 @@ type Case struct {
 // URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
 // namespace it owns", which no permission names, and so are the service accounts, "of the namespaces
 // the caller owns", and GET /api/v1/me with the caller's notifications, and so are the caller's
-// credentials. Sharing takes grant:manage at its scope, and writing a grant an administrator too.
+// credentials, profile and photo; another user's photo is an administrator's to read, as the user
+// is. Sharing takes grant:manage at its scope, and writing a grant an administrator too.
 // The installation's authentication policy is read by whoever is signed in and a namespace's by
 // whoever reads its record, and "PUT is an administrator's" for both.
 var Cases = []Case{
@@ -76,7 +78,14 @@ var Cases = []Case{
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/auth/tokens", Own: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/auth/tokens/{id}", Own: true}, Makes: "token", Owned: true, Refusal: 404},
 	own("GET", "/api/v1/me"),
+	// What a user says of themself, and their photo: refused before its body is read to whoever has
+	// none, the bootstrap token, a service account and a narrowed token, and sent one it refuses by
+	// anybody else. Removing a photo nobody in the fixture holds changes nothing.
+	{Route: api.Route{Method: "PATCH", Pattern: "/api/v1/me", Own: true}, Refused: true},
 	own("DELETE", "/api/v1/me/notifications/{id}"),
+	own("GET", "/api/v1/me/avatar"),
+	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/me/avatar", Own: true}, Refused: true},
+	own("DELETE", "/api/v1/me/avatar"),
 	own("GET", "/api/v1/me/credentials"),
 	own("DELETE", "/api/v1/me/credentials/{id}"),
 	own("DELETE", "/api/v1/me/password"),
@@ -91,19 +100,31 @@ var Cases = []Case{
 	{Route: administer("PUT", "/api/v1/auth/policy"), Refused: true},
 	{Route: administer("PUT", "/api/v1/{namespace}/auth/policy"), Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/auth/policy", Scope: api.Namespace, Members: true}},
-	{Route: administer("POST", "/api/v1/namespaces"), Refused: true},
+	// A namespace any user creates and owns, an administrator one for another owner: a route about
+	// its caller, sent a body it refuses. Its owner, whoever holds grant:manage there, or an
+	// administrator renames it, removes it once it holds nothing, which no shared namespace of the
+	// fixture is, and sets or removes its picture, which none holds; whoever reads its record reads
+	// its picture.
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/namespaces", Own: true}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces", Scope: api.Namespace, Members: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}", Scope: api.Namespace, Members: true}},
-	{Route: administer("DELETE", "/api/v1/namespaces/{namespace}")},
+	{Route: ownerOrAdministrator("PATCH", "/api/v1/namespaces/{namespace}"), Refused: true},
+	{Route: ownerOrAdministrator("DELETE", "/api/v1/namespaces/{namespace}")},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}/avatar", Scope: api.Namespace, Members: true}},
+	{Route: ownerOrAdministrator("PUT", "/api/v1/namespaces/{namespace}/avatar"), Refused: true},
+	{Route: ownerOrAdministrator("DELETE", "/api/v1/namespaces/{namespace}/avatar")},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/namespaces/{namespace}/quotas", Scope: api.Namespace, Members: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/quotas", Scope: api.Namespace, Members: true}},
 	{Route: administer("PUT", "/api/v1/namespaces/{namespace}/quotas"), Refused: true},
 	{Route: administer("GET", "/api/v1/users")},
 	{Route: administer("POST", "/api/v1/users"), Refused: true},
 	{Route: administer("GET", "/api/v1/users/{login}")},
+	{Route: administer("PATCH", "/api/v1/users/{login}"), Refused: true},
 	{Route: administer("DELETE", "/api/v1/users/{login}")},
 	{Route: administer("POST", "/api/v1/users/{login}/enrolment")},
 	{Route: administer("POST", "/api/v1/users/{login}/recovery")},
+	{Route: administer("GET", "/api/v1/users/{login}/avatar")},
+	{Route: administer("DELETE", "/api/v1/users/{login}/avatar")},
 	{Route: administer("GET", "/api/v1/groups")},
 	{Route: administer("POST", "/api/v1/groups"), Refused: true},
 	{Route: administer("GET", "/api/v1/groups/{group}")},
@@ -115,6 +136,8 @@ var Cases = []Case{
 	{Route: administer("POST", "/api/v1/runners/{runner}/revoke"), Refused: true},
 	{Route: administer("GET", "/api/v1/runner-pools")},
 	{Route: administer("GET", "/api/v1/stats/pools")},
+	{Route: administer("GET", "/api/v1/stats/activity")},
+	{Route: administer("GET", "/api/v1/auth/audit")},
 	{Route: administer("POST", "/api/v1/runner-pools"), Refused: true},
 	{Route: administer("POST", "/api/v1/runner-pools/{pool}/join-tokens"), Refused: true},
 
@@ -137,6 +160,10 @@ var Cases = []Case{
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.WorkflowRead, Scope: api.Namespace}},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.SecretWrite, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/secrets/{name}", Permission: api.SecretWrite, Scope: api.Namespace}, Makes: "secret"},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/variables", Permission: api.WorkflowRead, Scope: api.Namespace}},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowRead, Scope: api.Namespace}},
+	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowWrite, Scope: api.Namespace}, Refused: true},
+	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/variables/{name}", Permission: api.WorkflowWrite, Scope: api.Namespace}, Makes: "variable"},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/grants", Permission: api.GrantManage, Scope: api.Namespace}},
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/grants", Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true, Seeing: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/grants/{id}", Permission: api.GrantManage, Scope: api.Namespace}, Makes: "grant"},
@@ -144,13 +171,14 @@ var Cases = []Case{
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants", Permission: api.GrantManage, Scope: api.Workflow, OrAdministrator: true, Seeing: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants/{id}", Permission: api.GrantManage, Scope: api.Workflow}, Makes: "grant"},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}", Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse}, Refused: true},
-	// A repository created under what registering a version takes, at the namespace; read and its
-	// tree read under workflow:read; renamed under workflow:write, and its default branch and
+	// A repository created under what registering a version takes, at the namespace; read, and its
+	// branches, tags and tree read, under workflow:read; renamed under workflow:write, and its default branch and
 	// protection changed under grant:manage, besides, which only the handler asks, since which a
 	// change needs is in its body.
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows", Permission: api.WorkflowWrite, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	{Route: api.Route{Method: "PATCH", Pattern: "/api/v1/{namespace}/workflows/{workflow}", Permission: api.WorkflowRead, Scope: api.Workflow, Also: api.GrantManage, Asks: access.SetOf(api.WorkflowWrite)}, Refused: true},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/refs", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	// Deleted under workflow:delete, which only an owner holds; a body is refused before anything
 	// is deleted, which is what the probe sends.
@@ -166,6 +194,7 @@ var Cases = []Case{
 
 	// Runs and their data.
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/runs", Permission: api.WorkflowRun, Scope: api.Workflow}, Refused: true},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/inputs", Permission: api.WorkflowRun, Scope: api.Workflow}},
 	// What the default branch's head has armed, "to whoever holds workflow:read".
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/triggers", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	// What a webhook checks its caller against, written by whoever may change the workflow, and the
@@ -176,7 +205,12 @@ var Cases = []Case{
 	// every workflow listening to the namespace".
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/events", Permission: api.WorkflowRun, Scope: api.Namespace}, Refused: true},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
+	// The caller's live connection, which says a run changed to whoever holds run:read on its
+	// workflow, asked about each as it changes, as the listing asks. Asked here with no handshake,
+	// it answers 426 to whoever it lets through.
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/me/live", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/steps", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/ports", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
@@ -204,6 +238,12 @@ func own(method, pattern string) Case {
 // administer is a route an administrator alone reaches: grant:manage at the installation.
 func administer(method, pattern string) api.Route {
 	return api.Route{Method: method, Pattern: pattern, Permission: api.GrantManage, Scope: api.Installation}
+}
+
+// ownerOrAdministrator is a route a namespace's owner reaches, whoever holds grant:manage at its
+// scope, and an administrator by the installation's power over every namespace.
+func ownerOrAdministrator(method, pattern string) api.Route {
+	return api.Route{Method: method, Pattern: pattern, Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true}
 }
 
 // runner is a route a runner reaches with its credential, and nobody else.

@@ -39,8 +39,18 @@ var abbreviatedCommit = regexp.MustCompile(`^[0-9a-f]{7,39}$`)
 // that an include is no way of learning which workflows another namespace holds.
 func (s *Server) includeOf(r *http.Request) func(context.Context, graph.WorkflowRef) (fs.FS, string, error) {
 	return func(ctx context.Context, ref graph.WorkflowRef) (fs.FS, string, error) {
-		over := Target{Namespace: ref.Namespace, Workflow: ref.Name}
 		absent := fmt.Errorf("%s/%s is no workflow you may read: a workflow include needs workflow:read on the repository it names, so that an include cannot widen what its author may see", ref.Namespace, ref.Name)
+		// The library's namespace as it answers now, a name it held before a rename reaching it,
+		// since "a workflow naming the old name keeps working". Asked of every include, so that
+		// one naming a namespace that does not exist takes as long as one naming one that does.
+		if NamespaceRef(ref.Namespace) == nil {
+			current, err := s.pool.CurrentName(ctx, ref.Namespace)
+			if err != nil {
+				return nil, "", &pushFault{"the include could not be authorised", err}
+			}
+			ref.Namespace = current
+		}
+		over := Target{Namespace: ref.Namespace, Workflow: ref.Name}
 		reads, err := HoldsToInclude(r)(ctx, over)
 		if err != nil {
 			return nil, "", &pushFault{"the include could not be authorised", err}

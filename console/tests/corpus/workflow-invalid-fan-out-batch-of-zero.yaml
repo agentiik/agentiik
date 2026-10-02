@@ -1,0 +1,19 @@
+# invalid: A batch fan-out of no items. batch(n) is one container per batch of
+#   n items, and a batch of zero describes a shard that can never be filled.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#fan-out
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: reconciliation
+  namespace: finance
+
+steps:
+  fetch-ledger:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    strategy:
+      fan_out: batch(0)
+      max_parallel: 4
+    outputs: [out]

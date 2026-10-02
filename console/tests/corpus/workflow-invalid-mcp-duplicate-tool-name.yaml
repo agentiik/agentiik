@@ -1,0 +1,41 @@
+# invalid: Two published tools carrying the same name. A tool identifier is
+#   unique within the workflow, because clients hold it.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+  period:
+    schema: { type: string }
+    required: true
+
+mcp:
+  name: invoicing
+  tools:
+    - name: create_invoice
+      description: Issue one invoice for a customer.
+      input:
+        from: { input: orders }
+      mode: sync
+
+    - name: create_invoice
+      description: Issue every invoice of a period.
+      input:
+        from: { input: period }
+      mode: async
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]

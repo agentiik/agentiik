@@ -56,7 +56,7 @@ func (s *Store) Repack(ctx context.Context, pool *db.Pool, namespace, workflow s
 	var ids []repo.ID
 	from := map[repo.ID]*packed{}
 	for _, p := range objects.packs {
-		idx, err := s.index(ctx, namespace, r.Key, p.Name)
+		idx, err := s.index(ctx, objects.namespace, r.Key, p.Name)
 		if err != nil {
 			return db.Pack{}, 0, err
 		}
@@ -132,7 +132,8 @@ func (c *counter) Write(b []byte) (int, error) {
 // no index is refused where an index found with no pack is merely missing; and answers nil where they
 // are gone already, which a collection that died after deleting them leaves.
 func (s *Store) Collect(ctx context.Context, p db.RepositoryPack) error {
-	if err := checkKeys(p.Namespace, p.Repository, p.Name); err != nil {
+	storage := storageOf(p.Storage, p.Namespace)
+	if err := checkKeys(storage, p.Repository, p.Name); err != nil {
 		return err
 	}
 	remover, ok := s.objects.(interface {
@@ -141,7 +142,7 @@ func (s *Store) Collect(ctx context.Context, p db.RepositoryPack) error {
 	if !ok {
 		return errors.New("store: that object store deletes nothing, and a pack is collected by deleting its files")
 	}
-	for _, key := range []string{IdxKey(p.Namespace, p.Repository, p.Name), PackKey(p.Namespace, p.Repository, p.Name)} {
+	for _, key := range []string{IdxKey(storage, p.Repository, p.Name), PackKey(storage, p.Repository, p.Name)} {
 		if _, err := remover.Remove(ctx, key); err != nil {
 			return fmt.Errorf("store: %s could not be deleted: %w", key, err)
 		}

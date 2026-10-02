@@ -94,7 +94,7 @@ func (co *Core) cancel(ctx context.Context, run agk.RunID, why refused) error {
 		// started_at, rather than one saying it began at the moment it was called off.
 		state.Run.StartedAt = time.Time{}
 	}
-	doc, err := Elide(ctx, state, e.Namespace, co.objects)
+	doc, err := Elide(ctx, state, storageOf(e), co.objects)
 	if err != nil {
 		return err
 	}

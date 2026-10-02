@@ -30,7 +30,7 @@
   });
 </script>
 
-<ol class="file mono" bind:this={holder} aria-label="agentiik.yaml">
+<ol class="file code" bind:this={holder} aria-label="agentiik.yaml">
   {#each lines as line, i (i)}
     {@const n = i + 1}
     {@const p = parts(line)}
@@ -53,7 +53,7 @@
     border-radius: var(--radius-control);
     background: var(--sunken);
     font-size: 12.5px;
-    line-height: 1.6;
+    --leading: 1.6;
     list-style: none;
   }
 

@@ -7,10 +7,19 @@
   box-sizing: border-box;
 }
 
+/* The page scrolls as a document, the window's own scrollbar moving it, and never inside a box drawn
+   to the window's height: the wheel, the keys, the browser's find and its restored position all move
+   the document, and a box that scrolls in its place answers some of them and not others. The gutter
+   is kept whether or not the page is taller than the window, so that nothing shifts sideways when it
+   becomes so. */
+html {
+  scrollbar-gutter: stable;
+}
+
 html,
 body {
   margin: 0;
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
@@ -19,14 +28,31 @@ body {
   font-family: var(--type-body-font);
   font-size: var(--type-body-size);
   font-weight: var(--type-body-weight);
-  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
+/* Every line is a whole number of units high, two pixels, so that every box below it starts on a
+   whole pixel and every line centred in a bar, a row or a control does too. A leading of 1.5 at
+   13.5px is 20.25px, and a pane of eleven such lines ends a quarter of a pixel off the pane beside
+   it: the hairlines then round apart, one row of a table 44px from the next and the following one
+   45px. And the bars, rows and controls are all an even number of pixels high, 52, 44, 36, 32, so
+   that a line of 21px centred in one starts half a pixel down, which a line of 22px does not. The
+   leading is a multiple a component sets on --leading, which inherits as a unitless line-height
+   would, and each element turns it into units at its own size. */
+:root {
+  --leading: 1.5;
+  /* A button, a field and a choice are one height, so that a row of them is one band. */
+  --control-height: 32px;
+}
+
+body,
+body * {
+  line-height: round(calc(var(--leading) * 1em), var(--unit));
+}
+
 #console {
-  height: 100%;
-  min-width: var(--window-min);
+  min-height: 100dvh;
 }
 
 button,
@@ -51,8 +77,19 @@ a:hover {
   outline-offset: 1px;
 }
 
-.mono {
+/* A name or a figure: a namespace, a workflow, a login, a time, a count. It stays Archivo, the
+   face of everything a person reads, with figures of one width so that a column of them lines up. */
+.term {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Code: what a person copies, diffs or matches against a log, a run identifier, a commit, a digest,
+   an image, a cron expression, YAML and logs. It alone is monospaced, since a screen of names set in
+   a monospace reads as a terminal, which the web console is not. */
+.code {
   font-family: var(--type-identifier-font);
+  font-size: var(--type-identifier-size-max);
+  font-variant-ligatures: none;
 }
 
 .muted {
@@ -63,11 +100,14 @@ a:hover {
   color: var(--faint);
 }
 
-/* What a screen reader reads and a sighted reader does not need written out. */
+/* What a screen reader reads and a sighted reader does not need written out. Its pixel is drawn back
+   over where it would start, so that one at the foot of the page makes the page no taller. */
 .unseen {
   position: absolute;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
@@ -78,7 +118,7 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: calc(var(--unit) * 3);
-  height: 29px;
+  height: var(--control-height);
   padding: 0 calc(var(--unit) * 5);
   border: var(--border-hairline) solid var(--lineStrong);
   border-radius: var(--radius-control);
@@ -109,8 +149,8 @@ kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 17px;
-  height: 19px;
+  min-width: 18px;
+  height: 20px;
   padding: 0 calc(var(--unit) * 2);
   border: var(--border-hairline) solid var(--lineStrong);
   border-radius: var(--radius-chip);
@@ -119,4 +159,57 @@ kbd {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
+}
+
+/* A field and a choice, drawn alike on every screen rather than as each browser draws its own: the
+   raised surface, a hairline that darkens under the pointer and turns to the accent with the focus.
+   :where keeps them at no weight, so that a screen styling one of its own still does. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"]), select, textarea) {
+  min-height: var(--control-height);
+  padding: 0 calc(var(--unit) * 5);
+  border: var(--border-hairline) solid var(--lineStrong);
+  border-radius: var(--radius-control);
+  background-color: var(--raised);
+  color: var(--text);
+  font-size: var(--type-control-size);
+}
+
+/* A check box and a radio are 14px rather than the browser's 13px, so that one centred beside a line
+   of an even height starts on a whole pixel. */
+:where(input[type="checkbox"], input[type="radio"]) {
+  width: 14px;
+  height: 14px;
+}
+
+/* A field and a choice are a button's height exactly, whatever face or size a screen sets in them, so
+   that a row of them shares a top and a bottom edge. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"]), select) {
+  height: var(--control-height);
+}
+
+:where(textarea) {
+  padding: calc(var(--unit) * 4) calc(var(--unit) * 5);
+}
+
+:where(select) {
+  padding-right: calc(var(--unit) * 3);
+  cursor: pointer;
+}
+
+:where(input, select, textarea):hover {
+  border-color: var(--faint);
+}
+
+:where(input, select, textarea):focus-visible {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--faint);
+}
+
+:where(input[type="checkbox"], input[type="radio"]) {
+  accent-color: var(--accent);
 }
