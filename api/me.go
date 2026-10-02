@@ -13,12 +13,14 @@ import (
 )
 
 // Who the caller is: GET /api/v1/me, "identity, group memberships, effective permissions per
-// namespace, and notifications", and DELETE /api/v1/me/notifications/{id}, which dismisses one.
+// namespace, and notifications", and DELETE /api/v1/me/notifications/{id}, which dismisses one; and
+// what a user says of themself, PATCH /api/v1/me, and their photo, at /api/v1/me/avatar (profile.go,
+// avatar.go).
 //
-// What it answers is the caller's own, so both take Own. The permissions are what the caller's
-// grants resolve to at this moment, narrowed by the credential it presented, which is what agk
-// whoami prints and what a console reads to hide what the caller does not hold rather than disable
-// it.
+// What it answers is the caller's own, so every route takes Own. The permissions are what the
+// caller's grants resolve to at this moment, narrowed by the credential it presented, which is what
+// agk whoami prints and what a console reads to hide what the caller does not hold rather than
+// disable it.
 
 // Me is openapi.json's me.
 type Me struct {
@@ -82,7 +84,7 @@ type MeOptions struct {
 	Now func() time.Time
 }
 
-// MeAPI serves GET /api/v1/me and the dismissal of a notification.
+// MeAPI serves GET /api/v1/me, the dismissal of a notification, and the caller's profile and photo.
 type MeAPI struct {
 	pool *db.Pool
 	now  func() time.Time
@@ -109,7 +111,11 @@ func NewMe(rt *Router, o MeOptions) (*MeAPI, error) {
 		handler         OwnHandler
 	}{
 		{"GET", "/api/v1/me", m.me},
+		{"PATCH", "/api/v1/me", m.updateProfile},
 		{"DELETE", "/api/v1/me/notifications/{id}", m.dismiss},
+		{"GET", "/api/v1/me/avatar", m.avatar},
+		{"PUT", "/api/v1/me/avatar", m.setAvatar},
+		{"DELETE", "/api/v1/me/avatar", m.removeAvatar},
 	} {
 		if err := rt.HandleOwn(r.method, r.pattern, Own{}, r.handler); err != nil {
 			return nil, err
@@ -122,13 +128,17 @@ func NewMe(rt *Router, o MeOptions) (*MeAPI, error) {
 var errGone = errors.New("api: the caller's record is gone")
 
 // me is GET /api/v1/me.
+func (m *MeAPI) me(w http.ResponseWriter, r *http.Request, caller Caller) { m.answer(w, r, caller) }
+
+// answer writes who the caller is, as GET /api/v1/me answers it, and as PATCH /api/v1/me answers it
+// once the profile is written, so that a client holds the one document it reads either way.
 //
 // A credential narrowed by a scope is answered no notification: what is told to a principal is its
 // own, of the installation's accord, and reading it, as dismissing it, is none of the nine a scope
 // keeps some of, as managing credentials is not. So a script holding such a token neither reads
 // that an administrator widened their access nor makes the notice go away before its owner reads
 // it.
-func (m *MeAPI) me(w http.ResponseWriter, r *http.Request, caller Caller) {
+func (m *MeAPI) answer(w http.ResponseWriter, r *http.Request, caller Caller) {
 	held, err := caller.Effective(r.Context())
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "what the caller holds could not be read")

@@ -113,10 +113,16 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, who Principal, o
 	}
 	// And with what fired the run as it was frozen on it, "so a replay sees what fired it, not what
 	// is true now".
+	// And with the namespace's variables the run read when it was created, so that it reads what
+	// the run read and not what is true now: none, where it read none, rather than what is set now.
 	var fired db.TriggerContext
+	var vars map[string]any
 	if err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		fired, err = ns.ContextOf(ctx, of)
+		if fired, err = ns.ContextOf(ctx, of); err != nil {
+			return err
+		}
+		vars, err = ns.NamespaceVarsOf(ctx, of)
 		return err
 	}); err != nil {
 		fail(w, http.StatusInternalServerError, "the run could not be read")
@@ -127,7 +133,7 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, who Principal, o
 		Kind: agk.TriggerManual, By: string(who),
 		Commit: d.Commit, Bound: inputs,
 		ReplayOf: of, ReplayFrom: from, Detail: detail,
-		Context: fired,
+		Context: fired, NamespaceVars: vars,
 	})
 	if s.refused(w, Target{Namespace: over.Namespace, Workflow: d.Workflow}, d.Commit, err) {
 		return

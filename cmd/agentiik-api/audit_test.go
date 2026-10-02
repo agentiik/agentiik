@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,16 +48,18 @@ const publicOrigin = "https://agentiik.example.com"
 var reads = []string{
 	"GET /api/v1/runner-pools", "GET /api/v1/runners", "GET /api/v1/users", "GET /api/v1/users/{login}",
 	"GET /api/v1/groups", "GET /api/v1/groups/{group}", "GET /api/v1/auth/tokens", "GET /api/v1/service-accounts",
-	"GET /api/v1/runs", "GET /api/v1/{namespace}/runs", "GET /api/v1/{namespace}/stats/runs", "GET /api/v1/{namespace}/stats/steps", "GET /api/v1/{namespace}/stats/ports", "GET /api/v1/{namespace}/stats/quotas", "GET /api/v1/stats/pools", "GET /api/v1/runs/{run}", "GET /api/v1/{namespace}/runs/{run}",
+	"GET /api/v1/runs", "GET /api/v1/me/live", "GET /api/v1/{namespace}/runs", "GET /api/v1/{namespace}/workflows", "GET /api/v1/{namespace}/stats/runs", "GET /api/v1/{namespace}/stats/steps", "GET /api/v1/{namespace}/stats/ports", "GET /api/v1/{namespace}/stats/quotas", "GET /api/v1/stats/pools", "GET /api/v1/stats/activity", "GET /api/v1/auth/audit", "GET /api/v1/runs/{run}", "GET /api/v1/{namespace}/runs/{run}",
 	"GET /api/v1/runs/{run}/steps/{step}/logs", "GET /api/v1/runs/{run}/outputs/{name}",
 	"GET /api/v1/runs/{run}/steps/{step}/outputs/{port}", "GET /api/v1/runs/{run}/steps/{step}/inputs/{port}",
 	"GET /api/v1/artifacts/{uri}", "GET /api/v1/{namespace}/secrets", "GET /api/v1/{namespace}/secrets/{name}",
-	"GET /api/v1/namespaces", "GET /api/v1/namespaces/{namespace}", "GET /api/v1/namespaces/{namespace}/quotas",
+	"GET /api/v1/{namespace}/variables", "GET /api/v1/{namespace}/variables/{name}",
+	"GET /api/v1/namespaces", "GET /api/v1/namespaces/{namespace}", "GET /api/v1/namespaces/{namespace}/quotas", "GET /api/v1/namespaces/{namespace}/avatar",
 	"GET /api/v1/{namespace}/grants", "GET /api/v1/{namespace}/workflows/{workflow}/grants",
-	"GET /api/v1/{namespace}/workflows/{workflow}/images", "GET /api/v1/{namespace}/workflows/{workflow}/triggers",
+	"GET /api/v1/{namespace}/workflows/{workflow}/images", "GET /api/v1/{namespace}/workflows/{workflow}/inputs", "GET /api/v1/{namespace}/workflows/{workflow}/triggers",
 	"GET /{namespace}/{repository}/info/refs",
-	"GET /api/v1/{namespace}/workflows/{workflow}", "GET /api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
-	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
+	"GET /api/v1/{namespace}/workflows/{workflow}", "GET /api/v1/{namespace}/workflows/{workflow}/refs", "GET /api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
+	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/me/avatar", "GET /api/v1/users/{login}/avatar",
+	"GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
 	"GET /auth/sign-in", "GET /auth/enrol", "GET /auth/assets/{name}", "GET /objects/{key...}",
 }
 
@@ -145,6 +149,10 @@ func (s *scenario) ask(route, path string, who actor, body any, status int) *htt
 		// What a publisher sends, where the route takes an event.
 		if strings.HasSuffix(path, "/events") {
 			r.Header.Set("Content-Type", "application/cloudevents+json")
+		}
+		// A photo, where the route takes one.
+		if route == "PUT /api/v1/me/avatar" || route == "PUT /api/v1/namespaces/{namespace}/avatar" {
+			r.Header.Set("Content-Type", "image/png")
 		}
 	}
 	if who.bearer != "" {
@@ -462,19 +470,41 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.act("DELETE /api/v1/auth/tokens/{id}", "/api/v1/auth/tokens/"+minted, carol, nil, http.StatusNoContent,
 		"api_token.revoke carol "+minted+" - done")
 
-	// A namespace carol owns, its quotas, and a service account of it with a token, removed with it.
+	// dave says who he is and sets a photo, removes it and sets another, which carol, administering
+	// the installation, removes; carol gives him an email address.
+	s.act("PATCH /api/v1/me", "/api/v1/me", dave, `{"given_name":"Dave","timezone":"Europe/Paris"}`, http.StatusOK,
+		"user.profile dave dave - done")
+	s.act("PATCH /api/v1/users/{login}", "/api/v1/users/dave", carol, `{"email":"dave@example.com"}`, http.StatusOK,
+		"user.update carol dave - done")
+	s.act("PUT /api/v1/me/avatar", "/api/v1/me/avatar", dave, aPhoto(t), http.StatusNoContent,
+		"user.avatar dave dave - done")
+	s.act("DELETE /api/v1/me/avatar", "/api/v1/me/avatar", dave, nil, http.StatusNoContent,
+		"user.avatar dave dave - done")
+	s.act("PUT /api/v1/me/avatar", "/api/v1/me/avatar", dave, aPhoto(t), http.StatusNoContent,
+		"user.avatar dave dave - done")
+	s.act("DELETE /api/v1/users/{login}/avatar", "/api/v1/users/dave/avatar", carol, nil, http.StatusNoContent,
+		"user.avatar carol dave - done")
+
+	// A namespace carol owns, its quotas, its picture set and removed, and a service account of it
+	// with a token, removed with it; then the namespace renamed, and removed by its former name.
 	s.act("POST /api/v1/namespaces", "/api/v1/namespaces", carol, `{"name":"ops","owner":"carol"}`, http.StatusCreated,
 		"grant.create carol * ops done", "namespace.create carol ops - done")
 	s.act("PUT /api/v1/namespaces/{namespace}/quotas", "/api/v1/namespaces/ops/quotas", carol, `{"max_concurrent_tasks":5}`, http.StatusOK,
 		"namespace.update carol ops - done")
+	s.act("PUT /api/v1/namespaces/{namespace}/avatar", "/api/v1/namespaces/ops/avatar", carol, aPhoto(t), http.StatusNoContent,
+		"namespace.avatar carol ops - done")
+	s.act("DELETE /api/v1/namespaces/{namespace}/avatar", "/api/v1/namespaces/ops/avatar", carol, nil, http.StatusNoContent,
+		"namespace.avatar carol ops - done")
 	s.act("POST /api/v1/service-accounts", "/api/v1/service-accounts", carol, `{"namespace":"ops","name":"deployer"}`, http.StatusCreated,
 		"service_account.create carol ops/deployer ops done")
 	w = s.ask("POST /api/v1/auth/tokens", "/api/v1/auth/tokens", carol, `{"principal":"ops/deployer"}`, http.StatusCreated)
 	s.holds("POST /api/v1/auth/tokens", "api_token.create carol "+s.answer(w)["api_token"].(map[string]any)["id"].(string)+" ops done")
 	s.act("DELETE /api/v1/service-accounts/{ns}/{name}", "/api/v1/service-accounts/ops/deployer", carol, nil, http.StatusNoContent,
 		"service_account.delete carol ops/deployer ops done")
+	s.act("PATCH /api/v1/namespaces/{namespace}", "/api/v1/namespaces/ops", carol, `{"name":"operations"}`, http.StatusOK,
+		"namespace.rename carol operations - done")
 	s.act("DELETE /api/v1/namespaces/{namespace}", "/api/v1/namespaces/ops", carol, nil, http.StatusNoContent,
-		"namespace.delete carol ops - done")
+		"namespace.delete carol operations - done")
 
 	// A group, a member put in and taken out, and the group removed.
 	s.act("POST /api/v1/groups", "/api/v1/groups", carol, `{"name":"auditors"}`, http.StatusCreated,
@@ -534,6 +564,15 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"secret.write carol billing finance done")
 	s.act("DELETE /api/v1/{namespace}/secrets/{name}", "/api/v1/finance/secrets/billing", carol, nil, http.StatusNoContent,
 		"secret.delete carol billing finance done")
+	// A namespace's variable set, as variable.write, set again, and removed, as variable.delete.
+	s.act("PUT /api/v1/{namespace}/variables/{name}", "/api/v1/finance/variables/ledger_url", carol,
+		api.VariableWrite{Value: []byte(`"https://ledger.example.com/api"`), Visibility: "all"}, http.StatusCreated,
+		"variable.write carol ledger_url finance done")
+	s.act("PUT /api/v1/{namespace}/variables/{name}", "/api/v1/finance/variables/ledger_url", carol,
+		api.VariableWrite{Value: []byte(`[7, 14]`), Visibility: "selected", Workflows: []string{"monthly-invoicing"}}, http.StatusOK,
+		"variable.write carol ledger_url finance done")
+	s.act("DELETE /api/v1/{namespace}/variables/{name}", "/api/v1/finance/variables/ledger_url", carol, nil, http.StatusNoContent,
+		"variable.delete carol ledger_url finance done")
 	// A version declaring a webhook and an event trigger pushed to a repository no git push has
 	// given a branch, which arms both, as trigger.arm; the webhook's secret written, as
 	// webhook_credential.write; a request it signs and an event published into the namespace, each
@@ -728,4 +767,18 @@ func aGitPush(t *testing.T, branch, document string) string {
 		t.Fatal(err)
 	}
 	return string(command) + "0000" + pack.String()
+}
+
+// aPhoto is a photo as a user sends one: a PNG of a few pixels, written as the body is sent.
+func aPhoto(t *testing.T) string {
+	t.Helper()
+	picture := image.NewNRGBA(image.Rect(0, 0, 4, 3))
+	for i := range picture.Pix {
+		picture.Pix[i] = uint8(i * 17)
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, picture); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.String()
 }

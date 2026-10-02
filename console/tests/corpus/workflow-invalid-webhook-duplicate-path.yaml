@@ -1,0 +1,24 @@
+# invalid: Two webhooks answering one path with one method. A request would
+#   start whichever the engine found first, so a path and a method answer one
+#   trigger.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: price-quotes
+  namespace: sales
+
+on:
+  webhook:
+    - path: /quotes/requested
+    - path: /quotes/requested
+      method: POST
+      auth: bearer
+
+steps:
+  quote:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

@@ -106,11 +106,14 @@ func namespace(ctx context.Context, d config.Database, action, name string, stdo
 		return fmt.Errorf("%q is not something done to a namespace, which is created or removed", action)
 	}
 	var holds *db.NamespaceHolds
+	var held *db.NameHeld
 	switch {
 	case errors.Is(err, db.ErrNoNamespace):
 		return fmt.Errorf("there is no namespace %s, so nothing was removed", name)
 	case errors.Is(err, api.ErrPersonalNamespace):
 		return fmt.Errorf("%s, so it was not removed", api.PersonalRefusal(name))
+	case errors.As(err, &held) && held.Former:
+		return fmt.Errorf("%s is a name namespace %s held before it was renamed, which stays its own until it is removed, so no namespace %s was created", name, held.Namespace, name)
 	case errors.Is(err, db.ErrNameTaken):
 		return loginHoldsName(name)
 	case errors.As(err, &holds):

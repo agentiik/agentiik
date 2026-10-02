@@ -24,8 +24,8 @@ func TestAnAdministratorsGrantIsToldToTheOwnersOfItsNamespace(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []User{
-			{Login: "alice", DisplayName: "Alice"}, {Login: "carol", DisplayName: "Carol", Admin: true}, {Login: "dave", DisplayName: "Dave"},
-			{Login: "erin", DisplayName: "Erin"}, {Login: "frank", DisplayName: "Frank"}, {Login: "gina", DisplayName: "Gina"},
+			{Login: "alice", Profile: Profile{GivenName: "Alice"}}, {Login: "carol", Profile: Profile{GivenName: "Carol"}, Admin: true}, {Login: "dave", Profile: Profile{GivenName: "Dave"}},
+			{Login: "erin", Profile: Profile{GivenName: "Erin"}}, {Login: "frank", Profile: Profile{GivenName: "Frank"}}, {Login: "gina", Profile: Profile{GivenName: "Gina"}},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
@@ -227,8 +227,8 @@ func TestAnActInANamespaceNobodyOwnsIsToldToTheOtherAdministrators(t *testing.T)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []User{
-			{Login: "carol", DisplayName: "Carol", Admin: true}, {Login: "dan", DisplayName: "Dan", Admin: true, Suspended: true},
-			{Login: "erin", DisplayName: "Erin", Admin: true}, {Login: "gina", DisplayName: "Gina"},
+			{Login: "carol", Profile: Profile{GivenName: "Carol"}, Admin: true}, {Login: "dan", Profile: Profile{GivenName: "Dan"}, Admin: true, Suspended: true},
+			{Login: "erin", Profile: Profile{GivenName: "Erin"}, Admin: true}, {Login: "gina", Profile: Profile{GivenName: "Gina"}},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
@@ -417,8 +417,8 @@ func TestTheBreakGlassPathIsToldToEveryAdministrator(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []User{
-			{Login: "alice", DisplayName: "Alice"}, {Login: "carol", DisplayName: "Carol", Admin: true},
-			{Login: "dan", DisplayName: "Dan", Admin: true, Suspended: true}, {Login: "erin", DisplayName: "Erin", Admin: true},
+			{Login: "alice", Profile: Profile{GivenName: "Alice"}}, {Login: "carol", Profile: Profile{GivenName: "Carol"}, Admin: true},
+			{Login: "dan", Profile: Profile{GivenName: "Dan"}, Admin: true, Suspended: true}, {Login: "erin", Profile: Profile{GivenName: "Erin"}, Admin: true},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err

@@ -1,0 +1,8 @@
+{
+  "GET /api/v1/me": {
+    "status": 401,
+    "body": {
+      "error": "no session: sign in"
+    }
+  }
+}

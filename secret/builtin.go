@@ -45,9 +45,13 @@ func (b *Builtin) Read(ctx context.Context, namespace string, d db.Declaration) 
 		return nil, fmt.Errorf("secret: %s/%s is declared in %s, and the built-in store reads only a secret declared in it, which names no path", namespace, d.Name, d.Provider)
 	}
 	var s db.SealedValue
+	var storage string
 	err := b.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		s, err = ns.SealedValue(ctx, d.Name)
+		if s, err = ns.SealedValue(ctx, d.Name); err != nil {
+			return err
+		}
+		storage, err = ns.Storage(ctx)
 		return err
 	})
 	switch {
@@ -57,7 +61,9 @@ func (b *Builtin) Read(ctx context.Context, namespace string, d db.Declaration) 
 		return nil, fmt.Errorf("secret: the value of %s/%s could not be read: %w", namespace, d.Name, err)
 	}
 
-	value, err := b.keys.Open(namespace, d.Name, s.Version, sealedOf(s))
+	// Opened under the namespace's storage name, which it was sealed under and a rename leaves as
+	// it was, so that a value sealed before a rename opens after it.
+	value, err := b.keys.Open(storage, d.Name, s.Version, sealedOf(s))
 	if errors.Is(err, ErrNotMine) {
 		// Said apart from a value that does not open, because it is fixed apart: a key to put
 		// back on the ring, rather than a row to restore or a value to write again.
@@ -67,10 +73,16 @@ func (b *Builtin) Read(ctx context.Context, namespace string, d db.Declaration) 
 }
 
 // Write seals value as the one the namespace keeps under name, at the next version of that name,
-// in the transaction the declaration is written in.
+// in the transaction the declaration is written in. It is sealed under the namespace's storage name,
+// the name it was created with, rather than its name, which a rename changes: a value is bound to
+// the namespace it was written in for that namespace's whole life.
 func (b *Builtin) Write(ctx context.Context, ns *db.NS, name string, value []byte) error {
+	storage, err := ns.Storage(ctx)
+	if err != nil {
+		return err
+	}
 	return ns.WriteSealed(ctx, name, func(version int) (db.SealedValue, error) {
-		s, err := b.keys.Seal(ns.Namespace(), name, version, value)
+		s, err := b.keys.Seal(storage, name, version, value)
 		if err != nil {
 			return db.SealedValue{}, err
 		}

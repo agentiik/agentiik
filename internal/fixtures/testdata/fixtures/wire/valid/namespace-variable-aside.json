@@ -1,0 +1,8 @@
+{
+  "name": "dunning_days",
+  "value": 45,
+  "visibility": "selected",
+  "workflows": [],
+  "updated_by": "finance/nightly-sync",
+  "updated_at": "2026-10-01T09:15:30Z"
+}

@@ -1,0 +1,61 @@
+# valid: the three trigger kinds a workflow declares, each with every setting it
+#   takes, beside a concurrency policy that cancels the run in progress.
+# covers: on.schedule with a stepped, a ranged and a named field, a timezone
+#         and its absence, jitter and catch_up; on.webhook with hmac and the
+#         defaults it replaces, a path of several segments, a sync response
+#         naming a declared output, and map over the trigger context; on.event
+#         with type, source and filter, and with another namespace's events
+#         filling an input by map; concurrency with cancel_in_progress.
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: price-quotes
+  namespace: sales
+
+concurrency:
+  group: price-quotes
+  cancel_in_progress: true
+
+on:
+  schedule:
+    - cron: "*/30 7-19 * * MON-FRI"
+      timezone: Europe/Paris
+      jitter: 2m
+      catch_up: true
+    - cron: "0 3 1,15 * *"
+  webhook:
+    - path: /quotes/requested
+      method: POST
+      auth: hmac
+      response: sync
+      output: quote
+      map:
+        customer: ${{ trigger.body.customer }}
+    - path: /quotes/refresh
+  event:
+    - type: com.example.price.changed
+      source: /erp/prices
+      filter: ${{ event.data.delta > 0.05 }}
+    - type: com.example.customer.onboarded
+      namespace: crm
+      map:
+        customer: ${{ event.data.customer }}
+
+inputs:
+  customer:
+    schema: { type: string }
+    default: all
+
+outputs:
+  quote:
+    from: { step: quote, port: out }
+
+steps:
+  quote:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    params:
+      customer: ${{ workflow.inputs.customer }}
+    outputs: [out]
