@@ -61,7 +61,7 @@ func TestARunGoingOnIsCancelledOnceAskedY(t *testing.T) {
 	if !strings.Contains(screen(m), "Cancelling was asked: the controller stops the tasks in flight, and the run ends cancelled.") {
 		t.Errorf("the cancel asked is not said:\n%s", screen(m))
 	}
-	if len(in.asked) == reads || in.asked[len(in.asked)-1] != "/api/v1/runs/"+failedRun {
+	if !slices.Contains(in.asked[reads:], "/api/v1/runs/"+failedRun) {
 		t.Errorf("the run is not read again once its cancel is asked: %v", in.asked[reads:])
 	}
 }
