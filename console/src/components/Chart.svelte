@@ -149,18 +149,29 @@
   const shapeOf = () => `${stacked} ${height} ${series.map((s) => `${s.label}/${s.kind}/${s.tone}/${s.dashed ?? false}`).join(" ")}`;
 
   // gutter is the width of the values' axis: the widest label of this chart, measured in the axis'
-  // font, with uPlot's 5px gap and a pixel, or the widest any chart drawn with it needs; and at least
-  // 28px, so that the first time under the plot, centred on its left edge, is not cut.
+  // font, with uPlot's 5px gap and a pixel, or the widest any chart drawn with it needs, and nothing
+  // more, so that the labels start on the pane's edge as the text above them does.
   const me = Symbol("chart");
-  const least = 28;
   function gutter(u: uPlot, values: string[] | null): number {
     if (values && values.length > 0) {
-      u.ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
-      const widest = Math.max(...values.map((v) => u.ctx.measureText(v).width)) / devicePixelRatio;
-      const need = Math.max(least, Math.ceil(widest) + 6);
+      const need = Math.ceil(widest(u, values)) + 6;
       if (needs.get(me) !== need) needs.set(me, need);
     }
-    return Math.max(least, ...needs.values());
+    return needs.size > 0 ? Math.max(...needs.values()) : 0;
+  }
+
+  // widest is the widest of labels in the axes' font, in CSS pixels, a label of two lines by its
+  // longer.
+  function widest(u: uPlot, labels: string[]): number {
+    u.ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
+    return Math.max(0, ...labels.flatMap((l) => l.split("\n")).map((l) => u.ctx.measureText(l).width)) / devicePixelRatio;
+  }
+
+  // fitted leaves out a time whose label, centred on its tick, would run past the chart's left edge,
+  // which the values' axis, as wide as its own labels, may leave less than half a time from the plot.
+  function fitted(u: uPlot, splits: number[], labels: string[]): string[] {
+    const left = (u.bbox?.left ?? 0) / devicePixelRatio;
+    return labels.map((label, i) => (left + u.valToPos(splits[i]!, "x") < widest(u, [label]) / 2 ? "" : label));
   }
 
   // Laid out again when another chart's labels widen or narrow the axis they share.
@@ -193,7 +204,7 @@
       // limit, which left the label against the top and its line through the letters.
       scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * (limit ? 1 + 24 / Math.max(48, height - 60) : 1.08) || 1] } },
       axes: [
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "12px Archivo, sans-serif" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (u, splits) => fitted(u, splits, ticks(splits)), font: "12px Archivo, sans-serif" },
         { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: (u, values) => gutter(u, values), values: (_u, vals) => vals.map((v) => format(v)), font: "12px Archivo, sans-serif" },
       ],
       series: [
