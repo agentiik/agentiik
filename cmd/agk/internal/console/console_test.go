@@ -66,6 +66,9 @@ type installation struct {
 	failing   error
 	asked     []string
 
+	// graph is the resolved graph the workflow's route answers, as JSON.
+	graph string
+
 	// sent is what was sent, as method, path and body, and refusing why a send is refused.
 	sent     []string
 	refusing error
@@ -122,6 +125,8 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 		answer = e
 	case strings.HasPrefix(path, "/api/v1/runs/"):
 		answer = in.run
+	case strings.Contains(path, "/workflows/") && in.graph != "":
+		answer = map[string]any{"graph": json.RawMessage(in.graph)}
 	default:
 		return fmt.Errorf("no route %s", path)
 	}
@@ -258,7 +263,7 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 	if m.selected != "01RUNAAAAAAAAAAAAAAAAAAAAA" {
 		t.Errorf("the runs view opens with %q selected, not the newest run", m.selected)
 	}
-	if last := strings.TrimRight(lines[23], " "); last != "↑↓ Move   enter Open   / Filter   q Quit   ? Every key" {
+	if last := strings.TrimRight(lines[23], " "); last != "↑↓ Move   enter Open   g Graph   / Filter   q Quit   ? Every key" {
 		t.Errorf("the key line is %q", last)
 	}
 	// Every line is as wide as the window, so that the ground is painted under all of it.
@@ -302,7 +307,7 @@ func TestTheKeysMoveOpenAndGoBack(t *testing.T) {
 	if !slices.Contains(in.asked, "/api/v1/runs/01RUNBBBBBBBBBBBBBBBBBBBBB") {
 		t.Errorf("opening a run asked for %v", in.asked)
 	}
-	if !strings.HasSuffix(strings.TrimRight(screen(m), " "), "↑↓ Step   [] Port   esc Runs   q Quit   ? Every key") {
+	if !strings.HasSuffix(strings.TrimRight(screen(m), " "), "↑↓ Step   [] Port   g Graph   esc Runs   q Quit   ? Every key") {
 		t.Errorf("the run view's key line is wrong:\n%s", screen(m))
 	}
 	m = press(t, m, esc)

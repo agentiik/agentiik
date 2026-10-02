@@ -111,10 +111,14 @@ func (m Model) followChosen(again bool) (Model, tea.Cmd) {
 	return m, f.next()
 }
 
-// unfollow stops following the log followed, whose follower returns once its context is done.
+// unfollow stops following the log followed, whose follower returns once its context is done, and
+// forgets what was read of it.
 func (m Model) unfollow() Model {
 	if m.follow != nil {
 		m.follow.cancel()
+		// A log stopped by choice short of its end is sent again from its start when it is
+		// followed again, so what was kept of it would only be shown twice.
+		delete(m.logs, m.follow.key)
 		m.follow = nil
 	}
 	return m

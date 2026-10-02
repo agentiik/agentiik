@@ -44,6 +44,8 @@ func (m Model) screen() string {
 		lines = m.runLines(t, body)
 	case m.view == runnersView:
 		lines = m.runnersLines(t, body)
+	case m.view == graphView:
+		lines = m.graphLines(t, body)
 	default:
 		lines = m.runsLines(t, body)
 	}
@@ -129,7 +131,7 @@ func (m Model) keyLine(t theme) string {
 	case m.filtering && m.view == runsView:
 		keys = [][2]string{{"type", "Filter"}, {"↑↓", "Move"}, {"enter", "Keep"}, {"esc", "Clear"}}
 	case m.view == runView:
-		keys = [][2]string{{"↑↓", "Step"}, {"[]", "Port"}}
+		keys = [][2]string{{"↑↓", "Step"}, {"[]", "Port"}, {"g", "Graph"}}
 		if m.mayCancel() {
 			keys = append(keys, [2]string{"c", "Cancel run"})
 		}
@@ -139,8 +141,18 @@ func (m Model) keyLine(t theme) string {
 		keys = append(keys, [2]string{"esc", "Runs"}, [2]string{"q", "Quit"}, [2]string{"?", "Every key"})
 	case m.view == runnersView:
 		keys = [][2]string{{"↑↓", "Move"}, {"esc", "Runs"}, {"q", "Quit"}, {"?", "Every key"}}
+	case m.view == graphView:
+		written := "List"
+		if m.asList {
+			written = "Drawing"
+		}
+		back := "Run"
+		if m.graphFrom == runsView {
+			back = "Runs"
+		}
+		keys = [][2]string{{"↑↓", "Step"}, {"enter", "Inspect"}, {"g", written}, {"esc", back}, {"q", "Quit"}, {"?", "Every key"}}
 	default:
-		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"/", "Filter"}}
+		keys = [][2]string{{"↑↓", "Move"}, {"enter", "Open"}, {"g", "Graph"}, {"/", "Filter"}}
 		if m.filter != "" {
 			keys = append(keys, [2]string{"esc", "Clear"})
 		}
@@ -164,7 +176,7 @@ func (m Model) keysListed(t theme) []string {
 	}
 	switch m.view {
 	case runView:
-		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"esc", "Back to the runs"})
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"g", "The graph of the run's workflow, its state laid over it"}, [2]string{"esc", "Back to the runs"})
 		if m.mayCancel() {
 			rows = append(rows, [2]string{"c", "Cancel the run, once a prompt naming it is answered y"})
 		}
@@ -173,8 +185,11 @@ func (m Model) keysListed(t theme) []string {
 		}
 	case runnersView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runners"}, [2]string{"esc", "Back to the runs"})
+	case graphView:
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps, in the order the graph runs them"}, [2]string{"enter", "Open the step chosen in the inspector"},
+			[2]string{"g", "Write the graph as a list, and draw it again"}, [2]string{"esc", "Back to the view the graph was opened from"})
 	default:
-		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"},
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"}, [2]string{"g", "The graph of the run selected"},
 			[2]string{"/", "Filter the runs as you type: words against what is loaded, and namespace=, workflow=, state=, since= and until= asked of the installation"},
 			[2]string{"esc", "Clear the filter"})
 	}
