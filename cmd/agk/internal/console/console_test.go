@@ -13,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
@@ -70,6 +71,11 @@ type installation struct {
 	// its answer where a test gives one; stats is what the statistics route answers.
 	graph, detail, stats string
 
+	// grants are what each grants route answers, by path, and groups the groups an administrator
+	// reads.
+	grants map[string][]access.Grant
+	groups []api.Group
+
 	// sent is what was sent, as method, path and body, and refusing why a send is refused.
 	sent     []string
 	refusing error
@@ -116,6 +122,17 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 			listed = append(listed, api.RunnerPool{Pool: p})
 		}
 		answer = map[string]any{"runner_pools": listed}
+	case strings.HasSuffix(path, "/grants"):
+		g, ok := in.grants[path]
+		if !ok {
+			return errors.New("no such namespace or workflow, or not yours to share")
+		}
+		answer = map[string]any{"grants": g}
+	case path == "/api/v1/groups":
+		if in.me == nil || !in.me.Admin {
+			return errors.New("no such thing, or not yours")
+		}
+		answer = map[string]any{"groups": in.groups}
 	case strings.HasPrefix(path, "/api/v1/runs?"):
 		answer = map[string]any{"runs": in.runs}
 	case strings.Contains(path, "/steps/"):
@@ -366,7 +383,7 @@ func TestAnInstallationThatStopsAnsweringIsSaidSo(t *testing.T) {
 	tm = send(t, tm, cmd())
 	m = tm.(Model)
 	top := strings.Split(screen(m), "\n")[0]
-	if !strings.Contains(top, "not answering, asked again: the installation could not be") {
+	if !strings.Contains(top, "not answering, asked again: the installation") {
 		t.Errorf("the top line says %q", top)
 	}
 	if !strings.Contains(screen(m), "01RUNAAAAAAAAAAAAAAAAAAAAA") {

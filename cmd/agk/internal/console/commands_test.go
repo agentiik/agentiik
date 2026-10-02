@@ -112,7 +112,7 @@ func TestThePaletteDismissesANotification(t *testing.T) {
 	in := &installation{runs: someRuns(), me: withNotices(recovery, widened)}
 	m := press(t, typed(t, press(t, opened(t, in, Options{}, 120, 30), colon), "notif"), enter)
 	lines := paletteLines(m)
-	if m.palette == nil || !m.palette.notices || len(lines) < 3 || !strings.HasPrefix(lines[0], "notifications: ") || !strings.HasPrefix(lines[1], "A recovery code was issued") {
+	if m.palette == nil || m.palette.prompt != "notifications: " || len(lines) < 3 || !strings.HasPrefix(lines[0], "notifications: ") || !strings.HasPrefix(lines[1], "A recovery code was issued") {
 		t.Fatalf("Notifications does not list the notifications:\n%s", screen(m))
 	}
 	asked := len(in.asked)
