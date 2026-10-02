@@ -1,8 +1,0 @@
-# The console's build, which the release build writes here and go:embed carries into agentiik-api,
-# is never committed: package console says why, and a build's hundreds of files one directory deep
-# are what git add -A sweeps up on the machine that has just made them. This file alone is, because
-# //go:embed all:dist refuses a directory it matches nothing in, and this module has to compile on a
-# machine that has never built the console. The console's build writes beside it and never empties
-# the directory first, and the API serves no file whose name starts with a dot, this one included.
-*
-!.gitignore
