@@ -64,6 +64,17 @@
     cursor: pointer;
   }
 
+  /* Under 760px the six presets are wider than the screen, and a row that scrolls hid Max with
+     nothing to say it was there: they go in three columns of one width, on two rows. */
+  @media (max-width: 759px) {
+    .presets {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      width: 100%;
+      overflow: visible;
+    }
+  }
+
   .preset[aria-pressed="true"] {
     border-color: var(--accentLine);
     background: var(--accentDim);

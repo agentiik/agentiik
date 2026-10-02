@@ -95,7 +95,9 @@
 
   @media (max-width: 759px) {
     .filter {
-      width: 100%;
+      flex: 1 1 auto;
+      width: auto;
+      min-width: 0;
     }
   }
 </style>
