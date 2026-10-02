@@ -30,6 +30,9 @@ type namespaces struct {
 	principals
 	h                  http.Handler
 	carol, alice, erin string
+
+	// told is what the routes told Trouble, in order.
+	told *[]error
 }
 
 func someNamespaces(t *testing.T) namespaces {
@@ -39,7 +42,8 @@ func someNamespaces(t *testing.T) namespaces {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{Pool: in.pool}); err != nil {
+	told := &[]error{}
+	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{Pool: in.pool, Trouble: func(err error) { *told = append(*told, err) }}); err != nil {
 		t.Fatal(err)
 	}
 	err = in.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
@@ -66,6 +70,7 @@ func someNamespaces(t *testing.T) namespaces {
 		carol: in.token(t, "carol", nil, nil, later),
 		alice: in.token(t, "alice", nil, nil, later),
 		erin:  in.token(t, "erin", nil, nil, later),
+		told:  told,
 	}
 }
 
@@ -182,6 +187,31 @@ func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 	w = in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"carols"}`)
 	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"owner":"carol"`) {
 		t.Errorf("an administrator's namespace naming no owner was answered %d %s", w.Code, w.Body)
+	}
+}
+
+// A namespace that could not be created is answered 500 with what could not be done, and the cause,
+// which is the installation's and names its tables, goes to Trouble alone, so that an operator
+// finds it in the API's log rather than nowhere.
+func TestANamespaceThatCouldNotBeCreatedSaysWhyInTheLog(t *testing.T) {
+	in := someNamespaces(t)
+	for _, stmt := range []string{
+		`create function refuse_for_the_test() returns trigger language plpgsql as $$ begin raise exception 'refused for the test'; end $$`,
+		`create trigger refuse_for_the_test before insert on namespaces for each row execute function refuse_for_the_test()`,
+	} {
+		if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := in.ask(t, "POST", "/api/v1/namespaces", in.alice, `{"name":"wesh"}`)
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "the namespace could not be created") || strings.Contains(w.Body.String(), "refused for the test") {
+		t.Fatalf("a namespace the database refused was answered %d %s, want 500 saying what could not be done and nothing of why", w.Code, w.Body)
+	}
+	if len(*in.told) != 1 {
+		t.Fatalf("Trouble was told %v, want the one cause", *in.told)
+	}
+	if got := (*in.told)[0].Error(); !strings.Contains(got, "POST /api/v1/namespaces: the namespace could not be created: ") || !strings.Contains(got, "refused for the test") {
+		t.Errorf("Trouble was told %q, want the request, what could not be done and the database's reason", got)
 	}
 }
 

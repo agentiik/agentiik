@@ -165,6 +165,9 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		return ended(err)
 	}
 	defer pool.Close()
+	if err := pool.Current(work); err != nil {
+		return ended(err)
+	}
 
 	b, err := bus.Open(work, bus.Options{
 		URL:         c.Bus.URL,
