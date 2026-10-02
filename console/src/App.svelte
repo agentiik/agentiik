@@ -38,6 +38,7 @@
     Home: () => import("./views/Home.svelte"),
     Namespaces: () => import("./views/Namespaces.svelte"),
     Policy: () => import("./views/Policy.svelte"),
+    Audit: () => import("./views/Audit.svelte"),
     PoolStatistics: () => import("./views/PoolStatistics.svelte"),
     Run: () => import("./views/Run.svelte"),
     RunDiff: () => import("./views/RunDiff.svelte"),
@@ -262,6 +263,8 @@
         {#await screens.Home() then { default: Home }}<Home {api} {place} me={session.me} namespaces={session.namespaces} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "account"}
         {#await screens.Account() then { default: Account }}<Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />{:catch}<Unloaded />{/await}
+      {:else if route.kind === "users" && route.tab === "audit" && session.me.admin}
+        {#await screens.Audit() then { default: Audit }}<Audit {api} {place} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "users" && route.tab === "policy" && session.me.admin}
         {#await screens.Policy() then { default: Policy }}<Policy {api} {place} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "users" && route.tab === undefined && session.me.admin}
