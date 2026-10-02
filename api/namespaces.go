@@ -143,8 +143,10 @@ func (n *NamespaceCreate) field(b *body, name string) error {
 //
 // Each is left out where it is not set, and none is ever written as zero or empty: each count
 // "starts at one", and an empty allowed_runner_pools is refused rather than read. An answer always
-// writes max_concurrent_tasks and max_retention_days, which "always hold a value, 20 and 90 until
-// an administrator sets another", and the other four where they are set.
+// writes max_concurrent_tasks, which "always holds a value, 20 until an administrator sets
+// another", and the other five where they are set: max_retention_days among them, which bounds
+// nothing until it is set, so that an installation keeps what it ran until somebody decides
+// otherwise.
 type Quotas struct {
 	MaxConcurrentTasks int      `json:"max_concurrent_tasks,omitempty"`
 	MaxRunsPerHour     int      `json:"max_runs_per_hour,omitempty"`
@@ -688,11 +690,10 @@ func RemoveNamespace(ctx context.Context, pool *db.Pool, name string, who Princi
 
 // setQuotas is PUT /api/v1/namespaces/{namespace}/quotas: the namespace's quotas, whole.
 //
-// "max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an
-// administrator sets another, and a write that leaves either out keeps the value it has. The other
-// four bound nothing until they are set, and a write that leaves one out removes its bound." So the
-// body is the whole of what the four bound, and what a Terraform apply sends is what the namespace
-// holds after it.
+// "max_concurrent_tasks always holds a value, 20 until an administrator sets another, and a write
+// that leaves it out keeps the value it has. The other five bound nothing until they are set, and a
+// write that leaves one out removes its bound." So the body is the whole of what the five bound,
+// and what a Terraform apply sends is what the namespace holds after it.
 func (s *NamespaceAPI) setQuotas(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := over.Namespace
 	if NamespaceRef(name) != nil {

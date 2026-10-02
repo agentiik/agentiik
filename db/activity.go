@@ -64,7 +64,7 @@ func (w *Wide) ActivityStatistics(ctx context.Context, b Buckets) ([]ActivityBuc
 		from runs r
 		join namespaces n on n.name = r.namespace
 		where r.created_at >= $1 and r.created_at < $2
-		  and r.created_at >= now() - make_interval(days => n.max_retention_days)
+		  and (n.max_retention_days is null or r.created_at >= now() - make_interval(days => n.max_retention_days))
 		group by 1, 2`, args...)
 	if err != nil {
 		return nil, Activity{}, fmt.Errorf("db: the runs could not be counted: %w", err)

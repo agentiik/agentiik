@@ -10208,7 +10208,7 @@ export interface components {
         name: string;
         /**
          * Quotas
-         * @description The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, and a write leaving either out keeps the value it has: the two were a namespace's bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other four bound nothing until they are set, and a write leaving one out removes its bound. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.
+         * @description The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks always holds a value, 20 until an administrator sets another, and a write leaving it out keeps the value it has: it was one of a namespace's two bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other five bound nothing until they are set, and a write leaving one out removes its bound: max_retention_days, v0.2's other bound, among them from v0.6.0, so that an installation keeps what it ran until somebody decides otherwise. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.
          * @example {
          *       "max_concurrent_tasks": 20,
          *       "max_runs_per_hour": 500,
@@ -10241,7 +10241,7 @@ export interface components {
              */
             max_artifact_bytes?: number;
             /**
-             * @description The upper bound on how long the namespace may ask to keep what its runs produce.
+             * @description The upper bound on how long the namespace may ask to keep what its runs produce, and how long a workflow declaring no retain keeps it. Absent, it bounds nothing, and what a run of a workflow declaring no retain produces is kept for ever: an installation keeps what it ran until somebody decides otherwise, and a namespace that must forget, one whose logs hold personal data for instance, sets it.
              * @example 180
              * @example 30
              */
@@ -10289,16 +10289,14 @@ export interface components {
          *       "kind": "personal",
          *       "owner": "alice",
          *       "quotas": {
-         *         "max_concurrent_tasks": 20,
-         *         "max_retention_days": 90
+         *         "max_concurrent_tasks": 20
          *       }
          *     }
          * @example {
          *       "name": "demo",
          *       "kind": "shared",
          *       "quotas": {
-         *         "max_concurrent_tasks": 20,
-         *         "max_retention_days": 90
+         *         "max_concurrent_tasks": 20
          *       }
          *     }
          * @example {
@@ -10306,8 +10304,7 @@ export interface components {
          *       "kind": "shared",
          *       "owner": "bob-martin",
          *       "quotas": {
-         *         "max_concurrent_tasks": 20,
-         *         "max_retention_days": 90
+         *         "max_concurrent_tasks": 20
          *       },
          *       "former_names": [
          *         "finance"
@@ -10336,15 +10333,14 @@ export interface components {
              */
             owner?: components["schemas"]["principalRef"];
             /**
-             * @description What this namespace may consume. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, so the API answers both; the other four appear where they are set, and absent bound nothing of the namespace's own.
+             * @description What this namespace may consume. max_concurrent_tasks always holds a value, 20 until an administrator sets another, so the API answers it; the other five appear where they are set, and absent bound nothing of the namespace's own.
              * @example {
              *       "max_concurrent_tasks": 20,
              *       "max_runs_per_hour": 500,
-             *       "max_retention_days": 90
+             *       "max_retention_days": 365
              *     }
              * @example {
-             *       "max_concurrent_tasks": 20,
-             *       "max_retention_days": 90
+             *       "max_concurrent_tasks": 20
              *     }
              */
             quotas?: components["schemas"]["quotas"];
@@ -11047,7 +11043,7 @@ export interface components {
              */
             timeout?: components["schemas"]["duration"];
             /**
-             * @description The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding.
+             * @description The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding, and the run kept for ever where the namespace sets none either.
              * @example 7d
              */
             retain?: components["schemas"]["duration"];
@@ -11373,7 +11369,7 @@ export interface components {
                      */
                     timeout?: components["schemas"]["duration"];
                     /**
-                     * @description How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them.
+                     * @description How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them. Absent where defaults.retain is, the namespace's max_retention_days then deciding, and the artifacts kept for ever where it sets none.
                      * @example 7d
                      */
                     retain?: components["schemas"]["duration"];
@@ -12709,7 +12705,7 @@ export interface components {
         historyLimit: number;
         /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
         statsFrom: components["schemas"]["timestamp"];
-        /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+        /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
         statsRange: "max";
         /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
         statsTo: components["schemas"]["timestamp"];
@@ -15697,7 +15693,7 @@ export interface operations {
             query?: {
                 /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
-                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
                 range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
@@ -15742,7 +15738,7 @@ export interface operations {
             query: {
                 /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
-                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
                 range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
@@ -15789,7 +15785,7 @@ export interface operations {
             query: {
                 /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
-                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
                 range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
@@ -15834,7 +15830,7 @@ export interface operations {
             query?: {
                 /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
-                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
                 range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
@@ -15877,7 +15873,7 @@ export interface operations {
             query?: {
                 /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
-                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
                 range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
@@ -15915,7 +15911,7 @@ export interface operations {
             query?: {
                 /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
-                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
                 range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];

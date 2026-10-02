@@ -134,7 +134,7 @@ func someRenaming(t *testing.T) renaming {
 func TestAnOwnerRenamesANamespace(t *testing.T) {
 	in := someRenaming(t)
 	w := in.ask(t, "PATCH", "/api/v1/namespaces/finance", in.dave, `{"name":"accounting"}`)
-	want := `{"name":"accounting","kind":"shared","quotas":{"max_concurrent_tasks":20,"max_retention_days":90},"former_names":["finance"],"avatar_updated_at":null}`
+	want := `{"name":"accounting","kind":"shared","quotas":{"max_concurrent_tasks":20},"former_names":["finance"],"avatar_updated_at":null}`
 	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != want {
 		t.Fatalf("the rename answered %d %s, want %s", w.Code, w.Body, want)
 	}
