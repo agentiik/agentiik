@@ -20,7 +20,7 @@ func TestTheGrantsThatApplyAreTheOnesAskedFor(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []string{"alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: u, DisplayName: u}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: u}); err != nil {
 				return err
 			}
 		}
@@ -249,7 +249,7 @@ func TestANamespaceCarriesItsKindOwnerAndQuotas(t *testing.T) {
 			a.MaxRunsPerHour == b.MaxRunsPerHour && a.MaxArtifactBytes == b.MaxArtifactBytes &&
 			a.MaxRunDuration == b.MaxRunDuration
 	}
-	if before.Kind != NamespaceShared || before.Owner != "" || !same(before.Quotas, Quotas{MaxConcurrentTasks: 20, MaxRetentionDays: 90}) {
+	if before.Kind != NamespaceShared || before.Owner != "" || !same(before.Quotas, Quotas{MaxConcurrentTasks: 20}) {
 		t.Errorf("a namespace nobody set anything on reads as %+v", before)
 	}
 	want := Quotas{MaxConcurrentTasks: 7, MaxRetentionDays: 180, MaxRunsPerHour: 500, MaxArtifactBytes: 500 << 30,
@@ -257,8 +257,8 @@ func TestANamespaceCarriesItsKindOwnerAndQuotas(t *testing.T) {
 	if after.Owner != "group:finance-leads" || !same(after.Quotas, want) {
 		t.Errorf("the namespace reads as %+v", after)
 	}
-	// The two a namespace always has are kept, and the others bound nothing again.
-	if !same(kept.Quotas, Quotas{MaxConcurrentTasks: 7, MaxRetentionDays: 180}) {
+	// The one a namespace always has is kept, and the others bound nothing again.
+	if !same(kept.Quotas, Quotas{MaxConcurrentTasks: 7}) {
 		t.Errorf("quotas written as nothing read as %+v", kept.Quotas)
 	}
 	if len(listed) != 2 || listed[0].Name != "finance" || listed[1].Name != "team-ops" {

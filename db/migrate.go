@@ -141,3 +141,46 @@ func MigrateThrough(ctx context.Context, conn *pgx.Conn, last string) ([]string,
 	}
 	return ran, nil
 }
+
+// Current refuses a database that lacks a migration this binary carries, naming the first it lacks.
+// Every query the programs make is written against the schema their migrations leave, so a program
+// started on an older one serves, and fails on whatever reaches what a missing migration changed, as
+// a 500 that says nothing of the schema. It reads schema_migrations through the pool's own role,
+// which may read it and nothing more of it.
+func (p *Pool) Current(ctx context.Context) error {
+	rows, err := p.pool.Query(ctx, `select name from schema_migrations`)
+	if err != nil {
+		return fmt.Errorf("db: the migration record could not be read: %w", err)
+	}
+	applied, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("db: the migration record could not be read: %w", err)
+	}
+	return lacking(applied)
+}
+
+// lacking refuses a record of applied migrations missing one Migrations carries.
+func lacking(applied []string) error {
+	all, err := Migrations()
+	if err != nil {
+		return err
+	}
+	held := map[string]bool{}
+	for _, name := range applied {
+		held[name] = true
+	}
+	var missing []string
+	for _, m := range all {
+		if !held[m.Name] {
+			missing = append(missing, m.Name)
+		}
+	}
+	switch len(missing) {
+	case 0:
+		return nil
+	case 1:
+		return fmt.Errorf("db: the database lacks %s, a migration this binary carries: run agentiik-api init, or agentiik-api migrate where no init runs, with this binary, then start it again", missing[0])
+	default:
+		return fmt.Errorf("db: the database lacks %s and %d more of the migrations this binary carries: run agentiik-api init, or agentiik-api migrate where no init runs, with this binary, then start it again", missing[0], len(missing)-1)
+	}
+}

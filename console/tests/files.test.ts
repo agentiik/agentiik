@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
 import { Place } from "../src/lib/place.svelte";
+import { offers } from "../src/lib/refs";
 import { Session } from "../src/lib/session.svelte";
 import { answering, scenario, type Scenario } from "./scenario";
 
@@ -29,9 +30,9 @@ describe("a workflow's files", () => {
     const rows = within(list).getAllByRole("button").map((b) => (b.classList.contains("folder") ? b.textContent!.replace(/^[▸▾]/, "") : [...b.querySelectorAll("span")].map((x) => x.textContent).join(" ")));
     expect(rows).toEqual(["assets", "schemas", "scripts", expect.stringMatching(/^agentiik\.yaml \d\.\d KiB$/), "common-bricks.yaml 99 B"]);
     const file = await screen.findByRole("list", { name: "agentiik.yaml at main" });
-    expect(file.classList.contains("mono")).toBe(true);
+    expect(file.classList.contains("code")).toBe(true);
     expect(within(file).getAllByRole("listitem")[0]!.textContent).toBe("1# finance/monthly-invoicing");
-    expect(screen.getByText(head.slice(0, 7))).toBeTruthy();
+    expect(screen.getAllByText(head.slice(0, 7)).length).toBeGreaterThan(0);
   });
 
   it("open a folder, show a file chosen, and say a binary file is not drawn", async () => {
@@ -62,7 +63,35 @@ describe("a workflow's files", () => {
     await waitFor(() => expect(file.textContent).toContain("vat_scale: 4"));
 
     place.narrow(new URLSearchParams({ ref: "nowhere" }));
-    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "No branch, tag or version of monthly-invoicing is named nowhere.");
+    expect(await screen.findByText(/monthly-invoicing has no branch, tag or version named nowhere\. Check the name, or choose one from the list\./)).toBeTruthy();
+  });
+
+  it("offer the default branch, the other branches and the tags the repository holds, then the versions", async () => {
+    const asked: string[] = [];
+    open("/finance/workflows/monthly-invoicing/files", "", scenario("alice"), [], asked);
+    await screen.findByRole("region", { name: "Files at main" });
+    await waitFor(() => expect(document.querySelectorAll("#files-refs option").length).toBeGreaterThan(4));
+    const options = [...document.querySelectorAll<HTMLOptionElement>("#files-refs option")].map((o) => [o.value, o.textContent]);
+    expect(options.slice(0, 4)).toEqual([
+      ["main", "the default branch"],
+      ["feature/vat-rounding", expect.stringMatching(/^branch, moved by carol at /)],
+      ["try-retries", expect.stringMatching(/^branch, moved by alice at /)],
+      ["v2.1.0", expect.stringMatching(/^tag, moved by bob at /)],
+    ]);
+    expect(options.slice(4).map(([v]) => v)).toContain(head);
+    expect(asked).toContain("GET /api/v1/finance/workflows/monthly-invoicing/refs");
+  });
+
+  it("offer a name that is both a branch and a tag in full, and nothing for a branch not yet born", () => {
+    const at = "2026-09-30T15:02:00Z";
+    const refs = [
+      { name: "refs/heads/main", commit: head, protected: true, moved_by: "alice", moved_at: at },
+      { name: "refs/heads/release", commit: older, protected: false, moved_by: "bob", moved_at: at },
+      { name: "refs/tags/release", commit: head, protected: false, moved_by: "bob", moved_at: at },
+      { name: "refs/heads/unborn", commit: null, protected: false },
+    ];
+    expect(offers(refs, "main", [{ commit: older, subject: "older" }], Date.parse(at)).map((o) => o.value)).toEqual(["main", "refs/heads/release", "refs/tags/release", older]);
+    expect(offers([...refs, { name: "refs/tags/main", commit: head, protected: false, moved_by: "bob", moved_at: at }], "main", [], 0)[0]).toEqual({ value: "refs/heads/main", label: "the default branch" });
   });
 
   it("compare two refs over the whole tree, and the file chosen line by line", async () => {
@@ -82,13 +111,13 @@ describe("a workflow's files", () => {
     const place = open("/finance/workflows/monthly-invoicing/files", `?against=${older}&path=scripts%2Fnormalize.py`);
     expect(place.query.get("path")).toBe("scripts/normalize.py");
     expect(await screen.findByText("mode 0644 to 0755")).toBeTruthy();
-    expect(await screen.findByText("The bytes are the same; only the mode changed.")).toBeTruthy();
+    expect(await screen.findByText("Mode changed only")).toBeTruthy();
   });
 
   it("run the ref shown, its name in the run form, under workflow:run", async () => {
     const sent: { path: string; body: unknown }[] = [];
     open("/finance/workflows/monthly-invoicing/files", "?ref=feature%2Fvat-rounding", scenario("alice"), sent);
-    await fireEvent.click(await screen.findByRole("button", { name: "Run feature/vat-rounding" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Run this ref" }));
     await waitFor(() => expect((document.getElementById("run-ref") as HTMLInputElement).value).toBe("feature/vat-rounding"));
   });
 
@@ -99,18 +128,26 @@ describe("a workflow's files", () => {
 });
 
 describe("a namespace's workflows", () => {
-  it("are those its runs name, said as such, each with its latest run", async () => {
+  it("are those the API lists, each with its latest run", async () => {
     open("/finance/workflows");
-    expect(await screen.findByText(/The API lists no namespace's workflows/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "monthly-invoicing" }).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
+    expect(await screen.findByRole("region", { name: "Workflows of finance" })).toBeTruthy();
+    expect((await screen.findByRole("link", { name: "monthly-invoicing" })).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
+  });
+
+  it("say which were never run", async () => {
+    open("/alice/workflows");
+    const pane = await screen.findByRole("region", { name: "Workflows of alice" });
+    const row = (await within(pane).findByRole("link", { name: "vat-reconciliation" })).closest("tr")!;
+    expect(within(row).getByText("Never run")).toBeTruthy();
   });
 
   it("gain a new one, empty, which opens on how to fill it", async () => {
     const sent: { path: string; body: unknown }[] = [];
     const place = open("/alice/workflows", "", scenario("alice"), sent);
-    await fireEvent.input(await screen.findByLabelText(/^Name/), { target: { value: "vat-reconciliation" } });
+    await fireEvent.click(await screen.findByRole("button", { name: "New workflow" }));
+    await fireEvent.input(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "vat-reconciliation" } });
     await fireEvent.click(screen.getByRole("checkbox"));
-    await fireEvent.click(screen.getByRole("button", { name: "Create vat-reconciliation" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(sent).toEqual([{ path: "/api/v1/alice/workflows", body: { name: "vat-reconciliation", protected: true } }]));
     await waitFor(() => expect(place.route).toEqual({ kind: "namespace", namespace: "alice", view: "workflows", workflow: "vat-reconciliation", tab: "files" }));
   });
@@ -119,9 +156,10 @@ describe("a namespace's workflows", () => {
     const s = scenario("alice");
     s["POST /api/v1/alice/workflows"] = { status: 409, body: { error: "a workflow of that name is in the namespace" } };
     open("/alice/workflows", "", s);
-    await fireEvent.input(await screen.findByLabelText(/^Name/), { target: { value: "report" } });
-    await fireEvent.click(screen.getByRole("button", { name: "Create report" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("A workflow named report is already in alice, or one deleted under that name is still being purged.");
+    await fireEvent.click(await screen.findByRole("button", { name: "New workflow" }));
+    await fireEvent.input(screen.getByRole("textbox", { name: /^Name/ }), { target: { value: "report" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText(/report is already taken\./)).toBeTruthy();
   });
 });
 

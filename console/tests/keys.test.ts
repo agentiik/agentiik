@@ -28,14 +28,14 @@ function line(): string[] {
 const press = (key: string, target: Element | Window = window) => fireEvent.keyDown(target, { key });
 
 describe("the key line", () => {
-  it("names the keys of the runs view by their effect, and the console's own", async () => {
-    open("/finance/runs");
+  it("names the keys of a workflow's runs by their effect, and the console's own", async () => {
+    open("/finance/workflows/monthly-invoicing/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
-    expect(line()).toEqual(["↑↓ Move", "enter Open", "1234 Runs, workflows, statistics, settings", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Move", "enter Open", "1234 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
   });
 
   it("moves the selection over the runs and opens the one selected", async () => {
-    const { place } = open("/finance/runs");
+    const { place } = open("/finance/workflows/monthly-invoicing/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
     const rows = () => screen.getAllByRole("row").filter((r) => r.hasAttribute("data-run"));
     await press("ArrowDown");
@@ -48,21 +48,21 @@ describe("the key line", () => {
     expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
     const id = rows()[0]!.getAttribute("data-run")!;
     await press("Enter");
-    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "runs", run: id });
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", run: id });
   });
 
   it("leaves a key typed into a field to the field", async () => {
-    open("/finance/runs");
+    open("/finance/workflows/monthly-invoicing/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
     await press("j", screen.getByRole("switch"));
     expect(screen.getAllByRole("row").some((r) => r.getAttribute("aria-selected") === "true")).toBe(false);
   });
 
   it("leaves enter on a focused link to the link", async () => {
-    const { place } = open("/finance/runs");
+    const { place } = open("/finance/workflows/monthly-invoicing/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
     await press("ArrowDown");
-    await press("Enter", screen.getByRole("link", { name: "Statistics" }));
+    await press("Enter", within(screen.getByRole("navigation", { name: "monthly-invoicing, what is shown" })).getByRole("link", { name: "Statistics" }));
     expect(place.route.kind === "namespace" && place.route.run).toBeFalsy();
   });
 
@@ -70,30 +70,30 @@ describe("the key line", () => {
     const { place } = open(`/finance/runs/${failed}`);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     await press("1");
-    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "runs", run: undefined });
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", workflow: undefined, tab: undefined });
   });
 
   it("lists every key of the view with ?, and closes the list with esc", async () => {
-    const { place } = open("/finance/runs");
+    const { place } = open("/finance/workflows/monthly-invoicing/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
     await press("?");
     const listing = screen.getByRole("dialog", { name: "Every key of this view" });
     expect(within(listing).getByText("Move").closest("tr")!.textContent!.replace(/\s+/g, "")).toBe("↑↓kjMove");
     await press("Escape");
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(place.route).toMatchObject({ view: "runs" });
+    expect(place.route).toMatchObject({ view: "workflows", tab: "runs" });
   });
 });
 
 describe("the inspector's keys", () => {
-  it("moves between the steps and goes back to the runs", async () => {
+  it("moves between the steps and goes back to the workflow's runs", async () => {
     const { place, asked } = open(`/finance/runs/${failed}`);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
-    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from invoice", "esc All runs of finance", "1234 Runs, workflows, statistics, settings", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from this step", "esc Runs of the workflow", "1234 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
     await press("ArrowUp");
     expect(place.query.get("step")).toBe("normalize");
     await press("Escape");
-    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "runs", run: undefined });
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", tab: "runs" });
   });
 
   it("moves between the ports that hold an envelope", async () => {
@@ -112,15 +112,15 @@ describe("the inspector's keys", () => {
     const { asked, place } = open(`/finance/runs/${failed}`, s);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     await press("p");
-    expect(screen.getByText("Replay this run from invoice? A new run starts there.")).toBeTruthy();
-    expect(line().slice(0, 2)).toEqual(["y Replay from invoice", "nesc Keep it"]);
+    expect(screen.getByText("Replay this run from invoice?")).toBeTruthy();
+    expect(line().slice(0, 2)).toEqual(["y Replay from this step", "nesc Keep it"]);
     await press("x");
     await press("n");
     expect(screen.queryByText(/A new run starts there/)).toBeNull();
     expect(asked.some((a) => a.endsWith("/replay"))).toBe(false);
     await press("p");
     await press("y");
-    await waitFor(() => expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "runs", run: replay }));
+    await waitFor(() => expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", run: replay }));
     expect(asked.filter((a) => a.endsWith("/replay"))).toHaveLength(1);
   });
 
@@ -132,12 +132,12 @@ describe("the inspector's keys", () => {
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     expect(line()).toContain("c Cancel run");
     await press("c");
-    expect(screen.getByText("Cancel this run? Its tasks in flight are stopped.")).toBeTruthy();
+    expect(screen.getByText("Cancel this run?")).toBeTruthy();
     await press("Escape");
     expect(screen.queryByText(/Its tasks in flight are stopped/)).toBeNull();
     await press("c");
     await press("y");
-    expect(await screen.findByText(/Cancelling was asked/)).toBeTruthy();
+    expect(await screen.findByText("Cancelling.")).toBeTruthy();
     expect(asked.filter((a) => a === `POST /api/v1/runs/${failed}/cancel`)).toHaveLength(1);
   });
 
@@ -160,7 +160,7 @@ describe("the run diff's keys", () => {
     await screen.findAllByText(good);
     expect(line()[0]).toBe("esc Back to the first run");
     await press("Escape");
-    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "runs", run: failed, against: undefined });
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", run: failed });
   });
 });
 
@@ -184,7 +184,7 @@ describe("the workflow page's keys", () => {
   it("move between the steps as the graph draws them, and go back to the workflow's runs", async () => {
     const { place } = open("/finance/workflows/monthly-invoicing");
     await screen.findByRole("button", { name: /^Step normalize/ });
-    expect(line()).toEqual(["↑↓ Step", "esc Runs of monthly-invoicing", "1234 Runs, workflows, statistics, settings", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "esc Its runs", "1234 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
     await press("j");
     expect(place.query.get("step")).toBe("invoice");
     await press("ArrowDown");
@@ -192,8 +192,7 @@ describe("the workflow page's keys", () => {
     await press("k");
     expect(place.query.get("step")).toBe("invoice");
     await press("Escape");
-    expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "runs" });
-    expect(place.query.get("workflow")).toBe("monthly-invoicing");
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", tab: "runs" });
   });
 });
 
@@ -201,12 +200,12 @@ describe("the runners' keys", () => {
   it("narrow the runners to one pool after another, and to every pool again", async () => {
     const { place } = open("/runners", scenario("dana"));
     await screen.findByRole("button", { name: "dmz" });
-    expect(line()).toEqual(["↑↓ Pool", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Pool", ": Search", "? Every key"]);
     await press("j");
     expect(place.query.get("pool")).toBe("default");
     await press("j");
     expect(place.query.get("pool")).toBe("dmz");
-    expect(line()).toEqual(["↑↓ Pool", "esc Every pool", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Pool", "esc Every pool", ": Search", "? Every key"]);
     await press("Escape");
     expect(place.query.get("pool")).toBeNull();
   });

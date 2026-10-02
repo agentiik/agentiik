@@ -8,10 +8,10 @@ import (
 // RenameWorkflow gives a workflow another name within its namespace: "a rename carries everything at
 // once: versions, refs, runs, grants and triggers answer at the new name from the answer on, the old
 // name is free". One statement on the workflow's row, which every key naming it carries through
-// (migration 0053), and the grants of the tasks of its runs, which name the version their task runs
-// by the workflow's name in their scope, so that a task dispatched before the rename redeems after
-// it. Under the lock every writer of the repository takes, so that a push and a rename are one
-// before the other.
+// (migration 0053), the grants of the tasks of its runs, which name the version their task runs by
+// the workflow's name in their scope, so that a task dispatched before the rename redeems after it,
+// and the namespace's variables selected for it, which name it in a list no key carries. Under the
+// lock every writer of the repository takes, so that a push and a rename are one before the other.
 //
 // ErrNoWorkflow where the namespace holds no such workflow, or one deleted; ErrWorkflowExists where
 // it holds one under the new name, and ErrWorkflowPurging where one deleted under it is still being
@@ -45,6 +45,17 @@ func (n *NS) RenameWorkflow(ctx context.Context, workflow, to string) error {
 		 where namespace = $1 and scope->>'workflow' = $2`,
 		n.namespace, workflow, to); err != nil {
 		return fmt.Errorf("db: the grants of the tasks of %s could not follow its rename: %w", workflow, err)
+	}
+	// The namespace's variables selected for the workflow name it by name, and go on being read by
+	// it under the new one: "a rename carries the name in every list of the namespace". Kept sorted
+	// and each once, as a write keeps a list, since the new name may already be in one that named a
+	// workflow not pushed yet.
+	if _, err := n.tx.Exec(ctx,
+		`update namespace_variables
+		 set workflows = array(select distinct w from unnest(array_replace(workflows, $2, $3)) w order by w)
+		 where namespace = $1 and $2 = any (workflows)`,
+		n.namespace, workflow, to); err != nil {
+		return fmt.Errorf("db: the variables selected for %s could not follow its rename: %w", workflow, err)
 	}
 	return nil
 }

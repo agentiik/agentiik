@@ -2,10 +2,10 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, type Namespace } from "../src/api/client";
 import App from "../src/App.svelte";
-import { capacity, ceilings, condition, counted, offered, reachedBy, type Pool, type Runner } from "../src/lib/fleet";
+import { capacity, ceilings, condition, counted, joinCommand, joinEnvironment, labelsOf, offered, reachedBy, type Pool, type Runner } from "../src/lib/fleet";
 import { Place } from "../src/lib/place.svelte";
 import { Session } from "../src/lib/session.svelte";
-import { answering, scenario } from "./scenario";
+import { answering, scenario, type Scenario } from "./scenario";
 
 const now = Date.parse("2026-09-30T06:02:30Z");
 const dana = scenario("dana");
@@ -100,10 +100,9 @@ describe("the runners and pools", () => {
     expect(drained.textContent).toMatch(/drained by dana, .*: kernel update/);
     const revoked = rows.find((r) => r.textContent!.includes("runner-dmz-00"))!;
     expect(revoked.textContent).toMatch(/revoked by dana, .*: disk replaced/);
-    expect(revoked.textContent).toContain("its results taken until");
+    expect(revoked.textContent).toContain("results accepted until");
     const behind = within(revoked).getByText("0.5.2");
     expect(behind.getAttribute("title")).toBe("The installation runs 0.6.0");
-    expect(within(pane).getByText(/never the host it runs on/)).toBeTruthy();
   });
 
   it("narrow the runners to the pool chosen, kept in the address", async () => {
@@ -116,15 +115,148 @@ describe("the runners and pools", () => {
     expect(place.query.get("pool")).toBeNull();
   });
 
-  it("are reached from the menu, and offered to nobody else", async () => {
+  it("are reached from the sidebar, and offered to nobody else", async () => {
     const place = open("dana", "/dana/runs");
-    await fireEvent.click(await screen.findByRole("button", { name: /You, dana/ }));
-    await fireEvent.click(screen.getByRole("link", { name: "Runners and pools" }));
+    const installation = await screen.findByRole("list", { name: "Administration" });
+    await fireEvent.click(within(installation).getByRole("link", { name: "Runners" }));
     expect(place.route).toEqual({ kind: "runners" });
     expect(await screen.findByRole("region", { name: "Pools" })).toBeTruthy();
     cleanup();
 
     open("alice", "/runners");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
+  });
+});
+
+describe("what joins a host to a pool", () => {
+  it("is the command run as root, its labels where it claims any and --replace where it joined before", () => {
+    expect(joinCommand("https://agentiik.example.com", "agkjoin_x", ["zone=dmz", "arch=amd64"])).toBe("agk-runner join --api https://agentiik.example.com --token agkjoin_x --labels zone=dmz,arch=amd64");
+    expect(joinCommand("https://agentiik.example.com", "agkjoin_x", [], true)).toBe("agk-runner join --api https://agentiik.example.com --token agkjoin_x --replace");
+  });
+
+  it("is the environment a container starts serve with, which joins again by itself where its labels change", () => {
+    expect(joinEnvironment("https://agentiik.example.com", "agkjoin_x", ["gpu=true"])).toBe("AGK_API=https://agentiik.example.com\nAGK_RUNNER_JOIN_TOKEN=agkjoin_x\nAGK_RUNNER_LABELS=gpu=true");
+    expect(joinEnvironment("https://agentiik.example.com", "agkjoin_x", [])).not.toContain("AGK_RUNNER_LABELS");
+  });
+
+  it("reads labels apart at commas or spaces, each once", () => {
+    expect(labelsOf(" zone=dmz,arch=amd64  zone=dmz, ")).toEqual(["zone=dmz", "arch=amd64"]);
+  });
+});
+
+// An installation answering from a scenario, keeping each request with its body.
+function installation(s: Scenario) {
+  const asked: { key: string; body: unknown }[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    const key = `${request.method} ${url.pathname}`;
+    const text = request.method === "GET" ? "" : await request.text();
+    asked.push({ key, body: text ? JSON.parse(text) : undefined });
+    const recorded = s[`${key}${url.search}`] ?? s[key] ?? { status: 404, body: { error: "no such thing, or not yours" } };
+    return new Response(recorded.body === undefined ? null : JSON.stringify(recorded.body), { status: recorded.status, headers: { "Content-Type": "application/json" } });
+  };
+  return { asked, fetcher };
+}
+
+function manage(s: Scenario) {
+  const { asked, fetcher } = installation(s);
+  const api = connect("http://stand-in/", fetcher);
+  const place = new Place({ pathname: "/runners", search: "", baseURI: "https://agentiik.example.com/" }, { pushState() {}, replaceState() {} });
+  render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
+  return asked;
+}
+
+const sent = (asked: { key: string; body: unknown }[], key: string) => asked.filter((a) => a.key === key).map((a) => a.body);
+
+const token = (pool: string, labels: string[]) => ({
+  status: 201,
+  body: { pool: pools.find((p) => p.name === pool)!, join_token: { id: "01M2AAZ9G62NQXFAFCXKRPJEH5", token: "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ", pool, labels, single_use: true, issued_at: "2026-09-30T06:02:30Z", expires_at: "2026-09-30T07:02:30Z" } },
+});
+
+describe("managing runners", () => {
+  it("creates a pool with its labels, the namespaces it accepts and its ceilings, hardened", async () => {
+    const s = scenario("dana");
+    s["POST /api/v1/runner-pools"] = { status: 201, body: { pool: { name: "edge", labels: ["zone=edge"], namespaces: ["finance"], resource_ceilings: { cpu: "2", memory: "2Gi" }, containment: "hardened" } } };
+    const asked = manage(s);
+    await fireEvent.click(await screen.findByRole("button", { name: "New pool" }));
+    const form = within(screen.getByRole("form", { name: "New pool" }));
+    await fireEvent.input(form.getByLabelText("Name"), { target: { value: "edge" } });
+    await fireEvent.input(form.getByLabelText("Labels"), { target: { value: "zone=edge, arch" } });
+    expect(form.getByText("arch")).toBeTruthy();
+    await fireEvent.input(form.getByLabelText("Labels"), { target: { value: "zone=edge" } });
+    await fireEvent.click(form.getByLabelText("finance"));
+    await fireEvent.input(form.getByLabelText("CPU"), { target: { value: "2" } });
+    await fireEvent.input(form.getByLabelText("Memory"), { target: { value: "2Gi" } });
+    await fireEvent.click(form.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText("Pool edge created.")).toBeTruthy();
+    expect(sent(asked, "POST /api/v1/runner-pools")).toEqual([{ pool: { name: "edge", labels: ["zone=edge"], namespaces: ["finance"], resource_ceilings: { cpu: "2", memory: "2Gi" }, containment: "hardened" } }]);
+  });
+
+  it("says a pool's name taken as the API's 409 says it", async () => {
+    const s = scenario("dana");
+    s["POST /api/v1/runner-pools"] = { status: 409, body: { error: "a runner pool named dmz exists already" } };
+    manage(s);
+    await fireEvent.click(await screen.findByRole("button", { name: "New pool" }));
+    const form = within(screen.getByRole("form", { name: "New pool" }));
+    await fireEvent.input(form.getByLabelText("Name"), { target: { value: "dmz" } });
+    await fireEvent.click(form.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText("A runner pool named dmz exists already.")).toBeTruthy();
+  });
+
+  it("adds a runner with a join token for the labels ticked, shown once with the command and the environment that redeem it", async () => {
+    const s = scenario("dana");
+    s["POST /api/v1/runner-pools/dmz/join-tokens"] = token("dmz", ["zone=dmz"]);
+    const asked = manage(s);
+    await screen.findByRole("region", { name: "Pools" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Add a runner" }));
+    const form = within(screen.getByRole("form", { name: "Add a runner" }));
+    await fireEvent.change(form.getByLabelText("Pool"), { target: { value: "dmz" } });
+    expect((form.getByLabelText("zone=dmz") as HTMLInputElement).checked).toBe(true);
+    await fireEvent.click(form.getByLabelText("arch=amd64"));
+    await fireEvent.click(form.getByRole("button", { name: "Issue a join token" }));
+    expect(await screen.findByText("agk-runner join --api https://agentiik.example.com --token agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ --labels zone=dmz")).toBeTruthy();
+    expect(screen.getByText(/AGK_RUNNER_LABELS=zone=dmz/)).toBeTruthy();
+    expect(sent(asked, "POST /api/v1/runner-pools/dmz/join-tokens")).toEqual([{ labels: ["zone=dmz"] }]);
+  });
+
+  it("replaces a runner from its row, in its pool with its labels, joining with --replace", async () => {
+    const s = scenario("dana");
+    s["POST /api/v1/runner-pools/dmz/join-tokens"] = token("dmz", ["zone=dmz", "arch=amd64"]);
+    manage(s);
+    await fireEvent.click(await screen.findByRole("button", { name: "Orders to runner-dmz-01" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Replace a runner" }));
+    expect((dialog.getByLabelText("Pool") as HTMLSelectElement).value).toBe("dmz");
+    expect((dialog.getByLabelText("Pool") as HTMLSelectElement).disabled).toBe(true);
+    await fireEvent.click(dialog.getByRole("button", { name: "Issue a join token" }));
+    expect(await dialog.findByText(/--labels zone=dmz,arch=amd64 --replace$/)).toBeTruthy();
+  });
+
+  it("drains and revokes a runner with a reason, and offers a revoked one nothing", async () => {
+    const s = scenario("dana");
+    const dmz01 = named("runner-dmz-01");
+    s["POST /api/v1/runners/runner-dmz-01/drain"] = { status: 200, body: { ...dmz01, state: "draining", drained_by: "dana", drained_at: "2026-09-30T06:02:30Z", drain_reason: "kernel update" } };
+    s["POST /api/v1/runners/runner-dmz-02/revoke"] = { status: 403, body: { error: "only an administrator of the installation orders a runner" } };
+    const asked = manage(s);
+    await fireEvent.click(await screen.findByRole("button", { name: "Orders to runner-dmz-01" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Drain" }));
+    let form = within(screen.getByRole("form", { name: "Drain a runner" }));
+    await fireEvent.input(form.getByLabelText("Reason"), { target: { value: "kernel update" } });
+    await fireEvent.click(form.getByRole("button", { name: "Drain" }));
+    expect(await screen.findByText("Runner runner-dmz-01 drained.")).toBeTruthy();
+    expect(sent(asked, "POST /api/v1/runners/runner-dmz-01/drain")).toEqual([{ reason: "kernel update" }]);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Orders to runner-dmz-02" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    form = within(screen.getByRole("form", { name: "Revoke a runner" }));
+    await fireEvent.input(form.getByLabelText("Reason"), { target: { value: "disk replaced" } });
+    await fireEvent.click(form.getByRole("button", { name: "Revoke" }));
+    expect(await screen.findByText("You do not have permission.")).toBeTruthy();
+
+    expect(screen.queryByRole("button", { name: "Orders to runner-dmz-00" })).toBeNull();
+    const drainingOrders = screen.getByRole("button", { name: "Orders to runner-dmz-03" });
+    await fireEvent.click(drainingOrders);
+    expect(screen.queryByRole("button", { name: "Drain" })).toBeNull();
   });
 });

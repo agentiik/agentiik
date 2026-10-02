@@ -159,7 +159,7 @@ func TestTheBootstrapTokenIssuesRecoveryCodesThatEndWithIt(t *testing.T) {
 func TestTheBreakGlassPathRecoversAnAdministratorAndNobodyElse(t *testing.T) {
 	in := somePeople(t)
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "dan", DisplayName: "Dan", Admin: true})
+		return w.CreateUser(ctx, db.User{Login: "dan", Profile: db.Profile{GivenName: "Dan"}, Admin: true})
 	})
 	in.enrol(t, "carol")
 	before := recoveryOf(t, in.ask(t, "POST", "/api/v1/users/dan/recovery", in.carol, "", nil), in.now)

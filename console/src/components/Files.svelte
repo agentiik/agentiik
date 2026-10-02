@@ -1,9 +1,12 @@
 <script lang="ts">
+  import { explain, refused as refusedHere, type Explained } from "../lib/problem";
+  import Failure from "./Problem.svelte";
   import { untrack } from "svelte";
   import { refusal, type API } from "../api/client";
   import type { components } from "../api/schema";
   import { clock } from "../lib/format";
   import type { Place } from "../lib/place.svelte";
+  import { offers, type Ref } from "../lib/refs";
   import { binary, changes, folders, foldersOf, hunks, lineDiff, shownUpTo, sizeOf, type Change, type Entry, type Node } from "../lib/tree";
   import type { Problem } from "../lib/workflow-check";
   import Icon from "./Icon.svelte";
@@ -33,19 +36,31 @@
   type Listing = { commit: string; entries: Entry[] };
   let listing = $state<Listing | null>(null);
   let other = $state<Listing | null>(null);
-  let refused = $state("");
+  let refused = $state<Explained | null>(null);
   let typed = $state("");
   let comparing = $state("");
   let opened = $state<Set<string>>(new Set());
 
+  // The branches and tags the field offers, read once for the workflow. Where they cannot be read,
+  // the field offers the default branch and the versions alone, and takes any ref typed.
+  let refs = $state<Ref[]>([]);
+  $effect(() => {
+    const path = { ns: namespace, name: workflow };
+    untrack(async () => {
+      const { data } = await api.GET("/api/v1/{ns}/workflows/{name}/refs", { params: { path } });
+      if (path.ns === namespace && path.name === workflow) refs = data?.refs ?? [];
+    });
+  });
+  const offered = $derived(offers(refs, repository.default_branch, history.flatMap((h) => (h.version ? [{ commit: h.commit, subject: h.subject }] : [])), Date.now()));
+
   // tree reads the listing a ref names, saying a ref that names nothing as the API answers it: a 404
   // is no branch, tag or version of that name, whatever the caller may read, since the workflow
   // itself was read to draw this page.
-  async function tree(name: string): Promise<Listing | string> {
+  async function tree(name: string): Promise<Listing | Explained> {
     const { data, error, response } = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: name } } });
     if (data && typeof data === "object" && "entries" in data) return { commit: data.commit, entries: data.entries };
-    if (response.status === 404) return `No branch, tag or version of ${workflow} is named ${name}.`;
-    return refusal(response, error).message;
+    if (response.status === 404) return refusedHere(`open ${name}`, `${workflow} has no branch, tag or version named ${name}. Check the name, or choose one from the list.`);
+    return explain(`load the files at ${name}`, refusal(response, error));
   }
 
   // Each read is numbered, and an answer to one that has been asked again since is left: a ref
@@ -56,14 +71,14 @@
     const a = against;
     untrack(async () => {
       const n = ++asked;
-      refused = "";
+      refused = null;
       listing = null;
       other = null;
       typed = r;
       comparing = a;
       const read = await tree(r);
       if (n !== asked) return;
-      if (typeof read === "string") {
+      if ("what" in read) {
         refused = read;
         return;
       }
@@ -71,7 +86,7 @@
       if (a) {
         const b = await tree(a);
         if (n !== asked) return;
-        if (typeof b === "string") refused = b;
+        if ("what" in b) refused = b;
         else other = b;
       }
     });
@@ -202,7 +217,7 @@
       </li>
     {:else}
       <li>
-        <button class="row leaf mono" style="padding-left: {depth * 14 + 22}px" aria-current={node.entry.path === shown ? "true" : undefined} onclick={() => narrow({ path: node.entry.path })}>
+        <button class="row leaf term" style="padding-left: {depth * 14 + 22}px" aria-current={node.entry.path === shown ? "true" : undefined} onclick={() => narrow({ path: node.entry.path })}>
           <span>{node.name}</span><span class="faint size">{sizeOf(node.entry.size)}</span>
         </button>
       </li>
@@ -213,37 +228,36 @@
 <div class="bar">
   <form class="pick" onsubmit={switchTo}>
     <label for="files-ref" class="muted">At</label>
-    <input id="files-ref" class="mono" list="files-refs" bind:value={typed} aria-label="Branch, tag or commit" />
+    <input id="files-ref" class="term" list="files-refs" bind:value={typed} aria-label="Branch, tag or commit" />
     <button class="control" type="submit">Show</button>
   </form>
   <datalist id="files-refs">
-    <option value={repository.default_branch}>the default branch</option>
-    {#each history.filter((h) => h.version) as h (h.commit)}<option value={h.commit}>{h.subject ?? h.commit.slice(0, 7)}</option>{/each}
+    {#each offered as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
   </datalist>
-  {#if listing}<span class="faint mono" title={listing.commit}>{listing.commit.slice(0, 7)}</span>{/if}
+  {#if listing}<span class="faint code" title={listing.commit}>{listing.commit.slice(0, 7)}</span>{/if}
   <form class="pick" onsubmit={compare}>
     <label for="files-against" class="muted">Compared with</label>
-    <input id="files-against" class="mono" list="files-refs" bind:value={comparing} placeholder="a branch, a tag or a commit" aria-label="Ref to compare with" />
+    <input id="files-against" class="term" list="files-refs" bind:value={comparing} placeholder="a branch, a tag or a commit" aria-label="Ref to compare with" />
     <button class="control" type="submit">Compare</button>
     {#if against}<button class="control" type="button" onclick={() => narrow({ against: null, path: null })}>Stop comparing</button>{/if}
   </form>
   {#if mayRun && listing && !against}
-    <button class="control primary right" onclick={() => onrun(ref)}><Icon name="control-run" size={14} />Run {ref === repository.default_branch ? "the head" : ref}</button>
+    <button class="control primary right" onclick={() => onrun(ref)}><Icon name="control-run" size={14} />Run this ref</button>
   {/if}
 </div>
 
 {#if refused}
-  <p class="refused" role="alert">{refused}</p>
+  <Failure explained={refused} />
 {:else if !listing}
-  <p class="muted" role="status">Reading the tree at <span class="mono">{ref}</span>.</p>
+  <p class="muted" role="status">Loading</p>
 {:else if against && other}
   <div class="columns">
     <section class="list" aria-label="What differs">
-      <p class="muted head">{changed.length === 0 ? "The two trees are the same." : `${changed.length} file${changed.length === 1 ? "" : "s"} differ from ${named(against)} to ${named(ref)}`}</p>
+      <p class="muted head">{changed.length === 0 ? "Both versions have the same files." : `${changed.length} file${changed.length === 1 ? "" : "s"} differ from ${named(against)} to ${named(ref)}`}</p>
       <ul>
         {#each changed as c (c.path)}
           <li>
-            <button class="row leaf mono" aria-current={c.path === change?.path ? "true" : undefined} onclick={() => narrow({ path: c.path })}>
+            <button class="row leaf term" aria-current={c.path === change?.path ? "true" : undefined} onclick={() => narrow({ path: c.path })}>
               <span>{c.path}</span><span class="kind {c.kind}">{verb[c.kind]}</span>
             </button>
           </li>
@@ -251,19 +265,19 @@
       </ul>
     </section>
     {#if change}
-      <section class="code" aria-label={change.path}>
-        <p class="head"><span class="mono">{change.path}</span>{#if counted}<span class="added">+{counted.added}</span><span class="removed">−{counted.removed}</span>{/if}{#if change.kind === "modified" && change.before.mode !== change.after.mode}<span class="muted">mode {change.before.mode} to {change.after.mode}</span>{/if}</p>
+      <section class="sheet" aria-label={change.path}>
+        <p class="head"><span class="term">{change.path}</span>{#if counted}<span class="added">+{counted.added}</span><span class="removed">−{counted.removed}</span>{/if}{#if change.kind === "modified" && change.before.mode !== change.after.mode}<span class="muted">mode {change.before.mode} to {change.after.mode}</span>{/if}</p>
         {#if !sides}
-          <p class="muted" role="status">Reading both sides.</p>
+          <p class="muted" role="status">Loading</p>
         {:else if diffed}
           {#each diffed as hunk, i (i)}
-            <ol class="diff mono">
+            <ol class="diff code">
               {#each hunk.lines as line, j (j)}
                 <li class={line.kind}><span class="number">{line.before ?? ""}</span><span class="number">{line.after ?? ""}</span><span class="sign" aria-hidden="true">{line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}</span><span class="text">{line.text}</span></li>
               {/each}
             </ol>
           {:else}
-            <p class="muted">The bytes are the same; only the mode changed.</p>
+            <p class="muted">Mode changed only</p>
           {/each}
         {:else}
           <p class="muted">Not drawn: {sides.before && "not" in sides.before ? sides.before.not : sides.after && "not" in sides.after ? sides.after.not : ""}.</p>
@@ -274,35 +288,38 @@
 {:else}
   <div class="columns">
     <section class="list" aria-label="Files at {ref}">
-      <p class="muted head">{files.length} file{files.length === 1 ? "" : "s"} at <span class="mono">{ref}</span></p>
+      <p class="muted head">{files.length} file{files.length === 1 ? "" : "s"} at <span class="term">{ref}</span></p>
       <ul class="tree">{@render branch(nodes, 0)}</ul>
     </section>
     {#if entry}
-      <section class="code" aria-label={entry.path}>
+      <section class="sheet" aria-label={entry.path}>
         <p class="head">
-          <span class="mono">{entry.path}</span>
+          <span class="code">{entry.path}</span>
           <span class="faint">{sizeOf(entry.size)} · mode {entry.mode}</span>
-          <span class="faint mono" title="SHA-256">{entry.sha256.slice(0, 12)}</span>
+          <span class="faint code" title="SHA-256">{entry.sha256.slice(0, 12)}</span>
           <a class="right" href={download} download={entry.path.split("/").pop()}>Download</a>
         </p>
         {#if !content}
-          <p class="muted" role="status">Reading {entry.path}.</p>
+          <p class="muted" role="status">Loading</p>
         {:else if "not" in content}
           <p class="muted">Not drawn: {content.not}.</p>
         {:else}
-          {#if problems}
+          {#if entry.path === "agentiik.yaml"}
+            <!-- Drawn while the check loads, so that the file under it does not move when it answers. -->
             <div class="checked" role="status">
-              {#if problems.length === 0}
-                <p class="good"><Icon name="state-succeeded" size={14} />Valid against <span class="mono">workflow.schema.json</span></p>
+              {#if problems === null}
+                <p class="faint"><Icon name="state-queued" size={14} />Checking against <span class="term">workflow.schema.json</span></p>
+              {:else if problems.length === 0}
+                <p class="good"><Icon name="state-succeeded" size={14} />Valid against <span class="term">workflow.schema.json</span></p>
               {:else}
-                <p class="bad"><Icon name="state-failed" size={14} />{problems.length} problem{problems.length === 1 ? "" : "s"} against <span class="mono">workflow.schema.json</span></p>
+                <p class="bad"><Icon name="state-failed" size={14} />{problems.length} problem{problems.length === 1 ? "" : "s"} against <span class="term">workflow.schema.json</span></p>
                 <ul>
-                  {#each problems as p, i (i)}<li><span class="mono faint">line {p.line}</span>{#if p.at}<span class="mono">{p.at}</span>{/if}<span>{p.message}</span></li>{/each}
+                  {#each problems as p, i (i)}<li><span class="term faint">line {p.line}</span>{#if p.at}<span class="term">{p.at}</span>{/if}<span>{p.message}</span></li>{/each}
                 </ul>
               {/if}
             </div>
           {/if}
-          <ol class="file mono" aria-label="{entry.path} at {ref}">
+          <ol class="file code" aria-label="{entry.path} at {ref}">
             {#each lines as line, i (i)}<li class:wrong={wrong.has(i + 1)}><span class="number">{i + 1}</span><span class="text">{line}</span></li>{/each}
           </ol>
         {/if}
@@ -333,7 +350,8 @@
 
   .pick input {
     width: 220px;
-    height: 29px;
+    min-width: 0;
+    height: var(--control-height);
     padding: 0 calc(var(--unit) * 4);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
@@ -354,7 +372,7 @@
   }
 
   .list,
-  .code {
+  .sheet {
     min-width: 0;
     border: var(--border-hairline) solid var(--line);
     border-radius: var(--radius-pane);
@@ -442,7 +460,7 @@
     overflow: auto;
     background: var(--sunken);
     font-size: 12.5px;
-    line-height: 1.6;
+    --leading: 1.6;
     list-style: none;
   }
 
@@ -533,5 +551,26 @@
 
   .refused {
     color: var(--failed);
+  }
+
+  /* On a phone the tree goes above the file it opens, and a ref's field takes the room its label
+     leaves. */
+  @media (max-width: 759px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .pick {
+      width: 100%;
+    }
+
+    .pick input {
+      flex: 1;
+      width: auto;
+    }
+
+    .pick label {
+      white-space: nowrap;
+    }
   }
 </style>

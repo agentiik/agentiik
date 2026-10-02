@@ -399,7 +399,7 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		if url, held := minted[digest]; held {
 			return url, nil
 		}
-		url, err := s.urls.Presign(ctx, http.MethodGet, artifact.Key(got.Namespace, digest), got.Scope.Run, got.ExpiresAt)
+		url, err := s.urls.Presign(ctx, http.MethodGet, artifact.Key(storageOf(got), digest), got.Scope.Run, got.ExpiresAt)
 		if err != nil {
 			return "", err
 		}
@@ -422,7 +422,7 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 			Artifacts: []Artifact{},
 		}
 
-		envelope, err := artifact.GetEnvelope(ctx, s.objects, got.Namespace, in.Digest, s.limits)
+		envelope, err := artifact.GetEnvelope(ctx, s.objects, storageOf(got), in.Digest, s.limits)
 		if err != nil {
 			return Grant{}, err
 		}
@@ -460,7 +460,9 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 	}
 
 	// Signed for the namespace the grant was issued in, never one the runner names, and expiring
-	// with the grant, so that what it may write is bounded by what it was given to run.
+	// with the grant, so that what it may write is bounded by what it was given to run. Under its
+	// name, which the task's message carries and its runner writes its keys under: the object
+	// routes keep what it posts under the namespace's storage name (ObjectAPI.store).
 	policy, err := s.urls.Policy(ctx, got.Namespace, got.Scope.Run, got.ExpiresAt)
 	if err != nil {
 		return Grant{}, err
@@ -503,4 +505,14 @@ func secretOf(secret db.GrantSecret, value []byte) Secret {
 		out.Encoding, out.Value = EncodingBase64, base64.StdEncoding.EncodeToString(value)
 	}
 	return out
+}
+
+// storageOf is the storage name of the namespace a grant was redeemed in, which every object of it
+// is kept under: what the redemption read, or the namespace's name where it read none, as a
+// redemption built by hand for a test does, the two being one for a namespace never renamed.
+func storageOf(got db.Redeemed) string {
+	if got.Storage != "" {
+		return got.Storage
+	}
+	return got.Namespace
 }
