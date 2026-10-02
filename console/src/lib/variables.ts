@@ -1,19 +1,17 @@
-// A namespace variable's value is any JSON value, and the console shows it and takes it as JSON, so
-// that 30 is a number and "30" a string, as they are in a workflow file.
+// A namespace variable is a name and a value, and the console writes the value as the text typed,
+// whatever it holds, since a person setting a variable means the characters they wrote. The API holds
+// any JSON value, which agk or a Terraform configuration may write, so one that is not text is shown
+// as one line of JSON.
 
-// shown is a value as one line of JSON, as the API holds it.
+// shown is a value as the console shows it and offers it to edit: text as itself, anything else as JSON.
 export function shown(value: unknown): string {
-  return JSON.stringify(value) ?? "null";
+  return typeof value === "string" ? value : (JSON.stringify(value) ?? "null");
 }
 
-// parsed is what a value typed as JSON holds, or why it holds nothing: the sentence names what to
-// write instead, since text alone, the commonest slip, is JSON once it is quoted.
-export function parsed(text: string): { ok: true; value: unknown } | { ok: false; why: string } {
-  const t = text.trim();
-  if (t === "") return { ok: false, why: "The value is empty. Write null for no value." };
-  try {
-    return { ok: true, value: JSON.parse(t) };
-  } catch {
-    return { ok: false, why: `The value is not JSON. Text is written in double quotes: ${JSON.stringify(t)}.` };
-  }
+// written is the value a form sends: the text typed, except where it is what the variable already
+// showed, which keeps a value that is not text as it is, so that changing who reads a list leaves it
+// a list rather than the text of one.
+export function written(typed: string, before?: { value: unknown }): unknown {
+  if (before && typeof before.value !== "string" && typed === shown(before.value)) return before.value;
+  return typed;
 }
