@@ -4,7 +4,7 @@
   import { untrack } from "svelte";
   import type { Validator } from "@cfworker/json-schema";
   import { refusal, type API } from "../api/client";
-  import type { Graph } from "../lib/graph";
+  import type { components } from "../api/schema";
   import type { Place } from "../lib/place.svelte";
   import { runAt } from "../lib/route";
   import { fieldOf, initial, problems, read, validator, type Field } from "../lib/run-form";
@@ -12,14 +12,34 @@
 
   // A run of the workflow asked for by hand: a field for each input the version declares, typed as
   // its JSON Schema types it and checked against that schema as it is left and before the run is
-  // asked for, the files of the tree it names read to check it; and the ref to run, the default
-  // branch's head where none is named. An input the API still refuses is pointed at as the API
-  // names it. Once started, the run's inspector opens.
+  // asked for; and the ref to run, the default branch's head where none is named. The declaration
+  // is read from GET /api/v1/{ns}/workflows/{name}/inputs, under workflow:run, which is what asking
+  // for a run takes, with the files of the tree its schemas name: so that whoever may run the
+  // workflow without reading it, an operator, is asked for what a run takes as anybody else is. An
+  // input the API still refuses is pointed at as the API names it. Once started, the run's
+  // inspector opens.
   // ref is the one the form opens on: the files' ref where it opens from them, empty for the head.
-  let { api, place, namespace, workflow, graph, commit, ref: opensOn = "", onclose }: { api: API; place: Place; namespace: string; workflow: string; graph: Graph; commit: string; ref?: string; onclose: () => void } = $props();
+  let { api, place, namespace, workflow, ref: opensOn = "", onclose }: { api: API; place: Place; namespace: string; workflow: string; ref?: string; onclose: () => void } = $props();
 
-  const declared = $derived(Object.entries(graph.inputs ?? {}));
+  type Declaration = components["schemas"]["runInputs"];
+  let declaration = $state<Declaration | null>(null);
+  let unread = $state<Explained | null>(null);
+
+  async function readDeclaration() {
+    unread = null;
+    const on = untrack(() => opensOn).trim();
+    const { data, error, response } = await api.GET("/api/v1/{ns}/workflows/{name}/inputs", { params: { path: { ns: namespace, name: workflow }, query: on ? { ref: on } : {} } });
+    if (data) declaration = data;
+    else unread = explain(`read what ${workflow} takes`, refusal(response, error));
+  }
+
+  $effect(() => {
+    readDeclaration();
+  });
+
+  const declared = $derived(Object.entries(declaration?.inputs ?? {}));
   const fields = $derived(declared.map(([name, d]) => fieldOf(name, d as { schema: unknown; required?: boolean; default?: unknown })));
+  const commit = $derived(declaration?.commit ?? "");
 
   let raw = $state<Record<string, string | boolean>>({});
   let errors = $state<Record<string, string[]>>({});
@@ -30,12 +50,10 @@
 
   $effect(() => {
     raw = Object.fromEntries(fields.map((f) => [f.name, initial(f)]));
-    // Compiled once the form opens, the files of the tree each schema names read at the version's
-    // commit, as the API reads them.
-    const file = async (path: string) => {
-      const { data } = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: commit }, query: { path } }, parseAs: "text" });
-      return typeof data === "string" ? JSON.parse(data) : undefined;
-    };
+    // Compiled once the declaration is read, each file a schema names taken from what the route
+    // answered beside it, as the API reads them from the version's tree.
+    const files = declaration?.files ?? {};
+    const file = async (path: string) => files[path];
     for (const [name, d] of declared) {
       validator((d as { schema: unknown }).schema, file).then((v) => (validators = { ...validators, [name]: v }));
     }
@@ -85,6 +103,11 @@
   const id = (name: string) => `input-${name}`;
 </script>
 
+{#if unread}
+  <Problem explained={unread} onretry={readDeclaration} />
+{:else if declaration === null}
+  <p class="muted">Loading</p>
+{:else}
 <form class="form" onsubmit={start} novalidate>
   {#each fields as f (f.name)}
     {@const wrong = (errors[f.name] ?? []).length > 0}
@@ -121,6 +144,7 @@
     {#if refused}<Problem explained={refused} />{/if}
   </div>
 </form>
+{/if}
 
 <style>
   .form {

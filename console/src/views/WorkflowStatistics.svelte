@@ -25,7 +25,7 @@
   // graph says whether the caller reads the workflow itself, which its graph takes and its series do
   // not: the tab is left out for one who reads only its runs.
   let { api, place, namespace, workflow, graph = false, settles = false }: { api: API; place: Place; namespace: string; workflow: string; graph?: boolean; settles?: boolean } = $props();
-  const tabs = $derived(workflowTabs(namespace, workflow, "statistics", { mcp: false, settles }).filter((t) => graph || t.label !== "Graph"));
+  const tabs = $derived(workflowTabs(namespace, workflow, "statistics", { mcp: false, settles, reads: graph }));
 
   const ranged = new Ranged(() => place);
   const range = $derived(ranged.range);

@@ -125,6 +125,22 @@ func (c *Compiler) Compile(doc []byte) (*Schema, error) {
 	return c.compile(doc, "")
 }
 
+// Reached answers each file of the tree the documents compiled so far reached, by its path, as
+// the loader parsed it, leaving out a file that could not be read. It is what a client checking a
+// value in its own hands needs beside the schema that names those files, and what the tree route
+// would otherwise have to serve it under a permission it may not hold.
+func (c *Compiler) Reached() map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]any, len(c.parsed))
+	for name, p := range c.parsed {
+		if p.err == nil {
+			out[name] = p.doc
+		}
+	}
+	return out
+}
+
 // CompileAt compiles one schema out of a larger document, named by a JSON Pointer
 // resolved against that document.
 //
