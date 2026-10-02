@@ -24,9 +24,10 @@ import (
 // principal is the caller as GET /api/v1/me gives it: who, whether an administrator, and what they
 // hold where, by scope as a grant writes it.
 type principal struct {
-	Principal   string              `json:"principal"`
-	Admin       bool                `json:"admin"`
-	Permissions map[string][]string `json:"permissions"`
+	Principal     string              `json:"principal"`
+	Admin         bool                `json:"admin"`
+	Permissions   map[string][]string `json:"permissions"`
+	Notifications []notice            `json:"notifications"`
 }
 
 // holds says whether the caller holds a permission on a workflow, its own scope where /me carries

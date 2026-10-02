@@ -138,6 +138,11 @@ type Model struct {
 	// sparks are the last runs of each workflow the runs view lists, by namespace/workflow.
 	sparks map[string]sparkRead
 
+	// seen are the notifications GET /api/v1/me has held since the console opened, and toasts
+	// those shown now.
+	seen   map[string]bool
+	toasts []toast
+
 	// The graph view's: the graph of the run's workflow, read for graphFor, or why it could not be;
 	// the view it was opened from, which esc goes back to; and whether it is written as a list.
 	graph       *flowGraph
@@ -311,13 +316,21 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case silent:
 		m.settled = true
 	case meRead:
-		if msg.err == nil {
-			m.me = msg.me
-			if m.me.Admin && m.view == runView && m.runners == nil {
-				return m, tea.Batch(m.readRunners(), m.readChosen())
-			}
-			return m, m.readChosen()
+		if msg.err != nil {
+			// Asked again half a minute later, as the runs are.
+			return m, m.tick(meEvery, func(time.Time) tea.Msg { return meAgain{} })
 		}
+		m.me = msg.me
+		var cmds []tea.Cmd
+		m, cmds = m.noticed(msg.me)
+		if m.me.Admin && m.view == runView && m.runners == nil {
+			cmds = append(cmds, m.readRunners())
+		}
+		return m, tea.Batch(append(cmds, m.readChosen())...)
+	case meAgain:
+		return m, m.readMe()
+	case toastGone:
+		return m.gone(msg.id), nil
 	case runnersRead:
 		m.runners = msg.runners
 	case payloadRead:
@@ -330,20 +343,23 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Asked for with terms since changed, or by a view since left.
 			return m, nil
 		}
+		var toasts []tea.Cmd
 		switch {
 		case msg.err != nil && len(parse(m.terms).terms) > 0:
 			m.filterRefused = "The runs could not be read with these terms: " + said(msg.err)
 		case msg.err != nil:
 			m.unanswered = said(msg.err)
 		default:
+			m, toasts = m.runsEnded(m.runs, msg.runs)
 			m.unanswered, m.filterRefused, m.runs, m.read = "", "", msg.runs, true
 			if shown := m.shownRuns(); !slices.ContainsFunc(shown, func(r db.ListedRun) bool { return string(r.Run) == m.selected }) && len(shown) > 0 {
 				m.selected = string(shown[0].Run)
 			}
 		}
 		if m.view == runsView {
-			return m, tea.Batch(append(m.readSparks(), m.later())...)
+			toasts = append(append(toasts, m.readSparks()...), m.later())
 		}
+		return m, tea.Batch(toasts...)
 	case sparkRead:
 		if m.sparks == nil {
 			m.sparks = map[string]sparkRead{}
