@@ -294,7 +294,7 @@ type cell struct {
 
 func (m Model) header() []part {
 	h := func(s string) []part { return []part{{quiet, s}} }
-	return m.columns(h("STATE"), h("RUN"), h("WORKFLOW"), h("TRIGGER"), h("STARTED"), h("TOOK"), h("BY"))
+	return m.columns(h("STATE"), h("RUN"), h("WORKFLOW"), h("TRIGGER"), h("STARTED"), h("TOOK"), h("BY"), h("STEPS"), h("LAST 20"))
 }
 
 // row is one run as the list draws it: its state a word beside a dot in the state's colour, so
@@ -304,14 +304,21 @@ func (m Model) row(r db.ListedRun, now time.Time) []part {
 	return m.columns(
 		[]part{{stateRole(r.State), m.mark(r.State == agk.Running)}, {plain, " " + r.State.String()}},
 		[]part{{muted, string(r.Run)}},
-		p(r.Namespace+"/"+r.Workflow), p(r.Trigger.String()), p(clock(startOf(r), now)), p(lasted(r.RunSummary, now)), p(r.TriggeredBy))
+		p(r.Namespace+"/"+r.Workflow), p(r.Trigger.String()), p(clock(startOf(r), now)), p(lasted(r.RunSummary, now)), p(r.TriggeredBy),
+		stepStrip(r), m.sparkOf(r, now))
+}
+
+// sparkOf is the bars of a listed run's workflow's last runs, once they are read.
+func (m Model) sparkOf(r db.ListedRun, now time.Time) []part {
+	drawn, _ := bars(m.sparks[r.Namespace+"/"+r.Workflow].runs, now)
+	return drawn
 }
 
 // columns lays one row out at the view's widths, cutting what is too long rather than wrapping it,
 // since a list read line by line is no longer one where a line runs onto the next. A run's
 // identifier is shown in full where there is room, and by its first twelve characters otherwise,
 // which still tell two runs of one day apart.
-func (m Model) columns(state, run, workflow, trigger, started, took, by []part) []part {
+func (m Model) columns(state, run, workflow, trigger, started, took, by, steps, last []part) []part {
 	cells := []cell{{state, stateWidth, false}, {run, 12, false}, {workflow, 0, false}}
 	byWidth := 10
 	if m.wide() {
@@ -320,6 +327,10 @@ func (m Model) columns(state, run, workflow, trigger, started, took, by []part) 
 		byWidth = 14
 	}
 	cells = append(cells, cell{started, m.startedWidth(), false}, cell{took, tookWidth, true}, cell{by, byWidth, false})
+	if m.full() {
+		// At full width, a strip of the run's steps and its workflow's last twenty runs.
+		cells = append(cells, cell{steps, 12, false}, cell{last, 20, false})
+	}
 	return laid(cells, 2, m.width)
 }
 

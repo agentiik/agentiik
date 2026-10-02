@@ -135,6 +135,9 @@ type Model struct {
 	recent    []db.ListedRun
 	recentFor string
 
+	// sparks are the last runs of each workflow the runs view lists, by namespace/workflow.
+	sparks map[string]sparkRead
+
 	// The graph view's: the graph of the run's workflow, read for graphFor, or why it could not be;
 	// the view it was opened from, which esc goes back to; and whether it is written as a list.
 	graph       *flowGraph
@@ -339,8 +342,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if m.view == runsView {
-			return m, m.later()
+			return m, tea.Batch(append(m.readSparks(), m.later())...)
 		}
+	case sparkRead:
+		if m.sparks == nil {
+			m.sparks = map[string]sparkRead{}
+		}
+		m.sparks[msg.key] = msg
 	case runRead:
 		if msg.err != nil {
 			if m.run == nil {
