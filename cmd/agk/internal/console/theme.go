@@ -69,10 +69,15 @@ func (d depth) profile() colorprofile.Profile {
 	return colorprofile.Ascii
 }
 
-// theme is how the console draws: at what depth, and on which ground.
+// theme is how the console draws: at what depth, and on which ground; and, while a click is being
+// placed, where on the screen the lines it draws will sit and the book what a click lands on is
+// written in.
 type theme struct {
 	depth depth
 	light bool
+
+	picks  *[]pick
+	dx, dy int
 }
 
 // painted says whether the console paints the palette's ground under what it draws, which is

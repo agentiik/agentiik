@@ -300,8 +300,10 @@ func (m Model) withPalette(t theme, screen string) string {
 		style = style.BorderBackground(t.colour("bg")).BorderForeground(t.colour("accent"))
 	}
 	box := style.Render(strings.Join(rows, "\n"))
+	x := (m.width - lipgloss.Width(box)) / 2
+	t.palettePicks(x, 1, lipgloss.Width(box), lipgloss.Height(box), first, min(room, len(listed)-first))
 	c := lipgloss.NewCanvas(m.width, m.height)
-	c.Compose(lipgloss.NewCompositor(lipgloss.NewLayer(screen), lipgloss.NewLayer(box).X((m.width-lipgloss.Width(box))/2).Y(1).Z(2)))
+	c.Compose(lipgloss.NewCompositor(lipgloss.NewLayer(screen), lipgloss.NewLayer(box).X(x).Y(1).Z(2)))
 	lines := strings.Split(c.Render(), "\n")
 	for i, l := range lines {
 		if w := lipgloss.Width(l); w < m.width {

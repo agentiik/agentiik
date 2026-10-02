@@ -391,6 +391,7 @@ func (m Model) grantsLines(t theme, width, room int) []string {
 			if g.ExpiresAt != nil {
 				expires = []part{{plain, day(*g.ExpiresAt)}}
 			}
+			t.pick(len(lines), width, "grant", g.ID)
 			lines = append(lines, t.line(i == chosen, width, m.grantColumns(width, []part{{plain, g.Principal}}, gives, scope, expires, []part{{muted, g.GrantedBy + " " + clock(g.GrantedAt, now)}})...))
 		}
 		if len(shown) > rows {
@@ -640,7 +641,7 @@ func (m Model) sharingLines(t theme, height int) []string {
 	}
 	left := m.width * 11 / 20
 	right := m.width - left - 3
-	grants, resolved := m.grantsLines(t, left, height), m.resolvedLines(t, right)
+	grants, resolved := m.grantsLines(t, left, height), m.resolvedLines(t.at(left+3, 0), right)
 	gap := t.line(false, 3)
 	var lines []string
 	for i := 0; i < max(len(grants), len(resolved)); i++ {

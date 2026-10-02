@@ -283,6 +283,7 @@ func (m Model) workflowsLines(t theme, height int) []string {
 		f := m.flows[i]
 		latest := f.runs[0]
 		drawn, _ := bars(f.runs[:min(len(f.runs), 20)], now)
+		t.pick(len(lines), m.width, "flow", f.key())
 		lines = append(lines, t.line(f.key() == chosen.key(), m.width, columns(
 			[]part{{plain, f.key()}},
 			[]part{{stateRole(latest.State), m.mark(latest.State == agk.Running)}, {plain, " " + latest.State.String()}},

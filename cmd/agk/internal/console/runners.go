@@ -299,6 +299,7 @@ func (m Model) runnersLines(t theme, height int) []string {
 		if r.Concurrency > 0 {
 			concurrency = fmt.Sprint(r.Concurrency)
 		}
+		t.pick(len(lines), m.width, "runner", r.ID)
 		lines = append(lines, t.line(r.ID == chosen.ID, m.width, m.runnerColumns(
 			[]part{{muted, r.ID}}, p(r.Pool), labelled(r.Labels), []part{{conditionRole(c), "●"}, {plain, " " + c}},
 			p(concurrency), p(heartbeat(r, now)), p(r.AgentVersion), []part{{muted, order(r, now)}})...))

@@ -162,6 +162,7 @@ func (m Model) withToasts(t theme, screen string) string {
 		if bottom-h < 1 {
 			break
 		}
+		t.toastPicks(m.toasts[i].id, m.width-lipgloss.Width(box)-1, bottom-h, lipgloss.Width(box), h)
 		layers = append(layers, lipgloss.NewLayer(box).X(m.width-lipgloss.Width(box)-1).Y(bottom-h).Z(1))
 		bottom -= h
 	}

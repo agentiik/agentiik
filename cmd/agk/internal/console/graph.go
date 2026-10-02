@@ -181,7 +181,8 @@ func (m Model) stateOf(step string) (agk.Verdict, string, bool) {
 // they feed, then each step with its state, and under it each edge it leaves, naming the port, the
 // step or workflow output it reaches and that one's port, so that nothing is read off the
 // direction of a line.
-func (m Model) listLines(g *flowGraph) [][]part {
+func (m Model) listLines(g *flowGraph) ([][]part, map[int]string) {
+	steps := map[int]string{}
 	width := len("inputs")
 	for _, step := range g.Order {
 		width = max(width, len([]rune(step)))
@@ -216,6 +217,7 @@ func (m Model) listLines(g *flowGraph) [][]part {
 		} else {
 			row = append([]part{{plain, "  "}}, row...)
 		}
+		steps[len(lines)] = step
 		lines = append(lines, row)
 		ports := 0
 		for _, e := range g.edgesFrom(step) {
@@ -229,7 +231,7 @@ func (m Model) listLines(g *flowGraph) [][]part {
 			lines = append(lines, []part{{plain, "    "}, {portRole(e.port), cellOf(e.port, max(ports, width-2))}, {quiet, "  -> "}, {plain, cellOf(to, width)}, {muted, "  " + as}})
 		}
 	}
-	return lines
+	return lines, steps
 }
 
 // portRole is the colour an edge is drawn in: rejected in the waiting amber, items a step refused
@@ -292,9 +294,13 @@ func (m Model) graphLines(t theme, height int) []string {
 	}
 	lines = append(lines, line())
 	if !m.asList {
-		return append(lines, m.drawnLines(t, m.layout(m.graph), m.width, height-len(lines))...)
+		return append(lines, m.drawnLines(t.at(0, len(lines)), m.layout(m.graph), m.width, height-len(lines))...)
 	}
-	for _, l := range m.listLines(m.graph) {
+	listed, steps := m.listLines(m.graph)
+	for i, l := range listed {
+		if step, ok := steps[i]; ok {
+			t.pick(len(lines), m.width, "step", step)
+		}
 		lines = append(lines, line(l...))
 	}
 	return lines

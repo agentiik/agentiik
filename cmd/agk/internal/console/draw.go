@@ -528,6 +528,14 @@ func (m Model) drawnLines(t theme, d *drawing, width, height int) []string {
 			oy = min(max(0, n.y+boxHeight/2-height/2), c.h-height)
 		}
 	}
+	// Each box is clicked where the window shows it.
+	for step, n := range d.nodes {
+		for y := max(n.y, oy); y < min(n.y+boxHeight, oy+height); y++ {
+			if x0, x1 := max(n.x, ox)-ox, min(n.x+n.w, ox+width)-ox; x0 < x1 {
+				t.pickAt(y-oy, x0, x1, "step", step)
+			}
+		}
+	}
 	var lines []string
 	for y := oy; y < min(c.h, oy+height); y++ {
 		var parts []part
