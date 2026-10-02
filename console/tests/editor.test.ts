@@ -19,8 +19,17 @@ beforeEach(() => {
   committed.mockReset();
 });
 
+// What the editor asked the API, method and path, with the body it sent.
+let asked: { key: string; body: unknown }[] = [];
+
 function open(search = "", s = scenario("alice")) {
-  const api = connect("http://stand-in/", answering(s));
+  asked = [];
+  const answer = answering(s);
+  const api = connect("http://stand-in/", async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    asked.push({ key: `${request.method} ${new URL(request.url).pathname}`, body: request.method === "GET" ? undefined : await request.clone().json().catch(() => undefined) });
+    return answer(request);
+  });
   const place = new Place({ pathname: "/finance/workflows/monthly-invoicing", search, baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
   render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
   return place;
@@ -149,12 +158,22 @@ describe("committing from the editor", () => {
   // alice holds workflow:write on finance and not grant:manage, which its protected main takes: she
   // is given it where a test commits onto main.
   function managing() {
-    const s = scenario("alice");
+    const s = pushable(scenario("alice"));
     (s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> }).permissions.finance!.push("grant:manage");
     return s;
   }
 
-  async function edited(s = scenario("alice")) {
+  // The token a commit pushes with, minted and revoked through the API, since the repository takes
+  // no session.
+  const pushToken = "agktoken_push0123456789";
+  const pushTokenId = "01M2AD1R3T5W7Y9A1C3E5G7PSH";
+  function pushable(s: ReturnType<typeof scenario>) {
+    s["POST /api/v1/auth/tokens"] = { status: 201, body: { token: pushToken, api_token: { id: pushTokenId, principal: "alice", device_label: "web console commit", created_at: "2026-10-01T06:02:30Z", expires_at: "2026-10-01T06:12:30Z" } } };
+    s[`DELETE /api/v1/auth/tokens/${pushTokenId}`] = { status: 204 };
+    return s;
+  }
+
+  async function edited(s = pushable(scenario("alice"))) {
     const place = open("?edit=1&view=yaml", s);
     const before = await text();
     await type(before.replace("  archive:\n", "  archive:\n    # kept ten years\n"));
@@ -179,6 +198,55 @@ describe("committing from the editor", () => {
     expect(sent.text).toContain("    # kept ten years\n");
     expect(await screen.findByText("Committed to main.")).toBeTruthy();
     expect(place.query.get("edit")).toBeNull();
+  });
+
+  it("pushes with a token minted for the push, narrowed and short, sent as Bearer without the cookie, and revoked after", async () => {
+    await edited(managing());
+    const before = Date.now();
+    let seen: RequestInit | undefined;
+    committed.mockImplementation(async (c) => {
+      const real = globalThis.fetch;
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen = init;
+        return new Response("");
+      }) as typeof fetch;
+      try {
+        await c.remote.fetch(`${c.remote.url}/info/refs?service=git-receive-pack`, { credentials: "same-origin" });
+      } finally {
+        globalThis.fetch = real;
+      }
+      expect(asked.some((a) => a.key.startsWith("DELETE /api/v1/auth/tokens/"))).toBe(false);
+      return "b".repeat(40);
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    await fireEvent.submit(screen.getByRole("form", { name: "Commit" }));
+    expect(await screen.findByText("Committed to main.")).toBeTruthy();
+    const minted = asked.find((a) => a.key === "POST /api/v1/auth/tokens")?.body as { device_label: string; expires_at: string; scope: { permissions: string[]; within?: string[] } };
+    expect(minted.device_label).toBe("web console commit");
+    expect(minted.scope).toEqual({ permissions: ["workflow:read", "workflow:write", "grant:manage", "secret:use"] });
+    expect(Math.round((Date.parse(minted.expires_at) - before) / 60_000)).toBe(10);
+    expect(new Headers(seen?.headers).get("Authorization")).toBe(`Bearer ${pushToken}`);
+    expect(seen?.credentials).toBe("omit");
+    await waitFor(() => expect(asked.filter((a) => a.key === `DELETE /api/v1/auth/tokens/${pushTokenId}`)).toHaveLength(1));
+  });
+
+  it("revokes the token a refused push was made with too, and pushes nothing where none could be minted", async () => {
+    await edited(managing());
+    committed.mockRejectedValue(new Told("main has moved since the file was opened: open it again to edit what it holds now."));
+    await fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    await fireEvent.submit(screen.getByRole("form", { name: "Commit" }));
+    expect(await screen.findByText(/Could not commit to main\./)).toBeTruthy();
+    await waitFor(() => expect(asked.filter((a) => a.key === `DELETE /api/v1/auth/tokens/${pushTokenId}`)).toHaveLength(1));
+
+    cleanupAll();
+    committed.mockReset();
+    const s = managing();
+    s["POST /api/v1/auth/tokens"] = { status: 403, body: { error: "a token narrowed by a scope mints no token" } };
+    await edited(s);
+    await fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    await fireEvent.submit(screen.getByRole("form", { name: "Commit" }));
+    expect(await screen.findByText(/Could not commit to main\./)).toBeTruthy();
+    expect(committed).not.toHaveBeenCalled();
   });
 
   it("commits onto a new branch alone where the default branch is protected from the caller, and opens the files at it", async () => {
