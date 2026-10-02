@@ -171,6 +171,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the audit log
+         * @description The audit log, the newest entries first, each as the export writes it, narrowed by who did what, where, to what and when, and a page at a time with before. Beside the page, head and verified say where the chain stands. Administrator only: the log is every namespace's and the installation's at once. Under auth, reserved since v0.2, rather than a word of its own, which would have to be reserved a release before the route is served. Reading is not recorded.
+         */
+        get: operations["getAuditLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/auth/policy": {
         parameters: {
             query?: never;
@@ -1044,6 +1064,31 @@ export interface paths {
          * @description The manual trigger: a run of the commit the request names, or reaches through a ref, or of the default branch's head, or while it is unborn the latest version a tree push recorded, with the workflow inputs bound against that version's declaration as agk run --local binds them and recorded as bound. Attributed to the caller, trigger_kind manual. The run is pinned to its commit whatever the ref or the branch does next. Counted against the namespace's max_runs_per_hour before it is written. Requires workflow:run.
          */
         post: operations["startRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/workflows/{name}/inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read the inputs a run takes
+         * @description What a manual run of the workflow takes, to whoever may ask for one: the version the ref resolves to, the default branch's head where none is named; each input it declares with its schema as written, whether it is required and its default; and the files of the version's tree those schemas reach by $ref, by path, so that a form is drawn and a value checked before the run is asked for. Nothing else of the workflow file is answered: an operator holds workflow:run without workflow:read, so that it starts a job without seeing the steps, images, queries and endpoints inside it, and the inputs are the workflow's boundary, which whoever asks for a run has to fill. Requires workflow:run.
+         */
+        get: operations["getRunInputs"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9354,6 +9399,177 @@ export interface components {
             reason: string;
         };
         /**
+         * Audit page
+         * @description A page of the audit log, the newest entries first, with where the chain stands: the last entry appended and the last one proved, so that a reader tells an entry the chain is known to hold from one the next term checks.
+         * @example {
+         *       "entries": [
+         *         {
+         *           "seq": 4183,
+         *           "at": "2026-10-02T09:15:44.008112Z",
+         *           "actor": "dana",
+         *           "action": "runner.drain",
+         *           "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+         *           "result": "unchanged",
+         *           "detail": "{\"reason\":\"kernel update\"}",
+         *           "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+         *           "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+         *         },
+         *         {
+         *           "seq": 4182,
+         *           "at": "2026-10-02T09:14:07.512903Z",
+         *           "actor": "carol",
+         *           "action": "namespace.update",
+         *           "namespace": "finance",
+         *           "target": "finance",
+         *           "result": "done",
+         *           "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+         *           "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+         *           "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+         *         }
+         *       ],
+         *       "head": 4183,
+         *       "verified": 4182
+         *     }
+         */
+        auditPage: {
+            /**
+             * @description The entries of the page, the newest first; a page shorter than its limit is the last.
+             * @example [
+             *       {
+             *         "seq": 4183,
+             *         "at": "2026-10-02T09:15:44.008112Z",
+             *         "actor": "dana",
+             *         "action": "runner.drain",
+             *         "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+             *         "result": "unchanged",
+             *         "detail": "{\"reason\":\"kernel update\"}",
+             *         "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+             *         "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+             *       },
+             *       {
+             *         "seq": 4182,
+             *         "at": "2026-10-02T09:14:07.512903Z",
+             *         "actor": "carol",
+             *         "action": "namespace.update",
+             *         "namespace": "finance",
+             *         "target": "finance",
+             *         "result": "done",
+             *         "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+             *         "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+             *         "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+             *       }
+             *     ]
+             */
+            entries: components["schemas"]["auditEntry"][];
+            /**
+             * @description The last entry appended, 0 where the log is empty, whatever the page holds.
+             * @example 4183
+             */
+            head: number;
+            /**
+             * @description The last entry the leading controller proved the chain to, at the start of its term: an entry after it holds as far as anybody has looked, and the next term checks it.
+             * @example 4182
+             */
+            verified: number;
+        };
+        /**
+         * @description One input a version declares, as its file writes it: what a form asks for and holds a value to before the run is asked for.
+         * @example {
+         *       "schema": {
+         *         "type": "string",
+         *         "pattern": "^[0-9]{4}-[0-9]{2}$"
+         *       },
+         *       "required": false,
+         *       "default": "2026-09"
+         *     }
+         */
+        declaredInput: {
+            /**
+             * @description The input's JSON Schema 2020-12 as written, an object of keywords or a boolean, a $ref naming a file of the version's tree among them. Absent where the input declares none, which takes any value as it comes.
+             * @example {
+             *       "type": "array",
+             *       "items": {
+             *         "type": "object",
+             *         "required": [
+             *           "id",
+             *           "amount"
+             *         ]
+             *       }
+             *     }
+             * @example {
+             *       "type": "string",
+             *       "pattern": "^[0-9]{4}-[0-9]{2}$"
+             *     }
+             */
+            schema?: unknown;
+            /**
+             * @description Whether a run supplying no value is refused, where the input declares no default.
+             * @example true
+             * @example false
+             */
+            required: boolean;
+            /**
+             * @description The value standing in for one a run does not supply, held to the schema like any other. Absent where the input declares none.
+             * @example 2026-09
+             * @example []
+             */
+            default?: unknown;
+        };
+        /**
+         * @description What a manual run of a workflow takes: the version a ref resolves to, the inputs it declares, and the files of its tree their schemas reach, and nothing else of the workflow file, since it is read under workflow:run and the steps, images, queries and endpoints are workflow:read's.
+         * @example {
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "inputs": {},
+         *       "files": {}
+         *     }
+         */
+        runInputs: {
+            /**
+             * @description The version answered, which a run asked for by the same ref now would be pinned to.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit: string;
+            /**
+             * @description Each input the version declares, by its name, empty where it declares none.
+             * @example {
+             *       "period": {
+             *         "schema": {
+             *           "type": "string",
+             *           "pattern": "^[0-9]{4}-[0-9]{2}$"
+             *         },
+             *         "required": false,
+             *         "default": "2026-09"
+             *       }
+             *     }
+             */
+            inputs: {
+                [key: string]: components["schemas"]["declaredInput"];
+            };
+            /**
+             * @description Each file of the version's tree the inputs' schemas reach by $ref, directly or through another, by its path in the tree, as parsed JSON, so that a $ref resolves without reading the tree, which workflow:read guards. Empty where no schema names a file.
+             * @example {
+             *       "schemas/order.json": {
+             *         "type": "object",
+             *         "required": [
+             *           "id",
+             *           "amount"
+             *         ],
+             *         "properties": {
+             *           "id": {
+             *             "type": "string"
+             *           },
+             *           "amount": {
+             *             "type": "number"
+             *           }
+             *         }
+             *       }
+             *     }
+             */
+            files: {
+                [key: string]: unknown;
+            };
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -9622,6 +9838,92 @@ export interface components {
              * @example 3
              */
             min_passkeys: number;
+        };
+        /**
+         * Audit entry
+         * @description One entry of the audit log, as the export writes it on a line of its own and as GET /api/v1/auth/audit answers it: the act, who did it, where and to what, and the two hashes that chain it to the entry before. Every field is written as the hash covers it, so that a reader can check an entry it was handed without asking the installation anything more.
+         * @example {
+         *       "seq": 4182,
+         *       "at": "2026-10-02T09:14:07.512903Z",
+         *       "actor": "carol",
+         *       "action": "namespace.update",
+         *       "namespace": "finance",
+         *       "target": "finance",
+         *       "result": "done",
+         *       "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+         *       "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+         *       "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+         *     }
+         * @example {
+         *       "seq": 4183,
+         *       "at": "2026-10-02T09:15:44.008112Z",
+         *       "actor": "dana",
+         *       "action": "runner.drain",
+         *       "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+         *       "result": "unchanged",
+         *       "detail": "{\"reason\":\"kernel update\"}",
+         *       "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+         *       "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+         *     }
+         */
+        auditEntry: {
+            /**
+             * @description The entry's number, from 1 with no gap, which the database gives it as it appends it under a lock: a number missing is an entry missing.
+             * @example 4182
+             */
+            seq: number;
+            /**
+             * @description When the act's transaction appended it, on the database's clock, in UTC to the microsecond, written exactly as the hash covers it.
+             * @example 2026-10-02T09:14:07.512903Z
+             */
+            at: string;
+            /**
+             * @description Who did it: a principal as a grant names one, installation for what the installation did of itself, or operator for the bootstrap token.
+             * @example carol
+             * @example finance/deployer
+             * @example installation
+             */
+            actor: string;
+            /**
+             * @description What was done, a thing and a verb, as the documentation lists them.
+             * @example namespace.update
+             * @example run.cancel
+             * @example signin.fail
+             */
+            action: string;
+            /**
+             * @description The namespace it was done in, left out for an act on the installation.
+             * @example finance
+             */
+            namespace?: string;
+            /**
+             * @description What it was done to: a run, a namespace, a login, a runner, a grant, by the name or identifier its kind is known by.
+             * @example finance
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A
+             */
+            target: string;
+            /**
+             * @description done, or unchanged for an act asked of something already so, a second cancellation or a runner drained twice.
+             * @example done
+             * @example unchanged
+             * @enum {string}
+             */
+            result: "done" | "unchanged";
+            /**
+             * @description The act's particulars as the text of a JSON object, never a secret's value or a token: a string rather than an object, since a reader that re-encoded an object would reorder or respace the bytes the hash covers.
+             * @example {"quotas":{"max_concurrent_tasks":7}}
+             */
+            detail: string;
+            /**
+             * @description The hash of the entry before, 64 zeros before the first. Lowercase hexadecimal, 64 characters.
+             * @example 5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a
+             */
+            prev_hash: string;
+            /**
+             * @description SHA-256 over agentiik audit 1, the previous hash and the fields, as the documentation's Audit log sets out. Lowercase hexadecimal, 64 characters.
+             * @example 9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c
+             */
+            hash: string;
         };
         /**
          * Password
@@ -12759,6 +13061,24 @@ export interface components {
         pool: components["schemas"]["name"];
         /** @description The runner, by the identifier the API minted at its join. */
         runner: components["schemas"]["properties-runner"];
+        /** @description How many entries a page holds, from 1 to 200, 50 where it is left out: a screenful, and few enough that a page is answered at once. */
+        auditLimit: number;
+        /** @description The seq a page ends after: the entries before it, the newest first. Left out, the page starts at the last entry appended. */
+        auditBefore: number;
+        /** @description The entries done by this principal, matched exactly. */
+        auditActor: string;
+        /** @description The entries of this action, matched exactly. */
+        auditAction: string;
+        /** @description The entries done in this namespace, matched exactly, and - for the acts on the installation, which name none. */
+        auditNamespace: string;
+        /** @description The entries done to this target, matched exactly. */
+        auditTarget: string;
+        /** @description The entries appended at this instant or after, in RFC 3339. */
+        auditSince: components["schemas"]["timestamp"];
+        /** @description The entries appended at this instant or before, in RFC 3339. */
+        auditUntil: components["schemas"]["timestamp"];
+        /** @description The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs. */
+        inputsRef: string;
     };
     requestBodies: never;
     headers: {
@@ -13090,6 +13410,49 @@ export interface operations {
             /** @description The installation is addressed by an IP address and the policy forbids passwords, the error naming password; or, once the bootstrap token has ended, the change would leave no administrator able to sign in, the error naming password or device_bound_only, whichever takes their way in. */
             409: components["responses"]["conflict"];
             413: components["responses"]["tooLarge"];
+        };
+    };
+    getAuditLog: {
+        parameters: {
+            query?: {
+                /** @description How many entries a page holds, from 1 to 200, 50 where it is left out: a screenful, and few enough that a page is answered at once. */
+                limit?: components["parameters"]["auditLimit"];
+                /** @description The seq a page ends after: the entries before it, the newest first. Left out, the page starts at the last entry appended. */
+                before?: components["parameters"]["auditBefore"];
+                /** @description The entries done by this principal, matched exactly. */
+                actor?: components["parameters"]["auditActor"];
+                /** @description The entries of this action, matched exactly. */
+                action?: components["parameters"]["auditAction"];
+                /** @description The entries done in this namespace, matched exactly, and - for the acts on the installation, which name none. */
+                namespace?: components["parameters"]["auditNamespace"];
+                /** @description The entries done to this target, matched exactly. */
+                target?: components["parameters"]["auditTarget"];
+                /** @description The entries appended at this instant or after, in RFC 3339. */
+                since?: components["parameters"]["auditSince"];
+                /** @description The entries appended at this instant or before, in RFC 3339. */
+                until?: components["parameters"]["auditUntil"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the log. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["auditPage"];
+                };
+            };
+            /** @description The query is refused: a limit outside 1 to 200, a before that is not a whole number from 1, an action that is not a thing and a verb, a since or an until not in RFC 3339, or since after until. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A caller who is not an administrator, or a session that may only enrol. */
+            403: components["responses"]["forbidden"];
         };
     };
     getNamespaceAuthPolicy: {
@@ -15216,6 +15579,67 @@ export interface operations {
                 headers: {
                     /** @description The whole seconds until one more run fits in the hour. */
                     "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    getRunInputs: {
+        parameters: {
+            query?: {
+                /** @description The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs. */
+                ref?: components["parameters"]["inputsRef"];
+            };
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The inputs the version declares, and the files their schemas name. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runInputs"];
+                };
+            };
+            /** @description A ref a branch and a tag both hold, or a request carrying two credentials, a bearer token beside the session cookie or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal of the workflow is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The version is a library's, which nothing runs, or its declaration is one a push now refuses, a schema naming a file the tree does not hold among them. */
+            422: {
+                headers: {
                     [name: string]: unknown;
                 };
                 content: {

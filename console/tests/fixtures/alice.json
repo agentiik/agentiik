@@ -34519,5 +34519,66 @@
   "GET /api/v1/team-ops/auth/policy": {
     "status": 200,
     "body": {}
+  },
+  "GET /api/v1/finance/workflows/monthly-invoicing/inputs": {
+    "status": 200,
+    "body": {
+      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+      "inputs": {
+        "orders": {
+          "schema": {
+            "type": "array",
+            "description": "The orders to invoice, as the shop exports them.",
+            "items": {
+              "type": "object",
+              "required": [
+                "order",
+                "amount"
+              ],
+              "properties": {
+                "order": {
+                  "type": "string",
+                  "pattern": "^ORD-[0-9]{4}$"
+                },
+                "amount": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "customers": {
+          "schema": {
+            "$ref": "./schemas/customers.json"
+          },
+          "required": false,
+          "default": []
+        }
+      },
+      "files": {
+        "schemas/customers.json": {
+          "type": "array",
+          "items": {
+            "$ref": "./customer.json"
+          }
+        },
+        "schemas/customer.json": {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "vat": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
   }
 }

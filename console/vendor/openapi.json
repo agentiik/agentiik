@@ -83,6 +83,10 @@
     {
       "name": "statistics",
       "description": "The series the web console's charts and agk console's compact forms read: a namespace's runs, a workflow's steps and ports, a namespace's load against its quotas, and, to an administrator, the pools and runners. From v0.6.0."
+    },
+    {
+      "name": "audit",
+      "description": "The audit log, read by an administrator: every act the installation recorded, chained so that a change or a removal leaves a break."
     }
   ],
   "security": [
@@ -925,6 +929,108 @@
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/audit": {
+      "get": {
+        "operationId": "getAuditLog",
+        "tags": [
+          "audit"
+        ],
+        "summary": "Read the audit log",
+        "description": "The audit log, the newest entries first, each as the export writes it, narrowed by who did what, where, to what and when, and a page at a time with before. Beside the page, head and verified say where the chain stands. Administrator only: the log is every namespace's and the installation's at once. Under auth, reserved since v0.2, rather than a word of its own, which would have to be reserved a release before the route is served. Reading is not recorded.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#audit-log"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/auditLimit"
+          },
+          {
+            "$ref": "#/components/parameters/auditBefore"
+          },
+          {
+            "$ref": "#/components/parameters/auditActor"
+          },
+          {
+            "$ref": "#/components/parameters/auditAction"
+          },
+          {
+            "$ref": "#/components/parameters/auditNamespace"
+          },
+          {
+            "$ref": "#/components/parameters/auditTarget"
+          },
+          {
+            "$ref": "#/components/parameters/auditSince"
+          },
+          {
+            "$ref": "#/components/parameters/auditUntil"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the log.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auditPage"
+                },
+                "examples": {
+                  "latest": {
+                    "summary": "the two latest entries",
+                    "value": {
+                      "entries": [
+                        {
+                          "seq": 4183,
+                          "at": "2026-10-02T09:15:44.008112Z",
+                          "actor": "dana",
+                          "action": "runner.drain",
+                          "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                          "result": "unchanged",
+                          "detail": "{\"reason\":\"kernel update\"}",
+                          "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                          "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+                        },
+                        {
+                          "seq": 4182,
+                          "at": "2026-10-02T09:14:07.512903Z",
+                          "actor": "carol",
+                          "action": "namespace.update",
+                          "namespace": "finance",
+                          "target": "finance",
+                          "result": "done",
+                          "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                          "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                          "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+                        }
+                      ],
+                      "head": 4183,
+                      "verified": 4182
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The query is refused: a limit outside 1 to 200, a before that is not a whole number from 1, an action that is not a thing and a verb, a since or an until not in RFC 3339, or since after until. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A caller who is not an administrator, or a session that may only enrol."
           }
         }
       }
@@ -6015,6 +6121,155 @@
                     "summary": "max_runs_per_hour reached",
                     "value": {
                       "error": "namespace finance has created as many runs in the last 60 minutes as its max_runs_per_hour, 120, allows, and one more fits in 240 seconds"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no store": {
+                    "summary": "no object store",
+                    "value": {
+                      "error": "this installation has no object store attached, and an input's schema names a file of the version's tree, which is kept there"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/workflows/{name}/inputs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/workflow"
+        }
+      ],
+      "get": {
+        "operationId": "getRunInputs",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Read the inputs a run takes",
+        "description": "What a manual run of the workflow takes, to whoever may ask for one: the version the ref resolves to, the default branch's head where none is named; each input it declares with its schema as written, whether it is required and its default; and the files of the version's tree those schemas reach by $ref, by path, so that a form is drawn and a value checked before the run is asked for. Nothing else of the workflow file is answered: an operator holds workflow:run without workflow:read, so that it starts a job without seeing the steps, images, queries and endpoints inside it, and the inputs are the workflow's boundary, which whoever asks for a run has to fill. Requires workflow:run.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#inputs"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/inputsRef"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The inputs the version declares, and the files their schemas name.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runInputs"
+                },
+                "examples": {
+                  "declared": {
+                    "summary": "two inputs, one with a default",
+                    "value": {
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "inputs": {
+                        "orders": {
+                          "schema": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "id",
+                                "amount"
+                              ]
+                            }
+                          },
+                          "required": true
+                        },
+                        "period": {
+                          "schema": {
+                            "type": "string",
+                            "pattern": "^[0-9]{4}-[0-9]{2}$"
+                          },
+                          "required": false,
+                          "default": "2026-09"
+                        }
+                      },
+                      "files": {}
+                    }
+                  },
+                  "none": {
+                    "summary": "a workflow declaring no input",
+                    "value": {
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "inputs": {},
+                      "files": {}
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A ref a branch and a tag both hold, or a request carrying two credentials, a bearer token beside the session cookie or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal of the workflow is a 404."
+          },
+          "404": {
+            "description": "No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no ref": {
+                    "summary": "a ref naming nothing",
+                    "value": {
+                      "error": "nightly names no branch, no tag and no version of the workflow"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The version is a library's, which nothing runs, or its declaration is one a push now refuses, a schema naming a file the tree does not hold among them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "a library": {
+                    "summary": "a library's version",
+                    "value": {
+                      "error": "finance/common@c41d9e2a is a library, which nothing runs: it is included by the workflows that run"
                     }
                   }
                 }
@@ -20389,6 +20644,243 @@
             "reason": "disk replaced"
           }
         ]
+      },
+      "auditPage": {
+        "title": "Audit page",
+        "type": "object",
+        "required": [
+          "entries",
+          "head",
+          "verified"
+        ],
+        "additionalProperties": false,
+        "description": "A page of the audit log, the newest entries first, with where the chain stands: the last entry appended and the last one proved, so that a reader tells an entry the chain is known to hold from one the next term checks.",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/auditEntry"
+            },
+            "description": "The entries of the page, the newest first; a page shorter than its limit is the last.",
+            "examples": [
+              [
+                {
+                  "seq": 4183,
+                  "at": "2026-10-02T09:15:44.008112Z",
+                  "actor": "dana",
+                  "action": "runner.drain",
+                  "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                  "result": "unchanged",
+                  "detail": "{\"reason\":\"kernel update\"}",
+                  "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                  "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+                },
+                {
+                  "seq": 4182,
+                  "at": "2026-10-02T09:14:07.512903Z",
+                  "actor": "carol",
+                  "action": "namespace.update",
+                  "namespace": "finance",
+                  "target": "finance",
+                  "result": "done",
+                  "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                  "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                  "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+                }
+              ]
+            ]
+          },
+          "head": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The last entry appended, 0 where the log is empty, whatever the page holds.",
+            "examples": [
+              4183
+            ]
+          },
+          "verified": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The last entry the leading controller proved the chain to, at the start of its term: an entry after it holds as far as anybody has looked, and the next term checks it.",
+            "examples": [
+              4182
+            ]
+          }
+        },
+        "examples": [
+          {
+            "entries": [
+              {
+                "seq": 4183,
+                "at": "2026-10-02T09:15:44.008112Z",
+                "actor": "dana",
+                "action": "runner.drain",
+                "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                "result": "unchanged",
+                "detail": "{\"reason\":\"kernel update\"}",
+                "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+              },
+              {
+                "seq": 4182,
+                "at": "2026-10-02T09:14:07.512903Z",
+                "actor": "carol",
+                "action": "namespace.update",
+                "namespace": "finance",
+                "target": "finance",
+                "result": "done",
+                "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+              }
+            ],
+            "head": 4183,
+            "verified": 4182
+          }
+        ]
+      },
+      "declaredInput": {
+        "type": "object",
+        "description": "One input a version declares, as its file writes it: what a form asks for and holds a value to before the run is asked for.",
+        "required": [
+          "required"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "The input's JSON Schema 2020-12 as written, an object of keywords or a boolean, a $ref naming a file of the version's tree among them. Absent where the input declares none, which takes any value as it comes.",
+            "examples": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ]
+                }
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}$"
+              }
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether a run supplying no value is refused, where the input declares no default.",
+            "examples": [
+              true,
+              false
+            ]
+          },
+          "default": {
+            "description": "The value standing in for one a run does not supply, held to the schema like any other. Absent where the input declares none.",
+            "examples": [
+              "2026-09",
+              []
+            ]
+          }
+        },
+        "examples": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}$"
+            },
+            "required": false,
+            "default": "2026-09"
+          }
+        ]
+      },
+      "runInputs": {
+        "type": "object",
+        "description": "What a manual run of a workflow takes: the version a ref resolves to, the inputs it declares, and the files of its tree their schemas reach, and nothing else of the workflow file, since it is read under workflow:run and the steps, images, queries and endpoints are workflow:read's.",
+        "required": [
+          "commit",
+          "inputs",
+          "files"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "The version answered, which a run asked for by the same ref now would be pinned to.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Each input the version declares, by its name, empty where it declares none.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/declaredInput"
+            },
+            "examples": [
+              {
+                "period": {
+                  "schema": {
+                    "type": "string",
+                    "pattern": "^[0-9]{4}-[0-9]{2}$"
+                  },
+                  "required": false,
+                  "default": "2026-09"
+                }
+              }
+            ]
+          },
+          "files": {
+            "type": "object",
+            "description": "Each file of the version's tree the inputs' schemas reach by $ref, directly or through another, by its path in the tree, as parsed JSON, so that a $ref resolves without reading the tree, which workflow:read guards. Empty where no schema names a file.",
+            "additionalProperties": {
+              "description": "The file's JSON document.",
+              "examples": [
+                {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number"
+                    }
+                  }
+                }
+              ]
+            },
+            "examples": [
+              {
+                "schemas/order.json": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            "inputs": {},
+            "files": {}
+          }
+        ]
       }
     },
     "parameters": {
@@ -21137,6 +21629,153 @@
           "runner": {
             "summary": "a runner",
             "value": "01jmz8x2d5f8qx7t2n5r8wd3hk"
+          }
+        }
+      },
+      "auditLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "How many entries a page holds, from 1 to 200, 50 where it is left out: a screenful, and few enough that a page is answered at once.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "examples": {
+          "a hundred": {
+            "summary": "a hundred entries",
+            "value": 100
+          }
+        }
+      },
+      "auditBefore": {
+        "name": "before",
+        "in": "query",
+        "required": false,
+        "description": "The seq a page ends after: the entries before it, the newest first. Left out, the page starts at the last entry appended.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "examples": {
+          "older": {
+            "summary": "the entries before 4182",
+            "value": 4182
+          }
+        }
+      },
+      "auditActor": {
+        "name": "actor",
+        "in": "query",
+        "required": false,
+        "description": "The entries done by this principal, matched exactly.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "carol": {
+            "summary": "what carol did",
+            "value": "carol"
+          }
+        }
+      },
+      "auditAction": {
+        "name": "action",
+        "in": "query",
+        "required": false,
+        "description": "The entries of this action, matched exactly.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z_]+\\.[a-z_]+$"
+        },
+        "examples": {
+          "sign-in failures": {
+            "summary": "the failed sign-ins",
+            "value": "signin.fail"
+          }
+        }
+      },
+      "auditNamespace": {
+        "name": "namespace",
+        "in": "query",
+        "required": false,
+        "description": "The entries done in this namespace, matched exactly, and - for the acts on the installation, which name none.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "finance": {
+            "summary": "what was done in finance",
+            "value": "finance"
+          }
+        }
+      },
+      "auditTarget": {
+        "name": "target",
+        "in": "query",
+        "required": false,
+        "description": "The entries done to this target, matched exactly.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "a run": {
+            "summary": "what was done to one run",
+            "value": "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          }
+        }
+      },
+      "auditSince": {
+        "name": "since",
+        "in": "query",
+        "required": false,
+        "description": "The entries appended at this instant or after, in RFC 3339.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/timestamp"
+        },
+        "examples": {
+          "this morning": {
+            "summary": "from six this morning",
+            "value": "2026-10-02T06:00:00Z"
+          }
+        }
+      },
+      "auditUntil": {
+        "name": "until",
+        "in": "query",
+        "required": false,
+        "description": "The entries appended at this instant or before, in RFC 3339.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/timestamp"
+        },
+        "examples": {
+          "this evening": {
+            "summary": "up to six this evening",
+            "value": "2026-10-02T18:00:00Z"
+          }
+        }
+      },
+      "inputsRef": {
+        "name": "ref",
+        "in": "query",
+        "required": false,
+        "description": "The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "branch": {
+            "summary": "a branch",
+            "value": "feature/vat-rounding"
+          },
+          "tag": {
+            "summary": "a tag",
+            "value": "v2.1.0"
           }
         }
       }
