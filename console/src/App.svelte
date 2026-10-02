@@ -197,7 +197,7 @@
     <main class="screen" aria-busy="true"></main>
   </div>
 {:else if session.standing === "signed-out"}
-  <SignIn {api} {session} {passkeys} />
+  <SignIn {api} {session} {passkeys} {version} />
 {:else if session.standing === "enrol-only"}
   <main class="alone">
     <Pane title="Set up a passkey">

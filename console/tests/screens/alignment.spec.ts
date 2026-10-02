@@ -40,6 +40,8 @@ const screens: Record<string, string[]> = {
     "/me/service-accounts",
   ],
   dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/finance/settings", "/me"],
+  // Nobody signed in: the sign-in page, whatever the address.
+  nobody: ["/"],
 };
 
 const widths = [2560, 1440, 1099, 759, 390];
