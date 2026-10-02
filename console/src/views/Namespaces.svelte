@@ -3,6 +3,7 @@
   import Problem from "../components/Problem.svelte";
   import { refusal, type API, type Namespace } from "../api/client";
   import AdminTabs from "../components/AdminTabs.svelte";
+  import NamespacePolicy from "../components/NamespacePolicy.svelte";
   import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
@@ -221,6 +222,7 @@
         <button class="control" type="button" onclick={() => choose(undefined)}>Close</button>
       </p>
     </form>
+    <NamespacePolicy {api} namespace={record.name} admin framed={false} />
   {/if}
 </Dialog>
 

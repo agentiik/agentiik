@@ -90,8 +90,8 @@
   {/if}
 
   {#if me.admin}
-    {#if !folded}<p class="section">Installation</p>{:else}<hr />{/if}
-    <ul class="entries" aria-label="Installation">
+    {#if !folded}<p class="section">Administration</p>{:else}<hr />{/if}
+    <ul class="entries" aria-label="Administration">
       {#each admin as a (a.kind)}
         <li>
           <a class="entry" class:open={route.kind === a.kind} aria-current={route.kind === a.kind ? "page" : undefined} href={place.href({ kind: a.kind })} onclick={follow(place, { kind: a.kind })} title={folded ? a.label : undefined}>
