@@ -25,6 +25,8 @@ const screens: Record<string, string[]> = {
     "/finance/workflows/monthly-invoicing/statistics",
     "/finance/workflows/monthly-invoicing?edit=1&step=invoice",
     "/finance/workflows/monthly-invoicing?edit=1&view=yaml",
+    "/finance/workflows/monthly-invoicing/settings",
+    "/alice/workflows/report/settings",
     "/finance/statistics",
     "/finance/sharing",
     "/finance/variables",

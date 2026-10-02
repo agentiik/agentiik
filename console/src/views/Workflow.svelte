@@ -2,7 +2,7 @@
   import { explain, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
-  import { refusal, type API, type Me } from "../api/client";
+  import { refusal, type API, type Me, type Namespace } from "../api/client";
   import type { components } from "../api/schema";
   import FileView from "../components/FileView.svelte";
   import Files from "../components/Files.svelte";
@@ -15,6 +15,7 @@
   import RunForm from "../components/RunForm.svelte";
   import StatePill from "../components/StatePill.svelte";
   import StepDetail from "../components/StepDetail.svelte";
+  import WorkflowSettings from "../components/WorkflowSettings.svelte";
   import Refused from "./Refused.svelte";
   import { clock, took } from "../lib/format";
   import { authOf, layout, triggers } from "../lib/graph";
@@ -32,8 +33,17 @@
   // it, with the state of a run laid over it: the one the address names, or the workflow's latest,
   // read again while it runs. Beside the graph, the step chosen as it resolved, or the file it was
   // written in, each selecting the other.
-  // tab is the page's: its graph where it names none, its files, or the tools it publishes.
-  let { api, place, me, namespace, workflow, tab }: { api: API; place: Place; me: Me; namespace: string; workflow: string; tab?: string } = $props();
+  // tab is the page's: its graph where it names none, its files, the tools it publishes, or its
+  // settings, which a move offers the namespaces the caller reads as places to move it to.
+  let {
+    api,
+    place,
+    me,
+    namespace,
+    workflow,
+    tab,
+    namespaces = [],
+  }: { api: API; place: Place; me: Me; namespace: string; workflow: string; tab?: string; namespaces?: Namespace[] } = $props();
 
   type Detail = components["schemas"]["workflowDetail"];
   type Entry = components["schemas"]["historyEntry"];
@@ -193,7 +203,9 @@
   const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
   const filesTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "files" });
   const runRoute = $derived(run ? runAt(namespace, workflow, run.run) : undefined);
-  const tabs = $derived(workflowTabs(namespace, workflow, tab, { shares, mcp: !!graph?.mcp, go: (r, q) => place.go(r, false, q) }));
+  // Its settings, to a caller who may change any of them.
+  const settles = $derived(mayEdit || shares || holds(me, "workflow:delete", namespace, workflow));
+  const tabs = $derived(workflowTabs(namespace, workflow, tab, { shares, mcp: !!graph?.mcp, settles, go: (r, q) => place.go(r, false, q) }));
   const now = Date.now();
 </script>
 
@@ -290,6 +302,10 @@
     </Pane>
   {:else if tab === "files"}
     <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runFrom} />
+  {:else if tab === "settings" && settles}
+    <WorkflowSettings {api} {place} {me} {namespace} {workflow} repository={detail.repository} {namespaces} />
+  {:else if tab === "settings"}
+    <Refused />
   {:else if tab === "mcp" && graph}
     <Pane title="MCP">
       <McpPanel {graph} {namespace} {workflow} />

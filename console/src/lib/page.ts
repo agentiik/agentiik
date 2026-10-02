@@ -4,13 +4,14 @@ import type { Route } from "./route";
 export type Tab = { label: string; to?: Route; query?: string; current: boolean; count?: number | string; icon?: string; onclick?: () => void };
 
 // workflowTabs are the tabs of a workflow's screens, in one order on each of them: its graph, its
-// files, its runs, its statistics, its sharing where the caller manages it, and its MCP tools last,
-// where it declares some, so that a tab one screen lacks moves no other.
+// files, its runs, its statistics, its sharing where the caller manages it, its MCP tools where it
+// declares some, and its settings last, where the caller may change any of them, so that a tab one
+// screen lacks moves no other.
 export function workflowTabs(
   namespace: string,
   workflow: string,
   tab: string | undefined,
-  o: { shares: boolean; mcp: boolean; go: (route: Route, query: URLSearchParams) => void },
+  o: { shares: boolean; mcp: boolean; settles?: boolean; go: (route: Route, query: URLSearchParams) => void },
 ): Tab[] {
   const page = (t?: string): Route => ({ kind: "namespace", namespace, view: "workflows", workflow, tab: t });
   const sharing: Tab = {
@@ -28,5 +29,6 @@ export function workflowTabs(
     { label: "Statistics", icon: "control-statistics", to: page("statistics"), current: tab === "statistics" },
     ...(o.shares ? [sharing] : []),
     ...(o.mcp ? [{ label: "MCP", icon: "trigger-mcp", to: page("mcp"), current: tab === "mcp" }] : []),
+    ...(o.settles ? [{ label: "Settings", icon: "control-settings", to: page("settings"), current: tab === "settings" }] : []),
   ];
 }
