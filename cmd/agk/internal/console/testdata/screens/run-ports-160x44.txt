@@ -5,30 +5,30 @@ agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   
 │             01JMZ8V1P9C4 · manual · alice ·… ││ failed at invoice, shard 3/8: exit 108, transient failure, attempt 2                                         │
 │ ● failed    dunning-reminders            22s ││                                                                                                              │
 │             01JMZ8T7B2M0 · schedule · finan… ││ Steps   Graph   Ports                                                                                        │
-│ ● timed_out vat-reconcile             9m 51s ││ STEPS 3                                                                                                      │
-│             01JMZ8G4X6D2 · event · finance/… ││ ● succeeded  normalize      1s                                                                               │
-│                                              ││ ● failed     invoice    1m 50s ■■■■■■■■ 8 shards · 1 failed                                                  │
-│ STATE       WORKFLOW                    TOOK ││ ● pending    archive                                                                                         │
-│ ⠋ running   monthly-invoicing         1m 48s ││                                                                                                              │
-│             01JMZ8W4K2R7 · schedule · finan… ││ invoice  ● failed  1m 50s                                                                                    │
-│ ● failed    monthly-invoicing         1m 52s ││ image   ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc     │
-│             01JMZ8V1P9C4 · manual · alice ·… ││ shards  ██████████ 8/8 done                                                                                  │
+│ ● timed_out vat-reconcile             9m 51s ││ invoice  ● failed  1m 50s                                                                                    │
+│             01JMZ8G4X6D2 · event · finance/… ││                                                                                                              │
+│                                              ││   PORT         ITEMS   SIZE      DIGEST                                                                      │
+│ STATE       WORKFLOW                    TOOK ││ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c     │
+│ ⠋ running   monthly-invoicing         1m 48s ││   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5     │
+│             01JMZ8W4K2R7 · schedule · finan… ││                                                                                                              │
+│ ● failed    monthly-invoicing         1m 52s ││ The envelope could not be read: no such thing, or not yours                                                  │
+│             01JMZ8V1P9C4 · manual · alice ·… ││                                                                                                              │
 │ ● failed    dunning-reminders            22s ││                                                                                                              │
-│             01JMZ8T7B2M0 · schedule · finan… ││ SHARD  STATE      ATTEMPT  EXIT                          RUNNER                                              │
-│ ⠋ running   ledger-export            33m 15s ││ 1/8    ● succeeded 1        exit 0, success               runner-dmz-02                                      │
-│             01JMZ8S3H6X8 · webhook · financ… ││ 2/8    ● succeeded 1        exit 0, success               runner-dmz-01                                      │
-│ ● queued    vat-reconcile                    ││ 3/8    ● failed    2        exit 108, transient failure   runner-dmz-02                                      │
-│             01JMZ8R0D4K2 · event · finance/… ││ 4/8    ● succeeded 1        exit 0, success               runner-dmz-01                                      │
-│ ● succeeded monthly-invoicing         3m 47s ││ 5/8    ● succeeded 1        exit 0, success               runner-dmz-02                                      │
-│             01JMZ8Q6F1T7 · manual · bruno ·… ││ 6/8    ● succeeded 1        exit 0, success               runner-dmz-01                                      │
-│ ● succeeded ledger-export                58s ││ 7/8    ● succeeded 1        exit 0, success               runner-dmz-02                                      │
-│             01JMZ8P2N8Y5 · webhook · financ… ││ 8/8    ● succeeded 1        exit 0, success               runner-dmz-01                                      │
+│             01JMZ8T7B2M0 · schedule · finan… ││                                                                                                              │
+│ ⠋ running   ledger-export            33m 15s ││                                                                                                              │
+│             01JMZ8S3H6X8 · webhook · financ… ││                                                                                                              │
+│ ● queued    vat-reconcile                    ││                                                                                                              │
+│             01JMZ8R0D4K2 · event · finance/… ││                                                                                                              │
+│ ● succeeded monthly-invoicing         3m 47s ││                                                                                                              │
+│             01JMZ8Q6F1T7 · manual · bruno ·… ││                                                                                                              │
+│ ● succeeded ledger-export                58s ││                                                                                                              │
+│             01JMZ8P2N8Y5 · webhook · financ… ││                                                                                                              │
 │ ● cancelled vat-reconcile             2m 16s ││                                                                                                              │
-│             01JMZ8N9J3W1 · manual · alice ·… ││   PORT         ITEMS   SIZE      DIGEST                                                                      │
-│ ● succeeded dunning-reminders            41s ││ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c     │
-│             01JMZ8M5Z7Q3 · schedule · finan… ││   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5     │
+│             01JMZ8N9J3W1 · manual · alice ·… ││                                                                                                              │
+│ ● succeeded dunning-reminders            41s ││                                                                                                              │
+│             01JMZ8M5Z7Q3 · schedule · finan… ││                                                                                                              │
 │ ● succeeded ledger-export             1m 03s ││                                                                                                              │
-│             01JMZ8K1V4R9 · webhook · financ… ││ The envelope could not be read: no such thing, or not yours                                                  │
+│             01JMZ8K1V4R9 · webhook · financ… ││                                                                                                              │
 │ ● succeeded monthly-invoicing         4m 22s ││                                                                                                              │
 │             01JMZ8H8C0K6 · schedule · finan… ││                                                                                                              │
 │ ● timed_out vat-reconcile             9m 51s ││                                                                                                              │
@@ -41,4 +41,4 @@ agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   
 │                                              ││                                                                                                              │
 │                                              ││                                                                                                              │
 ╰──────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-tab Next pane   ↑↓ Step   [] Port   g Graph   esc Runs   q Quit   ? Every key
+tab Next pane   ↑↓ Port   g Graph   esc Runs   q Quit   ? Every key

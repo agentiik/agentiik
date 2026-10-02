@@ -305,13 +305,14 @@ func (m Model) stepRow(s db.StepSummary, now time.Time, width int) []part {
 
 // stepLines is the step chosen: its image, each shard's last attempt, and its ports, with the line
 // each port is written on.
-func (m Model) stepLines(step string, now time.Time, width int) ([][]part, map[int]int) {
+func (m Model) stepLines(step string, now time.Time, width int) (lines [][]part, at map[int]int, portsFrom int) {
 	s := summaryOf(m.run, step)
 	if s == nil {
-		return [][]part{{{quiet, "No step to show yet."}}}, nil
+		return [][]part{{{quiet, "No step to show yet."}}}, nil, -1
 	}
-	at := map[int]int{}
-	lines := [][]part{{{strong, step}, {plain, "  "}, {verdictRole(s.Verdict), m.mark(s.Verdict == agk.VerdictRunning)}, {plain, " " + s.Verdict.String()}, {muted, "  " + took(s.StartedAt, s.FinishedAt, now)}}}
+	portsFrom = -1
+	at = map[int]int{}
+	lines = [][]part{{{strong, step}, {plain, "  "}, {verdictRole(s.Verdict), m.mark(s.Verdict == agk.VerdictRunning)}, {plain, " " + s.Verdict.String()}, {muted, "  " + took(s.StartedAt, s.FinishedAt, now)}}}
 	if s.Image != "" {
 		lines = append(lines, []part{{muted, "image   "}, {plain, s.Image}})
 	}
@@ -358,6 +359,7 @@ func (m Model) stepLines(step string, now time.Time, width int) ([][]part, map[i
 	}
 	ports := portsOf(s)
 	if len(ports) > 0 {
+		portsFrom = len(lines) + 1
 		lines = append(lines, nil, []part{{quiet, "  PORT         ITEMS   SIZE      DIGEST"}})
 	}
 	for i, p := range ports {
@@ -391,7 +393,7 @@ func (m Model) stepLines(step string, now time.Time, width int) ([][]part, map[i
 			}
 		}
 	}
-	return lines, at
+	return lines, at, portsFrom
 }
 
 func sizeOf(bytes int64) string {
@@ -442,6 +444,13 @@ func (m Model) runLines(t theme, height int) []string {
 	}
 	lines = append(lines, t.line(false, m.width))
 	step := stepOf(m.run, m.step)
+	lines = append(lines, m.runTabs(t, len(lines)))
+	switch m.runTabShown() {
+	case "graph":
+		return m.graphTab(t, lines, step, height, now)
+	case "ports":
+		return m.portsTab(t, lines, step, now)
+	}
 	left := m.width
 	if m.wide() {
 		left = max(40, m.width*2/5)
@@ -459,7 +468,7 @@ func (m Model) runLines(t theme, height int) []string {
 		right = m.width - left - 2
 	}
 	var detail []string
-	described, ports := m.stepLines(step, now, right)
+	described, ports, _ := m.stepLines(step, now, right)
 	// The step chosen is beside the steps from 120 columns, and below them and a blank line under.
 	of := t.at(left+2, len(lines))
 	if !m.wide() {

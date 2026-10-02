@@ -156,6 +156,10 @@ type Model struct {
 	clicked   pick
 	clickedAt time.Time
 
+	// runTab is the run's tab its steps are shown in: "graph" for the graph drawn, and the list
+	// otherwise.
+	runTab string
+
 	// The panes': the one in focus, where a border was dragged and the one being dragged, and how
 	// far the log of logBackOf is scrolled back from its end.
 	focus     pane
@@ -466,7 +470,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recentFor = string(m.run.Run)
 			cmds = append(cmds, m.readRecent())
 		}
-		if m.view == graphView && m.run != nil && m.graphFor != workflowKey(m.run) {
+		if (m.view == graphView || m.view == runView && m.runTab == "graph") && m.run != nil && m.graphFor != workflowKey(m.run) {
 			m.graphFor, m.graph, m.graphFailed = workflowKey(m.run), nil, ""
 			cmds = append(cmds, m.readWorkflow())
 		}
@@ -739,6 +743,11 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		}
 		switch key {
 		case "esc":
+			if m.runTab == "graph" {
+				// From the graph drawn in the run, back to its steps before the runs.
+				m.runTab = ""
+				return m, nil
+			}
 			return m.showing(runsView)
 		case "up", "k", "down", "j":
 			if m.run != nil {
@@ -752,10 +761,7 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(m.readChosen(), follow)
 			}
 		case "g":
-			if m.run != nil {
-				m.graphFrom = runView
-				return m.showing(graphView)
-			}
+			return m.drawGraph()
 		case "c":
 			if m.mayCancel() {
 				m.asking = askingCancel

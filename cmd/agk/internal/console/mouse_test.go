@@ -99,6 +99,11 @@ func TestAClickChoosesAStepAPortAndABox(t *testing.T) {
 	if m.port != 1 {
 		t.Errorf("a click on the port rejected leaves port %d chosen", m.port)
 	}
+	// Drawn in the run's pane first, where a click on a box chooses its step too.
+	m = press(t, m, keyG)
+	if m = click(t, m, "● normalize"); m.view != runView || m.runTab != "graph" || m.step != "normalize" {
+		t.Fatalf("a click on normalize's box in the run's pane leaves %q chosen in view %d", m.step, m.view)
+	}
 	m = press(t, m, keyG)
 	m = click(t, m, "● archive")
 	if m.view != graphView || m.step != "archive" {

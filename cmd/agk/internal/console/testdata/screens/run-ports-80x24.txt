@@ -1,0 +1,24 @@
+agentiik  every namespace  alice   1 Runs   2 Workflows   3 Sharing  1 notifica…
+▸ Runs  12 runs · 3 failed · 3 running   folded · tab
+╭─ Run ────────────────────────────────────────────────────────────────────────╮
+│ Run 01JMZ8V1P9C4XQ7K2N4D6F8H0A  finance/monthly-invoicing@a3f9c1e  ● failed  │
+│ manual · by alice · started 05:41:03 · took 1m 52s  last 11 ▃▁▁▁▁▁▁█▁▁▁  me… │
+│ failed at invoice, shard 3/8: exit 108, transient failure, attempt 2         │
+│                                                                              │
+│ Steps   Graph   Ports                                                        │
+│ invoice  ● failed  1m 50s                                                    │
+│                                                                              │
+│   PORT         ITEMS   SIZE      DIGEST                                      │
+│ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7… │
+│   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e… │
+│                                                                              │
+│ The envelope could not be read: no such thing, or not yours                  │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+tab Next pane   ↑↓ Port   g Graph   esc Runs   q Quit   ? Every key

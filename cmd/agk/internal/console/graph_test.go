@@ -33,8 +33,12 @@ func graphOf(t *testing.T, width, height int) (Model, *installation) {
 	t.Helper()
 	in := &installation{graph: invoicing}
 	in.run = aFailedRun()
-	m := opened(t, in, Options{Run: failedRun}, width, height)
-	return press(t, m, keyG), in
+	m := press(t, opened(t, in, Options{Run: failedRun}, width, height), keyG)
+	if m.view != graphView {
+		// Drawn in the run's pane where its rows allow it, and full screen from there.
+		m = press(t, m, keyG)
+	}
+	return m, in
 }
 
 // g opens the graph of the run's workflow, drawn: each step a box with its state and a fan-out's

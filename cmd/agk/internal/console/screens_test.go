@@ -199,8 +199,11 @@ var views = []struct {
 }{
 	{"runs", Options{}, nil},
 	{"run", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, nil},
-	{"graph", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{keyG}},
-	{"graph-list", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{keyG, keyG}},
+	// g draws the graph in the run's pane where its rows allow, and full screen otherwise.
+	{"run-graph", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{keyG}},
+	{"graph", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, nil},
+	{"graph-list", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{keyG}},
+	{"run-ports", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{tabKey}},
 	{"workflows", Options{}, []tea.KeyPressMsg{two}},
 	{"sharing", Options{}, []tea.KeyPressMsg{three}},
 	{"keys", Options{}, []tea.KeyPressMsg{help}},
@@ -217,7 +220,16 @@ func TestEveryViewOnTheRecordedAnswers(t *testing.T) {
 			kept := filepath.Join("testdata", "screens", name+".txt")
 			var first string
 			for _, d := range []depth{noColour, sixteen, twoFiftySix, trueColour} {
-				m := onScenario(t, s, v.o, size[0], size[1], d, v.keys...)
+				m := onScenario(t, s, v.o, size[0], size[1], d)
+				if strings.HasPrefix(v.name, "graph") {
+					// The graph full screen, from the run's pane or at once where it does not fit.
+					for range 2 {
+						if m.view != graphView {
+							m = press(t, m, keyG)
+						}
+					}
+				}
+				m = press(t, m, v.keys...)
 				screen := m.screen()
 				m.unfollow()
 				got := cells(t, screen, size[0], size[1])

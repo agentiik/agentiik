@@ -198,6 +198,18 @@ func (m Model) clickedOn(p pick, double bool) (tea.Model, tea.Cmd) {
 		}
 	case "grant":
 		m.grant = p.id
+	case "runtab":
+		switch p.id {
+		case "steps":
+			m.runTab, m.focus = "", runPane
+		case "graph":
+			if m.runTab != "graph" {
+				return m.drawGraph()
+			}
+		case "ports":
+			m.focus = portsPane
+		}
+		return m, nil
 	}
 	if double && p.kind != "port" && !(p.kind == "step" && m.view == runView) {
 		next, open := m.press("enter")
