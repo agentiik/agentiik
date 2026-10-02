@@ -117,6 +117,9 @@ func (p *Pool) Close() { p.pool.Close() }
 type NS struct {
 	tx        pgx.Tx
 	namespace string
+
+	// storage is the namespace's storage name once Storage has read it, and empty before.
+	storage string
 }
 
 // Namespace is the namespace this handle is bound to.
@@ -174,6 +177,13 @@ const (
 	// runner serves several namespaces and its inventory is administrator only.
 	RunnerInventory Reason = "the runner inventory"
 
+	// InstallationActivity is what every namespace together is doing, counted for an administrator:
+	// the runs created and the tasks in flight, bucket by bucket, and what runs now, as counts that
+	// name no run, workflow or namespace. An administrator holds no run:read by being one, so no
+	// namespace's handle would let it count anything, and what is counted is the installation's
+	// load, which is theirs to watch as the runners are.
+	InstallationActivity Reason = "the installation's activity, counted for an administrator"
+
 	// Heartbeat is one request covering every in-flight task on one host, which is
 	// one host across however many namespaces it is working for.
 	Heartbeat Reason = "a runner's heartbeat"
@@ -203,7 +213,8 @@ const (
 	// RunListing is GET /api/v1/runs, "across every namespace the caller can read", and GET
 	// /api/v1/{ns}/runs, the same listing within one, and GET /api/v1/{ns}/stats/runs,
 	// /stats/steps and /stats/ports, which count what that listing lists, since "an aggregate
-	// over runs discloses the runs". What it reads is which workflows there are, for the
+	// over runs discloses the runs", and GET /api/v1/{ns}/workflows, the workflows whose runs it
+	// lists, each with its newest. What it reads is which workflows there are, for the
 	// authorizer to be asked about each, and then the runs of the ones it allowed and of no
 	// others: the namespaces a listing reaches are the ones the authorisation decision named, as
 	// In's always are. One namespace's listing steps past In too, rather than reading its runs
@@ -211,16 +222,17 @@ const (
 	// and "a deny wins at any scope" only where the workflow is in the question.
 	RunListing Reason = "a listing of runs across the namespaces its caller can read"
 
-	// AuditLog is the audit log read across the installation, by the export and by a verification:
-	// "separate and append-only", one chain holding the acts of every namespace and of the
-	// installation itself, which no namespace's handle could read whole.
+	// AuditLog is the audit log read across the installation, by the export, by a verification and
+	// by an administrator reading it: "separate and append-only", one chain holding the acts of
+	// every namespace and of the installation itself, which no namespace's handle could read whole.
 	AuditLog Reason = "the audit log, one chain across the installation"
 
-	// NamespaceAdministration is a namespace created, removed or given its quotas by an
-	// administrator through the API, or by agentiik-api namespace on the server. A namespace is the
-	// scope every other handle is opened in, so creating one is not something a handle on one can
-	// do, removing one reads whether any of its rows remain, and a listing of them spans the
-	// installation.
+	// NamespaceAdministration is a namespace created, removed, renamed, given a picture or given
+	// its quotas through the API, or created or removed by agentiik-api namespace on the server. A
+	// namespace is the scope every other handle is opened in, so creating one is not something a
+	// handle on one can do, removing one reads whether any of its rows remain, renaming one writes
+	// every row naming it and those of other namespaces naming it or its service accounts, and a
+	// listing of them spans the installation.
 	NamespaceAdministration Reason = "a namespace created, removed or given its quotas"
 
 	// Identity is who a request is from, and the records that say so: the principals, their

@@ -27,7 +27,7 @@ func TestAgkLoginSignsInThroughTheRealSignInAndExchange(t *testing.T) {
 	const publicURL = "https://agentiik.example.com"
 	now := time.Now().UTC()
 	err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "alice", Profile: db.Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
 		hash, err := password.Hash("alice's own passphrase")

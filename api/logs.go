@@ -374,7 +374,11 @@ func (s *RunnerAPI) take(ctx context.Context, wide *db.Wide, was db.TaskLog, shi
 		}
 		sum := sha256.Sum256(object)
 		c.Digest = hex.EncodeToString(sum[:])
-		if c.Key, err = logKey(was, seq, shippedDigest); err != nil {
+		storage, err := wide.StorageOf(ctx, was.Namespace)
+		if err != nil {
+			return LogShipped{}, "", err
+		}
+		if c.Key, err = logKey(was, storage, seq, shippedDigest); err != nil {
 			return LogShipped{}, "", err
 		}
 		if dry {
@@ -466,23 +470,23 @@ func chunkOf(firstLine int64, final bool, lines []LogLine) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// logKey is where one chunk of a log is kept: under its namespace, as every object is, then under
-// the run and the task the log's URI names, "so the logs of a run are one prefix", then under the
-// dispatch, since a requeue keeps its key and ships a log of its own, and last the seq, padded so
-// that a listing is in order, and the digest of what was shipped.
+// logKey is where one chunk of a log is kept: under its namespace's storage name, as every object
+// of it is, then under the run and the task the log's URI names, "so the logs of a run are one
+// prefix", then under the dispatch, since a requeue keeps its key and ships a log of its own, and
+// last the seq, padded so that a listing is in order, and the digest of what was shipped.
 //
 // The shipped digest rather than the digest of what is kept, because the key has to be known, and
 // recorded, before the chunk is decided under the log's lock. It names one content all the same:
 // what a chunk keeps is decided by the chunks before it, which are fixed once it can be taken, so a
 // chunk shipped again with the same lines is kept the same way, and one with other lines is
 // another key.
-func logKey(l db.TaskLog, seq int, shippedDigest string) (string, error) {
+func logKey(l db.TaskLog, storage string, seq int, shippedDigest string) (string, error) {
 	uri, err := l.URI()
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s/logs/%s/%s/%s/%010d-%s",
-		l.Namespace, uri.Run, url.PathEscape(string(uri.Task)), l.Row, seq, shippedDigest), nil
+		storage, uri.Run, url.PathEscape(string(uri.Task)), l.Row, seq, shippedDigest), nil
 }
 
 // errChunkUnreadable is a chunk of a log whose object does not hold the lines it was written with,

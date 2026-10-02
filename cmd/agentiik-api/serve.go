@@ -223,6 +223,10 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 	if err != nil {
 		return nil, err
 	}
+	if err := pool.Current(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
 	// The API's connection to the bus creates the streams, which it would otherwise wait for
 	// the controller to, and each pool's consumer, since a runner may create neither: every
 	// pool's here, the default pool the installation was migrated with among them, and a new
@@ -258,12 +262,12 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 }
 
 // routes builds every route built so far on one router: runs and versions, the step log streams,
-// the secret declarations, the runners and their pools, the bus credential, the users and groups,
-// the namespaces, the API tokens, the grants, the caller's own record, the built-in object store,
-// the service accounts, the passkey ceremonies, the passwords, agk login's exchange, the
-// authentication policy, the caller's credentials, and the sign-in page with its sign-out. Each
-// request is identified and authorised by api.Principals, from the tokens, the grants and the
-// bootstrap state the database holds. The log streams end when stopping closes. Every route is
+// the secret declarations, the namespace's variables, the runners and their pools, the bus
+// credential, the users and groups, the namespaces, the API tokens, the grants, the caller's own
+// record, the built-in object store, the service accounts, the passkey ceremonies, the passwords,
+// agk login's exchange, the authentication policy, the caller's credentials, and the sign-in page
+// with its sign-out. Each request is identified and authorised by api.Principals, from the tokens,
+// the grants and the bootstrap state the database holds. The log streams end when stopping closes. Every route is
 // handed the settings' one clock, so that a grant lapses at the same instant for the authorizer,
 // the routes that list grants and GET /api/v1/me.
 func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
@@ -331,6 +335,10 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewDeclarations(rt, declarations); err != nil {
 		return nil, err
 	}
+	// The namespace's variables, which every run reads those of when it is created.
+	if _, err := api.NewVariables(rt, api.VariableOptions{Pool: pool, Now: s.now}); err != nil {
+		return nil, err
+	}
 	if _, err := api.NewRunners(rt, runners); err != nil {
 		return nil, err
 	}
@@ -339,7 +347,10 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewUsers(rt, api.UserOptions{Pool: pool, PublicURL: s.PublicURL, Now: s.now}); err != nil {
 		return nil, err
 	}
-	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{Pool: pool}); err != nil {
+	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{
+		Pool:    pool,
+		Trouble: func(err error) { log.Error("a namespace request was answered 500", "error", err) },
+	}); err != nil {
 		return nil, err
 	}
 	// Every write held to its namespace's max_artifact_bytes.

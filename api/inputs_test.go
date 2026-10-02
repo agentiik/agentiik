@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -333,5 +334,91 @@ func TestTheInputsWithTheirDefaultsAreHeldToTheBoundsOfARunsInputs(t *testing.T)
 	}
 	if n := runsHeld(t, super); n != 1 {
 		t.Errorf("%d runs exist, and one start was accepted", n)
+	}
+}
+
+// Whoever may ask for a run reads what it takes, and nothing else of the workflow: oscar, an
+// operator, holds workflow:run and run:read without workflow:read, and reads the inputs and the
+// file their schemas reach while the workflow itself answers him 404; vera, who reads the workflow
+// and may not run it, is answered 404 here, as for a workflow that does not exist.
+func TestWhoeverMayRunAWorkflowReadsTheInputsARunTakesAndNothingElse(t *testing.T) {
+	finance := api.Target{Namespace: "finance"}
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	h, _, _ := servingTo(t, granted{
+		"alice": {{api.WorkflowWrite, finance}, {api.WorkflowRead, finance}},
+		"oscar": {{api.WorkflowRun, invoicing}, {api.RunRead, invoicing}},
+		"vera":  {{api.WorkflowRead, invoicing}, {api.RunRead, invoicing}},
+	})
+	if w, _ := call(t, h, "PUT", pushTo, "alice", declaringPush(t, declaringWorkflow, map[string]string{"schemas/order.json": orderSchema})); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	const inputsAt = "/api/v1/finance/workflows/monthly-invoicing/inputs"
+
+	w := sent(t, h, "GET", inputsAt, "oscar", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("the operator reading the inputs was answered %d: %s", w.Code, w.Body)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("the inputs are answered with Cache-Control %q", got)
+	}
+	var read struct {
+		Commit string
+		Inputs map[string]map[string]json.RawMessage
+		Files  map[string]json.RawMessage
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &read); err != nil {
+		t.Fatal(err)
+	}
+	if read.Commit != aCommit {
+		t.Errorf("the inputs are of %s, and the default branch's head is %s", read.Commit, aCommit)
+	}
+	for name, want := range map[string]map[string]string{
+		"orders":    {"schema": `{"$ref":"./schemas/order.json"}`, "required": `true`},
+		"cycle":     {"schema": `{"pattern":"^[0-9]{4}-[0-9]{2}$","type":"string"}`, "required": `false`, "default": `"2026-01"`},
+		"batch":     {"schema": `{"type":"integer"}`, "required": `false`, "default": `3`},
+		"customers": {"required": `false`, "default": `[]`},
+		"note":      {"required": `false`},
+		"edge":      {"schema": `{"maximum":9007199254740992}`, "required": `false`},
+	} {
+		got := map[string]string{}
+		for k, v := range read.Inputs[name] {
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, v); err != nil {
+				t.Fatal(err)
+			}
+			got[k] = compact.String()
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("the input %s reads %v, and the file declares %v", name, got, want)
+		}
+	}
+	if len(read.Inputs) != 6 {
+		t.Errorf("%d inputs are answered, and the file declares 6", len(read.Inputs))
+	}
+	var file, written any
+	json.Unmarshal(read.Files["schemas/order.json"], &file)
+	json.Unmarshal([]byte(orderSchema), &written)
+	if len(read.Files) != 1 || !reflect.DeepEqual(file, written) {
+		t.Errorf("the files the schemas reach are answered as %v", read.Files)
+	}
+	// Nothing of the steps: their names, their images and what they are handed.
+	for _, inside := range []string{"normalize", image, "steps", "outputs"} {
+		if strings.Contains(w.Body.String(), inside) {
+			t.Errorf("the inputs answer %q, which is the workflow's inside: %s", inside, w.Body)
+		}
+	}
+
+	if w := sent(t, h, "GET", "/api/v1/finance/workflows/monthly-invoicing", "oscar", ""); w.Code != http.StatusNotFound {
+		t.Errorf("the operator reading the workflow itself was answered %d", w.Code)
+	}
+	if w := sent(t, h, "GET", inputsAt, "vera", ""); w.Code != http.StatusNotFound {
+		t.Errorf("a viewer reading the inputs a run takes was answered %d: %s", w.Code, w.Body)
+	}
+	if w := sent(t, h, "GET", inputsAt+"?ref=nightly", "oscar", ""); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "nightly") {
+		t.Errorf("a ref naming nothing was answered %d: %s", w.Code, w.Body)
+	}
+	// A version named whole is a ref, as a run names one; a push of a tree moves no branch.
+	if w := sent(t, h, "GET", inputsAt+"?ref="+aCommit, "oscar", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), aCommit) {
+		t.Errorf("the version named whole was answered %d: %s", w.Code, w.Body)
 	}
 }

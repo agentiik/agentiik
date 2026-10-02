@@ -275,6 +275,10 @@ func (f *Fixture) make(t testing.TB, c Case, at Target) string {
 		name, value := f.freshName(), "sk_probe_"+randomHex(t)
 		f.must(t, "PUT", "/api/v1/"+at.Namespace+"/secrets/"+name, owner, api.Declare{Provider: "builtin", Value: &value}, http.StatusCreated)
 		return name
+	case "variable":
+		name := f.freshName()
+		f.must(t, "PUT", "/api/v1/"+at.Namespace+"/variables/"+name, owner, api.VariableWrite{Value: []byte(`true`), Visibility: "all"}, http.StatusCreated)
+		return name
 	case "token":
 		return f.mint(t, f.Carol, NightlySync, api.TokenRequest{Principal: NightlySync, DeviceLabel: "a probe's"}).tokenID
 	case "service account":
@@ -306,6 +310,8 @@ func (f *Fixture) unmake(t testing.TB, c Case, at Target, made string, allowed b
 		f.must(t, "DELETE", path, owner, nil, http.StatusNoContent)
 	case "secret":
 		f.must(t, "DELETE", "/api/v1/"+at.Namespace+"/secrets/"+made, owner, nil, http.StatusNoContent)
+	case "variable":
+		f.must(t, "DELETE", "/api/v1/"+at.Namespace+"/variables/"+made, owner, nil, http.StatusNoContent)
 	case "token":
 		f.revoke(t, f.Carol, made)
 	case "service account":
@@ -348,6 +354,8 @@ func (f *Fixture) fill(pattern string, at Target, made string) string {
 				return made
 			case strings.Contains(pattern, "/secrets/"):
 				return f.Secrets[at.Namespace]
+			case strings.Contains(pattern, "/variables/"):
+				return f.Variables[at.Namespace]
 			case strings.Contains(pattern, "/outputs/"):
 				return "invoices"
 			}

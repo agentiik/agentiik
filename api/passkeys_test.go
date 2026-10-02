@@ -1206,7 +1206,7 @@ func TestASessionThatMayOnlyEnrolRegistersAPasskey(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	var cookie *http.Cookie
 	if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "bob", DisplayName: "Bob"}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "bob", Profile: db.Profile{GivenName: "Bob"}}); err != nil {
 			return err
 		}
 		if err := w.AddCredential(ctx, db.Credential{ID: "bob-password", Login: "bob", Type: db.CredentialPassword, PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"}); err != nil {

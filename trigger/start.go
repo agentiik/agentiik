@@ -98,6 +98,14 @@ type Request struct {
 	// context of the run it replays, so that it sees what fired it and not what is true now.
 	Context db.TriggerContext
 
+	// NamespaceVars are the variables the namespace shows the workflow, for a run whose were read
+	// already: a replay's, those the run it replays read, so that it reads what that run read and
+	// not what is true now; a webhook's or an event's, those its map and its filter read, so that
+	// its steps read what they did. Nil, which every other run leaves it, reads them in Create's
+	// transaction, the one that writes the run. Either way the run keeps those its file does not
+	// write, frozen on it.
+	NamespaceVars map[string]any
+
 	// Caller is the step whose call asks for the run, for the kind workflow, and Depth how deep
 	// in a chain of calls the run is.
 	Caller *db.Caller
@@ -153,7 +161,7 @@ func (s *Starter) Start(ctx context.Context, r Request) (Started, error) {
 type Prepared struct {
 	r      Request
 	commit string
-	g      interface{ Steps() []agk.Step }
+	g      *graph.Graph
 	inputs json.RawMessage
 }
 
@@ -166,24 +174,11 @@ func (s *Starter) Prepare(ctx context.Context, r Request) (Prepared, error) {
 	if r.Commit != "" && r.Ref != "" {
 		return Prepared{}, ErrCommitAndRef
 	}
-	p := Prepared{r: r, commit: r.Commit}
-	if p.commit == "" {
-		err := s.pool.In(ctx, r.Namespace, func(ctx context.Context, ns *db.NS) error {
-			var err error
-			if r.Ref != "" {
-				// A ref other than the default branch, resolved here, once, and the run pinned to
-				// the commit it names now, whatever the ref does next.
-				p.commit, err = ns.ResolveRef(ctx, r.Workflow, r.Ref)
-			} else {
-				// "A run naming no ref runs the default branch's head."
-				p.commit, err = ns.DefaultCommit(ctx, r.Workflow)
-			}
-			return err
-		})
-		if err != nil {
-			return Prepared{}, err
-		}
+	commit, err := s.resolve(ctx, r)
+	if err != nil {
+		return Prepared{}, err
 	}
+	p := Prepared{r: r, commit: commit}
 	g, err := s.versions.Graph(ctx, r.Namespace, r.Workflow, p.commit)
 	if err != nil {
 		return p, err
@@ -195,6 +190,70 @@ func (s *Starter) Prepare(ctx context.Context, r Request) (Prepared, error) {
 		}
 	}
 	return p, nil
+}
+
+// resolve answers the commit a run r asks for is of: the commit it names, or the one its ref
+// resolves to now, or the default branch's head where it names neither.
+func (s *Starter) resolve(ctx context.Context, r Request) (string, error) {
+	if r.Commit != "" {
+		return r.Commit, nil
+	}
+	var commit string
+	err := s.pool.In(ctx, r.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		if r.Ref != "" {
+			// A ref other than the default branch, resolved here, once, and the run pinned to
+			// the commit it names now, whatever the ref does next.
+			commit, err = ns.ResolveRef(ctx, r.Workflow, r.Ref)
+		} else {
+			// "A run naming no ref runs the default branch's head."
+			commit, err = ns.DefaultCommit(ctx, r.Workflow)
+		}
+		return err
+	})
+	return commit, err
+}
+
+// Declaration is what a manual run of one version takes: the commit a ref resolved to, the inputs
+// that version declares as its file writes them, and each file of its tree their schemas reach by
+// $ref, by its path, as parsed JSON.
+type Declaration struct {
+	Commit string
+	Inputs map[string]graph.Input
+	Files  map[string]any
+}
+
+// Declared answers what the run r asks for would take, without asking for it: the ref resolved
+// and the graph read as Prepare reads them, and the declaration compiled against the version's
+// tree as a run binds against it, so that a declaration a run would refuse is refused here too,
+// with the same errors. Nothing is written, and r's inputs are not read.
+//
+// It is what a form asks before a run is asked for, by whoever may ask for one: the inputs are the
+// workflow's boundary, and nothing else of the file is answered.
+func (s *Starter) Declared(ctx context.Context, r Request) (Declaration, error) {
+	if r.Commit != "" && r.Ref != "" {
+		return Declaration{}, ErrCommitAndRef
+	}
+	commit, err := s.resolve(ctx, r)
+	if err != nil {
+		return Declaration{}, err
+	}
+	g, err := s.versions.Graph(ctx, r.Namespace, r.Workflow, commit)
+	if err != nil {
+		return Declaration{Commit: commit}, err
+	}
+	wf := g.Workflow()
+	tree := &versionTree{ctx: ctx, pool: s.pool, objects: s.objects, namespace: r.Namespace, workflow: r.Workflow, commit: commit}
+	files, err := wf.InputFiles(tree)
+	switch {
+	case errors.Is(tree.trouble, ErrNoObjectStore):
+		return Declaration{Commit: commit}, ErrNoObjectStore
+	case tree.trouble != nil:
+		return Declaration{Commit: commit}, fmt.Errorf("the tree of %s/%s@%s could not be read to answer its inputs: %w", r.Namespace, r.Workflow, commit, tree.trouble)
+	case err != nil:
+		return Declaration{Commit: commit}, fmt.Errorf("%w: %v", ErrDeclarationRefused, err)
+	}
+	return Declaration{Commit: commit, Inputs: wf.Inputs, Files: files}, nil
 }
 
 // Create writes the run, tells the controller and records run.trigger, in the transaction ns
@@ -225,13 +284,18 @@ func (p Prepared) Create(ctx context.Context, ns *db.NS) (agk.RunID, error) {
 	for k, v := range r.Detail {
 		detail[k] = v
 	}
+	vars, err := p.namespaceVars(ctx, ns)
+	if err != nil {
+		return "", err
+	}
 	if err := ns.CreateRun(ctx, db.NewRun{
 		ID: run, Workflow: r.Workflow, Commit: p.commit,
 		Trigger: r.Kind, TriggeredBy: r.By,
 		Inputs: p.inputs, Steps: p.g.Steps(),
 		ReplayOf: r.ReplayOf, ReplayFrom: r.ReplayFrom,
-		Context: r.Context,
-		Caller:  r.Caller, Depth: r.Depth,
+		Context:       r.Context,
+		NamespaceVars: vars,
+		Caller:        r.Caller, Depth: r.Depth,
 	}); err != nil {
 		return "", err
 	}
@@ -249,6 +313,29 @@ func (p Prepared) Create(ctx context.Context, ns *db.NS) (agk.RunID, error) {
 		return "", err
 	}
 	return run, nil
+}
+
+// namespaceVars are the namespace's variables the run keeps: those its namespace shows its workflow,
+// read here, in the transaction that writes the run, unless the request carries them, less those
+// its file writes, whose value the file's is. Read once, when the run is created, and kept, so that
+// a variable written in the middle of a run never gives its first step one value and its last
+// another, and a controller taking it over reads what the one before it did.
+func (p Prepared) namespaceVars(ctx context.Context, ns *db.NS) (map[string]any, error) {
+	shown := p.r.NamespaceVars
+	if shown == nil {
+		var err error
+		if shown, err = ns.VariablesFor(ctx, p.r.Workflow); err != nil {
+			return nil, err
+		}
+	}
+	own := p.g.Workflow().Vars
+	kept := make(map[string]any, len(shown))
+	for name, value := range shown {
+		if _, written := own[name]; !written {
+			kept[name] = value
+		}
+	}
+	return kept, nil
 }
 
 // InputsTooLarge is inputs past what a run's inputs may hold once the defaults the workflow declares

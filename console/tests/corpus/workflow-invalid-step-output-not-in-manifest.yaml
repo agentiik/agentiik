@@ -1,0 +1,25 @@
+# invalid: A step declaring an output port its brick manifest does not carry.
+#   outputs must be a subset of the ports the manifest declares.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#step-keywords
+# paired with: brick/valid/normalize.yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    # the manifest of this image declares ok and rejected, and nothing else
+    outputs: [ok, maybe]
