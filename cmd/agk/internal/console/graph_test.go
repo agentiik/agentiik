@@ -57,7 +57,7 @@ func TestTheGraphIsDrawnAsBoxesAndEdges(t *testing.T) {
 		}
 	}
 	lines := strings.Split(s, "\n")
-	if len(lines) != 36 || lastLine(m) != "↑↓ Step   enter Inspect   g List   esc Run   q Quit   ? Every key" {
+	if len(lines) != 36 || lastLine(m) != "↑↓ Step   ←→ Along an edge   enter Inspect   g List   esc Run   q Quit   ? Every key" {
 		t.Errorf("the graph view's keys are %q", lastLine(m))
 	}
 	for i, l := range lines {
@@ -113,7 +113,7 @@ func TestGWritesTheGraphAsAListAndBack(t *testing.T) {
 			t.Errorf("the list does not say %q:\n%s", want, s)
 		}
 	}
-	if strings.Contains(s, "╭") || lastLine(m) != "↑↓ Step   enter Inspect   g Drawing   esc Run   q Quit   ? Every key" {
+	if strings.Contains(s, "╭") || lastLine(m) != "↑↓ Step   ←→ Along an edge   enter Inspect   g Drawing   esc Run   q Quit   ? Every key" {
 		t.Errorf("the list is still drawn, or names its keys %q", lastLine(m))
 	}
 	if s := screen(press(t, m, keyG)); !strings.Contains(s, "╭────") {
@@ -149,7 +149,7 @@ func TestTheGraphOpensAStepAndGoesBack(t *testing.T) {
 	in := &installation{graph: invoicing, runs: someRuns()}
 	in.run = aFailedRun()
 	m = press(t, opened(t, in, Options{}, 160, 36), down, keyG)
-	if m.view != graphView || !strings.Contains(screen(m), "Graph finance/monthly-invoicing") || lastLine(m) != "↑↓ Step   enter Inspect   g List   esc Runs   q Quit   ? Every key" {
+	if m.view != graphView || !strings.Contains(screen(m), "Graph finance/monthly-invoicing") || lastLine(m) != "↑↓ Step   ←→ Along an edge   enter Inspect   g List   esc Runs   q Quit   ? Every key" {
 		t.Fatalf("g on a run selected does not open its graph:\n%s", screen(m))
 	}
 	if m = press(t, m, esc); m.view != runsView || m.run != nil {
@@ -172,5 +172,29 @@ func TestAGraphOfAnotherVersionIsSaidSo(t *testing.T) {
 	m = press(t, opened(t, in, Options{Run: failedRun}, 160, 36), keyG)
 	if s := screen(m); !strings.Contains(s, "The graph could not be read: no route /api/v1/finance/workflows/monthly-invoicing?limit=1") {
 		t.Errorf("a graph that cannot be read is not said:\n%s", s)
+	}
+}
+
+// ← and → move along an edge: back to the first step the one chosen needs, forward to the first
+// that needs it, and nowhere past either end.
+func TestTheArrowsMoveAlongAnEdge(t *testing.T) {
+	m, _ := graphOf(t, 160, 36)
+	left := tea.KeyPressMsg{Code: tea.KeyLeft}
+	right := tea.KeyPressMsg{Code: tea.KeyRight}
+	h := tea.KeyPressMsg{Code: 'h', Text: "h"}
+	if m.graphStep() != "invoice" {
+		t.Fatalf("the graph opens on %q", m.graphStep())
+	}
+	if m = press(t, m, left); m.graphStep() != "normalize" {
+		t.Errorf("← from invoice goes to %q, not the step it needs", m.graphStep())
+	}
+	if m = press(t, m, h); m.graphStep() != "normalize" {
+		t.Errorf("h from the first step goes to %q", m.graphStep())
+	}
+	if m = press(t, m, right); m.graphStep() != "invoice" {
+		t.Errorf("→ from normalize goes to %q, not the first step that needs it", m.graphStep())
+	}
+	if m = press(t, m, right, right); m.graphStep() != "archive" {
+		t.Errorf("→ past the last step goes to %q", m.graphStep())
 	}
 }

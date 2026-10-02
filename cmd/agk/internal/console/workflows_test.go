@@ -90,7 +90,7 @@ func TestAWorkflowsGraphIsDrawnWithNoRun(t *testing.T) {
 	if m.view != graphView || !strings.Contains(s, "Graph finance/monthly-invoicing@a3f9c1e  the version the default branch's head resolves to") || !strings.Contains(s, "○ normalize") {
 		t.Fatalf("enter does not draw the workflow's graph with no run:\n%s", s)
 	}
-	if lastLine(m) != "↑↓ Step   g List   esc Workflows   q Quit   ? Every key" {
+	if lastLine(m) != "↑↓ Step   ←→ Along an edge   g List   esc Workflows   q Quit   ? Every key" {
 		t.Errorf("a graph with no run offers %q", lastLine(m))
 	}
 	if m = press(t, m, enter, esc); m.view != workflowsView || m.graphOf != "" {

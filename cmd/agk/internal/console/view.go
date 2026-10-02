@@ -171,6 +171,8 @@ func (m Model) keyLine(t theme) string {
 			keys = append(keys, [2]string{"↑↓", "Move"}, [2]string{"enter", "Open"})
 		case logPane:
 			keys = append(keys, [2]string{"↑↓", "Scroll"})
+		case portsPane:
+			keys = append(keys, [2]string{"↑↓", "Port"})
 		default:
 			keys = append(keys, [2]string{"↑↓", "Step"}, [2]string{"[]", "Port"})
 		}
@@ -190,7 +192,7 @@ func (m Model) keyLine(t theme) string {
 			written = "Drawing"
 		}
 		back := map[view]string{runsView: "Runs", runView: "Run", workflowsView: "Workflows"}[m.graphFrom]
-		keys = [][2]string{{"↑↓", "Step"}}
+		keys = [][2]string{{"↑↓", "Step"}, {"←→", "Along an edge"}}
 		if m.run != nil {
 			keys = append(keys, [2]string{"enter", "Inspect"})
 		}
@@ -224,7 +226,8 @@ func (m Model) keysListed(t theme) []string {
 	}
 	switch m.view {
 	case runView:
-		rows = append(rows, [2]string{"tab", "Move the focus to the next pane: the runs, the run, then its log; shift+tab to the one before"},
+		rows = append(rows, [2]string{"tab", "Move the focus to the next pane: the runs, then in the run its steps, its ports and its log; shift+tab to the one before"},
+			[2]string{"↑ ↓ in the ports", "Move between the ports of the step chosen, as [ ] do"},
 			[2]string{"↑ ↓ in the runs", "Move the selection over the runs; enter opens the run selected beside them"},
 			[2]string{"↑ ↓ in the log", "Scroll the log back, and forward to its end"})
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps"}, [2]string{"[ ]", "The previous or next port of the step"}, [2]string{"g", "The graph of the run's workflow, its state laid over it"}, [2]string{"esc", "Back to the runs"})
@@ -244,7 +247,9 @@ func (m Model) keysListed(t theme) []string {
 	case workflowsView:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the workflows"}, [2]string{"enter, g", "The graph of the workflow chosen"}, [2]string{"esc", "Back to the runs"})
 	case graphView:
-		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps, in the order the graph runs them"}, [2]string{"enter", "Open the step chosen in the inspector"},
+		rows = append(rows, [2]string{"↑ ↓, k j", "Move between the steps, in the order the graph runs them"},
+			[2]string{"← →, h l", "Move to the step before or after the one chosen, along an edge: the first it needs, or the first that needs it"},
+			[2]string{"enter", "Open the step chosen in the inspector"},
 			[2]string{"g", "Write the graph as a list, and draw it again"}, [2]string{"esc", "Back to the view the graph was opened from"})
 	default:
 		rows = append(rows, [2]string{"↑ ↓, k j", "Move the selection over the runs"}, [2]string{"enter", "Open the run selected"}, [2]string{"g", "The graph of the run selected"},
