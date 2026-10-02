@@ -58,6 +58,10 @@
     height?: number;
   } = $props();
 
+  // The longest series' name in characters, which sets how narrow a column of the legend may be, so
+  // that a name such as "refused for max_runs_per_hour" is never broken where its column ends.
+  const longest = $derived(series.reduce((n, s) => Math.max(n, s.label.length), 0));
+
   let holder: HTMLDivElement | undefined = $state();
   let chosen = $state<number | null>(null);
   // pointed is the bucket under the pointer, which the legend reads out, or the one the arrow keys
@@ -359,7 +363,7 @@
   ></div>
   <!-- The series in columns of one width, each value read out at its column's end, and the bucket
        read out under them, its line kept while nothing is pointed at so that nothing moves. -->
-  <div class="legend" aria-live="polite">
+  <div class="legend" aria-live="polite" style:--longest="{longest}ch">
     <ul>
       {#each series as s (s.label)}
         <li><span class="swatch {s.tone}" class:line={s.kind === "line" || s.kind === "step"} class:dashed={s.dashed}></span><span class="name">{s.label}</span><span class="value term">{at !== null && since[at] ? valueAt(s, at) : ""}</span></li>
@@ -421,10 +425,11 @@
   }
 
   /* Columns of one width, as many as the pane holds, so that the second column of every row starts
-     where the first row's does. */
+     where the first row's does, each wide enough for the longest name beside its swatch and its value:
+     at 140px a column broke max_runs_per_hour in two. */
   .legend ul {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, max(140px, calc(var(--longest, 0ch) + 10px + var(--unit) * 4 + 7ch))), 1fr));
     gap: calc(var(--unit) * 2) calc(var(--unit) * 7);
     margin: 0;
     padding: 0;
@@ -439,7 +444,7 @@
 
   .name {
     min-width: 0;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
   }
 
   /* A value has its room whether it is read out or not, so that nothing moves as the pointer does,
