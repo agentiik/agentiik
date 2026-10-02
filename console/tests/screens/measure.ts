@@ -246,5 +246,15 @@ export function measure(): Finding[] {
       if (!columns.some((c) => Math.abs(c - left) < 0.6)) out.push({ rule: "legend-column", where: name(li), detail: `starts at ${left.toFixed(1)}, the columns at ${columns.map((c) => c.toFixed(1)).join(", ")}` });
     }
   }
+
+  // A series in a legend is named on one line: a column narrower than its name would break an
+  // identifier such as max_runs_per_hour where it falls, which reads as two names.
+  for (const label of document.querySelectorAll(".chart .legend .name")) {
+    if (!visible(label)) continue;
+    const style = getComputedStyle(label);
+    const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
+    const height = rect(label).height;
+    if (height > line * 1.5) out.push({ rule: "legend-name", where: name(label), detail: `${height.toFixed(1)}px tall, ${Math.round(height / line)} lines of ${line.toFixed(1)}px` });
+  }
   return out;
 }

@@ -7,7 +7,7 @@ import { measure, type Finding } from "./measure";
 // folded, the last with it shown as a drawer and a phone, in both themes, and measured: nothing runs off the page, every
 // control is one height and a row of them one band, what is centred in a row is centred on one line
 // and text side by side on one baseline, each pane's content starts under its title, a chart's legend keeps its
-// columns, nothing runs into the page's side margins, and every box starts on a whole pixel; and the policy refuses nothing a screen asks for. A finding names the rule, the element and what was measured.
+// columns and names each series on one line, nothing runs into the page's side margins, and every box starts on a whole pixel; and the policy refuses nothing a screen asks for. A finding names the rule, the element and what was measured.
 
 const screens: Record<string, string[]> = {
   alice: [
@@ -28,6 +28,7 @@ const screens: Record<string, string[]> = {
     "/finance/workflows/monthly-invoicing/settings",
     "/alice/workflows/report/settings",
     "/finance/statistics",
+    "/finance/statistics?tab=quotas",
     "/finance/sharing",
     "/finance/variables",
     "/finance/settings",
