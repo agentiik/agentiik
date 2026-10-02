@@ -5,6 +5,7 @@
   import AccountMenu from "./AccountMenu.svelte";
   import Icon from "./Icon.svelte";
   import NamespaceSwitcher from "./NamespaceSwitcher.svelte";
+  import { administration, viewIcons } from "../lib/shell";
   import Notifications from "./Notifications.svelte";
 
   // The navigation, down the left of every screen: the home and the caller's notifications, the views
@@ -27,6 +28,7 @@
     onsignout,
     ondismiss,
     oncreate,
+    onsearch,
   }: {
     me: Me;
     namespaces: Namespace[];
@@ -41,19 +43,11 @@
     onsignout: () => void;
     ondismiss: (id: string) => void;
     oncreate?: () => void;
+    onsearch?: () => void;
   } = $props();
 
-  const icon: Record<View, string> = { workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", variables: "control-variables", settings: "control-settings" };
   const home = { kind: "landing" as const };
-  // The audit log is the users' segment's too, at users/audit, so an entry is open by its route's tab
-  // as well as its kind.
-  const admin = [
-    { to: { kind: "runners" as const }, label: "Runners", icon: "control-runners" },
-    { to: { kind: "users" as const }, label: "Users", icon: "control-users" },
-    { to: { kind: "groups" as const }, label: "Groups", icon: "control-groups" },
-    { to: { kind: "namespaces" as const }, label: "Namespaces", icon: "control-namespaces" },
-    { to: { kind: "users" as const, tab: "audit" }, label: "Audit log", icon: "control-history" },
-  ];
+  const admin = administration;
   const audited = $derived(route.kind === "users" && route.tab === "audit");
   const opened = (to: (typeof admin)[number]["to"]) => route.kind === to.kind && ("tab" in to ? audited : !audited);
   const current = $derived(route.kind === "namespace" && route.namespace === namespace ? route.view : undefined);
@@ -74,6 +68,13 @@
         <Icon name="control-home" /><span class="label">Home</span>
       </a>
     </li>
+    {#if onsearch}
+      <li>
+        <button class="entry" onclick={onsearch} title={folded ? "Search" : undefined}>
+          <Icon name="control-search" /><span class="label">Search</span>{#if !folded}<kbd>:</kbd>{/if}
+        </button>
+      </li>
+    {/if}
     <li><Notifications {me} {folded} {ondismiss} /></li>
   </ul>
 
@@ -87,7 +88,7 @@
         {@const to = { kind: "namespace" as const, namespace, view: item.view }}
         <li>
           <a class="entry" class:open={current === item.view} aria-current={current === item.view ? "page" : undefined} href={place.href(to)} onclick={follow(place, to)} title={folded ? item.label : undefined}>
-            <Icon name={icon[item.view]} /><span class="label">{item.label}</span>
+            <Icon name={viewIcons[item.view]} /><span class="label">{item.label}</span>
           </a>
         </li>
       {/each}
@@ -215,6 +216,19 @@
     background: var(--raised);
     color: var(--text);
     text-decoration: none;
+  }
+
+  .entry kbd {
+    min-width: 18px;
+    margin-left: auto;
+    padding: 0 calc(var(--unit) * 2);
+    border: var(--border-hairline) solid var(--line);
+    border-radius: var(--radius-chip);
+    color: var(--faint);
+    font-family: var(--type-identifier-font);
+    font-size: var(--type-identifier-size-min);
+    line-height: 18px;
+    text-align: center;
   }
 
   .entry.open {

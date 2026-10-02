@@ -7,13 +7,15 @@
   import Sidebar from "./components/Sidebar.svelte";
   import TopBar from "./components/TopBar.svelte";
   import { Viewport } from "./lib/viewport.svelte";
-  import { Keys, provide } from "./lib/keys.svelte";
+  import { Keys, provide, shown as keyShown } from "./lib/keys.svelte";
+  import Palette from "./components/Palette.svelte";
+  import type { Entry } from "./lib/palette";
   import { Live, provideLive } from "./lib/live.svelte";
-  import { holds, holdsSomewhereIn, inNamespace } from "./lib/permissions";
+  import { holds, holdsSomewhereIn, inNamespace, ordered } from "./lib/permissions";
   import type { Place } from "./lib/place.svelte";
   import type { View } from "./lib/route";
   import type { Session } from "./lib/session.svelte";
-  import { firstNamespace, fold, folded as wasFolded, keepNamespace, lastNamespace } from "./lib/shell";
+  import { administration, firstNamespace, fold, folded as wasFolded, keepNamespace, lastNamespace, viewIcons } from "./lib/shell";
   import { titleOf } from "./lib/trail";
   import { settles } from "./lib/page";
   import Unloaded from "./components/Unloaded.svelte";
@@ -177,9 +179,36 @@
             },
           ]
         : []),
+      { keys: [":"], effect: "Search", does: () => (searching = true) },
       { keys: ["?"], effect: "Every key", does: () => (keys.listing = !keys.listing) },
     ]),
   );
+
+  // The palette, which : and Search in the sidebar open: the views of the sidebar, the namespaces and
+  // the keys of the screen drawn, to which it adds the workflows and the latest runs it reads as it
+  // opens. A key that moves a selection is left out, since the palette has nothing chosen for it to
+  // move; so are the digits, whose views are listed themselves.
+  let searching = $state(false);
+  const moving = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "j", "k", "[", "]"]);
+  const entries = $derived.by((): Entry[] => {
+    const me = session.me;
+    if (!me) return [];
+    const { own, personal, shared } = ordered(session.namespaces, me.principal);
+    return [
+      { id: "view:home", kind: "view", label: "Home", icon: "control-home", to: { kind: "landing" } },
+      ...(context ? listed.map((v): Entry => ({ id: `view:${v.view}`, kind: "view", label: v.label, detail: context, icon: viewIcons[v.view], to: { kind: "namespace", namespace: context, view: v.view } })) : []),
+      ...(me.admin ? administration.map((a): Entry => ({ id: `view:${a.label}`, kind: "view", label: a.label, detail: "Administration", icon: a.icon, to: a.to })) : []),
+      { id: "view:account", kind: "view", label: "Your account", icon: "control-users", to: { kind: "account", tab: "profile" } },
+      ...[...(own ? [own] : []), ...personal, ...shared].flatMap((n): Entry[] => {
+        const first = all.find((v) => built.has(v.view) && v.shows(n.name));
+        return first ? [{ id: `namespace:${n.name}`, kind: "namespace", label: n.name, to: { kind: "namespace", namespace: n.name, view: first.view } }] : [];
+      }),
+      ...keys.bindings
+        .filter((b) => !b.keys.some((k) => moving.has(k) || /^\d$/.test(k)) && !b.keys.includes(":"))
+        .map((b): Entry => ({ id: `key:${b.effect}`, kind: "key", label: b.effect, key: keyShown(b.keys[0]!), does: () => b.does(b.keys[0]!) })),
+    ];
+  });
+  const followed = $derived(session.me ? session.namespaces.filter((n) => holdsSomewhereIn(session.me!, "run:read", n.name)) : []);
 </script>
 
 <svelte:window
@@ -216,7 +245,7 @@
 {:else if session.me}
   <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer}>
     <div class="side" inert={viewport.narrow && !drawer}>
-      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} oncreate={session.me.user ? () => (creating = true) : undefined} />
+      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} oncreate={session.me.user ? () => (creating = true) : undefined} onsearch={() => (searching = true)} />
     </div>
     {#if viewport.narrow && drawer}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -275,6 +304,7 @@
   </div>
   <KeyLine {keys} />
   <NewNamespace {api} bind:open={creating} {created} />
+  <Palette {api} {place} bind:open={searching} {entries} reads={followed} />
 {/if}
 
 <style>
