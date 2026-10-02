@@ -258,8 +258,20 @@ func (m Model) keysListed(t theme) []string {
 	}
 	rows = append(rows, [2]string{"mouse", "A click selects a row, a step, a port or a tab and focuses its pane, a second click opens it, the wheel scrolls what is under the pointer, a border between two panes is dragged to move it; shift and drag copy, as the terminal does"})
 	lines := []string{t.line(false, m.width, part{strong, "Every key of this view"}), t.line(false, m.width)}
+	// Each key in a column as wide as the widest, and what it does folded beside it, so that the list
+	// is read whole in the least window.
+	keys := 12
 	for _, r := range rows {
-		lines = append(lines, t.line(false, m.width, part{plain, "  "}, part{strong, fmt.Sprintf("%-12s", r[0])}, part{plain, " " + r[1]}))
+		keys = max(keys, lipgloss.Width(r[0]))
+	}
+	for _, r := range rows {
+		for i, l := range folded(r[1], max(20, m.width-keys-3)) {
+			key := ""
+			if i == 0 {
+				key = r[0]
+			}
+			lines = append(lines, t.line(false, m.width, within([]part{{plain, "  "}, {strong, cellOf(key, keys)}, {plain, " " + l}}, m.width)...))
+		}
 	}
 	return lines
 }

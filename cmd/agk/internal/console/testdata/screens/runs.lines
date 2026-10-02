@@ -1,0 +1,12 @@
+running	01JMZ8W4K2R7QX6T1N3P5V7Y9A	finance/monthly-invoicing	schedule	2026-09-30T06:00:12Z	1m 48s	finance/agentiik
+failed	01JMZ8V1P9C4XQ7K2N4D6F8H0A	finance/monthly-invoicing	manual	2026-09-30T05:41:03Z	1m 52s	alice
+failed	01JMZ8T7B2M0QK2N4D6F8H0A2C	finance/dunning-reminders	schedule	2026-09-30T05:30:00Z	22s	finance/agentiik
+running	01JMZ8S3H6X8QK2N4D6F8H0A2D	finance/ledger-export	webhook	2026-09-30T05:28:45Z	33m 15s	finance/agentiik
+queued	01JMZ8R0D4K2QK2N4D6F8H0A2E	finance/vat-reconcile	event	2026-09-30T05:22:10Z		finance/agentiik
+succeeded	01JMZ8Q6F1T7QK2N4D6F8H0A2F	finance/monthly-invoicing	manual	2026-09-30T04:58:31Z	3m 47s	bruno
+succeeded	01JMZ8P2N8Y5QK2N4D6F8H0A2G	finance/ledger-export	webhook	2026-09-30T04:41:09Z	58s	finance/agentiik
+cancelled	01JMZ8N9J3W1QK2N4D6F8H0A2H	finance/vat-reconcile	manual	2026-09-30T04:12:55Z	2m 16s	alice
+succeeded	01JMZ8M5Z7Q3QK2N4D6F8H0A2J	finance/dunning-reminders	schedule	2026-09-30T03:30:00Z	41s	finance/agentiik
+succeeded	01JMZ8K1V4R9QK2N4D6F8H0A2K	finance/ledger-export	webhook	2026-09-30T02:41:12Z	1m 03s	finance/agentiik
+succeeded	01JMZ8H8C0K6QK2N4D6F8H0A2M	finance/monthly-invoicing	schedule	2026-09-30T02:00:07Z	4m 22s	finance/agentiik
+timed_out	01JMZ8G4X6D2QK2N4D6F8H0A2N	finance/vat-reconcile	event	2026-09-30T01:18:39Z	9m 51s	finance/agentiik

@@ -1,0 +1,44 @@
+agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   3 Sharing                                                 1 notification  ● live
+Grants as written on alice                                             5 grants · 1 deny   Resolved for alice (you)          user · member of group:team-finance
+PRINCIPAL              ROLE OR DENY        SCOPE                              EXPIRES      Every grant that applies, its own and its groups', at the namespace:
+alice                  owner               alice                              never        their union, then each deny taken away.
+group:team-finance     viewer              alice                              never
+bruno                  editor              alice                              2026-12-31   + workflow:read     alice: owner; alice: group:team-finance, viewer
+bruno                  deny secret:write   alice                              never        + workflow:run      alice: owner
+alice/ci               operator            alice                              never        + workflow:write    alice: owner
+A namespace grant reaches every workflow inside; a deny names one permission, never a      + workflow:delete   alice: owner
+role.                                                                                      + run:read          alice: owner; alice: group:team-finance, viewer
+                                                                                           + run:read_data     alice: owner
+What each role carries                                                                     + secret:use        alice: owner
+          read    run     write   data    secret  delete  grant                            + secret:write      alice: owner
+viewer    ●       ·       ·       ·       ·       ·       ·                                + grant:manage      alice: owner
+operator  ·       ●       ·       ·       ·       ·       ·
+editor    ●       ●       ●       ●       ●       ·       ·                                Grants add up across both scopes; a deny is the only subtraction, and
+owner     ●       ●       ●       ●       ●       ●       ●                                wins over any allow wherever it is set.
+read workflow:read, run:read · run workflow:run, run:read
+write workflow:write, secret:use · data run:read_data · secret secret:write
+delete workflow:delete · grant grant:manage
+operator runs and follows runs without workflow:read: the queries inside stay out of
+reach.
+
+Never shown, to anyone
+· Secret values, at any role: a declaration is shown, never what it holds, which exists
+  inside a container alone.
+· Another namespace's artifacts: a presigned address covers one artifact of one run, for
+  5 minutes.
+· The host that ran a task: a run names each task's runner by its identifier, and
+  nothing of the machine.
+· Workflows somebody cannot read, in any listing, search or error, or in how long a
+  refusal takes.
+
+read only: agk share and the web console change grants
+
+
+
+
+
+
+
+
+
+↑↓ Grant   enter Resolve for…   s Scope   / Filter   : Commands   esc Runs   q Quit   ? Every key
