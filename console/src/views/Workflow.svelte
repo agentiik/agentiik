@@ -9,6 +9,7 @@
   import GraphCanvas from "../components/GraphCanvas.svelte";
   import Icon from "../components/Icon.svelte";
   import McpPanel from "../components/McpPanel.svelte";
+  import Notice from "../components/Notice.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import RunForm from "../components/RunForm.svelte";
@@ -21,6 +22,7 @@
   import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt, runsOf } from "../lib/route";
   import { RunReader } from "../lib/run.svelte";
   import { workflowTabs } from "../lib/page";
   import { blocks } from "../lib/yaml-blocks";
@@ -120,7 +122,7 @@
   // the ref the files are read at where it opens from theirs, so that a branch is tried on real
   // inputs before it is merged.
   let runRef = $state("");
-  function runAt(ref: string) {
+  function runFrom(ref: string) {
     runRef = ref === detail?.repository.default_branch ? "" : ref;
     running = true;
   }
@@ -132,6 +134,19 @@
       else q.set(k, v);
     }
     place.narrow(q);
+  }
+
+  // A commit from the editor: on the default branch, the page reads the workflow again at its new
+  // head; on a new branch, its files are opened at that branch, where Run tries it.
+  let said = $state("");
+  async function committed(branch: string, _commit: string) {
+    if (detail && branch === detail.repository.default_branch) {
+      narrow({ edit: null, view: null });
+      await read();
+      said = `Committed to ${branch}.`;
+      return;
+    }
+    place.go({ kind: "namespace", namespace, view: "workflows", workflow, tab: "files" }, false, new URLSearchParams({ ref: branch }));
   }
 
   // The visual editor, under workflow:write, over the file at the head of the default branch: the
@@ -157,17 +172,16 @@
               if (step) narrow({ step });
             },
           },
-          { keys: ["Escape"], effect: `Runs of ${workflow}`, does: () => place.go(runsOf, false, new URLSearchParams({ workflow })) },
+          { keys: ["Escape"], effect: "Its runs", does: () => place.go(runsOf(namespace, workflow)) },
         ],
   );
 
-  const runsOf = $derived({ kind: "namespace" as const, namespace, view: "runs" as const });
   const sharing = $derived({ kind: "namespace" as const, namespace, view: "sharing" as const });
   const shares = $derived(holds(me, "grant:manage", namespace, workflow));
 
   // narrowed follows a view of the namespace narrowed to this workflow, as a plain click does and
   // leaving every other click to the browser.
-  function narrowed(route: typeof runsOf | typeof sharing) {
+  function narrowed(route: typeof sharing) {
     return (e: MouseEvent) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
@@ -178,10 +192,12 @@
   const graphTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow });
   const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
   const filesTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "files" });
-  const runRoute = $derived(run ? { kind: "namespace" as const, namespace, view: "runs" as const, run: run.run } : undefined);
+  const runRoute = $derived(run ? runAt(namespace, workflow, run.run) : undefined);
   const tabs = $derived(workflowTabs(namespace, workflow, tab, { shares, mcp: !!graph?.mcp, go: (r, q) => place.go(r, false, q) }));
   const now = Date.now();
 </script>
+
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <PageHeader title={workflow} icon="control-workflows" {place} tabs={tabs}>
   {#snippet subtitle()}
@@ -273,14 +289,14 @@
       <pre class="clone term">git clone {detail.repository.clone_url}</pre>
     </Pane>
   {:else if tab === "files"}
-    <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runAt} />
+    <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runFrom} />
   {:else if tab === "mcp" && graph}
     <Pane title="MCP">
       <McpPanel {graph} {namespace} {workflow} />
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
     {#await import("../components/Editor.svelte") then { default: Editor }}
-      <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} bind:selected={editSelected} onclose={() => narrow({ edit: null })} />
+      <Editor {api} {me} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
     {/await}
   {:else if graph && laid}
     <div class="columns fills">

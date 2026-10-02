@@ -7,16 +7,16 @@ import { measure, type Finding } from "./measure";
 // folded, the last with it shown as a drawer and a phone, in both themes, and measured: nothing runs off the page, every
 // control is one height and a row of them one band, what is centred in a row is centred on one line
 // and text side by side on one baseline, each pane's content starts under its title, and every box
-// starts on a whole pixel. A finding names the rule, the element and what was measured.
+// starts on a whole pixel; and the policy refuses nothing a screen asks for. A finding names the rule, the element and what was measured.
 
 const screens: Record<string, string[]> = {
   alice: [
     "/",
-    "/finance/runs",
-    "/finance/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A",
-    "/finance/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A?step=invoice",
-    "/finance/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A",
-    "/finance/runs/01JMZ8Q6F1T7QK2N4D6F8H0A2F",
+    "/finance/workflows/monthly-invoicing/runs",
+    "/finance/workflows/monthly-invoicing/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A",
+    "/finance/workflows/monthly-invoicing/runs/01JMZ8W4K2R7QX6T1N3P5V7Y9A?step=invoice",
+    "/finance/workflows/monthly-invoicing/runs/01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+    "/finance/workflows/monthly-invoicing/runs/01JMZ8Q6F1T7QK2N4D6F8H0A2F",
     "/finance/workflows",
     "/finance/workflows/monthly-invoicing",
     "/finance/workflows/monthly-invoicing?step=archive",
@@ -24,19 +24,22 @@ const screens: Record<string, string[]> = {
     "/finance/workflows/monthly-invoicing/mcp",
     "/finance/workflows/monthly-invoicing/statistics",
     "/finance/workflows/monthly-invoicing?edit=1&step=invoice",
+    "/finance/workflows/monthly-invoicing?edit=1&view=yaml",
     "/finance/statistics",
     "/finance/sharing",
+    "/finance/variables",
     "/finance/settings",
     "/alice/workflows/report",
     "/alice/workflows/vat-reconciliation/files",
     "/team-ops/workflows/nightly?step=export",
     "/alice/sharing",
+    "/alice/variables",
     "/me",
     "/me/profile",
     "/me/tokens",
     "/me/service-accounts",
   ],
-  dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/me"],
+  dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/finance/settings", "/me"],
 };
 
 const widths = [2560, 1440, 1099, 759, 390];
@@ -60,12 +63,30 @@ for (const [who, paths] of Object.entries(screens)) {
           for (const path of paths) {
             const page = await context.newPage();
             await page.clock.install({ time: new Date("2026-10-01T06:02:30Z") });
+            // Whatever the policy refuses is drawn without it, a style or a script the screen then lacks.
+            await page.addInitScript(() => {
+              const refused: string[] = [];
+              (window as unknown as { refused: string[] }).refused = refused;
+              document.addEventListener("securitypolicyviolation", (e) => refused.push(`${e.violatedDirective} refused ${e.blockedURI} from ${e.sourceFile}:${e.lineNumber}`));
+            });
             await page.goto(server.url.replace(/\/$/, "") + path);
             await page.locator("main").first().waitFor();
             await page.evaluate(() => document.fonts.ready);
             // A chart is drawn once its box has been measured, on the frame after.
             await page.waitForTimeout(300);
+            // An editor lays its lines out as they come into view, as a person scrolls to them: the page is
+            // read down to its end, a window at a time, and back, so that what is measured is what is seen.
+            await page.evaluate(async () => {
+              const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+              for (let y = 0; y < document.documentElement.scrollHeight; y += window.innerHeight) {
+                window.scrollTo(0, y);
+                await frame();
+              }
+              window.scrollTo(0, 0);
+              await frame();
+            });
             for (const f of await page.evaluate(measure)) found.push({ path, ...f });
+            for (const detail of await page.evaluate(() => (window as unknown as { refused: string[] }).refused)) found.push({ path, rule: "policy", where: "document", detail });
             await page.close();
           }
           await context.close();

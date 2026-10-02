@@ -39,7 +39,7 @@ func anInstallationToShare(t *testing.T) shareInstallation {
 	in := shareInstallation{alice: "agktoken_alice" + strings.Repeat("E", 40), bob: "agktoken_bob" + strings.Repeat("F", 40), carol: "agktoken_carol" + strings.Repeat("G", 40), bootstrap: "agk_op_share"}
 	now := time.Now().UTC()
 	err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		for _, u := range []db.User{{Login: "alice", DisplayName: "Alice"}, {Login: "bob", DisplayName: "Bob"}, {Login: "carol", DisplayName: "Carol", Admin: true}} {
+		for _, u := range []db.User{{Login: "alice", Profile: db.Profile{GivenName: "Alice"}}, {Login: "bob", Profile: db.Profile{GivenName: "Bob"}}, {Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}

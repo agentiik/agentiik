@@ -20,14 +20,19 @@ import (
 	"github.com/agentiik/agentiik/db"
 )
 
-// What a user says of themself: PATCH /api/v1/me, which changes their display name and their
-// profile, given and family names, title, location, time zone and bio, and answers who they are as
-// GET /api/v1/me does.
+// What a user says of themself: PATCH /api/v1/me, which changes their profile, given and family
+// names, title, location, time zone and bio, and answers who they are as GET /api/v1/me does. Their
+// display name is made of the two names (db.User.DisplayName) and written by nobody.
 //
 // Set by the user alone, and by no administrator: a profile is what a person tells the people they
 // work with about themself, and one an administrator could rewrite would be a sentence put in their
-// mouth. An administrator still sets a display name at the creation, and removes a photo that should
-// not be shown (avatar.go).
+// mouth. An administrator still gives the given and family names at the creation, so that a user is
+// shown by their name from the start, and removes a photo that should not be shown (avatar.go).
+//
+// The email address is the other way round: an administrator's to give, at the creation and at
+// PATCH /api/v1/users/{login} (users.go), and not the user's to change, so this route refuses it.
+// Nothing proves an address, and one the installation shows beside a name, for the people who read it
+// to write to, comes from whoever answers for its accounts, each change of it audited.
 //
 // Only a user has a profile. A service account is named by its namespace and its name, which say
 // all a grant needs, and the bootstrap token is nobody; both are refused with 403 saying so rather
@@ -71,26 +76,26 @@ func userWriting(w http.ResponseWriter, caller Caller) (string, bool) {
 
 // ProfileChange is what PATCH /api/v1/me changes, openapi.json's profileUpdate: each field it names
 // is set to what it holds, the empty string clearing it, and each it leaves out is kept. Every field
-// but the display name may be cleared; a user always has a display name, the name people read.
+// may be cleared: a user who clears both names is shown by their login.
 type ProfileChange struct {
-	DisplayName *string `json:"display_name,omitempty"`
-	GivenName   *string `json:"given_name,omitempty"`
-	FamilyName  *string `json:"family_name,omitempty"`
-	Title       *string `json:"title,omitempty"`
-	Location    *string `json:"location,omitempty"`
-	Timezone    *string `json:"timezone,omitempty"`
-	Bio         *string `json:"bio,omitempty"`
+	GivenName  *string `json:"given_name,omitempty"`
+	FamilyName *string `json:"family_name,omitempty"`
+	Title      *string `json:"title,omitempty"`
+	Location   *string `json:"location,omitempty"`
+	Timezone   *string `json:"timezone,omitempty"`
+	Bio        *string `json:"bio,omitempty"`
 }
 
 // profileFields are the fields of a profile change, in the order the audit log names those that
 // changed.
-var profileFields = []string{"display_name", "given_name", "family_name", "title", "location", "timezone", "bio"}
+var profileFields = []string{"given_name", "family_name", "title", "location", "timezone", "bio"}
+
+// emailGiven is the refusal of an email address a user writes of themself.
+var emailGiven = errors.New("email: an email address is given by an administrator, at PATCH /api/v1/users/{login}, and a user does not write their own")
 
 // of answers where the field called name is kept, and nil for a name that is none.
 func (c *ProfileChange) of(name string) **string {
 	switch name {
-	case "display_name":
-		return &c.DisplayName
 	case "given_name":
 		return &c.GivenName
 	case "family_name":
@@ -112,7 +117,12 @@ func (c *ProfileChange) of(name string) **string {
 // is kept.
 func (c *ProfileChange) field(b *body, name string) error {
 	into := c.of(name)
-	if into == nil {
+	switch {
+	case name == "display_name":
+		return displayNameMade
+	case name == "email":
+		return emailGiven
+	case into == nil:
 		return unknown(name)
 	}
 	if b.d.PeekKind() == jsontext.KindNull {
@@ -135,8 +145,6 @@ func (c *ProfileChange) check() error {
 		}
 		var err error
 		switch name {
-		case "display_name":
-			err = displayName(*value)
 		case "timezone":
 			err = timeZone(*value)
 		case "bio":
@@ -153,7 +161,7 @@ func (c *ProfileChange) check() error {
 
 // apply writes the change over what is recorded, and answers the names of the fields it changed,
 // in profileFields' order: a field written with what it already holds is no change.
-func (c *ProfileChange) apply(display *string, p *db.Profile) []string {
+func (c *ProfileChange) apply(p *db.Profile) []string {
 	changed := []string{}
 	for _, name := range profileFields {
 		value := *c.of(name)
@@ -162,8 +170,6 @@ func (c *ProfileChange) apply(display *string, p *db.Profile) []string {
 		}
 		var kept *string
 		switch name {
-		case "display_name":
-			kept = display
 		case "given_name":
 			kept = &p.GivenName
 		case "family_name":
@@ -186,8 +192,9 @@ func (c *ProfileChange) apply(display *string, p *db.Profile) []string {
 }
 
 // profileLine refuses a field of a profile longer than most characters, or holding a control
-// character: it is shown in a console and printed at a terminal, as a display name is, where a line
-// break forges a line and an escape sequence rewrites what is shown. The empty string clears it.
+// character: it is shown in a console and printed at a terminal, the names as the display name they
+// make, where a line break forges a line and an escape sequence rewrites what is shown. The empty
+// string clears it.
 func profileLine(name, value string, most int) error {
 	switch n := utf8.RuneCountInString(value); {
 	case n > most:
@@ -216,8 +223,8 @@ func timeZone(name string) error {
 	return nil
 }
 
-// updateProfile is PATCH /api/v1/me: the caller's display name and profile, as the body names them,
-// answered as GET /api/v1/me answers who the caller is.
+// updateProfile is PATCH /api/v1/me: the caller's profile, as the body names it, answered as GET
+// /api/v1/me answers who the caller is.
 //
 // The user's row is held while the change is merged into it, so that two changes at once each keep
 // what the other wrote of the fields it left out. The change is recorded as user.profile with the
@@ -233,7 +240,7 @@ func (m *MeAPI) updateProfile(w http.ResponseWriter, r *http.Request, caller Cal
 		return
 	}
 	if change == (ProfileChange{}) {
-		fail(w, http.StatusBadRequest, "the request names nothing to change: display_name, given_name, family_name, title, location, timezone, bio, or any of them")
+		fail(w, http.StatusBadRequest, "the request names nothing to change: given_name, family_name, title, location, timezone, bio, or any of them")
 		return
 	}
 	if err := change.check(); err != nil {
@@ -248,12 +255,12 @@ func (m *MeAPI) updateProfile(w http.ResponseWriter, r *http.Request, caller Cal
 		if err != nil {
 			return err
 		}
-		display, profile := user.DisplayName, user.Profile
-		changed := change.apply(&display, &profile)
+		profile := user.Profile
+		changed := change.apply(&profile)
 		result := audit.Unchanged
 		if len(changed) > 0 {
 			result = audit.Done
-			if err := wide.UpdateProfile(ctx, login, display, profile); err != nil {
+			if err := wide.UpdateProfile(ctx, login, profile); err != nil {
 				return err
 			}
 		}

@@ -809,7 +809,7 @@ func (s *Server) listRefs(w http.ResponseWriter, r *http.Request, _ Principal, o
 // names, or with ?path= one file's bytes.
 func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
 	ref := r.PathValue("ref")
-	var commit string
+	var commit, storage string
 	var files []db.TreeFile
 	status := http.StatusOK
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
@@ -818,12 +818,15 @@ func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, o
 		if _, err := ns.WorkflowRecord(ctx, over.Workflow); err != nil {
 			return err
 		}
+		var err error
+		if storage, err = ns.Storage(ctx); err != nil {
+			return err
+		}
 		var why error
 		commit, status, why = resolveRef(ctx, ns, over.Workflow, ref)
 		if why != nil {
 			return why
 		}
-		var err error
 		files, err = ns.Tree(ctx, over.Workflow, commit)
 		if errors.Is(err, db.ErrNoVersion) || errors.Is(err, db.ErrNoTree) {
 			status = http.StatusNotFound
@@ -868,7 +871,7 @@ func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, o
 			fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and a file of a tree is read from it")
 			return
 		}
-		body, err := s.objects.Open(r.Context(), artifact.Key(over.Namespace, f.SHA256))
+		body, err := s.objects.Open(r.Context(), artifact.Key(storage, f.SHA256))
 		if err != nil {
 			s.report(fmt.Errorf("api: %s of %s/%s@%s: %w", name, over.Namespace, over.Workflow, commit, err))
 			fail(w, http.StatusInternalServerError, "the file could not be read")

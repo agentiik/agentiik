@@ -43,7 +43,7 @@ func aNamespaceInstallation(t *testing.T) namespaceInstallation {
 	}
 	var in namespaceInstallation
 	err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		for _, u := range []db.User{{Login: "carol", DisplayName: "Carol", Admin: true}, {Login: "alice", DisplayName: "Alice"}} {
+		for _, u := range []db.User{{Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true}, {Login: "alice", Profile: db.Profile{GivenName: "Alice"}}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}
@@ -164,16 +164,19 @@ func TestAgkAdministersANamespace(t *testing.T) {
 	}
 }
 
-// The command line is refused before anything is sent where it is wrong: no namespace, no owner, a
-// quota written as zero, which the wire refuses and which would otherwise be dropped as a flag
-// nobody passed, and an output format there is not.
+// The command line is refused before anything is sent where it is wrong: no namespace, a rename
+// naming no new name, a quota written as zero, which the wire refuses and which would otherwise be
+// dropped as a flag nobody passed, and an output format there is not. A creation naming no owner is
+// sent, since its caller then owns it.
 func TestAgkNamespaceRefusesACommandLineThatIsWrong(t *testing.T) {
 	var asked atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { asked.Store(true) }))
 	t.Cleanup(srv.Close)
 	for _, args := range [][]string{
-		{"namespace", "create", "team-ops"},
 		{"namespace", "create", "--owner", "alice"},
+		{"namespace", "rename", "finance"},
+		{"namespace", "rename", "finance", "accounting", "ledger"},
+		{"namespace", "rename", "finance", "accounting", "-o", "yaml"},
 		{"namespace", "create", "team-ops", "--owner", "alice", "--max-runs-per-hour", "0"},
 		{"namespace", "quotas", "team-ops", "--allowed-runner-pools", ","},
 		{"namespace", "quotas", "team-ops", "--max-run-duration", ""},
@@ -195,7 +198,7 @@ func TestAgkNamespaceRefusesACommandLineThatIsWrong(t *testing.T) {
 	}
 
 	// A verb of the family nobody knows is named as typed.
-	if code, _, errs := against(t.Context(), t.TempDir(), srv.URL, "namespace", "rename", "finance"); code != exitUsage || !strings.Contains(errs, "namespace rename: there is no such command") {
+	if code, _, errs := against(t.Context(), t.TempDir(), srv.URL, "namespace", "move", "finance"); code != exitUsage || !strings.Contains(errs, "namespace move: there is no such command") {
 		t.Errorf("an unknown namespace verb answered %d: %s", code, errs)
 	}
 }
@@ -229,6 +232,7 @@ func TestAgkNamespaceTellsNoOutcomeFromARefusal(t *testing.T) {
 	t.Cleanup(srv.Close)
 	for _, args := range [][]string{
 		{"namespace", "create", "team-ops", "--owner", "alice"},
+		{"namespace", "rename", "team-ops", "operations"},
 		{"namespace", "delete", "team-ops"},
 		{"namespace", "quotas", "team-ops", "--max-runs-per-hour", "5"},
 	} {

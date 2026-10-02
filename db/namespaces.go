@@ -59,8 +59,9 @@ func (h *NamespaceHolds) Held() string {
 
 // CreateNamespace creates a namespace with its built-in identity, NS/agentiik, and answers whether
 // it did: false is one that already existed, which is left as it was, so that an installation
-// script run twice creates it once. A name that is a user's login is ErrNameTaken, and an owner
-// nobody created ErrNoPrincipal.
+// script run twice creates it once. A name that is a user's login is ErrNameTaken, one another
+// namespace held before it was renamed a *NameHeld naming it, which is ErrNameTaken as well, and an
+// owner nobody created ErrNoPrincipal. Its storage name is the name it is created with.
 //
 // n.Kind is shared where it is empty, and n.Owner is written on the row alone: the grant that lets
 // an owner act on the namespace is its creator's to write, beside this, with GrantAccess. The
@@ -74,6 +75,13 @@ func (w *Wide) CreateNamespace(ctx context.Context, n Namespace) (bool, error) {
 	if n.Kind == "" {
 		n.Kind = NamespaceShared
 	}
+	// Asked first, since a refusal in the statement below ends the transaction it would be asked
+	// in; the trigger that refuses it all the same is what holds when two creations race.
+	if held, err := heldBy(ctx, w.tx, n.Name, ""); err != nil {
+		return false, err
+	} else if held != nil && held.Former {
+		return false, held
+	}
 	tag, err := w.tx.Exec(ctx,
 		`insert into namespaces (name, kind, owner) values ($1, $2, $3) on conflict (name) do nothing`,
 		n.Name, n.Kind, nilIfEmpty(n.Owner))
@@ -81,6 +89,8 @@ func (w *Wide) CreateNamespace(ctx context.Context, n Namespace) (bool, error) {
 	switch {
 	case errors.As(err, &pg) && pg.ConstraintName == namesShared:
 		return false, fmt.Errorf("%w: %s", ErrNameTaken, n.Name)
+	case errors.As(err, &pg) && pg.ConstraintName == formerNamesHeld:
+		return false, &NameHeld{Name: n.Name, Former: true}
 	case errors.As(err, &pg) && pg.Code == foreignKeyViolation:
 		return false, fmt.Errorf("%w: %s", ErrNoPrincipal, n.Owner)
 	case err != nil:
@@ -107,8 +117,8 @@ func (w *Wide) CreateNamespace(ctx context.Context, n Namespace) (bool, error) {
 //
 // The built-in identity goes first, with the tokens and grants it holds: it is the namespace's own
 // and nobody created it, so it is no reason to keep the namespace, and a service account refers to
-// its namespace, which could not go while it stayed. The namespace's grants and its authentication
-// policy go with the row.
+// its namespace, which could not go while it stayed. The namespace's grants, its authentication
+// policy and its variables go with the row.
 //
 // The row is locked before anything is counted, so that a workflow pushed, a secret written or a
 // service account created while the counts are read waits for this transaction and then finds the
@@ -154,6 +164,9 @@ func (w *Wide) RemoveNamespace(ctx context.Context, name string) error {
 	return nil
 }
 
+// formerNamesHeld is what refuses a namespace a name another namespace held before it was renamed.
+const formerNamesHeld = "namespace_former_names"
+
 // The kinds of namespace, as namespaces.kind writes them.
 const (
 	// NamespacePersonal is the namespace a user is given, named after their login and owned by
@@ -174,6 +187,14 @@ type Namespace struct {
 
 	Quotas    Quotas
 	CreatedAt time.Time
+
+	// Storage is the name it was created with, which its objects and sealed values are kept
+	// under, and FormerNames the names it held before a rename, in the order it left them.
+	Storage     string
+	FormerNames []string
+
+	// AvatarUpdatedAt is when its picture was set, and zero where it has none.
+	AvatarUpdatedAt time.Time
 }
 
 // Quotas are what one namespace may consume.
@@ -194,13 +215,18 @@ type Quotas struct {
 
 const namespaceColumns = `name, kind, coalesce(owner, ''), max_concurrent_tasks, max_retention_days,
 	coalesce(max_runs_per_hour, 0), coalesce(max_artifact_bytes, 0), coalesce(max_run_duration, ''),
-	allowed_runner_pools, created_at`
+	allowed_runner_pools, created_at, storage, former_names, avatar_updated_at`
 
 func scanNamespace(row pgx.Row) (Namespace, error) {
 	var n Namespace
+	var avatarAt *time.Time
 	q := &n.Quotas
 	err := row.Scan(&n.Name, &n.Kind, &n.Owner, &q.MaxConcurrentTasks, &q.MaxRetentionDays,
-		&q.MaxRunsPerHour, &q.MaxArtifactBytes, &q.MaxRunDuration, &q.AllowedRunnerPools, &n.CreatedAt)
+		&q.MaxRunsPerHour, &q.MaxArtifactBytes, &q.MaxRunDuration, &q.AllowedRunnerPools, &n.CreatedAt,
+		&n.Storage, &n.FormerNames, &avatarAt)
+	if avatarAt != nil {
+		n.AvatarUpdatedAt = *avatarAt
+	}
 	return n, err
 }
 

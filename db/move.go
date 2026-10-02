@@ -323,6 +323,11 @@ type Move struct {
 
 	// Repository is the key its packs are kept under, which the move keeps.
 	Repository string
+
+	// Storage and TargetStorage are the storage names of the namespace it leaves and of the one it
+	// goes to, which their objects are kept under (NS.Storage): the move copies from the one to the
+	// other.
+	Storage, TargetStorage string
 }
 
 // Moves reads the moves asked and not yet carried out, the oldest first, at most batch of them.
@@ -330,9 +335,11 @@ func (p *Pool) Moves(ctx context.Context, batch int) ([]Move, error) {
 	var out []Move
 	err := p.Installation(ctx, WorkflowMove, func(ctx context.Context, w *Wide) error {
 		rows, err := w.tx.Query(ctx, `
-			select m.namespace, m.workflow, m.target, m.asked_by, m.asked_at, w.repository
+			select m.namespace, m.workflow, m.target, m.asked_by, m.asked_at, w.repository, s.storage, t.storage
 			from workflow_moves m
 			join workflows w on w.namespace = m.namespace and w.name = m.workflow
+			join namespaces s on s.name = m.namespace
+			join namespaces t on t.name = m.target
 			order by m.asked_at, m.namespace, m.workflow
 			limit $1`, batch)
 		if err != nil {
@@ -340,7 +347,7 @@ func (p *Pool) Moves(ctx context.Context, batch int) ([]Move, error) {
 		}
 		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Move, error) {
 			var m Move
-			err := row.Scan(&m.Namespace, &m.Workflow, &m.Target, &m.AskedBy, &m.AskedAt, &m.Repository)
+			err := row.Scan(&m.Namespace, &m.Workflow, &m.Target, &m.AskedBy, &m.AskedAt, &m.Repository, &m.Storage, &m.TargetStorage)
 			return m, err
 		})
 		return err
@@ -752,7 +759,7 @@ func (p *Pool) CompleteMove(ctx context.Context, m Move, copied MoveObjects, gra
 		}
 		left := slices.Clone(logs)
 		for _, name := range names {
-			prefix := m.Namespace + "/git/" + m.Repository + "/pack-" + name
+			prefix := m.Storage + "/git/" + m.Repository + "/pack-" + name
 			left = append(left, prefix+".pack", prefix+".idx")
 		}
 		if len(left) > 0 {
@@ -798,15 +805,16 @@ func (p *Pool) CompleteMove(ctx context.Context, m Move, copied MoveObjects, gra
 			}
 		}
 
-		// The logs under the target's keys, which the copy wrote.
+		// The logs under the target's keys, which the copy wrote: its storage name's, as every key
+		// of a namespace is.
 		for _, table := range []string{"task_log_chunks", "task_log_objects"} {
 			if _, err := tx.Exec(ctx, `
-				update `+table+` l set object_key = $2 || substr(l.object_key, length($1) + 1)
+				update `+table+` l set object_key = $4 || substr(l.object_key, length($1) + 1)
 				from tasks t, runs r
 				where t.namespace = l.namespace and t.id = l.task_id
 				  and r.namespace = t.namespace and r.id = t.run_id
 				  and r.namespace = $2 and r.workflow = $3 and starts_with(l.object_key, $1 || '/')`,
-				m.Namespace, m.Target, m.Workflow); err != nil {
+				m.Storage, m.Target, m.Workflow, m.TargetStorage); err != nil {
 				return fmt.Errorf("db: the logs of %s could not be moved: %w", m.Workflow, err)
 			}
 		}

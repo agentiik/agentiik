@@ -117,6 +117,9 @@ func (p *Pool) Close() { p.pool.Close() }
 type NS struct {
 	tx        pgx.Tx
 	namespace string
+
+	// storage is the namespace's storage name once Storage has read it, and empty before.
+	storage string
 }
 
 // Namespace is the namespace this handle is bound to.
@@ -223,11 +226,12 @@ const (
 	// installation itself, which no namespace's handle could read whole.
 	AuditLog Reason = "the audit log, one chain across the installation"
 
-	// NamespaceAdministration is a namespace created, removed or given its quotas by an
-	// administrator through the API, or by agentiik-api namespace on the server. A namespace is the
-	// scope every other handle is opened in, so creating one is not something a handle on one can
-	// do, removing one reads whether any of its rows remain, and a listing of them spans the
-	// installation.
+	// NamespaceAdministration is a namespace created, removed, renamed, given a picture or given
+	// its quotas through the API, or created or removed by agentiik-api namespace on the server. A
+	// namespace is the scope every other handle is opened in, so creating one is not something a
+	// handle on one can do, removing one reads whether any of its rows remain, renaming one writes
+	// every row naming it and those of other namespaces naming it or its service accounts, and a
+	// listing of them spans the installation.
 	NamespaceAdministration Reason = "a namespace created, removed or given its quotas"
 
 	// Identity is who a request is from, and the records that say so: the principals, their

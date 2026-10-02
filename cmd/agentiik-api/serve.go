@@ -267,12 +267,12 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 }
 
 // routes builds every route built so far on one router: runs and versions, the step log streams,
-// the secret declarations, the runners and their pools, the bus credential, the users and groups,
-// the namespaces, the API tokens, the grants, the caller's own record, the built-in object store,
-// the service accounts, the passkey ceremonies, the passwords, agk login's exchange, the
-// authentication policy, the caller's credentials, and the sign-in page with its sign-out. Each
-// request is identified and authorised by api.Principals, from the tokens, the grants and the
-// bootstrap state the database holds. The log streams end when stopping closes. Every route is
+// the secret declarations, the namespace's variables, the runners and their pools, the bus
+// credential, the users and groups, the namespaces, the API tokens, the grants, the caller's own
+// record, the built-in object store, the service accounts, the passkey ceremonies, the passwords,
+// agk login's exchange, the authentication policy, the caller's credentials, and the sign-in page
+// with its sign-out. Each request is identified and authorised by api.Principals, from the tokens,
+// the grants and the bootstrap state the database holds. The log streams end when stopping closes. Every route is
 // handed the settings' one clock, so that a grant lapses at the same instant for the authorizer,
 // the routes that list grants and GET /api/v1/me.
 func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
@@ -338,6 +338,10 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 	if _, err := api.NewDeclarations(rt, declarations); err != nil {
+		return nil, err
+	}
+	// The namespace's variables, which every run reads those of when it is created.
+	if _, err := api.NewVariables(rt, api.VariableOptions{Pool: pool, Now: s.now}); err != nil {
 		return nil, err
 	}
 	if _, err := api.NewRunners(rt, runners); err != nil {

@@ -176,7 +176,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -461,7 +461,7 @@ export interface paths {
         head?: never;
         /**
          * Change what the caller says of themself
-         * @description Changes the caller's display name and profile as the body names them: given_name, family_name, title, location, timezone and bio, each set to what the body holds, the empty string clearing it, and each the body leaves out kept. The display name is never cleared, since a user always has one. Set by the user alone, and by no administrator: a profile is what a person tells the people they work with about themself, and one somebody else could rewrite would put words in their mouth. The bootstrap token and a service account have no profile, and are refused saying so; a token narrowed by a scope keeps only the permissions it names, and saying who its holder is to everybody who reads their name is none of them. Each field is one line holding no control character, since it is shown in a console and printed at a terminal: at most 128 characters, the display name 256 and the bio 280. timezone is a name of the IANA database, which a client turns an instant into the user's own hours with; Local, the server's own zone, names no place and is refused. The user's row is held while the change is merged into it, so that two changes at once each keep what the other wrote. Answers who the caller is, as GET /api/v1/me does. Audited as user.profile with the names of the fields that changed and never what they hold, since the log is kept for good and what a person wrote about themself is theirs to take back; unchanged where none did.
+         * @description Changes the caller's profile as the body names it: given_name, family_name, title, location, timezone and bio, each set to what the body holds, the empty string clearing it, and each the body leaves out kept. The display name is made of the given and family names, the login where neither is said, and written by nobody, so display_name is refused; so is email, which an administrator gives at PATCH /api/v1/users/{login} and the user does not change. Set by the user alone, and by no administrator: a profile is what a person tells the people they work with about themself, and one somebody else could rewrite would put words in their mouth. The bootstrap token and a service account have no profile, and are refused saying so; a token narrowed by a scope keeps only the permissions it names, and saying who its holder is to everybody who reads their name is none of them. Each field is one line holding no control character, since it is shown in a console and printed at a terminal: at most 128 characters, and the bio 280. timezone is a name of the IANA database, which a client turns an instant into the user's own hours with; Local, the server's own zone, names no place and is refused. The user's row is held while the change is merged into it, so that two changes at once each keep what the other wrote. Answers who the caller is, as GET /api/v1/me does. Audited as user.profile with the names of the fields that changed and never what they hold, since the log is kept for good and what a person wrote about themself is theirs to take back; unchanged where none did.
          */
         patch: operations["updateMe"];
         trace?: never;
@@ -552,7 +552,7 @@ export interface paths {
         put?: never;
         /**
          * Create a namespace
-         * @description Creates a shared namespace with an owner and, optionally, quotas. The owner, a user or group:NAME, is required, and is given the owner role on the namespace in the same transaction, granted by the administrator, so that it can share the namespace and act in it from the start: an owner in the record alone would be refused everything in it. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Administrator only, audited as namespace.create, and the owner's grant as grant.create in the namespace.
+         * @description Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20, max_retention_days 90 and the other four unset. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.
          */
         post: operations["createNamespace"];
         delete?: never;
@@ -566,23 +566,58 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
         };
         /**
          * Read a namespace
-         * @description One namespace as GET /api/v1/namespaces lists it: its kind, its owner where it has one, and its quotas. A namespace from before v0.3.0 names no owner, since v0.2 had nobody to name. Readable by an administrator and by every principal holding a grant carrying a role in it, directly or through a group; anyone else is answered the 404 of a namespace that does not exist, so that no name can be learnt by asking. What the Terraform provider refreshes and imports a namespace with.
+         * @description One namespace as GET /api/v1/namespaces lists it: its kind, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. A namespace from before v0.3.0 names no owner, since v0.2 had nobody to name. A former name in the path reaches the namespace as its name does, and the record answered names it as it now stands. Readable by an administrator and by every principal holding a grant carrying a role in it, directly or through a group; anyone else is answered the 404 of a namespace that does not exist, so that no name can be learnt by asking. What the Terraform provider refreshes and imports a namespace with.
          */
         get: operations["getNamespace"];
         put?: never;
         post?: never;
         /**
          * Remove a namespace
-         * @description Removes a namespace that holds no workflow, run, secret, stored object or service account but its built-in NS/agentiik, which goes first; one that holds any is refused, saying what it holds, since what a namespace holds is somebody's work. Its grants go with it, so that a namespace created again under the same name starts with none of the old one's, and so does its authentication policy; who granted what, and when, stays in the audit log. A user's personal namespace is refused, since it is removed with its user. Administrator only, and audited as namespace.delete.
+         * @description Removes a namespace that holds no workflow, run, secret, stored object or service account but its built-in NS/agentiik, which goes first; one that holds any is refused, saying what it holds, since what a namespace holds is somebody's work. Its grants go with it, so that a namespace created again under the same name starts with none of the old one's, and so do its authentication policy and its picture; who granted what, and when, stays in the audit log. Every name it held, its own and its former ones, is free once it is gone. A user's personal namespace is refused, since it is removed with its user. By its owner, whoever holds grant:manage at its scope, or an administrator, and audited as namespace.delete.
          */
         delete: operations["deleteNamespace"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a namespace's settings
+         * @description The namespace's settings, as a partial object: each field the body names is set and each it leaves out is kept, so that the route takes more fields as a namespace's settings grow and a client sends only what it changes. Today it takes name, which renames a shared namespace in one transaction carrying every row that names it: its workflows with their versions, refs and runs, its grants and denies, its secrets and their values, its triggers and webhooks, its quotas, its authentication policy and its picture, and its service accounts, which become NEW/NAME, the built-in one among them, keeping their tokens and their grants in every namespace; a token narrowed to it, a pool accepting it by name, an event trigger of another namespace hearing it, and who did what wherever one of its service accounts acted, follow it. Its objects and sealed values stay under the name it was created with, so nothing is copied. The name it leaves stays its own, listed in former_names: every address naming it, this route's among them, reaches the namespace, and no other namespace or login takes it until the namespace is removed. Renaming it to one of its former names takes that name back; renaming it to its own name changes nothing and is recorded as unchanged. A user's personal namespace is never renamed, since it is named after a login and a login never changes. Refused while a run of it is queued, running or waiting, since its tasks carry its name to their runners; while a move of one of its workflows to or from it waits to be carried out; and while a runner not revoked narrows itself to it by name on its host, which no rename reaches. By its owner, whoever holds grant:manage at its scope, or an administrator. Audited as namespace.rename on the installation, with from and to, the new name as its target.
+         */
+        patch: operations["updateNamespace"];
+        trace?: never;
+    };
+    "/api/v1/namespaces/{ns}/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read a namespace's picture
+         * @description The namespace's picture, the PNG PUT /api/v1/namespaces/{ns}/avatar stored, at most 512 by 512 pixels, read by whoever reads the namespace's record: an administrator, and every principal holding a grant carrying a role in it. Kept a day by the browser that asked and by no shared cache, since a namespace is shown to those it is shared with alone; a client asks for it with v, the record's avatar_updated_at, so that a picture set again is asked for at another address, and revalidates past the day by its tag. nosniff, so that a browser shows it as the PNG it is declared as.
+         */
+        get: operations["getNamespaceAvatar"];
+        /**
+         * Set a namespace's picture
+         * @description Sets the namespace's picture in place of any before it, held to the rules of a user's photo: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it. Set by its owner, whoever holds grant:manage at its scope, a personal namespace's user among them, or an administrator. The record's avatar_updated_at says when it was set, which a client adds to the picture's address. Audited as namespace.avatar with the size it was stored at, and never the picture.
+         */
+        put: operations["setNamespaceAvatar"];
+        post?: never;
+        /**
+         * Remove a namespace's picture
+         * @description Removes the namespace's picture, which a client draws as the namespace's initial from then on, avatar_updated_at null. Removing none is the same answer, so that a client that lost the first answer asks again with nothing to sort out. By its owner, whoever holds grant:manage at its scope, or an administrator, removing one that should not be shown. Audited as namespace.avatar with removed, and as unchanged where there was none. No body is read, and one sent is refused.
+         */
+        delete: operations["removeNamespaceAvatar"];
         options?: never;
         head?: never;
         patch?: never;
@@ -593,7 +628,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -624,13 +659,13 @@ export interface paths {
         };
         /**
          * List users
-         * @description Every user of the installation, by login, with whether each is an administrator, whether it is suspended and, where the policy suspended it, why, when each was created and last signed in, and what each says of themself and when their photo was last set; never a credential, and never a photo. Administrator only.
+         * @description Every user of the installation, by login, with their display name and the email address an administrator gave them, whether each is an administrator, whether it is suspended and, where the policy suspended it, why, when each was created and last signed in, and what each says of themself and when their photo was last set; never a credential, and never a photo. Administrator only.
          */
         get: operations["listUsers"];
         put?: never;
         /**
          * Create a user
-         * @description Creates a user from a login, a display name, the login where none is given, and admin where it is an administrator, holding no credential, answered 201 with an enrolment link shown once, single use and good for an hour. Asked again for a user who has not enrolled, with nothing said otherwise than was recorded, it answers 200 with a fresh link and revokes the one before, a field left out keeping what is recorded, so that a link that lapsed unused locks nobody out: agk user create LOGIN, run again with nothing more, answers the fresh link it is run again for. Administrator only, and the bootstrap token's until the first administrator has signed in: an administrator it creates gets a first administrator's link, which revokes every first administrator's link still open, and anybody else a new user's. An administrator the bootstrap token creates is also given, in the same act, the owner role on every namespace whose record names no owner, which the token owned in effect, each audited as grant.create by operator in its namespace, so that the first administrator owns the installation's namespaces with nothing shared by hand; a repeat gives nothing twice. The login is refused where a namespace holds it, and operator, installation and the reserved words by its grammar. Audited as user.create, recorded unchanged for a repeat, and the link as enrolment.issue.
+         * @description Creates a user from a login, the given and family names their display name is made of, the login standing for both where neither is given, an email address for the people they work with to reach them at, which nothing sends anything to, and admin where it is an administrator, holding no credential, answered 201 with an enrolment link shown once, single use and good for an hour. Asked again for a user who has not enrolled, with nothing said otherwise than was recorded, it answers 200 with a fresh link and revokes the one before, a field left out keeping what is recorded, so that a link that lapsed unused locks nobody out: agk user create LOGIN, run again with nothing more, answers the fresh link it is run again for. Administrator only, and the bootstrap token's until the first administrator has signed in: an administrator it creates gets a first administrator's link, which revokes every first administrator's link still open, and anybody else a new user's. An administrator the bootstrap token creates is also given, in the same act, the owner role on every namespace whose record names no owner, which the token owned in effect, each audited as grant.create by operator in its namespace, so that the first administrator owns the installation's namespaces with nothing shared by hand; a repeat gives nothing twice. The login is refused where a namespace holds it, and operator, installation and the reserved words by its grammar; display_name is refused, since nobody writes it. Audited as user.create, recorded unchanged for a repeat, and the link as enrolment.issue.
          */
         post: operations["createUser"];
         delete?: never;
@@ -651,7 +686,7 @@ export interface paths {
         };
         /**
          * Read a user
-         * @description One user: login, display name, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.
+         * @description One user: login, display name, the email address an administrator gave them, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.
          */
         get: operations["getUser"];
         put?: never;
@@ -663,7 +698,11 @@ export interface paths {
         delete: operations["deleteUser"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change what an administrator gives a user
+         * @description Changes what an administrator gives a user after creating them, as the body names it: email, set to what the body holds, the empty string removing it, and kept where the body leaves it out. The address is for the people the user works with to reach them at, read wherever the user is answered, and nothing sends anything to it: the product signs nobody in, enrols nobody and recovers no account by mail. It is held as at the creation: one @ with something on each side, no space or control character, and at most 254 characters. Nothing else of a user is the administrator's to change here: the given and family names and the rest of the profile are the user's own, written at PATCH /api/v1/me, and display_name is made of the names and written by nobody, each refused saying so. The user's row is held while the change is merged into it, and the answer is the user as GET /api/v1/users/{login} answers them. Administrator only, and the bootstrap token's until the first administrator has signed in. Audited as user.update with the names of the fields that changed and never what they hold, since the log is kept for good and an address is somebody's to have removed; unchanged where none did.
+         */
+        patch: operations["updateUser"];
         trace?: never;
     };
     "/api/v1/users/{login}/avatar": {
@@ -827,7 +866,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -854,7 +893,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The grant's identifier, as the list gives it and as Terraform imports it. */
                 id: components["parameters"]["grant"];
@@ -879,7 +918,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -908,7 +947,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -935,7 +974,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -958,7 +997,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -991,7 +1030,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -1016,7 +1055,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -1041,7 +1080,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -1068,7 +1107,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -1172,7 +1211,7 @@ export interface paths {
         put?: never;
         /**
          * Replay a run
-         * @description Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.
+         * @description Starts a new run of the commit the run pinned, over the inputs it was started with as they were bound and with what fired it as it was frozen, and with the namespace variables it read, however they changed since, attributed to the caller as a manual run. From a step, the steps above it are reused and every other step runs; from the start, nothing is reused. Requires workflow:run on the run's workflow. Refused while the run is not over, and from a step where the run is replayable from the start only, or a step above never ended or was cancelled with its run.
          */
         post: operations["replayRun"];
         delete?: never;
@@ -1265,7 +1304,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -1288,7 +1327,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -1311,7 +1350,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -1334,7 +1373,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -1445,7 +1484,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -1468,7 +1507,7 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
                 name: components["parameters"]["secret"];
@@ -1491,6 +1530,62 @@ export interface paths {
          * @description Removes the declaration and, where the built-in store keeps one, its value, so that declaring the name again later does not bring back a credential somebody meant to be gone. Requires secret:write at namespace scope, and is audited as secret.delete.
          */
         delete: operations["removeSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a namespace's variables
+         * @description Every variable of the namespace, sorted by name, whole and not paged, each with its value, its visibility and, where it is selected, the workflows that read it, and who wrote it last and when. Requires workflow:read at namespace scope, which reading the workflows these variables are shown to takes; a grant on one workflow reads none, since a variable serves every workflow it is shown to.
+         */
+        get: operations["listVariables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/variables/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+                name: components["parameters"]["variable"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read one variable
+         * @description One variable, as the list gives it. Requires workflow:read at namespace scope.
+         */
+        get: operations["readVariable"];
+        /**
+         * Create or replace one variable
+         * @description Writes the variable whole, its value, its visibility and for selected the workflows that read it, creating it or replacing what it held. One variable per request, so that two Terraform applies each setting their own never drop each other's change. A run created afterwards reads it; a run created before reads what it read when it was created, and so does its replay. A name its workflow's file writes in vars takes the file's value. Requires workflow:write at namespace scope, since a variable changes what the workflows reading it do, as pushing a version does, and is audited as variable.write with the visibility, the workflows, whether it was created and the SHA-256 of the value, never the value itself, which every run that read it keeps.
+         */
+        put: operations["writeVariable"];
+        post?: never;
+        /**
+         * Remove one variable
+         * @description Removes the variable. A run created afterwards no longer reads it; one created before, and its replay, read what it read. Requires workflow:write at namespace scope, and is audited as variable.delete.
+         */
+        delete: operations["removeVariable"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2652,6 +2747,7 @@ export interface components {
          *         "kind": "user",
          *         "login": "alice",
          *         "display_name": "Alice Martin",
+         *         "email": "alice.martin@example.com",
          *         "admin": true,
          *         "suspended": false,
          *         "given_name": "Alice",
@@ -2756,6 +2852,7 @@ export interface components {
              *       "kind": "user",
              *       "login": "alice",
              *       "display_name": "Alice Martin",
+             *       "email": "alice.martin@example.com",
              *       "admin": true,
              *       "suspended": false,
              *       "given_name": "Alice",
@@ -3067,7 +3164,7 @@ export interface components {
         };
         /**
          * Namespace creation
-         * @description A shared namespace to create: its name, its owner and its quotas. The record answered is the one GET /api/v1/namespaces lists.
+         * @description A shared namespace to create: its name and, where an administrator creates it, its owner and its quotas. The record answered is the one GET /api/v1/namespaces lists.
          * @example {
          *       "name": "finance",
          *       "kind": "shared",
@@ -3088,10 +3185,13 @@ export interface components {
          *       "name": "team-ops",
          *       "owner": "bob-martin"
          *     }
+         * @example {
+         *       "name": "research"
+         *     }
          */
         namespaceCreate: {
             /**
-             * @description The namespace's name, the first path segment of its routes. Refused where a namespace or a login already holds it.
+             * @description The namespace's name, the first path segment of its routes. Refused where a namespace holds it, as its name or a former one, or a login does.
              * @example finance
              */
             name: components["schemas"]["namespace"];
@@ -3102,12 +3202,12 @@ export interface components {
              */
             kind?: "shared";
             /**
-             * @description Who owns it: a user or group:NAME, given the owner role on the namespace in the same transaction, so that it can share the namespace and act in it from the start. The owner is who is told when an administrator writes a grant there by the installation's power or widens their own access in it.
+             * @description Who owns it: a user or group:NAME, given the owner role on the namespace in the same transaction, so that it can share the namespace and act in it from the start. Left out, the caller owns it, which the bootstrap token, being nobody, cannot. Naming another owner than the caller is an administrator's. The owner is who is told when an administrator writes a grant there by the installation's power or widens their own access in it.
              * @example group:finance-leads
              */
-            owner: components["schemas"]["principalRef"];
+            owner?: components["schemas"]["principalRef"];
             /**
-             * @description What it may consume. max_concurrent_tasks and max_retention_days start at 20 and 90 where left out, and the other four bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later.
+             * @description What it may consume, an administrator's to write. max_concurrent_tasks and max_retention_days start at 20 and 90 where left out, and the other four bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later, an administrator's as well.
              * @example {
              *       "max_concurrent_tasks": 20,
              *       "max_runs_per_hour": 500,
@@ -3121,6 +3221,20 @@ export interface components {
              *     }
              */
             quotas?: components["schemas"]["quotas"];
+        };
+        /**
+         * Namespace settings
+         * @description What PATCH /api/v1/namespaces/{ns} changes, as a partial object: each field named is set and each left out kept, null refused rather than read as either. It is the namespace's settings and takes more fields as they grow, each written by whoever holds grant:manage at the namespace's scope or administers the installation. The quotas are not among them: they are an administrator's alone, at PUT /api/v1/namespaces/{ns}/quotas.
+         * @example {
+         *       "name": "accounting"
+         *     }
+         */
+        namespaceUpdate: {
+            /**
+             * @description The namespace's new name, on the grammar every namespace's name is written on. The name it leaves becomes a former name, still the namespace's; a name a namespace, a login or a reserved word holds, or a former name of another namespace, is refused.
+             * @example accounting
+             */
+            name?: components["schemas"]["namespace"];
         };
         /**
          * Namespace list
@@ -3190,15 +3304,18 @@ export interface components {
         };
         /**
          * User creation
-         * @description A user to create, as agk user create sends it: what it was given and nothing more, so that the same command run again asks for the same user.
+         * @description A user to create, as agk user create sends it: what it was given and nothing more, so that the same command run again asks for the same user. The display name is not among it: it is made of the given and family names.
          * @example {
          *       "login": "alice",
-         *       "display_name": "Alice Martin",
+         *       "given_name": "Alice",
+         *       "family_name": "Martin",
+         *       "email": "alice.martin@example.com",
          *       "admin": true
          *     }
          * @example {
          *       "login": "bob-martin",
-         *       "display_name": "Bob Martin"
+         *       "given_name": "Bob",
+         *       "family_name": "Martin"
          *     }
          * @example {
          *       "login": "carol"
@@ -3211,15 +3328,43 @@ export interface components {
              */
             login: components["schemas"]["namespace"];
             /**
-             * @description The name people read in the console and in the sharing panel: one line of at most 256 characters, holding no control character, since it is shown in a console and printed at a terminal. Left out, a user created is given their login, and a user asked for again keeps what is recorded.
-             * @example Alice Martin
+             * @description The name the user is called by, which with the family name makes the name people read. Left out, a user created has none, and is shown by their login while they say neither name, and a user asked for again keeps what is recorded. The user writes it once signed in.
+             * @example Alice
              */
-            display_name?: components["schemas"]["display_name"];
+            given_name?: components["schemas"]["given_name"];
+            /**
+             * @description The user's family name, the second half of the name people read. Left out, a user created has none, and a user asked for again keeps what is recorded. The user writes it once signed in.
+             * @example Martin
+             */
+            family_name?: components["schemas"]["family_name"];
+            /**
+             * @description An address for the people the user works with to reach them at, which nothing sends anything to. Left out, a user created has none, and a user asked for again keeps what is recorded. An administrator changes it later at PATCH /api/v1/users/{login}.
+             * @example alice.martin@example.com
+             */
+            email?: components["schemas"]["email"];
             /**
              * @description true for a platform administrator, as agk user create --admin asks. Left out, a user created is not one, and a user asked for again keeps what is recorded.
              * @example true
              */
             admin?: components["schemas"]["admin"];
+        };
+        /**
+         * User change
+         * @description What an administrator changes of a user after creating them, and nothing else: the email address, set to what the field holds, the empty string removing it, and kept where it is left out. Null is refused rather than read as either. The names and the rest of the profile are the user's, and the display name nobody's.
+         * @example {
+         *       "email": "bob.martin@example.com"
+         *     }
+         * @example {
+         *       "email": ""
+         *     }
+         */
+        userUpdate: {
+            /**
+             * @description The address the people the user works with reach them at, which nothing sends anything to; the empty string removes it.
+             * @example bob.martin@example.com
+             * @example
+             */
+            email?: components["schemas"]["email"];
         };
         /**
          * Enrolment link
@@ -3249,10 +3394,11 @@ export interface components {
          *         "kind": "user",
          *         "login": "alice",
          *         "display_name": "Alice Martin",
+         *         "email": "alice.martin@example.com",
          *         "admin": true,
          *         "suspended": false,
-         *         "given_name": "",
-         *         "family_name": "",
+         *         "given_name": "Alice",
+         *         "family_name": "Martin",
          *         "title": "",
          *         "location": "",
          *         "timezone": "",
@@ -3273,10 +3419,11 @@ export interface components {
              *       "kind": "user",
              *       "login": "alice",
              *       "display_name": "Alice Martin",
+             *       "email": "alice.martin@example.com",
              *       "admin": true,
              *       "suspended": false,
-             *       "given_name": "",
-             *       "family_name": "",
+             *       "given_name": "Alice",
+             *       "family_name": "Martin",
              *       "title": "",
              *       "location": "",
              *       "timezone": "",
@@ -3330,10 +3477,11 @@ export interface components {
          *           "kind": "user",
          *           "login": "alice",
          *           "display_name": "Alice Martin",
+         *           "email": "alice.martin@example.com",
          *           "admin": true,
          *           "suspended": false,
-         *           "given_name": "",
-         *           "family_name": "",
+         *           "given_name": "Alice",
+         *           "family_name": "Martin",
          *           "title": "",
          *           "location": "",
          *           "timezone": "",
@@ -3345,10 +3493,11 @@ export interface components {
          *           "kind": "user",
          *           "login": "bob-martin",
          *           "display_name": "Bob Martin",
+         *           "email": "bob.martin@example.com",
          *           "admin": false,
          *           "suspended": false,
-         *           "given_name": "",
-         *           "family_name": "",
+         *           "given_name": "Bob",
+         *           "family_name": "Martin",
          *           "title": "",
          *           "location": "",
          *           "timezone": "",
@@ -3367,10 +3516,11 @@ export interface components {
              *         "kind": "user",
              *         "login": "alice",
              *         "display_name": "Alice Martin",
+             *         "email": "alice.martin@example.com",
              *         "admin": true,
              *         "suspended": false,
-             *         "given_name": "",
-             *         "family_name": "",
+             *         "given_name": "Alice",
+             *         "family_name": "Martin",
              *         "title": "",
              *         "location": "",
              *         "timezone": "",
@@ -3382,10 +3532,11 @@ export interface components {
              *         "kind": "user",
              *         "login": "bob-martin",
              *         "display_name": "Bob Martin",
+             *         "email": "bob.martin@example.com",
              *         "admin": false,
              *         "suspended": false,
-             *         "given_name": "",
-             *         "family_name": "",
+             *         "given_name": "Bob",
+             *         "family_name": "Martin",
              *         "title": "",
              *         "location": "",
              *         "timezone": "",
@@ -8608,6 +8759,100 @@ export interface components {
             encoding?: "utf-8" | "base64";
         };
         /**
+         * Variable list
+         * @description A namespace's variables, by name, whole and not paged: a namespace holds at most 1,000.
+         * @example {
+         *       "variables": [
+         *         {
+         *           "name": "ledger_url",
+         *           "value": "https://ledger.example.com/api",
+         *           "visibility": "all",
+         *           "updated_by": "alice",
+         *           "updated_at": "2026-10-01T09:10:00Z"
+         *         },
+         *         {
+         *           "name": "reminder_days",
+         *           "value": [
+         *             7,
+         *             14,
+         *             30
+         *           ],
+         *           "visibility": "selected",
+         *           "workflows": [
+         *             "payment-reminders"
+         *           ],
+         *           "updated_by": "alice",
+         *           "updated_at": "2026-10-01T09:12:00Z"
+         *         }
+         *       ]
+         *     }
+         * @example {
+         *       "variables": []
+         *     }
+         */
+        variableList: {
+            /**
+             * @description Every variable of the namespace, sorted by name, each with its value.
+             * @example [
+             *       {
+             *         "name": "ledger_url",
+             *         "value": "https://ledger.example.com/api",
+             *         "visibility": "all",
+             *         "updated_by": "alice",
+             *         "updated_at": "2026-10-01T09:10:00Z"
+             *       }
+             *     ]
+             */
+            variables: components["schemas"]["namespaceVariable"][];
+        };
+        /**
+         * Variable written
+         * @description What a PUT writes: the whole variable, its value, its visibility and for selected its workflows, each written every time, so that a PUT changing only the value never leaves the visibility to a default that could widen a variable selected for one workflow to every workflow of the namespace.
+         * @example {
+         *       "value": "https://ledger.example.com/api",
+         *       "visibility": "all"
+         *     }
+         * @example {
+         *       "value": [
+         *         7,
+         *         14,
+         *         30
+         *       ],
+         *       "visibility": "selected",
+         *       "workflows": [
+         *         "payment-reminders"
+         *       ]
+         *     }
+         */
+        variableWrite: {
+            /**
+             * @description Any JSON value, null among them, at most 64 KiB written as compact JSON. A number is held as a run's inputs are: one no 64-bit float holds, or written past 340 digits from the point, is refused, and one written with an exponent is written out with a point, 1e3 as 1000.0, so that it reads back a double. U+0000 in a string or a name is refused, since PostgreSQL does not keep it in JSON.
+             * @example https://ledger.example.com/api
+             * @example [
+             *       7,
+             *       14,
+             *       30
+             *     ]
+             * @example 45
+             */
+            value: unknown;
+            /**
+             * @description all, read by every workflow of the namespace, or selected, read by those workflows names.
+             * @example all
+             * @example selected
+             * @enum {string}
+             */
+            visibility: "all" | "selected";
+            /**
+             * @description For selected alone, and required with it, the workflows that read it, each once, in any order, kept sorted; [] for none. Required rather than taken as none where left out, so that a PUT forgetting it does not empty the list, and refused beside all.
+             * @example [
+             *       "payment-reminders"
+             *     ]
+             * @example []
+             */
+            workflows?: components["schemas"]["identifier"][];
+        };
+        /**
          * Runner
          * @description One runner as the inventory holds it: its identifier, pool and labels, what the host has, what the installation and the runner each say of its state, and who took it out of service and when. Never the host it runs on, nor the key it joined with, which proves it rather than lists it: a runner is a name, a pool and labels, so that a host can be reimaged or moved while what is written against the fleet stays true.
          * @example {
@@ -9004,7 +9249,7 @@ export interface components {
         };
         /**
          * Profile change
-         * @description What changes of the caller's display name and profile, and nothing else: a field left out keeps what is recorded, and the empty string clears a field, the display name excepted, which a user always has. Null is refused rather than read as either, since a client could have meant both.
+         * @description What changes of the caller's profile, and nothing else: a field left out keeps what is recorded, and the empty string clears a field. Null is refused rather than read as either, since a client could have meant both. The display name is not among it, being made of the given and family names, and neither is the email address, which an administrator gives.
          * @example {
          *       "given_name": "Alice",
          *       "family_name": "Martin",
@@ -9016,23 +9261,19 @@ export interface components {
          *       "location": ""
          *     }
          * @example {
-         *       "display_name": "Alice Martin"
+         *       "given_name": "Alice",
+         *       "family_name": "Martin"
          *     }
          */
         profileUpdate: {
             /**
-             * @description The name people read in the console and in the sharing panel, never cleared.
-             * @example Alice Martin
-             */
-            display_name?: components["schemas"]["display_name"];
-            /**
-             * @description The name the user is called by; the empty string clears it.
+             * @description The name the user is called by, the first half of their display name; the empty string clears it.
              * @example Alice
              * @example
              */
             given_name?: components["schemas"]["given_name"];
             /**
-             * @description The user's family name; the empty string clears it.
+             * @description The user's family name, the second half of their display name; the empty string clears it.
              * @example Martin
              * @example
              */
@@ -9122,7 +9363,7 @@ export interface components {
         label: string;
         /**
          * Namespace
-         * @description The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. Nothing renames a namespace, so one made before v0.3.0 under it keeps its name and the API still serves it, every route of it, with nothing to do; only its creation is refused: a reader validating what such an installation answers meets a refusal the API does not make.
+         * @description The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. A namespace made before v0.3.0 under one keeps its name until its owner renames it, and the API still serves it, every route of it, with nothing to do; only its creation, and a rename to one, are refused: a reader validating what such an installation answers meets a refusal the API does not make. A shared namespace is renamed by its owner or an administrator, every row naming it following in one transaction, and the name it leaves stays its own as a former name, which every address naming it still reaches and no other namespace or login takes while it lives. Its objects and sealed values stay under the name it was created with, its storage name, so that a rename copies nothing; that name is the installation's to keep and no record here carries it.
          * @example finance
          * @example team-ops
          */
@@ -9538,11 +9779,12 @@ export interface components {
         actor: components["schemas"]["principalRef"] | "operator" | "installation";
         /**
          * User
-         * @description A local account: a login, a display name and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, and when their photo was last set, null where they hold none: set by the user alone, and answered wherever a user is, so that every client draws a person the same way.
+         * @description A local account: a login and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, the display name made of their given and family names, the email address an administrator gave them, and when their photo was last set, null where they hold none: answered wherever a user is, so that every client draws a person the same way.
          * @example {
          *       "kind": "user",
          *       "login": "alice",
          *       "display_name": "Alice Martin",
+         *       "email": "alice.martin@example.com",
          *       "admin": false,
          *       "suspended": false,
          *       "given_name": "Alice",
@@ -9558,11 +9800,12 @@ export interface components {
          *       "kind": "user",
          *       "login": "dave",
          *       "display_name": "Dave Moreau",
+         *       "email": "",
          *       "admin": false,
          *       "suspended": true,
          *       "suspended_for": "no_passkey",
-         *       "given_name": "",
-         *       "family_name": "",
+         *       "given_name": "Dave",
+         *       "family_name": "Moreau",
          *       "title": "",
          *       "location": "",
          *       "timezone": "",
@@ -9585,11 +9828,18 @@ export interface components {
              */
             login: components["schemas"]["namespace"];
             /**
-             * @description The name a person reads in the console and in the sharing panel: one line holding no control character, since it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Free text otherwise, because it is shown and never matched against: everything that decides access reads the login.
+             * @description The name a person reads in the console, in the sharing panel and at a terminal, which nobody writes: the user's given name and family name, each trimmed of the spaces at its ends and joined by one space, either alone where only one is said, and the login where neither is. Made as the user is read rather than kept beside the names, so that it never says otherwise than they do; a request writing it is refused. At most 257 characters, two names of 128 and the space between them, and one line holding no control character, since neither name holds one: it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Everything that decides access reads the login.
              * @example Alice Martin
-             * @example Bob
+             * @example Martin
+             * @example carol
              */
             display_name: string;
+            /**
+             * @description The email address an administrator gave the user, at POST /api/v1/users or PATCH /api/v1/users/{login}, and the empty string where none was given: for the people who read the record to reach them by, and for nothing else. The product sends no mail, and never signs anybody in, enrols them or recovers their account by mail, since a link sent to a mailbox would put the account back behind it. It is the administrator's to give and not the user's to change, since nothing proves an address. Held loosely: one @ with something on each side, no space or control character, and at most 254 characters, the longest address a mail path carries once its two angle brackets are counted; whether it reaches anybody is something only sending to it would tell. Read by the user, at GET /api/v1/me, and by administrators.
+             * @example alice.martin@example.com
+             * @example
+             */
+            email?: string;
             /**
              * @description Whether the user is a platform administrator, who manages users, groups, namespaces, quotas, runners and runner policies. It grants no run:read_data anywhere: reading another namespace's payloads still means granting oneself access first, which is audited and told to the namespace's owner.
              * @default false
@@ -9611,13 +9861,13 @@ export interface components {
              */
             suspended_for?: "no_passkey";
             /**
-             * @description The name the user is called by, set by the user at PATCH /api/v1/me, and the empty string where they have not said it. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
+             * @description The name the user is called by, set by the user at PATCH /api/v1/me or by an administrator creating them, and the empty string where neither has said it. The display name is made of it and the family name. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
              * @example Alice
              * @example
              */
             given_name?: string;
             /**
-             * @description The user's family name, set by the user, and the empty string where they have not said it. One line of at most 128 characters holding no control character.
+             * @description The user's family name, set by the user or by an administrator creating them, and the empty string where neither has said it: the second half of the display name. One line of at most 128 characters holding no control character.
              * @example Martin
              * @example
              */
@@ -9908,19 +10158,13 @@ export interface components {
             login?: components["schemas"]["namespace"];
         } & (unknown & unknown & unknown);
         /**
-         * @description The name a person reads in the console and in the sharing panel: one line holding no control character, since it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Free text otherwise, because it is shown and never matched against: everything that decides access reads the login.
-         * @example Alice Martin
-         * @example Bob
-         */
-        display_name: string;
-        /**
-         * @description The name the user is called by, set by the user at PATCH /api/v1/me, and the empty string where they have not said it. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
+         * @description The name the user is called by, set by the user at PATCH /api/v1/me or by an administrator creating them, and the empty string where neither has said it. The display name is made of it and the family name. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
          * @example Alice
          * @example
          */
         given_name: string;
         /**
-         * @description The user's family name, set by the user, and the empty string where they have not said it. One line of at most 128 characters holding no control character.
+         * @description The user's family name, set by the user or by an administrator creating them, and the empty string where neither has said it: the second half of the display name. One line of at most 128 characters holding no control character.
          * @example Martin
          * @example
          */
@@ -10024,7 +10268,7 @@ export interface components {
         };
         /**
          * Namespace record
-         * @description A namespace as an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, and its quotas. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.
+         * @description A namespace as a user or an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.
          * @example {
          *       "name": "finance",
          *       "kind": "shared",
@@ -10038,7 +10282,9 @@ export interface components {
          *           "default",
          *           "dmz"
          *         ]
-         *       }
+         *       },
+         *       "former_names": [],
+         *       "avatar_updated_at": "2026-10-01T09:30:00Z"
          *     }
          * @example {
          *       "name": "alice",
@@ -10057,23 +10303,36 @@ export interface components {
          *         "max_retention_days": 90
          *       }
          *     }
+         * @example {
+         *       "name": "accounting",
+         *       "kind": "shared",
+         *       "owner": "bob-martin",
+         *       "quotas": {
+         *         "max_concurrent_tasks": 20,
+         *         "max_retention_days": 90
+         *       },
+         *       "former_names": [
+         *         "finance"
+         *       ],
+         *       "avatar_updated_at": null
+         *     }
          */
         namespaceRecord: {
             /**
-             * @description The namespace's name, the first path segment of its routes, which is why the reserved words are refused.
+             * @description The namespace's name, the first path segment of its routes, which is why the reserved words are refused. A rename changes it, and the name it leaves is listed in former_names.
              * @example finance
              * @example alice
              */
             name: components["schemas"]["namespace"];
             /**
-             * @description personal for the namespace a user is given on first sign-in, shared for one an administrator creates for a team. The console's namespace switcher shows the personal one first and groups the shared ones after it.
+             * @description personal for the namespace a user is given on first sign-in, shared for one a user or an administrator creates for a team. The console's namespace switcher shows the personal one first and groups the shared ones after it.
              * @example shared
              * @example personal
              * @enum {string}
              */
             kind: "personal" | "shared";
             /**
-             * @description Who owns it: the user, for a personal namespace, and a user or a group for a shared one. The owner is who is told when an administrator widens their own access in it. Absent on a namespace from before v0.3.0, which v0.2 made with nobody to name; every principal holding the owner role on it is told instead. Never absent on a personal namespace, which is its user's.
+             * @description Who owns it: the user, for a personal namespace, and for a shared one the user who created it, or the user or group an administrator named. The owner is who is told when an administrator widens their own access in it. Absent on a namespace from before v0.3.0, which v0.2 made with nobody to name; every principal holding the owner role on it is told instead. Never absent on a personal namespace, which is its user's.
              * @example group:finance-leads
              * @example alice
              */
@@ -10092,6 +10351,24 @@ export interface components {
              */
             quotas?: components["schemas"]["quotas"];
             /**
+             * @description The names the namespace held before it was renamed, oldest first, and empty where it was never renamed. Each is still the namespace's: every address naming it, a route under /api/v1/{ns}/ or /api/v1/namespaces/{ns}, a webhook, an MCP endpoint and a repository's clone and push URL, reaches the namespace, and no other namespace or login takes it until the namespace is removed. A rename back to one of them takes it out of the list, since it is the name again.
+             * @example []
+             * @example [
+             *       "finance"
+             *     ]
+             * @example [
+             *       "finance",
+             *       "accounting"
+             *     ]
+             */
+            former_names?: string[];
+            /**
+             * @description When the namespace's picture was last set, and null where it has none. The picture is read on its own, at GET /api/v1/namespaces/{ns}/avatar by whoever reads this record, and a client adds this instant to its address, ?v=, so that a picture set again is fetched again rather than taken from a cache; where it is null, a client draws the namespace's initial. It changes only when the picture is set, by its owner or an administrator, and goes back to null when the picture is removed.
+             * @example 2026-10-01T09:30:00Z
+             * @example null
+             */
+            avatar_updated_at?: components["schemas"]["timestamp"] | null;
+            /**
              * @description How this namespace tightens the installation's authentication policy for everyone holding a grant in it, for instance by requiring device-bound passkeys. Absent means the installation's policy as it stands.
              * @example {
              *       "device_bound_only": true
@@ -10099,6 +10376,12 @@ export interface components {
              */
             auth_policy?: components["schemas"]["authPolicy"];
         };
+        /**
+         * @description The email address an administrator gave the user, at POST /api/v1/users or PATCH /api/v1/users/{login}, and the empty string where none was given: for the people who read the record to reach them by, and for nothing else. The product sends no mail, and never signs anybody in, enrols them or recovers their account by mail, since a link sent to a mailbox would put the account back behind it. It is the administrator's to give and not the user's to change, since nothing proves an address. Held loosely: one @ with something on each side, no space or control character, and at most 254 characters, the longest address a mail path carries once its two angle brackets are counted; whether it reaches anybody is something only sending to it would tell. Read by the user, at GET /api/v1/me, and by administrators.
+         * @example alice.martin@example.com
+         * @example
+         */
+        email: string;
         /**
          * @description Whether the user is a platform administrator, who manages users, groups, namespaces, quotas, runners and runner policies. It grants no run:read_data anywhere: reading another namespace's payloads still means granting oneself access first, which is audited and told to the namespace's owner.
          * @default false
@@ -11926,6 +12209,94 @@ export interface components {
             };
         };
         /**
+         * Namespace variable
+         * @description A variable a namespace keeps beside those its workflows' files write, read through the vars context by the workflows it is shown to as a file's own are read, a name the file writes taking the file's value. A run reads the variables shown to its workflow once, when it is created, and keeps those its file does not write, so that a controller taking it over and a replay read what it read rather than what is true now. Not a secret: the value is answered to whoever reads the namespace's workflows, kept in clear on every run that read it and masked nowhere; a credential is a secret. Written whole, one variable per request, by whoever holds workflow:write at namespace scope.
+         * @example {
+         *       "name": "ledger_url",
+         *       "value": "https://ledger.example.com/api",
+         *       "visibility": "all",
+         *       "updated_by": "alice",
+         *       "updated_at": "2026-10-01T09:10:00Z"
+         *     }
+         * @example {
+         *       "name": "reminder_days",
+         *       "value": [
+         *         7,
+         *         14,
+         *         30
+         *       ],
+         *       "visibility": "selected",
+         *       "workflows": [
+         *         "payment-reminders"
+         *       ],
+         *       "updated_by": "alice",
+         *       "updated_at": "2026-10-01T09:12:00Z"
+         *     }
+         * @example {
+         *       "name": "dunning_days",
+         *       "value": 45,
+         *       "visibility": "selected",
+         *       "workflows": [],
+         *       "updated_by": "finance/nightly-sync",
+         *       "updated_at": "2026-10-01T09:15:30Z"
+         *     }
+         */
+        namespaceVariable: {
+            /**
+             * @description The variable's name, read as vars.<name>: the grammar a workflow file's vars names its keys with, so that an expression reads either alike, at most 255 characters.
+             * @example ledger_url
+             * @example reminder_days
+             */
+            name: components["schemas"]["identifier"];
+            /**
+             * @description Any JSON value, as a workflow file's vars holds any value YAML writes, at most 64 KiB written as compact JSON. A number keeps the way it was written: one with no fraction and no exponent is an int in an expression, and any other a double, as a number of the file or of a run's inputs is, an exponent written out with a point.
+             * @example https://ledger.example.com/api
+             * @example 30
+             * @example 2.5
+             * @example [
+             *       7,
+             *       14,
+             *       30
+             *     ]
+             * @example {
+             *       "currency": "EUR",
+             *       "rounding": "half-even"
+             *     }
+             * @example null
+             */
+            value: unknown;
+            /**
+             * @description Which workflows of the namespace read it: all, every one of them, or selected, those workflows names and no other. It says which workflows read the variable and nothing about which people may: reading the variables takes workflow:read at namespace scope whatever their visibility.
+             * @example all
+             * @example selected
+             * @enum {string}
+             */
+            visibility: "all" | "selected";
+            /**
+             * @description For selected alone, the workflows that read it, by name, sorted and each once, matched when a run is created: a rename rewrites the name in every list of the namespace, and a workflow deleted or moved leaves its name, read by whatever is created under it again. Empty is read by none, which keeps a variable aside without removing it. Absent for all.
+             * @example [
+             *       "payment-reminders"
+             *     ]
+             * @example [
+             *       "monthly-invoicing",
+             *       "payment-reminders"
+             *     ]
+             * @example []
+             */
+            workflows?: components["schemas"]["identifier"][];
+            /**
+             * @description Who wrote it last.
+             * @example alice
+             * @example finance/nightly-sync
+             */
+            updated_by: components["schemas"]["actor"];
+            /**
+             * @description When it was written last.
+             * @example 2026-10-01T09:12:00Z
+             */
+            updated_at: components["schemas"]["timestamp"];
+        };
+        /**
          * Runner identifier
          * @description The identifier the API minted for this machine, and the name it answers to everywhere afterwards: the runner field of every task result it publishes, the runner inventory, the console. It is minted here rather than chosen on the host, because a name a machine picks for itself is a name two machines can pick. Lowercase words joined by hyphens, the grammar a namespace and a pool are written in, so the same string reads correctly in a message, in a URL and in a queue name.
          * @example runner-dmz-02
@@ -12304,7 +12675,7 @@ export interface components {
         };
     };
     parameters: {
-        /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+        /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
         ns: components["schemas"]["namespace"];
         /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
         workflow: components["schemas"]["identifier"];
@@ -12384,7 +12755,9 @@ export interface components {
         artifactUri: string;
         /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
         secret: string;
-        /** @description Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it. */
+        /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+        variable: components["schemas"]["identifier"];
+        /** @description Read by nobody: the avatar_updated_at of the user or the namespace whose picture it is, which a client writes here so that the picture's address changes when the picture does, and no cache answers a picture set again with the one before it. */
         avatarVersion: string;
         /** @description The runner pool, by its name, its only identity. */
         pool: components["schemas"]["name"];
@@ -12728,7 +13101,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -12758,7 +13131,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -13296,7 +13669,7 @@ export interface operations {
                     "application/json": components["schemas"]["me"];
                 };
             };
-            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, a field null, written twice or not a string, a field past its length or holding a line break or another control character, an empty display name, or a time zone the IANA database does not hold, named, or Local. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, a field null, written twice or not a string, a field past its length or holding a line break or another control character, or a time zone the IANA database does not hold, named, or Local; display_name, which is made of the given and family names, or email, which an administrator gives, each refused saying so. Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             /** @description No credential, or one that opens nothing, a user removed since their credential was read among them. */
             401: components["responses"]["unauthorised"];
@@ -13336,7 +13709,7 @@ export interface operations {
     getMyAvatar: {
         parameters: {
             query?: {
-                /** @description Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it. */
+                /** @description Read by nobody: the avatar_updated_at of the user or the namespace whose picture it is, which a client writes here so that the picture's address changes when the picture does, and no cache answers a picture set again with the one before it. */
                 v?: components["parameters"]["avatarVersion"];
             };
             header?: never;
@@ -13543,12 +13916,12 @@ export interface operations {
                     "application/json": components["schemas"]["namespaceRecord"];
                 };
             };
-            /** @description The body is refused: a name outside the namespace grammar or a reserved word, no owner or one outside a principal's grammar, a kind other than shared, a quota written null or outside its bounds. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
+            /** @description The body is refused: a name outside the namespace grammar or a reserved word, an owner outside a principal's grammar, a kind other than shared, a quota written null or outside its bounds; or the bootstrap token naming no owner, since it is nobody. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description The caller is not an administrator, or holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
+            /** @description A caller who does not administer the installation naming another owner than themself, or any quota; a service account, or a token narrowed by a scope, which create no namespace; or a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
             403: components["responses"]["forbidden"];
-            /** @description The name is held by a namespace or a login. */
+            /** @description The name is held by a namespace, as its name or as a former one, or by a login. */
             409: components["responses"]["conflict"];
             413: components["responses"]["tooLarge"];
             /** @description An owner naming no user or group, a service account's NS/NAME among them, or allowed_runner_pools naming a pool that does not exist. */
@@ -13560,7 +13933,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -13590,7 +13963,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -13607,12 +13980,200 @@ export interface operations {
             /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description The caller is not an administrator, which is answered before the namespace is looked up; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404. */
             403: components["responses"]["forbidden"];
-            /** @description No such namespace, or a name no namespace can have. */
+            /** @description No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers. */
             404: components["responses"]["notFound"];
             /** @description The namespace holds a workflow, a run, a secret, a stored object or a service account other than NS/agentiik, the error saying what; or it is a user's personal namespace, removed with its user. */
             409: components["responses"]["conflict"];
+        };
+    };
+    updateNamespace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        /** @description What changes, each field left out kept. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["namespaceUpdate"];
+            };
+        };
+        responses: {
+            /** @description The namespace's record as it now stands, under its new name, the name it left in former_names. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["namespaceRecord"];
+                };
+            };
+            /** @description The body names no setting, a field that is not one, null, or a name outside the namespace grammar. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers. */
+            404: components["responses"]["notFound"];
+            /** @description The rename cannot be made, the error saying why: a user's personal namespace; a name a namespace, a login or a reserved word holds, or a former name of another namespace; a run of the namespace queued, running or waiting; a move of one of its workflows asked and not carried out; or a runner not revoked narrowing itself to it by name. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            413: components["responses"]["tooLarge"];
+        };
+    };
+    getNamespaceAvatar: {
+        parameters: {
+            query?: {
+                /** @description Read by nobody: the avatar_updated_at of the user or the namespace whose picture it is, which a client writes here so that the picture's address changes when the picture does, and no cache answers a picture set again with the one before it. */
+                v?: components["parameters"]["avatarVersion"];
+            };
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The picture. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["privateDay"];
+                    ETag: components["headers"]["avatarTag"];
+                    "X-Content-Type-Options": components["headers"]["noSniff"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            /** @description The picture is the one the If-None-Match tag names: the client's copy is still the picture. */
+            304: {
+                headers: {
+                    ETag: components["headers"]["avatarTag"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description The namespace has no picture, one never set or removed; or there is no such namespace, or one the caller cannot see, the same answer. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    setNamespaceAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        /** @description The picture, a PNG or a JPEG of at most 1 MiB and 2048 by 2048 pixels. */
+        requestBody: {
+            content: {
+                "image/png": string;
+                "image/jpeg": string;
+            };
+        };
+        responses: {
+            /** @description Stored, as GET /api/v1/namespaces/{ns}/avatar answers it from now on. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An empty body. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            /** @description No credential, or one that opens nothing. */
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers. */
+            404: components["responses"]["notFound"];
+            /** @description A picture past 1 MiB, refused before it is decoded. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description A Content-Type other than image/png and image/jpeg, refused before the body is read. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The body is not a PNG or a JPEG that can be read, or its header announces more than 2048 pixels a side, saying how many. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    removeNamespaceAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed, or there was none. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            /** @description No credential, or one that opens nothing. */
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers. */
+            404: components["responses"]["notFound"];
+            413: components["responses"]["tooLarge"];
         };
     };
     getQuotas: {
@@ -13620,7 +14181,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -13650,7 +14211,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -13742,12 +14303,12 @@ export interface operations {
                     "application/json": components["schemas"]["createdUser"];
                 };
             };
-            /** @description The body is refused: a login outside the namespace grammar, a reserved word, operator or installation; or a display name empty, over 256 characters, or holding a line break or another control character. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
+            /** @description The body is refused: a login outside the namespace grammar, a reserved word, operator or installation; a given or family name over 128 characters or holding a line break or another control character; an email address that is not one @ with something on each side, holds a space or a control character, or is over 254 characters; or display_name, which is made of the names and written by nobody. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
             /** @description The caller is not an administrator, and not the bootstrap token before the first administrator has signed in; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
             403: components["responses"]["forbidden"];
-            /** @description The login is held by a namespace, by a user who has enrolled, by one created with another display name or admin than this request says, or by one another request created at the same moment. */
+            /** @description The login is held by a namespace, by a user who has enrolled, by one created with another name, email address or admin than this request says, or by one another request created at the same moment. */
             409: components["responses"]["conflict"];
             413: components["responses"]["tooLarge"];
         };
@@ -13813,10 +14374,46 @@ export interface operations {
             413: components["responses"]["tooLarge"];
         };
     };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user, by login. */
+                login: components["parameters"]["login"];
+            };
+            cookie?: never;
+        };
+        /** @description What changes. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["userUpdate"];
+            };
+        };
+        responses: {
+            /** @description Written: the user, as GET /api/v1/users/{login} answers them. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["user"];
+                };
+            };
+            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, email null or not a string, or an address that is not one @ with something on each side, holds a space or a control character, or is over 254 characters; a name or another field of the profile, which is the user's, or display_name, which nobody writes, each refused saying so. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, and not the bootstrap token before the first administrator has signed in; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
+            403: components["responses"]["forbidden"];
+            /** @description No user by that login, or a login no user can have. */
+            404: components["responses"]["notFound"];
+            413: components["responses"]["tooLarge"];
+        };
+    };
     getUserAvatar: {
         parameters: {
             query?: {
-                /** @description Read by nobody: the user's avatar_updated_at, which a client writes here so that the photo's address changes when the photo does, and no cache answers a photo set again with the one before it. */
+                /** @description Read by nobody: the avatar_updated_at of the user or the namespace whose picture it is, which a client writes here so that the picture's address changes when the picture does, and no cache answers a picture set again with the one before it. */
                 v?: components["parameters"]["avatarVersion"];
             };
             header?: never;
@@ -14188,7 +14785,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -14218,7 +14815,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -14258,7 +14855,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The grant's identifier, as the list gives it and as Terraform imports it. */
                 id: components["parameters"]["grant"];
@@ -14288,7 +14885,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14320,7 +14917,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14362,7 +14959,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14394,7 +14991,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -14437,7 +15034,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14469,7 +15066,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14501,7 +15098,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14551,7 +15148,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14645,7 +15242,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14680,7 +15277,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14716,7 +15313,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -14748,7 +15345,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
                 name: components["parameters"]["workflow"];
@@ -15113,7 +15710,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -15156,7 +15753,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -15199,7 +15796,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -15240,7 +15837,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -15450,7 +16047,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
             };
             cookie?: never;
@@ -15480,7 +16077,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
                 name: components["parameters"]["secret"];
@@ -15512,7 +16109,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
                 name: components["parameters"]["secret"];
@@ -15564,7 +16161,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The namespace, by name. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
                 ns: components["parameters"]["ns"];
                 /** @description The secret's name, as the workflow file names it and as a step is given it at /agk/secrets/<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters. */
                 name: components["parameters"]["secret"];
@@ -15586,6 +16183,150 @@ export interface operations {
             /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
             403: components["responses"]["forbidden"];
             /** @description No such declaration, no such namespace, or one where the caller does not hold secret:write: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    listVariables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The variables. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["variableList"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    readVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+                name: components["parameters"]["variable"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The variable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["namespaceVariable"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such variable, no such namespace, or one where the caller does not hold workflow:read at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    writeVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+                name: components["parameters"]["variable"];
+            };
+            cookie?: never;
+        };
+        /** @description The whole variable. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["variableWrite"];
+            };
+        };
+        responses: {
+            /** @description Replaced: the variable as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["namespaceVariable"];
+                };
+            };
+            /** @description Created: the variable, and Location naming it. */
+            201: {
+                headers: {
+                    /** @description Where the variable is read. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["namespaceVariable"];
+                };
+            };
+            /** @description A name the workflow file could not write, no value or no visibility, a visibility that is neither all nor selected, selected without workflows or workflows beside all, a workflow's name the file could not write or one named twice, a number no 64-bit float holds or written past 340 digits from the point, U+0000 in a string, a field the route does not read, or two credentials. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such namespace, or one where the caller does not hold workflow:write at namespace scope: the same answer. */
+            404: components["responses"]["notFound"];
+            /** @description A variable created in a namespace holding 1,000 already, or a value taking the namespace's variables past 4 MiB or 100,000 values in all, the bounds a run's inputs are held to, since a run keeps those it reads and the controller reads them at every decision: nothing is written. */
+            409: components["responses"]["conflict"];
+            /** @description A value past 64 KiB written as compact JSON, workflows past 1,024 names, or a body past 512 KiB. */
+            413: components["responses"]["tooLarge"];
+        };
+    };
+    removeVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
+                name: components["parameters"]["variable"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such variable, no such namespace, or one where the caller does not hold workflow:write at namespace scope: the same answer. */
             404: components["responses"]["notFound"];
         };
     };

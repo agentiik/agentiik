@@ -159,7 +159,7 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 				return []byte(`{"provider":"builtin","value":"` + strings.Repeat("A", int(l)-33) + `"}`)
 			}, 2, 6.0, 4.667},
 		// The namespace routes came after the reader, so encoding/json never read them.
-		{"a namespace of empty pools", func() request { return new(NamespaceRecord) }, smallMaxBytes,
+		{"a namespace of empty pools", func() request { return new(NamespaceCreate) }, smallMaxBytes,
 			func(l int64) []byte { return filled(`{"quotas":{"allowed_runner_pools":[`, `]}}`, l, empty) }, 0, 0, 0.141},
 		{"quotas of empty pools", func() request { return new(Quotas) }, smallMaxBytes,
 			func(l int64) []byte { return filled(`{"allowed_runner_pools":[`, `]}`, l, empty) }, 0, 0, 0.141},
@@ -174,6 +174,20 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 			func(l int64) []byte {
 				return filled(`{"credential":{`, `}}`, l, func(i int) string { return named(i) + `:0` })
 			}, 0, 0, 0.084},
+		// And a namespace's variables, which came after them all.
+		{"a variable of empty objects", func() request { return new(VariableWrite) }, variableMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"visibility":"all","value":[`, `]}`, l, func(int) string { return `{}` })
+			},
+			0, 0, 0.668},
+		{"a variable of one long string", func() request { return new(VariableWrite) }, variableMaxBytes,
+			func(l int64) []byte {
+				return []byte(`{"visibility":"all","value":"` + strings.Repeat("A", int(l)-32) + `"}`)
+			}, 0, 0, 0.668},
+		{"a variable of empty workflows", func() request { return new(VariableWrite) }, variableMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"visibility":"selected","value":0,"workflows":[`, `]}`, l, empty)
+			}, 0, 0, 0.725},
 	} {
 		body := c.body(c.limit)
 		if int64(len(body)) > c.limit || int64(len(body)) < c.limit-64 {
@@ -201,7 +215,7 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 // is a field every request carrying it is refused for.
 func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 	value := "sk_live_notreal"
-	aliceMartin, alice, paris, cleared := "Alice Martin", "Alice", "Europe/Paris", ""
+	alice, martin, paris, cleared, address := "Alice", "Martin", "Europe/Paris", "", "alice.martin@example.com"
 	for _, want := range []request{
 		&Push{
 			Entry: "agentiik.yaml", Document: []byte("kind: Workflow\n"),
@@ -240,13 +254,17 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 		&Redemption{Grant: "agkgrant_x", TaskID: "01M2Z8V1P9C4XQ7K2N4D6F8H0C", IdempotencyKey: "01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1"},
 		&Declare{Provider: "builtin", Value: &value, Encoding: "utf-8"},
 		&Declare{Provider: "env", Path: "AGK_DEV_FINANCE_BILLING"},
-		&NamespaceRecord{Name: "finance", Kind: "shared", Owner: "group:finance-leads", Quotas: &Quotas{
+		&NamespaceCreate{Name: "finance", Kind: "shared", Owner: "group:finance-leads", Quotas: &Quotas{
 			MaxConcurrentTasks: 20, MaxRunsPerHour: 500, MaxArtifactBytes: 536870912000, MaxRetentionDays: 180,
 			MaxRunDuration: "24h", AllowedRunnerPools: []string{"default", "dmz"},
 		}},
-		&NamespaceRecord{Name: "team-ops", Owner: "bob-martin"},
+		&NamespaceCreate{Name: "team-ops", Owner: "bob-martin"},
 		&Quotas{MaxRunsPerHour: 60},
-		&ProfileChange{DisplayName: &aliceMartin, GivenName: &alice, Timezone: &paris, Bio: &cleared},
+		&ProfileChange{GivenName: &alice, FamilyName: &martin, Timezone: &paris, Bio: &cleared},
+		&UserChange{Email: &address},
+		&UserChange{Email: &cleared},
+		&VariableWrite{Value: json.RawMessage(`{"hosts":["a","b"],"zone":"eu-west"}`), Visibility: "selected", Workflows: []string{"payroll"}, valued: true, values: 5},
+		&VariableWrite{Value: json.RawMessage(`null`), Visibility: "all", valued: true, values: 1},
 	} {
 		encoded, err := json.Marshal(want)
 		if err != nil {

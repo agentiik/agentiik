@@ -70,7 +70,7 @@ describe("the manual run form", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Start the run" }));
     await new Promise((r) => setTimeout(r, 0));
     expect(sent).toEqual([{ path: "/api/v1/finance/workflows/monthly-invoicing/runs", body: { inputs: { orders: [{ order: "ORD-0001", amount: 12 }], customers: [] } } }]);
-    expect(place.route).toMatchObject({ kind: "namespace", view: "runs", run: "01JMZ9A2B3C4D5E6F7G8H9J0K1" });
+    expect(place.route).toMatchObject({ kind: "namespace", view: "workflows", run: "01JMZ9A2B3C4D5E6F7G8H9J0K1" });
   });
 
   it("checks an input whose schema names files of the tree against them", async () => {

@@ -80,23 +80,27 @@ func (s *Store) Put(ctx context.Context, pool *db.Pool, namespace, workflow stri
 	if err := repo.WriteIdx(&idx, u.Objects, u.Checksum); err != nil {
 		return db.Pack{}, fmt.Errorf("store: the index of pack %s of %s/%s: %w", p.Name, namespace, workflow, err)
 	}
-	var key string
+	var key, storage string
 	err := pool.In(ctx, namespace, func(ctx context.Context, n *db.NS) error {
 		var err error
-		key, err = n.ReceivePack(ctx, workflow, p)
+		if key, err = n.ReceivePack(ctx, workflow, p); err != nil {
+			return err
+		}
+		// Kept under the namespace's storage name, which a rename leaves as it was.
+		storage, err = n.Storage(ctx)
 		return err
 	})
 	if err != nil {
 		return db.Pack{}, err
 	}
-	if err := checkKeys(namespace, key, p.Name); err != nil {
+	if err := checkKeys(storage, key, p.Name); err != nil {
 		return db.Pack{}, err
 	}
 	checked := &checkedPack{r: pack, size: size, sum: u.Checksum, h: sha1.New()}
-	if err := s.objects.Put(ctx, PackKey(namespace, key, p.Name), checked); err != nil {
+	if err := s.objects.Put(ctx, PackKey(storage, key, p.Name), checked); err != nil {
 		return db.Pack{}, fmt.Errorf("store: pack %s of %s/%s could not be written: %w", p.Name, namespace, workflow, err)
 	}
-	if err := s.objects.Put(ctx, IdxKey(namespace, key, p.Name), &idx); err != nil {
+	if err := s.objects.Put(ctx, IdxKey(storage, key, p.Name), &idx); err != nil {
 		return db.Pack{}, fmt.Errorf("store: the index of pack %s of %s/%s could not be written: %w", p.Name, namespace, workflow, err)
 	}
 	return p, nil
@@ -141,9 +145,9 @@ func (c *checkedPack) Read(b []byte) (int, error) {
 // Open answers the objects of a repository's live packs, as the transaction that read r listed
 // them. It is closed once the request reading it is done, which lets go of the packs it opened.
 func (s *Store) Open(r db.Repository) (*Objects, error) {
-	o := &Objects{store: s, namespace: r.Namespace, repository: r.Key}
+	o := &Objects{store: s, namespace: storageOf(r.Storage, r.Namespace), repository: r.Key}
 	for _, p := range r.Packs {
-		if err := checkKeys(r.Namespace, r.Key, p.Name); err != nil {
+		if err := checkKeys(o.namespace, r.Key, p.Name); err != nil {
 			return nil, err
 		}
 		o.packs = append(o.packs, &packed{Pack: p})
@@ -319,4 +323,15 @@ func checkKeys(namespace, repository, name string) error {
 		return fmt.Errorf("store: pack %q is not named by its checksum, 40 hexadecimal digits", name)
 	}
 	return nil
+}
+
+// storageOf is the first segment of a repository's keys: its namespace's storage name, the name the
+// namespace was created with, which a rename leaves as it was; and the namespace's name where the
+// record read names no storage name, as one built by hand for a test does, the two being one for a
+// namespace never renamed.
+func storageOf(storage, namespace string) string {
+	if storage != "" {
+		return storage
+	}
+	return namespace
 }

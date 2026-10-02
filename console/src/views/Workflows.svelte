@@ -11,6 +11,7 @@
   import { clock } from "../lib/format";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt } from "../lib/route";
 
   // A namespace's workflows, and a new one created. The API lists no namespace's workflows, so the
   // page lists those its runs name, each with its latest run, and says so rather than passing them
@@ -81,7 +82,7 @@
       <tbody>
         {#each known as k (k.workflow)}
           {@const page = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow: k.workflow }}
-          {@const run = { kind: "namespace" as const, namespace, view: "runs" as const, run: k.run }}
+          {@const run = runAt(namespace, k.workflow, k.run)}
           <tr>
             <td><a class="term" href={place.href(page)} onclick={follow(place, page)}>{k.workflow}</a></td>
             <td><StatePill state={k.state} /> <a class="code faint" href={place.href(run)} onclick={follow(place, run)}>{k.run}</a></td>
