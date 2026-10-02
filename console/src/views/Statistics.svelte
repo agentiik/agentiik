@@ -72,7 +72,7 @@
     }
     const link = document.createElement("a");
     link.href = URL.createObjectURL(data as Blob);
-    link.download = `${namespace}-${tab}-${range.from.toISOString().slice(0, 10)}.${kind}`;
+    link.download = `${namespace}-${tab}-${(series?.from ?? range.from.toISOString()).slice(0, 10)}.${kind}`;
     link.click();
     URL.revokeObjectURL(link.href);
   }
@@ -160,7 +160,7 @@
   {/snippet}
 </PageHeader>
 
-<RangeBar {ranged} bucket={series?.bucket} />
+<RangeBar {ranged} bucket={series?.bucket} from={series?.from} />
 
 {#if refused}
   <Problem explained={refused} onretry={() => read(tab, range)} />

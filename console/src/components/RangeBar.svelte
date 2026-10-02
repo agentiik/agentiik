@@ -5,8 +5,9 @@
 
   // The controls along the top of a statistics page: the range, as a preset or a span a zoom chose,
   // the way back from a zoom, the comparison with the span before where the page's series take one,
-  // and what the page exports.
-  let { ranged, bucket, comparable = true, children }: { ranged: Ranged; bucket: string | undefined; comparable?: boolean; children?: Snippet } = $props();
+  // and what the page exports. from is where the API answered the range starts, which Max learns
+  // from it.
+  let { ranged, bucket, from, comparable = true, children }: { ranged: Ranged; bucket: string | undefined; from?: string; comparable?: boolean; children?: Snippet } = $props();
 </script>
 
 <div class="range">
@@ -15,7 +16,7 @@
       <button class="preset" aria-pressed={ranged.range.preset === key} onclick={() => ranged.choose(key as Preset)}>{p.label}</button>
     {/each}
   </div>
-  <span class="muted term">{described(ranged.range, bucket)}</span>
+  <span class="muted term">{described(ranged.range, bucket, from)}</span>
   {#if ranged.before.length > 0}<button class="link" onclick={() => ranged.back()}>Back to the range before</button>{/if}
   {#if comparable}
     <label class="compare">

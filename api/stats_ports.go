@@ -41,8 +41,16 @@ func (s *Server) portStatistics(w http.ResponseWriter, r *http.Request, who Prin
 		return
 	}
 
-	out := statsPorts{From: stamp(rng.From), To: stamp(rng.To), Bucket: rng.Bucket, Workflow: workflow, Steps: []statsPortsStep{}}
+	out := statsPorts{Workflow: workflow, Steps: []statsPortsStep{}}
 	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
+		if rng.Max {
+			first, err := wide.FirstRun(ctx, []db.Workflow{of}, rng.To)
+			if err != nil {
+				return err
+			}
+			rng = rng.reach(first)
+		}
+		out.From, out.To, out.Bucket = stamp(rng.From), stamp(rng.To), rng.Bucket
 		current, err := wide.PortStatistics(ctx, of, rng.Buckets)
 		if err != nil {
 			return err

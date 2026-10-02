@@ -7280,6 +7280,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -7742,6 +7745,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -7992,6 +7998,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8130,6 +8139,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8262,6 +8274,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8383,6 +8398,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/statsFrom"
+          },
+          {
+            "$ref": "#/components/parameters/statsRange"
           },
           {
             "$ref": "#/components/parameters/statsTo"
@@ -20663,7 +20681,7 @@
         "name": "from",
         "in": "query",
         "required": false,
-        "description": "The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to.",
+        "description": "The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max.",
         "schema": {
           "$ref": "wire.schema.json#/$defs/timestamp"
         },
@@ -20671,6 +20689,24 @@
           "morning": {
             "summary": "six in the morning",
             "value": "2026-09-30T06:00:00Z"
+          }
+        }
+      },
+      "statsRange": {
+        "name": "range",
+        "in": "query",
+        "required": false,
+        "description": "max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "max"
+          ]
+        },
+        "examples": {
+          "max": {
+            "summary": "from the first run",
+            "value": "max"
           }
         }
       },

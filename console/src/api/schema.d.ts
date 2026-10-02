@@ -12703,8 +12703,10 @@ export interface components {
         historyFrom: components["schemas"]["commit"];
         /** @description How many commits a page lists, 50 where it is left out and 500 at the most, as GET /api/v1/runs lists runs. */
         historyLimit: number;
-        /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+        /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
         statsFrom: components["schemas"]["timestamp"];
+        /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+        statsRange: "max";
         /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
         statsTo: components["schemas"]["timestamp"];
         /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15689,8 +15691,10 @@ export interface operations {
     getRunStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15732,8 +15736,10 @@ export interface operations {
     getStepStatistics: {
         parameters: {
             query: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15777,8 +15783,10 @@ export interface operations {
     getPortStatistics: {
         parameters: {
             query: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15820,8 +15828,10 @@ export interface operations {
     getQuotaStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15861,8 +15871,10 @@ export interface operations {
     getActivityStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15897,8 +15909,10 @@ export interface operations {
     getPoolStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */

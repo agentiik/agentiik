@@ -29,6 +29,13 @@ func (s *RunnerAPI) activityStatistics(w http.ResponseWriter, r *http.Request, _
 	var buckets []db.ActivityBucket
 	var now db.Activity
 	err = s.pool.Installation(r.Context(), db.InstallationActivity, func(ctx context.Context, wide *db.Wide) error {
+		if rng.Max {
+			first, err := wide.FirstRunAnywhere(ctx, rng.To)
+			if err != nil {
+				return err
+			}
+			rng = rng.reach(first)
+		}
 		var err error
 		buckets, now, err = wide.ActivityStatistics(ctx, rng.Buckets)
 		return err
