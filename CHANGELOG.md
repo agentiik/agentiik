@@ -2,7 +2,9 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
-## Unreleased
+## v0.6.0, 2026-10-02
+
+A console to watch it: `agentiik-api` serves the web console at the installation's address from its own binary, with no proxy or server of its own, and `agk console` draws the same views in a terminal over the same routes. A person signs in, reads every namespace they work in on their home, follows a run as it happens over one live connection, inspects a step's envelopes, logs and files, edits a workflow in a graph or as YAML that keeps its format and commits the change, shares a namespace or a workflow, keeps a namespace's variables, and reads the statistics of runs, steps, ports and quotas; an administrator manages users, groups, namespaces, runners and their pools, and reads the audit log. Nothing the console does is decided by it: each screen calls a route the OpenAPI document describes, under the caller's own permissions. The API and the controller become one image, `ghcr.io/agentiik/agentiik`. A v0.5.0 installation upgrades with v0.6.0's `compose.yaml` and its own `.env`, and nothing else.
 
 ### Upgrading
 
@@ -193,6 +195,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Tests
 
+- The schemas of agentiik/schemas `0.6.0` are vendored in `internal/fixtures`, and `console/vendor` copies its OpenAPI document and schemas and agentiik/design's tokens, faces and icons at v0.6.0. The corpus holds 12 valid workflow documents and 75 invalid ones, 20 of them the validator's, each refused by the rule it is named after.
 - The test that nothing in the module sends mail no longer refuses the word email in what it ships, since the word names a user's address; it still refuses a mail transport, the program that sends mail, a package or a module for mail, a provider's name and a `mailto:` link.
 
 ## v0.5.0, 2026-09-30
