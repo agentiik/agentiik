@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Filter from "../components/Filter.svelte";
+  import { filtered } from "../lib/palette";
   import { explain, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
   import { refusal, type API } from "../api/client";
@@ -113,10 +115,13 @@
       return `group:${g.name} removed.`;
     });
   }
+  // What the Filter field at the head leaves of the list, as typed into the address.
+  const groupsShown = $derived(groups ? filtered(groups, place.query.get("q") ?? "", (g) => `${g.name} ${g.members.join(" ")}`) : []);
 </script>
 
 <AdminTabs {place} current="groups">
   {#snippet actions()}
+    <Filter {place} label="Filter the groups" />
     <button class="control primary" onclick={() => ((creating = true), (problem = null))}><Icon name="control-add" size={14} />New group</button>
   {/snippet}
 </AdminTabs>
@@ -137,7 +142,7 @@
     <table>
       <thead><tr><th>Group</th><th>Members</th><th>Add a member</th><th class="end"></th></tr></thead>
       <tbody>
-        {#each groups as g (g.name)}
+        {#each groupsShown as g (g.name)}
           <tr>
             <td class="term nowrap">group:{g.name}</td>
             <td>
@@ -163,7 +168,7 @@
             </td>
           </tr>
         {:else}
-          <tr><td colspan="4" class="muted">No groups</td></tr>
+          <tr><td colspan="4" class="muted">{groups.length === 0 ? "No groups" : "Nothing matches."}</td></tr>
         {/each}
       </tbody>
     </table>

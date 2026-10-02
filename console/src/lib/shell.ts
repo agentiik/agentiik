@@ -5,6 +5,7 @@
 
 import type { Me, Namespace } from "../api/client";
 import { ordered } from "./permissions";
+import type { Route, View } from "./route";
 
 const foldedKey = "agentiik.sidebar";
 const namespaceKey = "agentiik.namespace";
@@ -50,3 +51,16 @@ export function firstNamespace(me: Me, namespaces: readonly Namespace[]): string
   if (me.service_account) return me.service_account.namespace;
   return (shared[0] ?? personal[0])?.name;
 }
+
+// The icon of each view of a namespace, and what an administrator manages, in the sidebar's order:
+// the sidebar draws them and the palette lists them, from this one list. The audit log is the users'
+// segment's too, at users/audit, so an entry is told apart by its route's tab as well as its kind.
+export const viewIcons: Record<View, string> = { workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", variables: "control-variables", settings: "control-settings" };
+
+export const administration = [
+  { to: { kind: "runners" as const }, label: "Runners", icon: "control-runners" },
+  { to: { kind: "users" as const }, label: "Users", icon: "control-users" },
+  { to: { kind: "groups" as const }, label: "Groups", icon: "control-groups" },
+  { to: { kind: "namespaces" as const }, label: "Namespaces", icon: "control-namespaces" },
+  { to: { kind: "users" as const, tab: "audit" }, label: "Audit log", icon: "control-history" },
+] satisfies { to: Route; label: string; icon: string }[];
