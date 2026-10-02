@@ -25,7 +25,7 @@
   import { follow, type Place } from "../lib/place.svelte";
   import { runAt, runsOf } from "../lib/route";
   import { RunReader } from "../lib/run.svelte";
-  import { workflowTabs } from "../lib/page";
+  import { settles as settlesOn, workflowTabs } from "../lib/page";
   import { blocks } from "../lib/yaml-blocks";
 
   // A workflow: the version a run naming no ref runs, the head of its default branch, with what
@@ -186,26 +186,15 @@
         ],
   );
 
-  const sharing = $derived({ kind: "namespace" as const, namespace, view: "sharing" as const });
   const shares = $derived(holds(me, "grant:manage", namespace, workflow));
-
-  // narrowed follows a view of the namespace narrowed to this workflow, as a plain click does and
-  // leaving every other click to the browser.
-  function narrowed(route: typeof sharing) {
-    return (e: MouseEvent) => {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      e.preventDefault();
-      place.go(route, false, new URLSearchParams({ workflow }));
-    };
-  }
   const statistics = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "statistics" });
   const graphTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow });
   const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
   const filesTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "files" });
   const runRoute = $derived(run ? runAt(namespace, workflow, run.run) : undefined);
   // Its settings, to a caller who may change any of them.
-  const settles = $derived(mayEdit || shares || holds(me, "workflow:delete", namespace, workflow));
-  const tabs = $derived(workflowTabs(namespace, workflow, tab, { shares, mcp: !!graph?.mcp, settles, go: (r, q) => place.go(r, false, q) }));
+  const settles = $derived(settlesOn(me, namespace, workflow));
+  const tabs = $derived(workflowTabs(namespace, workflow, tab, { mcp: !!graph?.mcp, settles }));
   const now = Date.now();
 </script>
 

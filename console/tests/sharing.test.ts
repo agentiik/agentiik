@@ -231,23 +231,14 @@ describe("the sharing panel", () => {
     expect(operator.querySelector("td.lack")!.textContent).toBe("no");
   });
 
-  it("is offered from a workflow's page to whoever may share that workflow, and opens its grants", async () => {
-    open("/finance/workflows/monthly-invoicing");
-    const plain = await screen.findByRole("navigation", { name: "monthly-invoicing, what is shown" });
-    expect(within(plain).queryByRole("link", { name: "Sharing" })).toBeNull();
-    cleanup();
-
+  it("is no tab of a workflow's page, whoever may share it", async () => {
     const s = scenario("alice");
     const permissions = (s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> }).permissions;
     permissions["finance/monthly-invoicing"] = [...permissions["finance"]!, "grant:manage"];
-    const { place } = open("/finance/workflows/monthly-invoicing", s);
+    open("/finance/workflows/monthly-invoicing", s);
     const nav = await screen.findByRole("navigation", { name: "monthly-invoicing, what is shown" });
-    const tab = within(nav).getByRole("link", { name: "Sharing" });
-    expect(tab.getAttribute("href")).toBe("/finance/sharing?workflow=monthly-invoicing");
-    await fireEvent.click(tab);
-    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "sharing" });
-    expect(place.query.get("workflow")).toBe("monthly-invoicing");
-    expect(await screen.findByRole("button", { name: "finance/monthly-invoicing", pressed: true })).toBeTruthy();
+    expect(within(nav).getByRole("link", { name: "Settings" })).toBeTruthy();
+    expect(within(nav).queryByRole("link", { name: "Sharing" })).toBeNull();
   });
 
   it("is offered nowhere the caller holds no grant:manage, and answered as what does not exist", async () => {
