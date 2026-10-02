@@ -66,8 +66,13 @@ func (m Model) readWorkflow() tea.Cmd {
 	if m.run == nil {
 		return nil
 	}
-	key := workflowKey(m.run)
-	path := "/api/v1/" + url.PathEscape(m.run.Namespace) + "/workflows/" + url.PathEscape(m.run.Workflow) + "?limit=1"
+	return m.readWorkflowNamed(workflowKey(m.run))
+}
+
+// readWorkflowNamed reads the graph of a workflow named namespace/name.
+func (m Model) readWorkflowNamed(key string) tea.Cmd {
+	ns, name, _ := strings.Cut(key, "/")
+	path := "/api/v1/" + url.PathEscape(ns) + "/workflows/" + url.PathEscape(name) + "?limit=1"
 	return func() tea.Msg {
 		var detail struct {
 			Graph *flowGraph `json:"graph"`
@@ -259,19 +264,28 @@ func (m Model) graphStep() string {
 // list.
 func (m Model) graphLines(t theme, height int) []string {
 	line := func(parts ...part) string { return t.line(false, m.width, within(parts, m.width)...) }
-	if m.run == nil {
+	if m.run == nil && m.graphOf == "" {
 		return []string{line(part{quiet, "Reading the run."})}
 	}
-	header := []part{{strong, "Graph "}, {plain, m.run.Namespace + "/" + m.run.Workflow}}
+	name := m.graphOf
+	if m.run != nil {
+		name = m.run.Namespace + "/" + m.run.Workflow
+	}
+	header := []part{{strong, "Graph "}, {plain, name}}
 	switch {
 	case m.graphFailed != "":
 		return []string{line(header...), line(), line(part{failedText, "The graph could not be read: " + m.graphFailed})}
 	case m.graph == nil:
 		return []string{line(header...), line(), line(part{quiet, "Reading the graph."})}
 	}
-	header = append(header, part{plain, "@" + short(m.graph.Commit) + "  "}, part{muted, "run " + string(m.run.Run) + "  "}, part{stateRole(m.run.State), m.mark(m.run.State == agk.Running)}, part{plain, " " + m.run.State.String()})
+	header = append(header, part{plain, "@" + short(m.graph.Commit) + "  "})
+	if m.run != nil {
+		header = append(header, part{muted, "run " + string(m.run.Run) + "  "}, part{stateRole(m.run.State), m.mark(m.run.State == agk.Running)}, part{plain, " " + m.run.State.String()})
+	} else {
+		header = append(header, part{muted, "the version the default branch's head resolves to, with no run laid over it"})
+	}
 	lines := []string{line(header...)}
-	if m.run.Commit != "" && m.graph.Commit != "" && m.run.Commit != m.graph.Commit {
+	if m.run != nil && m.run.Commit != "" && m.graph.Commit != "" && m.run.Commit != m.graph.Commit {
 		// The API resolves the head's graph alone, as the web console says of a run of an older
 		// version laid over it.
 		lines = append(lines, line(part{waitingText, "The run is of " + short(m.run.Commit) + ", drawn on the graph of the default branch's head, " + short(m.graph.Commit) + "."}))

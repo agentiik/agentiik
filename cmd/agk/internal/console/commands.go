@@ -68,8 +68,11 @@ func (m Model) commands() []command {
 		out = append(out, pressing(written, "g"), pressing("Inspect the step chosen", "enter"), pressing("Back", "esc"))
 	case runnersView:
 		out = append(out, pressing("Back to the runs", "esc"))
+	case workflowsView:
+		out = append(out, pressing("Graph of the workflow chosen", "enter"), pressing("Back to the runs", "esc"))
 	}
-	out = append(out, command{label: "Runs", key: "1", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("1") }})
+	out = append(out, command{label: "Runs", key: "1", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("1") }},
+		command{label: "Workflows", key: "2", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("2") }})
 	if m.me.Admin {
 		out = append(out, command{label: "Runners", key: "4", kind: "view", act: func(m Model) (tea.Model, tea.Cmd) { return m.press("4") }})
 	}
