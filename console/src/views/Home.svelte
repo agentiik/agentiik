@@ -454,9 +454,9 @@
     font-size: 12.5px;
   }
 
-  /* The columns follow the room the home is given, not the window: one under 1000px, the main
-     column with the server and the places beside it up to 1560px, and wider still the places on the
-     left as a forge's home has them, the main column in the middle and the server on the right. */
+  /* The columns follow the room the home is given, not the window: one under 1000px, and from there
+     the main column with the server and the places beside it, two columns and never a third, as no
+     screen sets more. */
   .dashboard {
     container: home / inline-size;
   }
@@ -500,21 +500,8 @@
     }
   }
 
-  @container home (min-width: 1560px) {
-    .home {
-      grid-template-columns: 300px minmax(0, 1fr);
-      grid-template-areas: "places main";
-    }
-
-    .home.admin {
-      grid-template-columns: 300px minmax(0, 1fr) 360px;
-      grid-template-rows: auto;
-      grid-template-areas: "places main server";
-    }
-  }
-
-  /* Inside the main column, its blocks one above the other, and where it is wide enough what needs
-     the caller and the latest runs side by side under the year. */
+  /* Inside the main column, its blocks one above the other: beside the places, what needs the caller
+     and the latest runs side by side would be a third column. */
   .stack {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -542,13 +529,6 @@
   .latest {
     display: grid;
     min-width: 0;
-  }
-
-  @container main (min-width: 1100px) {
-    .stack {
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      grid-template-areas: "cards cards" "activity activity" "attention latest";
-    }
   }
 
   /* Four counts on one strip, told apart by hairlines rather than by four boxes: a figure is read by
