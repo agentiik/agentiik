@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import type { API, Me } from "../api/client";
   import { commitFile } from "../lib/git/commit";
+  import { withPushToken } from "../lib/git/token";
   import { addStep, connect, disconnect, edgesWritten, removeStep, setFanOut, setMaxParallel, setMerge, type Merge } from "../lib/editor/edits";
   import { includedPaths, resolve } from "../lib/editor/resolve";
   import { layout, type Graph } from "../lib/graph";
@@ -196,7 +197,8 @@
   }
 
   // The commit: a message and the branch it lands on, the default branch the file was opened at or
-  // a new one starting there, sent over git as the person signed in.
+  // a new one starting there, sent over git as the person signed in, with a token minted for the
+  // push alone (lib/git/token), since the repository takes no session.
   let committing = $state(false);
   let message = $state("Update agentiik.yaml");
   let target = $state<"default" | "new">(untrack(() => (ontoDefault ? "default" : "new")));
@@ -212,16 +214,18 @@
     commitProblem = null;
     try {
       const login = me.user?.login ?? me.principal;
-      const id = await commitFile({
-        remote: { url: cloneURL, fetch: (input, init) => fetch(input, init) },
-        parent: commit,
-        branch: onto,
-        create: target === "new",
-        path: "agentiik.yaml",
-        text,
-        message: message.trim(),
-        author: { name: me.user?.display_name ?? login, email: me.user?.email || `${login}@${new URL(cloneURL).hostname}`, when: new Date() },
-      });
+      const id = await withPushToken(api, cloneURL, (remote) =>
+        commitFile({
+          remote,
+          parent: commit,
+          branch: onto,
+          create: target === "new",
+          path: "agentiik.yaml",
+          text,
+          message: message.trim(),
+          author: { name: me.user?.display_name ?? login, email: me.user?.email || `${login}@${new URL(cloneURL).hostname}`, when: new Date() },
+        }),
+      );
       committing = false;
       oncommitted(onto, id);
     } catch (err) {
