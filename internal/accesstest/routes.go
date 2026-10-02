@@ -193,6 +193,7 @@ var Cases = []Case{
 
 	// Runs and their data.
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/runs", Permission: api.WorkflowRun, Scope: api.Workflow}, Refused: true},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/inputs", Permission: api.WorkflowRun, Scope: api.Workflow}},
 	// What the default branch's head has armed, "to whoever holds workflow:read".
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/triggers", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	// What a webhook checks its caller against, written by whoever may change the workflow, and the
