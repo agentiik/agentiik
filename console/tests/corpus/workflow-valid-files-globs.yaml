@@ -1,0 +1,26 @@
+# valid: a step narrowed to what a glob matches, and a glob relocated into the
+#   directory a tool reads. ./sql/**/*.sql is every .sql file at any depth under
+#   sql/, and each keeps its path below sql/ under /docker-entrypoint-initdb.d.
+# covers: files with a directory, ** and * in a glob, a glob relocated into a
+#   directory with a mode, a file relocated to a path of its own.
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: ledger-bootstrap
+  namespace: finance
+
+steps:
+
+  seed:
+    image: postgres:17-alpine@sha256:8e21af18c6b590f2df7fa9bc364251212900a8d3493ed74f96bf418479a34b70
+    files:
+      - ./schemas
+      - ./fixtures/**/*.csv
+      - { from: ./sql/**/*.sql, to: /docker-entrypoint-initdb.d, mode: "0444" }
+      - { from: ./certs/internal-ca.pem, to: /etc/ssl/certs/internal-ca.pem, mode: "0444" }
+    script:
+      - psql -f /docker-entrypoint-initdb.d/orders.sql
+    outputs: [out]

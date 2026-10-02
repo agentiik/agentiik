@@ -197,8 +197,9 @@ func TestARealDaemonStopsAContainerWithTheGraceItWasGiven(t *testing.T) {
 	created, err := c.ContainerCreate(t.Context(), "", docker.Config{
 		Image: image,
 		// A shell that takes its term and does not go, which is the container
-		// the escalation exists for.
-		Cmd: []string{"/bin/sh", "-c", "trap '' TERM; sleep 300"},
+		// the escalation exists for. It says so once the trap is set, since a term
+		// sent before would end it as any shell ends, 143 at once.
+		Cmd: []string{"/bin/sh", "-c", "trap '' TERM; echo trapped; sleep 300"},
 	}, docker.HostConfig{NetworkMode: "none"}, docker.NetworkingConfig{})
 	if err != nil {
 		t.Fatalf("creating: %v", err)
@@ -212,6 +213,36 @@ func TestARealDaemonStopsAContainerWithTheGraceItWasGiven(t *testing.T) {
 	if err := c.ContainerStart(t.Context(), created.ID); err != nil {
 		t.Fatalf("starting: %v", err)
 	}
+	// The stop is sent once the shell has set its trap, and not as soon as the daemon
+	// started it, which is a race the shell loses on a fast machine.
+	logs, err := c.ContainerLogs(t.Context(), created.ID, docker.LogOptions{Stdout: true, Follow: true})
+	if err != nil {
+		t.Fatalf("following the log: %v", err)
+	}
+	trapped := make(chan bool, 1)
+	go func() {
+		var logged strings.Builder
+		for {
+			frame, err := logs.Next()
+			if err != nil {
+				trapped <- false
+				return
+			}
+			if logged.Write(frame.Bytes); strings.Contains(logged.String(), "trapped") {
+				trapped <- true
+				return
+			}
+		}
+	}()
+	select {
+	case ok := <-trapped:
+		if !ok {
+			t.Fatal("the shell ended before it set its trap")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the shell never set its trap")
+	}
+	logs.Close()
 
 	started := time.Now()
 	if err := c.ContainerStop(t.Context(), created.ID, 2*time.Second); err != nil {

@@ -48,7 +48,10 @@ export class Ranged {
   }
 }
 
-// query is a range as every statistics route takes it.
+// query is a range as every statistics route takes it: Max as range=max, which starts where the
+// route's first run is, and any other with from.
 export function query(r: Range) {
-  return { from: r.from.toISOString(), to: r.to.toISOString(), compare: r.compare ? ("previous" as const) : undefined };
+  const compare = r.compare ? ("previous" as const) : undefined;
+  if (r.preset === "max") return { range: "max" as const, from: undefined, to: r.to.toISOString(), compare };
+  return { range: undefined, from: r.from.toISOString(), to: r.to.toISOString(), compare };
 }

@@ -98,3 +98,70 @@ func refuseInput(w http.ResponseWriter, r *schema.InputRefusal) {
 		"error": r.Error(), "input": r.Input, "rule": r.Rule,
 	})
 }
+
+// declaredInput is one input a version declares, as GET /api/v1/{ns}/workflows/{name}/inputs
+// answers it: the schema as the file writes it, absent where it declares none, whether a run
+// supplying nothing is refused, and the value standing in for one it does not supply.
+type declaredInput struct {
+	Schema   json.RawMessage `json:"schema,omitempty"`
+	Required bool            `json:"required"`
+	Default  any             `json:"default,omitempty"`
+}
+
+// runInputs answers GET /api/v1/{ns}/workflows/{name}/inputs, under workflow:run: what a manual
+// run of the version ref names takes, the default branch's head where it names none. The inputs
+// that version declares and the files of its tree their schemas reach, and nothing else of the
+// file, since an operator holds workflow:run without workflow:read so that it starts a job
+// without seeing the steps, images, queries and endpoints inside it; the inputs are the boundary
+// whoever asks for a run has to fill. Read as a run reads them, so that a version a run would be
+// refused at is refused here with the same status.
+func (s *Server) runInputs(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
+	declared, err := s.starter.Declared(r.Context(), trigger.Request{
+		Namespace: over.Namespace, Workflow: over.Workflow, Ref: r.URL.Query().Get("ref"),
+	})
+	var ref *db.RefUnresolved
+	switch {
+	case err == nil:
+	case errors.As(err, &ref) && ref.Ambiguous:
+		fail(w, http.StatusBadRequest, ref.Error())
+		return
+	case errors.As(err, &ref):
+		fail(w, http.StatusNotFound, ref.Error())
+		return
+	case errors.Is(err, db.ErrNoWorkflow), errors.Is(err, db.ErrNoVersion):
+		// The same answer an inaccessible one gets, for the same reason.
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	case errors.Is(err, version.ErrLibrary):
+		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("%s at %s is a library: its root agentiik.yaml is written as a fragment, which other workflows include and nothing runs", over.Workflow, declared.Commit))
+		return
+	case errors.Is(err, trigger.ErrNoObjectStore):
+		fail(w, http.StatusServiceUnavailable, err.Error())
+		return
+	case errors.Is(err, trigger.ErrDeclarationRefused):
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	default:
+		if !errors.Is(err, context.Canceled) {
+			s.report(fmt.Errorf("api: the inputs of %s/%s could not be read: %w", over.Namespace, over.Workflow, err))
+		}
+		fail(w, http.StatusInternalServerError, "the inputs could not be read")
+		return
+	}
+	inputs := make(map[string]declaredInput, len(declared.Inputs))
+	for name, in := range declared.Inputs {
+		d := declaredInput{Required: in.Required, Default: in.Default}
+		// The reader writes JSON null for a key that was present and empty, which declares no
+		// schema, as DeclaredInputs reads it.
+		if raw := bytes.TrimSpace(in.Schema); len(raw) > 0 && !bytes.Equal(raw, []byte("null")) {
+			d.Schema = raw
+		}
+		inputs[name] = d
+	}
+	files := declared.Files
+	if files == nil {
+		files = map[string]any{}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	write(w, http.StatusOK, map[string]any{"commit": declared.Commit, "inputs": inputs, "files": files})
+}

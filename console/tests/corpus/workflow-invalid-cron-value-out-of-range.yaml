@@ -1,0 +1,21 @@
+# invalid: A cron field naming a minute past the hour's last. Each field is
+#   bounded by what it counts, and a value outside it names an occurrence that
+#   never comes.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: price-quotes
+  namespace: sales
+
+on:
+  schedule:
+    - cron: "60 6 * * *"
+
+steps:
+  quote:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

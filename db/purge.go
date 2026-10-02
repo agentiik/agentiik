@@ -655,19 +655,22 @@ func (p *Pool) Collectable(ctx context.Context, grace time.Duration, batch int) 
 			  limit $2
 			  for update of o skip locked
 			)
-			returning namespace, digest, size_bytes`, int64(grace/time.Second), batch)
+			returning namespace, digest, size_bytes,
+			          coalesce((select n.storage from namespaces n where n.name = artifact_objects.namespace), namespace)`,
+			int64(grace/time.Second), batch)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var o Object
-			var stored string
-			if err := rows.Scan(&o.Namespace, &stored, &o.Size); err != nil {
+			var stored, storage string
+			if err := rows.Scan(&o.Namespace, &stored, &o.Size, &storage); err != nil {
 				return err
 			}
 			o.Digest = trimAlgorithm(stored)
-			o.Key = artifact.Key(o.Namespace, o.Digest)
+			// Under the namespace's storage name, which every object of it is kept under.
+			o.Key = artifact.Key(storage, o.Digest)
 			out = append(out, o)
 		}
 		return rows.Err()

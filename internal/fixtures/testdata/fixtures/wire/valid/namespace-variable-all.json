@@ -1,0 +1,7 @@
+{
+  "name": "ledger_url",
+  "value": "https://ledger.example.com/api",
+  "visibility": "all",
+  "updated_by": "alice",
+  "updated_at": "2026-10-01T09:10:00Z"
+}

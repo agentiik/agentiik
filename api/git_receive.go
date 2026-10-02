@@ -702,10 +702,14 @@ func (s *Server) hook(ctx context.Context, r *http.Request, over Target, rc *rec
 	if len(c.Parents) > 0 {
 		j.parent = c.Parents[0].String()
 	}
+	former, err := formerNames(ctx, s.pool, over.Namespace)
+	if err != nil {
+		return judged{}, &pushFault{"the names the namespace held could not be read", err}
+	}
 	// Judged by the rules first, which name what they refuse and where, and its files read after.
 	tree := repo.NewTreeFS(ctx, rc.objects, c.Tree)
 	j.checked, err = version.Check(ctx, tree, version.Checking{
-		Commit: commit.String(), Committed: true, Namespace: over.Namespace, Repository: over.Workflow,
+		Commit: commit.String(), Committed: true, Namespace: over.Namespace, FormerNamespaces: former, Repository: over.Workflow,
 		Resolvers: s.resolvers(r, over),
 	})
 	var rule *graph.Refusal
@@ -1006,13 +1010,17 @@ const afterPushTimeout = time.Minute
 // writeAgain writes again, as the tree push does, each object a sweep had claimed while a version
 // raised its reference onto it, and each whose row the version had to create: see there.
 func (s *Server) writeAgain(ctx context.Context, over Target, rc *received, all []made, saved []db.Saved) error {
+	storage, err := s.pool.Storage(ctx, over.Namespace)
+	if err != nil {
+		return err
+	}
 	for i, m := range all {
 		again := map[string]fileOf{}
 		for _, digest := range saved[i].MustWriteBytes {
 			again[digest] = m.files[digest]
 		}
 		for _, digest := range saved[i].Recorded {
-			held, err := s.objects.Has(ctx, artifact.Key(over.Namespace, digest))
+			held, err := s.objects.Has(ctx, artifact.Key(storage, digest))
 			if err != nil {
 				return err
 			}
@@ -1119,15 +1127,20 @@ func digestOf(ctx context.Context, objects repo.Lookup, blob repo.ID) (string, i
 }
 
 // storeFiles writes each file as the object a runner fetches, by its SHA-256, streamed from its
-// blob, leaving one the store holds unless again says to write it all the same.
+// blob, leaving one the store holds unless again says to write it all the same. Each is kept under
+// the namespace's storage name, which every object of it is kept under.
 func (s *Server) storeFiles(ctx context.Context, namespace string, objects repo.Lookup, files map[string]fileOf, again bool) error {
+	storage, err := s.pool.Storage(ctx, namespace)
+	if err != nil {
+		return err
+	}
 	digests := make([]string, 0, len(files))
 	for digest := range files {
 		digests = append(digests, digest)
 	}
 	slices.Sort(digests)
 	for _, digest := range digests {
-		key := artifact.Key(namespace, digest)
+		key := artifact.Key(storage, digest)
 		if !again {
 			held, err := s.objects.Has(ctx, key)
 			if err != nil {

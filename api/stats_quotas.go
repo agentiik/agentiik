@@ -23,8 +23,16 @@ func (s *NamespaceAPI) statistics(w http.ResponseWriter, r *http.Request, _ Prin
 	if !ok {
 		return
 	}
-	out := statsQuotas{From: stamp(rng.From), To: stamp(rng.To), Bucket: rng.Bucket, Quotas: quotasOf(n.Quotas)}
+	out := statsQuotas{Quotas: quotasOf(n.Quotas)}
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		if rng.Max {
+			first, err := ns.FirstLoad(ctx, rng.To)
+			if err != nil {
+				return err
+			}
+			rng = rng.reach(first)
+		}
+		out.From, out.To, out.Bucket = stamp(rng.From), stamp(rng.To), rng.Bucket
 		current, err := ns.QuotaStatistics(ctx, rng.Buckets)
 		if err != nil {
 			return err

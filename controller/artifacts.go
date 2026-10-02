@@ -116,7 +116,8 @@ func declaresRetain(wf *graph.Workflow, step agk.Step, port agk.Port) bool {
 // runRetain is how long a run's envelopes and logs are kept once it has finished: "Envelopes and
 // logs are not declared one at a time the way an output is, so they live by the workflow's
 // defaults.retain". Zero where the workflow declares none, which the database resolves, as it caps
-// every retention, to the namespace's max_retention_days.
+// every retention, to the namespace's max_retention_days, or to for ever where the namespace sets
+// none.
 func runRetain(g *graph.Graph) time.Duration {
 	if g == nil || g.Workflow() == nil || g.Workflow().Defaults.Retain == nil {
 		return 0

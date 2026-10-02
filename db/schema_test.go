@@ -264,6 +264,8 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// The runs a namespace was refused for its quota, which its own chart draws beside those
 		// it created.
 		"run_refusals": true,
+		// A namespace's variables, which its own workflows read and no other namespace's.
+		"namespace_variables": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -347,10 +349,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 // declared: a new escape is a line somebody adds here, not a habit that spreads.
 func TestEveryEscapeIsNamed(t *testing.T) {
 	declared := map[string]bool{}
-	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, EventDelivery, SchemaUpgrade} {
+	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, InstallationActivity, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, EventDelivery, SchemaUpgrade} {
 		declared[string(r)] = true
 	}
-	if len(declared) != 16 {
+	if len(declared) != 17 {
 		t.Fatalf("two reasons share a string: %v", declared)
 	}
 
@@ -456,7 +458,10 @@ func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
 	// writes it depends on the row, so every table with one is decided about here.
 	fileNames := map[string]bool{"workflows": true, "secret_declarations": true, "secret_values": true,
 		// The name a workflow moving to a namespace holds there, which is the workflow's.
-		"move_targets": true}
+		"move_targets": true,
+		// A namespace's variable, read as vars.<name>, on the grammar a file's vars names its keys
+		// with.
+		"namespace_variables": true}
 	otherNames := map[string]string{
 		"namespaces":        "a namespace is held to a narrower grammar of its own",
 		"runner_pools":      "a pool is named by an administrator, not by the workflow file",
@@ -526,6 +531,7 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 	step := "normalize-" + strings.Repeat("s", agk.IdentifierMaxBytes-len("normalize-"))
 	port := "rejected-" + strings.Repeat("p", agk.IdentifierMaxBytes-len("rejected-"))
 	secret := "billing-" + strings.Repeat("k", 60)
+	variable := "ledger_url-" + strings.Repeat("v", 60)
 	const run = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
 
 	for _, s := range []struct {
@@ -566,6 +572,8 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 			[]any{workflow, strings.Repeat("a", 40)}},
 		{`insert into webhook_credentials (namespace, workflow, path, method, written_by)
 		  values ('finance', $1, '/invoicing', 'POST', 'alice')`, []any{workflow}},
+		{`insert into namespace_variables (namespace, name, value, value_bytes, value_count, visibility, updated_by)
+		  values ('finance', $1, '"EUR"', 5, 1, 'all', 'alice')`, []any{variable}},
 	} {
 		if _, err := conn.Exec(ctx, s.sql, s.args...); err != nil {
 			t.Fatalf("%s: %s", s.sql, err)
@@ -591,6 +599,7 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		"brick_manifests.workflow":     {workflow},
 		"triggers.workflow":            {workflow},
 		"webhook_credentials.workflow": {workflow},
+		"namespace_variables.name":     {variable},
 	}
 	for _, c := range schemaColumns(t, conn) {
 		if c.typeName == "identifier" && written[c.table+"."+c.column] == nil {

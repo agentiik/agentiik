@@ -109,6 +109,10 @@ type GrantSecret struct {
 type Redeemed struct {
 	Namespace string
 
+	// Storage is the namespace's storage name, which every object it holds is kept under and its
+	// secrets' values are sealed under (NS.Storage): what a redemption presigns its URLs for.
+	Storage string
+
 	// Row is the task's own identifier, the one the grant names inside its text, and Task is
 	// the idempotency key that says which unit of work it is. A redemption is asked with both
 	// and answers the row.
@@ -349,7 +353,11 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 			return Redeemed{}, err
 		}
 	}
-	return Redeemed{Namespace: namespace, Row: id, Task: key, Scope: scope, ExpiresAt: expires}, nil
+	storage, err := storageOf(ctx, w.tx, namespace)
+	if err != nil {
+		return Redeemed{}, err
+	}
+	return Redeemed{Namespace: namespace, Storage: storage, Row: id, Task: key, Scope: scope, ExpiresAt: expires}, nil
 }
 
 // mayTake holds a runner that would bind a task to what it may take: its standing first, then its

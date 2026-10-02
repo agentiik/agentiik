@@ -1,6 +1,6 @@
 import { Refusal, refusal, type API } from "../api/client";
 import type { components } from "../api/schema";
-import { ceremonyProblem, creationOptions, credentialJSON, type CreationOptionsJSON } from "./signin";
+import { CeremonyFailed, ceremonyProblem, creationOptions, credentialJSON, type CreationOptionsJSON } from "./signin";
 
 // What a person signs in with and what their scripts do, read and changed from the console: the
 // passkeys, the password and the one-time code generator GET /api/v1/me/credentials lists, the API
@@ -81,10 +81,10 @@ export async function addPasskey(api: API, credentials: CredentialsContainer, la
   try {
     made = await credentials.create({ publicKey: creationOptions(started.data.options as unknown as CreationOptionsJSON) });
   } catch (e) {
-    throw new Error(ceremonyProblem(e));
+    throw new CeremonyFailed(ceremonyProblem(e));
   }
   if (!made || made.type !== "public-key") {
-    throw new Error("No passkey was made. Try again, on this device or on a phone nearby.");
+    throw new CeremonyFailed("No passkey was created.");
   }
   const body: { ceremony: "registration"; credential: CredentialJSON; label?: string } = {
     ceremony: "registration",

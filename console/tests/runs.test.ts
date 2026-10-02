@@ -46,7 +46,7 @@ describe("a namespace's runs", () => {
   it("say why where the API refused them", async () => {
     const list = new RunList(connect("http://stand-in/", answering({ "GET /api/v1/runs": { status: 400, body: { error: "\"x\" is not a run state" } } })), "finance", { span: "all" }, now);
     await list.read();
-    expect(list.refused).toBe("\"x\" is not a run state");
+    expect(list.refused?.why).toBe("\"x\" is not a run state.");
     expect(list.runs).toEqual([]);
   });
 });

@@ -37,7 +37,7 @@ func anInstallationWithTokens(t *testing.T) tokenInstallation {
 	in := tokenInstallation{alice: "agktoken_alice" + strings.Repeat("C", 40), bob: "agktoken_bob" + strings.Repeat("D", 40)}
 	now := time.Now().UTC()
 	err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		for _, u := range []db.User{{Login: "alice", DisplayName: "Alice"}, {Login: "bob", DisplayName: "Bob"}} {
+		for _, u := range []db.User{{Login: "alice", Profile: db.Profile{GivenName: "Alice"}}, {Login: "bob", Profile: db.Profile{GivenName: "Bob"}}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}

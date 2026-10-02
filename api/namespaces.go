@@ -20,15 +20,20 @@ import (
 	"github.com/agentiik/agentiik/internal/ulid"
 )
 
-// The namespaces, as an administrator creates, bounds and removes them, and as whoever holds a
-// grant in one reads it: /api/v1/namespaces.
+// The namespaces, as a user or an administrator creates them, their owners rename, picture and
+// remove them, an administrator bounds them, and whoever holds a grant in one reads it:
+// /api/v1/namespaces.
 //
-// "A platform administrator manages users, groups, namespaces, quotas, runners, runner policies and
-// the authentication policy", so every change here is an administrator's, asked as grant:manage at
-// the installation as the runner pools are, and answered 403 to anybody else before the namespace
-// is looked up. Reading is wider: a namespace's record is "to an administrator and to a principal
-// holding a grant in it; anyone else is answered the 404 of one that does not exist", which the
-// router answers through OnNamespace.
+// "Any user creates a shared namespace, and owns it ... An administrator alone names another owner,
+// a user or a group, or sets quotas at its creation", so the creation is a route about its caller,
+// which asks whether the caller administers the installation for what only an administrator may
+// write. "Its owner, whoever holds grant:manage at its scope, which the owner role carries, renames
+// it, gives it a picture and removes it once it holds nothing, and so may an administrator; its
+// quotas stay an administrator's to change": those routes need grant:manage at the namespace, or the
+// administrator's power, and its quotas grant:manage at the installation, answered 403 to anybody
+// else before the namespace is looked up. Reading is wider: a namespace's record and its picture are
+// "to an administrator and to a principal holding a grant in it; anyone else is answered the 404 of
+// one that does not exist", which the router answers through OnNamespace.
 //
 // Everything is asked and answered in the shapes wire.schema.json gives it, $defs/namespaceRecord
 // and $defs/quotas, which a console, the Terraform provider and agk are written against.
@@ -72,20 +77,35 @@ func routesOn(word string) string {
 }
 
 // NamespaceRecord is a namespace as the wire writes it, $defs/namespaceRecord: its name, whether it
-// is somebody's personal namespace or a shared one, its owner where it has one, and its quotas.
-//
-// It is also what POST /api/v1/namespaces reads, the openapi's namespaceCreate: a name, an owner,
-// and quotas where they are not the defaults. Kind is shared there, and shared where it is left
-// out, since "every user owns a personal namespace named after their login, created on first
-// sign-in", and never by an administrator.
+// is somebody's personal namespace or a shared one, its owner where it has one, its quotas, the names
+// it held before a rename and when its picture was set.
 type NamespaceRecord struct {
+	Name   string  `json:"name"`
+	Kind   string  `json:"kind,omitempty"`
+	Owner  string  `json:"owner,omitempty"`
+	Quotas *Quotas `json:"quotas,omitempty"`
+
+	// FormerNames are the names it held before a rename, in the order it left them, each still
+	// reaching it, and empty where it was never renamed.
+	FormerNames []string `json:"former_names"`
+
+	// AvatarUpdatedAt is when its picture was set, and null where it has none: a client adds it to
+	// the picture's address, so that a picture set again is never taken from a cache.
+	AvatarUpdatedAt *time.Time `json:"avatar_updated_at"`
+}
+
+// NamespaceCreate is what POST /api/v1/namespaces reads, the openapi's namespaceCreate: a name, and
+// an owner and quotas where an administrator writes them. Kind is shared, and shared where it is
+// left out, since "every user owns a personal namespace named after their login, created on first
+// sign-in", and never here.
+type NamespaceCreate struct {
 	Name   string  `json:"name"`
 	Kind   string  `json:"kind,omitempty"`
 	Owner  string  `json:"owner,omitempty"`
 	Quotas *Quotas `json:"quotas,omitempty"`
 }
 
-func (n *NamespaceRecord) field(b *body, name string) error {
+func (n *NamespaceCreate) field(b *body, name string) error {
 	switch name {
 	case "name":
 		return text(b, &n.Name)
@@ -123,8 +143,10 @@ func (n *NamespaceRecord) field(b *body, name string) error {
 //
 // Each is left out where it is not set, and none is ever written as zero or empty: each count
 // "starts at one", and an empty allowed_runner_pools is refused rather than read. An answer always
-// writes max_concurrent_tasks and max_retention_days, which "always hold a value, 20 and 90 until
-// an administrator sets another", and the other four where they are set.
+// writes max_concurrent_tasks, which "always holds a value, 20 until an administrator sets
+// another", and the other five where they are set: max_retention_days among them, which bounds
+// nothing until it is set, so that an installation keeps what it ran until somebody decides
+// otherwise.
 type Quotas struct {
 	MaxConcurrentTasks int      `json:"max_concurrent_tasks,omitempty"`
 	MaxRunsPerHour     int      `json:"max_runs_per_hour,omitempty"`
@@ -239,10 +261,42 @@ type NamespaceList struct {
 	Namespaces []NamespaceRecord `json:"namespaces"`
 }
 
-// recordOf is a namespace as it is answered.
+// recordOf is a namespace as it is answered: its former names always written, empty where it was
+// never renamed, and when its picture was set always written, null where it has none, so that a
+// client reads one spelling of nothing.
 func recordOf(n db.Namespace) NamespaceRecord {
 	q := quotasOf(n.Quotas)
-	return NamespaceRecord{Name: n.Name, Kind: n.Kind, Owner: n.Owner, Quotas: &q}
+	record := NamespaceRecord{Name: n.Name, Kind: n.Kind, Owner: n.Owner, Quotas: &q, FormerNames: []string{}}
+	record.FormerNames = append(record.FormerNames, n.FormerNames...)
+	if !n.AvatarUpdatedAt.IsZero() {
+		at := n.AvatarUpdatedAt.UTC()
+		record.AvatarUpdatedAt = &at
+	}
+	return record
+}
+
+// NamespaceUpdate is what PATCH /api/v1/namespaces/{ns} changes, the openapi's namespaceUpdate: the
+// namespace's settings as a partial object, each field it names set and each it leaves out kept.
+// Name alone today; "the route takes more fields as the settings grow", each a pointer here so that
+// a field left out is told from one written, and null is refused rather than read as either.
+type NamespaceUpdate struct {
+	Name *string `json:"name,omitempty"`
+}
+
+func (u *NamespaceUpdate) field(b *body, name string) error {
+	switch name {
+	case "name":
+		if err := notNullHere(b, "the namespace's new name"); err != nil {
+			return err
+		}
+		var to string
+		if err := text(b, &to); err != nil {
+			return err
+		}
+		u.Name = &to
+		return nil
+	}
+	return unknown(name)
 }
 
 func quotasOf(q db.Quotas) Quotas {
@@ -268,12 +322,26 @@ type NamespaceOptions struct {
 
 	// Now is the clock a statistics range defaults to, an argument so that a test has one.
 	Now func() time.Time
+
+	// Trouble is told why a request was answered 500, which the caller is not, since the cause is
+	// the installation's and may name its tables: without it, an operator reading the API's log
+	// would find the request and nothing of what went wrong. Nil drops it.
+	Trouble func(error)
 }
 
 // NamespaceAPI serves /api/v1/namespaces, and a namespace's load against its quotas.
 type NamespaceAPI struct {
-	pool *db.Pool
-	now  func() time.Time
+	pool    *db.Pool
+	now     func() time.Time
+	trouble func(error)
+}
+
+// broke answers 500 with what could not be done, and tells Trouble why.
+func (s *NamespaceAPI) broke(w http.ResponseWriter, r *http.Request, message string, err error) {
+	if s.trouble != nil {
+		s.trouble(fmt.Errorf("%s %s: %s: %w", r.Method, r.URL.Path, message, err))
+	}
+	fail(w, http.StatusInternalServerError, message)
 }
 
 // NewNamespaces registers the namespace routes on a router. The router's authorizer has to say
@@ -289,19 +357,33 @@ func NewNamespaces(rt *Router, o NamespaceOptions) (*NamespaceAPI, error) {
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
-	s := &NamespaceAPI{pool: o.Pool, now: o.Now}
+	s := &NamespaceAPI{pool: o.Pool, now: o.Now, trouble: o.Trouble}
+	// A namespace renamed answers to its former names on every route naming it, these among them.
+	rt.ServeNamespaces(o.Pool)
 
+	// Any user creates a namespace, owned by them, and an administrator one for another owner: a
+	// route about its caller, which asks whether the caller administers what only an administrator
+	// may write.
+	if err := rt.HandleOwn("POST", "/api/v1/namespaces", Own{}, s.create); err != nil {
+		return nil, err
+	}
 	admin := Needs{Permission: GrantManage, Scope: Installation}
+	// The namespace's owner, whoever holds grant:manage at its scope, "which the owner role
+	// carries", or an administrator, by the installation's power over every namespace.
+	owner := Needs{Permission: GrantManage, Scope: Namespace, OrAdministrator: true}
 	for _, r := range []struct {
 		method  string
 		pattern string
 		guard   Guard
 		handler Handler
 	}{
-		{"POST", "/api/v1/namespaces", admin, s.create},
 		{"GET", "/api/v1/namespaces", OnNamespace{}, s.list},
 		{"GET", "/api/v1/namespaces/{namespace}", OnNamespace{}, s.one},
-		{"DELETE", "/api/v1/namespaces/{namespace}", admin, s.remove},
+		{"PATCH", "/api/v1/namespaces/{namespace}", owner, s.update},
+		{"DELETE", "/api/v1/namespaces/{namespace}", owner, s.remove},
+		{"GET", "/api/v1/namespaces/{namespace}/avatar", OnNamespace{}, s.avatar},
+		{"PUT", "/api/v1/namespaces/{namespace}/avatar", owner, s.setAvatar},
+		{"DELETE", "/api/v1/namespaces/{namespace}/avatar", owner, s.removeAvatar},
 		{"GET", "/api/v1/namespaces/{namespace}/quotas", OnNamespace{}, s.quotas},
 		{"PUT", "/api/v1/namespaces/{namespace}/quotas", admin, s.setQuotas},
 		// A namespace's load against its quotas, to whoever reads the quotas, "since a quota
@@ -353,14 +435,28 @@ func poolsExist(ctx context.Context, w *db.Wide, names []string) error {
 	return nil
 }
 
-// create is POST /api/v1/namespaces: a shared namespace, with its owner and its quotas.
+// The refusals of a caller who may not create the namespace it asks for, each a 403.
+const (
+	accountCreatesNoNamespace  = "a service account creates no namespace: a namespace is a person's, who owns it and answers for what is shared in it, and an administrator creates one for a team"
+	narrowedCreatesNoNamespace = "a token narrowed by a scope creates no namespace, since a scope keeps only the permissions it names and creating a namespace is none of them: use a credential that carries no scope"
+	ownerIsAnAdministrators    = "a namespace you create is owned by you: naming another owner, a user or a group, is an administrator's, since it hands somebody a namespace they did not ask for"
+	quotasAreAnAdministrators  = "quotas are an administrator's to set: a namespace you create takes the installation's defaults, and an administrator changes them at PUT /api/v1/namespaces/{ns}/quotas"
+)
+
+// create is POST /api/v1/namespaces: a shared namespace, owned by whoever creates it, or by the
+// owner an administrator names, with the quotas an administrator sets.
+//
+// "Any user creates a shared namespace, and owns it ... An administrator alone names another owner,
+// a user or a group, or sets quotas at its creation, and a namespace a user creates takes the
+// installation's defaults." A service account and a token narrowed by a scope create none, since a
+// namespace is a person's; the bootstrap token, which administers and is nobody, names its owner.
 //
 // The owner is given the owner role on it in the same transaction, granted by whoever created it,
 // so that it can do what an owner does from the moment the namespace exists: share it, and act in
 // it. Without that grant an owner would own a namespace in its record alone, and be refused
 // everything in it.
-func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
-	var ask NamespaceRecord
+func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, caller Caller) {
+	var ask NamespaceCreate
 	if err := readAtMost(r, &ask, smallMaxBytes); err != nil {
 		fail(w, statusOf(err), err.Error())
 		return
@@ -369,9 +465,32 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if ask.Owner == "" {
-		fail(w, http.StatusBadRequest, "the request names no owner: a namespace is created with one, a user or group:NAME, who is told when an administrator widens their own access in it")
+	who := caller.Principal
+	admin, err := caller.Administers(r.Context())
+	if err != nil {
+		s.broke(w, r, "the request could not be authorised", err)
 		return
+	}
+	switch {
+	case admin && ask.Owner == "" && who == BootstrapOperator:
+		fail(w, http.StatusBadRequest, "the request names no owner, and the bootstrap token is nobody: a namespace it creates names its owner, a user or group:NAME, who is told when an administrator widens their own access in it")
+		return
+	case admin:
+	case who == BootstrapOperator, strings.Contains(string(who), "/"):
+		fail(w, http.StatusForbidden, accountCreatesNoNamespace)
+		return
+	case caller.Narrowed():
+		fail(w, http.StatusForbidden, narrowedCreatesNoNamespace)
+		return
+	case ask.Owner != "" && ask.Owner != string(who):
+		fail(w, http.StatusForbidden, ownerIsAnAdministrators)
+		return
+	case ask.Quotas != nil:
+		fail(w, http.StatusForbidden, quotasAreAnAdministrators)
+		return
+	}
+	if ask.Owner == "" {
+		ask.Owner = string(who)
 	}
 	quotas := Quotas{}
 	if ask.Quotas != nil {
@@ -387,7 +506,7 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, who Princi
 	}
 
 	var created db.Namespace
-	err := s.pool.Installation(r.Context(), db.NamespaceAdministration, func(ctx context.Context, wide *db.Wide) error {
+	err = s.pool.Installation(r.Context(), db.NamespaceAdministration, func(ctx context.Context, wide *db.Wide) error {
 		kind, err := wide.PrincipalKind(ctx, ask.Owner)
 		switch {
 		case errors.Is(err, db.ErrNoPrincipal):
@@ -431,9 +550,13 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, who Princi
 		})
 	})
 	var missing noSuchPools
+	var held *db.NameHeld
 	switch {
 	case errors.Is(err, errNamespaceExists):
 		fail(w, http.StatusConflict, ask.Name+" is already a namespace")
+		return
+	case errors.As(err, &held) && held.Former:
+		fail(w, http.StatusConflict, heldRefusal(held))
 		return
 	case errors.Is(err, db.ErrNameTaken):
 		fail(w, http.StatusConflict, ask.Name+" is a user's login, and logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them")
@@ -447,7 +570,7 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, http.StatusUnprocessableEntity, missing.Error())
 		return
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace could not be created")
+		s.broke(w, r, "the namespace could not be created", err)
 		return
 	}
 	write(w, http.StatusCreated, recordOf(created))
@@ -464,7 +587,7 @@ func (s *NamespaceAPI) list(w http.ResponseWriter, r *http.Request, _ Principal,
 		return err
 	})
 	if err != nil {
-		fail(w, http.StatusInternalServerError, "the namespaces could not be read")
+		s.broke(w, r, "the namespaces could not be read", err)
 		return
 	}
 	seen := NamespaceList{Namespaces: []NamespaceRecord{}}
@@ -512,7 +635,7 @@ func (s *NamespaceAPI) read(w http.ResponseWriter, r *http.Request, name string)
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
 		return db.Namespace{}, false
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace could not be read")
+		s.broke(w, r, "the namespace could not be read", err)
 		return db.Namespace{}, false
 	}
 	return n, true
@@ -538,7 +661,7 @@ func (s *NamespaceAPI) remove(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, http.StatusConflict, holds.Held())
 		return
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace could not be removed")
+		s.broke(w, r, "the namespace could not be removed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -581,11 +704,10 @@ func RemoveNamespace(ctx context.Context, pool *db.Pool, name string, who Princi
 
 // setQuotas is PUT /api/v1/namespaces/{namespace}/quotas: the namespace's quotas, whole.
 //
-// "max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an
-// administrator sets another, and a write that leaves either out keeps the value it has. The other
-// four bound nothing until they are set, and a write that leaves one out removes its bound." So the
-// body is the whole of what the four bound, and what a Terraform apply sends is what the namespace
-// holds after it.
+// "max_concurrent_tasks always holds a value, 20 until an administrator sets another, and a write
+// that leaves it out keeps the value it has. The other five bound nothing until they are set, and a
+// write that leaves one out removes its bound." So the body is the whole of what the five bound,
+// and what a Terraform apply sends is what the namespace holds after it.
 func (s *NamespaceAPI) setQuotas(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := over.Namespace
 	if NamespaceRef(name) != nil {
@@ -623,8 +745,208 @@ func (s *NamespaceAPI) setQuotas(w http.ResponseWriter, r *http.Request, who Pri
 		fail(w, http.StatusUnprocessableEntity, missing.Error())
 		return
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace's quotas could not be set")
+		s.broke(w, r, "the namespace's quotas could not be set", err)
 		return
 	}
 	write(w, http.StatusOK, quotasOf(set.Quotas))
+}
+
+// heldRefusal is the refusal of a name somebody holds, in the words the creation and the rename of
+// a namespace both say it in.
+func heldRefusal(held *db.NameHeld) string {
+	switch {
+	case held.Login:
+		return held.Name + " is a user's login, and logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace given it first would take it from them"
+	case held.Former && held.Namespace != "":
+		return held.Name + " is a name namespace " + held.Namespace + " held before it was renamed, and a name a namespace held stays its own until that namespace is removed, so that an address written with it reaches nobody else"
+	case held.Former:
+		return held.Name + " is a name another namespace held before it was renamed, and a name a namespace held stays its own until that namespace is removed, so that an address written with it reaches nobody else"
+	}
+	return held.Name + " is already a namespace"
+}
+
+// update is PATCH /api/v1/namespaces/{namespace}: the namespace's settings, each the body names set
+// and each it leaves out kept. name is the one it takes today, which renames a shared namespace.
+//
+// "The rename is one transaction and carries everything at once", made by db.Wide.RenameNamespace
+// beside its audit entry, and answered with the namespace's record under its new name. A name off
+// the grammar is the body's fault, 400; a name held, by a login, a namespace, a word the API routes
+// on or another namespace's former name, and a namespace that cannot be renamed now, are 409, each
+// saying which.
+func (s *NamespaceAPI) update(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	name := over.Namespace
+	if NamespaceRef(name) != nil {
+		fail(w, http.StatusNotFound, "there is no namespace of that name")
+		return
+	}
+	var ask NamespaceUpdate
+	if err := readObject(r, &ask, smallMaxBytes, "the namespace's settings"); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
+	}
+	if ask == (NamespaceUpdate{}) {
+		fail(w, http.StatusBadRequest, "the request names nothing to change: name, the one setting a namespace takes today")
+		return
+	}
+	to := *ask.Name
+	if to != name {
+		if agk.IsReservedNamespace(to) {
+			fail(w, http.StatusConflict, fmt.Sprintf("%s is %s: the first path segment after /api/v1/ decides the route, so no namespace is renamed to it", to, routesOn(to)))
+			return
+		}
+		if err := NamespaceName(to); err != nil {
+			fail(w, http.StatusBadRequest, "name: "+err.Error())
+			return
+		}
+	}
+	var renamed db.Namespace
+	err := s.pool.Installation(r.Context(), db.NamespaceAdministration, func(ctx context.Context, wide *db.Wide) error {
+		changed, err := wide.RenameNamespace(ctx, name, to)
+		if err != nil {
+			return err
+		}
+		if renamed, err = wide.NamespaceNamed(ctx, to); err != nil {
+			return err
+		}
+		result := audit.Done
+		if !changed {
+			result = audit.Unchanged
+		}
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.NamespaceRename, Target: to, Result: result,
+			Detail: map[string]any{"from": name, "to": to},
+		})
+	})
+	var held *db.NameHeld
+	var waits *db.RenameWaits
+	switch {
+	case errors.Is(err, db.ErrNoNamespace):
+		fail(w, http.StatusNotFound, "there is no namespace of that name")
+		return
+	case errors.Is(err, db.ErrPersonalRename):
+		fail(w, http.StatusConflict, "namespace "+name+" is the personal namespace of the user "+name+", named after their login, which never changes, and is never renamed")
+		return
+	case errors.As(err, &held):
+		fail(w, http.StatusConflict, heldRefusal(held))
+		return
+	case errors.As(err, &waits):
+		fail(w, http.StatusConflict, waits.Held())
+		return
+	case err != nil:
+		s.broke(w, r, "the namespace could not be renamed", err)
+		return
+	}
+	write(w, http.StatusOK, recordOf(renamed))
+}
+
+// The absence a namespace's picture is answered with, a 404 whether the namespace or its picture is
+// not there, since a namespace the caller cannot see is refused before it is looked up and one it
+// can see is all it learns of.
+const noNamespaceAvatar = "no such namespace, or it has no picture"
+
+// avatar is GET /api/v1/namespaces/{namespace}/avatar: the namespace's picture, to whoever reads its
+// record, which the router let through. Served as a user's photo is, with avatar_updated_at as its
+// tag.
+func (s *NamespaceAPI) avatar(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
+	if NamespaceRef(over.Namespace) != nil {
+		fail(w, http.StatusNotFound, noNamespaceAvatar)
+		return
+	}
+	var picture []byte
+	var at time.Time
+	err := s.pool.Installation(r.Context(), db.NamespaceAdministration, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		picture, at, err = wide.NamespaceAvatar(ctx, over.Namespace)
+		return err
+	})
+	switch {
+	case errors.Is(err, db.ErrNoNamespace), errors.Is(err, db.ErrNoNamespaceAvatar):
+		fail(w, http.StatusNotFound, noNamespaceAvatar)
+		return
+	case err != nil:
+		s.broke(w, r, "the picture could not be read", err)
+		return
+	}
+	servePicture(w, r, picture, at)
+}
+
+// setAvatar is PUT /api/v1/namespaces/{namespace}/avatar: the namespace's picture, "held to a user's
+// photo's rules", read as pictureSent reads one and stored as reencode makes it in place of any
+// before it, and recorded as namespace.avatar with the size it was stored at.
+func (s *NamespaceAPI) setAvatar(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	if NamespaceRef(over.Namespace) != nil {
+		fail(w, http.StatusNotFound, "there is no namespace of that name")
+		return
+	}
+	stored, width, height, ok := pictureSent(w, r, "picture")
+	if !ok {
+		return
+	}
+	// To the microsecond the database keeps, so that the instant answered is the one stored.
+	at := s.now().Truncate(time.Microsecond)
+	err := s.pool.Installation(r.Context(), db.NamespaceAdministration, func(ctx context.Context, wide *db.Wide) error {
+		if err := wide.SetNamespaceAvatar(ctx, over.Namespace, stored, at); err != nil {
+			return err
+		}
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.NamespaceAvatar, Target: over.Namespace, Result: audit.Done,
+			Detail: map[string]any{"removed": false, "width": width, "height": height},
+		})
+	})
+	switch {
+	case errors.Is(err, db.ErrNoNamespace):
+		fail(w, http.StatusNotFound, "there is no namespace of that name")
+	case err != nil:
+		s.broke(w, r, "the picture could not be stored", err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// removeAvatar is DELETE /api/v1/namespaces/{namespace}/avatar: the namespace's picture removed,
+// which the console draws as its initial from then on. Removing none is the same answer, and
+// recorded as unchanged.
+func (s *NamespaceAPI) removeAvatar(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	if err := readIfAny(r, nothingAsked{}, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
+	}
+	if NamespaceRef(over.Namespace) != nil {
+		fail(w, http.StatusNotFound, "there is no namespace of that name")
+		return
+	}
+	err := s.pool.Installation(r.Context(), db.NamespaceAdministration, func(ctx context.Context, wide *db.Wide) error {
+		had, err := wide.RemoveNamespaceAvatar(ctx, over.Namespace)
+		if err != nil {
+			return err
+		}
+		result := audit.Done
+		if !had {
+			result = audit.Unchanged
+		}
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.NamespaceAvatar, Target: over.Namespace, Result: result,
+			Detail: map[string]any{"removed": true},
+		})
+	})
+	switch {
+	case errors.Is(err, db.ErrNoNamespace):
+		fail(w, http.StatusNotFound, "there is no namespace of that name")
+	case err != nil:
+		s.broke(w, r, "the picture could not be removed", err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// formerNames are the names the namespace held before it was renamed, which a version pushed to it
+// may still write as its metadata.namespace.
+func formerNames(ctx context.Context, pool *db.Pool, namespace string) ([]string, error) {
+	var former []string
+	err := pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		former, err = ns.FormerNames(ctx)
+		return err
+	})
+	return former, err
 }

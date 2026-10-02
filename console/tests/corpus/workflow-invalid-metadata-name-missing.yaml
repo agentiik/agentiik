@@ -1,0 +1,17 @@
+# invalid: A workflow with no name. The name and the namespace form the
+#   identity a run, a grant and a git remote are addressed by.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  namespace: finance
+  labels:
+    domain: billing
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    outputs: [out]
