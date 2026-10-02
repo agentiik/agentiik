@@ -25,6 +25,8 @@ const screens: Record<string, string[]> = {
     "/finance/workflows/monthly-invoicing/statistics",
     "/finance/workflows/monthly-invoicing?edit=1&step=invoice",
     "/finance/workflows/monthly-invoicing?edit=1&view=yaml",
+    "/finance/workflows/monthly-invoicing/settings",
+    "/alice/workflows/report/settings",
     "/finance/statistics",
     "/finance/sharing",
     "/finance/variables",
@@ -39,7 +41,7 @@ const screens: Record<string, string[]> = {
     "/me/tokens",
     "/me/service-accounts",
   ],
-  dana: ["/", "/runners", "/runners/statistics", "/users", "/users/policy", "/groups", "/namespaces", "/namespaces?namespace=finance", "/finance/settings", "/me"],
+  dana: ["/", "/runners", "/runners/statistics", "/users", "/users/policy", "/users/audit", "/groups", "/namespaces", "/namespaces?namespace=finance", "/finance/settings", "/me"],
   // Nobody signed in: the sign-in page, whatever the address.
   nobody: ["/"],
 };

@@ -13,7 +13,7 @@
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
-  import { workflowTabs } from "../lib/page";
+  import { settles, workflowTabs } from "../lib/page";
   import { runAt } from "../lib/route";
 
   // A workflow's runs, a tab of the workflow: newest first and kept live, the ones that failed lifted
@@ -25,7 +25,7 @@
 
   const filters = $derived({ ...filtersOf(place.query), workflow });
   const graph = $derived(holds(me, "workflow:read", namespace, workflow));
-  const tabs = $derived(workflowTabs(namespace, workflow, "runs", { shares: holds(me, "grant:manage", namespace, workflow), mcp: false, go: (r, q) => place.go(r, false, q) }).filter((t) => graph || t.label !== "Graph"));
+  const tabs = $derived(workflowTabs(namespace, workflow, "runs", { mcp: false, settles: settles(me, namespace, workflow) }).filter((t) => graph || t.label !== "Graph"));
   const list = $derived(new RunList(api, namespace, filters));
 
   let live = $state(true);

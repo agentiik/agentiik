@@ -4,7 +4,6 @@
   import { refusal, type API, type Me } from "../api/client";
   import { sentence } from "../lib/signin";
   import { columns, expiryOf, kindOf, permissions, principalsOf, resolve, roles, type Grant, type Kind, type Line, type Role, type Scope } from "../lib/sharing";
-  import BranchProtection from "./BranchProtection.svelte";
   import Icon from "./Icon.svelte";
   import Pane from "./Pane.svelte";
   import Notice from "./Notice.svelte";
@@ -251,8 +250,6 @@
   </div>
 
   <div class="stack">
-    {#if workflow}<BranchProtection {api} {namespace} {workflow} />{/if}
-
     <Pane title="Effective permissions" aside={here}>
       <label class="whom">
         <span class="unseen">Whom</span>
