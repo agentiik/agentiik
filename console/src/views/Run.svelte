@@ -335,26 +335,28 @@
         </ul>
         {#if run.outputs && Object.keys(run.outputs).length > 0}
           <h3>Workflow outputs</h3>
-          <table class="outputs">
-            <thead><tr><th>Output</th><th>From</th><th class="number">Items</th><th>Files</th></tr></thead>
-            <tbody>
-              {#each Object.entries(run.outputs) as [name, out] (name)}
-                {@const held = run.artifacts.filter((a) => a.step === out.step && a.port === out.port)}
-                <tr class:chosen={name === output}>
-                  <td class="term">
-                    {#if readsData}
-                      <button class="link" aria-pressed={name === output} onclick={() => choose({ output: name })}>{name}</button>
-                    {:else}
-                      {name}
-                    {/if}
-                  </td>
-                  <td class="term muted">{out.step}.{out.port}</td>
-                  <td class="number term">{out.count}</td>
-                  <td class="muted">{#if held.length === 0}none{:else}{held.length} · {retention(held[0]!, now)}{/if}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+          <div class="scroll">
+            <table class="outputs">
+              <thead><tr><th>Output</th><th>From</th><th class="number">Items</th><th>Files</th></tr></thead>
+              <tbody>
+                {#each Object.entries(run.outputs) as [name, out] (name)}
+                  {@const held = run.artifacts.filter((a) => a.step === out.step && a.port === out.port)}
+                  <tr class:chosen={name === output}>
+                    <td class="term">
+                      {#if readsData}
+                        <button class="link" aria-pressed={name === output} onclick={() => choose({ output: name })}>{name}</button>
+                      {:else}
+                        {name}
+                      {/if}
+                    </td>
+                    <td class="term muted">{out.step}.{out.port}</td>
+                    <td class="number term">{out.count}</td>
+                    <td class="muted">{#if held.length === 0}none{:else}{held.length} · {retention(held[0]!, now)}{/if}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
       </Pane>
 
@@ -389,28 +391,30 @@
             <p class="faint">Parameters hidden (needs <span class="term">run:read_data</span>)</p>
           {/if}
 
-          <table class="tasks">
-            <thead>
-              <tr><th>Task</th><th>State</th><th>Runner</th><th class="number">Exit</th><th class="number">Took</th></tr>
-            </thead>
-            <tbody>
-              {#each tasks as t (t.task)}
-                <tr class:chosen={t.task === task?.task} onclick={() => choose({ step: step.step, task: t.task })}>
-                  <td class="term">
-                    <button class="link" onclick={(e) => { e.stopPropagation(); choose({ step: step.step, task: t.task }); }}>
-                      {t.shard ? `${t.shard.index}/${t.shard.of} · ` : ""}attempt {t.attempt}
-                    </button>
-                  </td>
-                  <td><StatePill state={t.state} live={!reader.ended} /></td>
-                  <td class="term muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : "")}</td>
-                  <td class="number code">{t.exit_code ?? ""}</td>
-                  <td class="number term">{lasted(t.started_at, t.finished_at)}</td>
-                </tr>
-              {:else}
-                <tr><td colspan="5" class="muted empty">No tasks</td></tr>
-              {/each}
-            </tbody>
-          </table>
+          <div class="scroll">
+            <table class="tasks">
+              <thead>
+                <tr><th>Task</th><th>State</th><th>Runner</th><th class="number">Exit</th><th class="number">Took</th></tr>
+              </thead>
+              <tbody>
+                {#each tasks as t (t.task)}
+                  <tr class:chosen={t.task === task?.task} onclick={() => choose({ step: step.step, task: t.task })}>
+                    <td class="term">
+                      <button class="link" onclick={(e) => { e.stopPropagation(); choose({ step: step.step, task: t.task }); }}>
+                        {t.shard ? `${t.shard.index}/${t.shard.of} · ` : ""}attempt {t.attempt}
+                      </button>
+                    </td>
+                    <td><StatePill state={t.state} live={!reader.ended} /></td>
+                    <td class="term muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : "")}</td>
+                    <td class="number code">{t.exit_code ?? ""}</td>
+                    <td class="number term">{lasted(t.started_at, t.finished_at)}</td>
+                  </tr>
+                {:else}
+                  <tr><td colspan="5" class="muted empty">No tasks</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
 
           <div class="ports">
             <div class="sides" role="tablist" aria-label="What the step pane shows">
@@ -423,26 +427,28 @@
               {#if files.length === 0}
                 <p class="muted">No files</p>
               {:else}
-                <table class="files">
-                  <thead><tr><th>File</th><th>Port</th><th>Media type</th><th class="number">Size</th><th>SHA-256</th><th>Retention</th><th></th></tr></thead>
-                  <tbody>
-                    {#each files as f (f.uri)}
-                      <tr class={f.status}>
-                        <td class="term">{f.name}</td>
-                        <td class="term muted port {f.port}">{f.port}</td>
-                        <td class="term muted">{f.media_type}</td>
-                        <td class="number term">{bytes(f.size)}</td>
-                        <td class="code muted" title={f.sha256}>{f.sha256.slice(0, 12)}</td>
-                        <td class="muted">{retention(f, now)}</td>
-                        <td class="end">
-                          {#if readsData && f.status === "live"}
-                            <button class="control" onclick={() => fetchFile(f.uri, f.name)}><Icon name="control-download" size={14} />Download</button>
-                          {/if}
-                        </td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
+                <div class="scroll">
+                  <table class="files">
+                    <thead><tr><th>File</th><th>Port</th><th>Media type</th><th class="number">Size</th><th>SHA-256</th><th>Retention</th><th></th></tr></thead>
+                    <tbody>
+                      {#each files as f (f.uri)}
+                        <tr class={f.status}>
+                          <td class="term">{f.name}</td>
+                          <td class="term muted port {f.port}">{f.port}</td>
+                          <td class="term muted">{f.media_type}</td>
+                          <td class="number term">{bytes(f.size)}</td>
+                          <td class="code muted" title={f.sha256}>{f.sha256.slice(0, 12)}</td>
+                          <td class="muted">{retention(f, now)}</td>
+                          <td class="end">
+                            {#if readsData && f.status === "live"}
+                              <button class="control" onclick={() => fetchFile(f.uri, f.name)}><Icon name="control-download" size={14} />Download</button>
+                            {/if}
+                          </td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
                 {#if unfetched}<Problem explained={unfetched} />{/if}
                 {#if !readsData}
                   <p class="faint">Download hidden (needs <span class="term">run:read_data</span>)</p>
@@ -457,30 +463,32 @@
             {:else if portNames.length === 0}
               <p class="muted">{tab === "output" ? "The step declares no output port." : "The step declares no input port."}</p>
             {:else}
-              <table class="envelopes">
-                <thead><tr><th>Port</th><th class="number">Items</th><th class="number">Size</th><th>Digest</th></tr></thead>
-                <tbody>
-                  {#each portNames as name (name)}
-                    {@const e = ports[name]}
-                    <tr class:chosen={readsData && e && name === port}>
-                      <td class="term name port {name}">
-                        {#if readsData && e}
-                          <button class="link" aria-pressed={name === port} onclick={() => choose({ pane: tab, port: name })}>{name}</button>
+              <div class="scroll">
+                <table class="envelopes">
+                  <thead><tr><th>Port</th><th class="number">Items</th><th class="number">Size</th><th>Digest</th></tr></thead>
+                  <tbody>
+                    {#each portNames as name (name)}
+                      {@const e = ports[name]}
+                      <tr class:chosen={readsData && e && name === port}>
+                        <td class="term name port {name}">
+                          {#if readsData && e}
+                            <button class="link" aria-pressed={name === port} onclick={() => choose({ pane: tab, port: name })}>{name}</button>
+                          {:else}
+                            {name}
+                          {/if}
+                        </td>
+                        {#if e}
+                          <td class="number term">{e.items}</td>
+                          <td class="number term">{bytes(e.size)}</td>
+                          <td class="code muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
                         {:else}
-                          {name}
+                          <td colspan="3" class="muted">{tab === "output" ? "published when the step ends" : task ? "not handed to the task chosen" : "handed once a task is dispatched"}</td>
                         {/if}
-                      </td>
-                      {#if e}
-                        <td class="number term">{e.items}</td>
-                        <td class="number term">{bytes(e.size)}</td>
-                        <td class="code muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
-                      {:else}
-                        <td colspan="3" class="muted">{tab === "output" ? "published when the step ends" : task ? "not handed to the task chosen" : "handed once a task is dispatched"}</td>
-                      {/if}
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
               {#if readsData && port}
                 <EnvelopePane {api} run={run.run} step={step.step} {port} side={tab} task={tab === "input" ? task : undefined} />
               {/if}
@@ -594,7 +602,7 @@
 
   .columns {
     display: grid;
-    grid-template-columns: 380px 1fr;
+    grid-template-columns: 380px minmax(0, 1fr);
     gap: calc(var(--unit) * 7);
     align-items: start;
   }
@@ -759,6 +767,12 @@
     font-size: var(--type-navigation-size);
   }
 
+  /* The code is one word, kept whole however narrow the pane, its meaning wrapping beside it. */
+  .exit strong {
+    flex: none;
+    white-space: nowrap;
+  }
+
   .exit.failed {
     background: var(--failedFill);
     color: var(--failed);
@@ -781,6 +795,11 @@
 
   .exit span {
     color: var(--text);
+  }
+
+  /* A table wider than its pane, on a phone, scrolls within it rather than being cut at its edge. */
+  .scroll {
+    overflow-x: auto;
   }
 
   table {

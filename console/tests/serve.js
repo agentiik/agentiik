@@ -6,7 +6,9 @@
 // A scenario is a JSON file under tests/fixtures mapping "METHOD /path" or "METHOD /path?query" to
 // {"status": 200, "body": ...}, or {"status": 200, "text": ...} for bytes such as a file of a tree,
 // where the query may be a part of the one asked, by=hour alone say. A route it does not hold is
-// answered as the API answers what the caller may not see: 404, no such thing, or not yours.
+// answered as the API answers what the caller may not see: 404, no such thing, or not yours. Bytes
+// are answered as application/octet-stream unless "type" names their media type, text/event-stream
+// for a step's log say, which a browser follows as nothing else.
 //
 //     node tests/serve.js tests/fixtures/alice.json [port] [path]
 
@@ -89,7 +91,7 @@ export function serve({ scenario, port = 0, prefix = "/" }) {
       const recorded = recordedFor(state.scenario, req.method, path, url.search);
       const answer = recorded ?? { status: 404, body: { error: "no such thing, or not yours" } };
       if (answer.text !== undefined) {
-        res.writeHead(answer.status, { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" });
+        res.writeHead(answer.status, { "Content-Type": answer.type ?? "application/octet-stream", "Cache-Control": "no-store" });
         res.end(answer.text);
         return;
       }
