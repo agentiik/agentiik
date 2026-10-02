@@ -128,10 +128,17 @@ describe("a workflow's files", () => {
 });
 
 describe("a namespace's workflows", () => {
-  it("are those its runs name, said as such, each with its latest run", async () => {
+  it("are those the API lists, each with its latest run", async () => {
     open("/finance/workflows");
-    expect(await screen.findByRole("region", { name: "Recently run" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Workflows of finance" })).toBeTruthy();
     expect((await screen.findByRole("link", { name: "monthly-invoicing" })).getAttribute("href")).toBe("/finance/workflows/monthly-invoicing");
+  });
+
+  it("say which were never run", async () => {
+    open("/alice/workflows");
+    const pane = await screen.findByRole("region", { name: "Workflows of alice" });
+    const row = (await within(pane).findByRole("link", { name: "vat-reconciliation" })).closest("tr")!;
+    expect(within(row).getByText("Never run")).toBeTruthy();
   });
 
   it("gain a new one, empty, which opens on how to fill it", async () => {

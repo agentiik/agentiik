@@ -4,41 +4,52 @@
   import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import { refusal, type API, type Me } from "../api/client";
+  import type { components } from "../api/schema";
   import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import { clock } from "../lib/format";
+  import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { runAt } from "../lib/route";
 
-  // A namespace's workflows, and a new one created. The API lists no namespace's workflows, so the
-  // page lists those its runs name, each with its latest run, and says so rather than passing them
-  // off as every one there is. Creating one is POST /api/v1/{ns}/workflows under workflow:write at
-  // the namespace's scope: an empty repository, its default branch born by the first push, which
-  // the workflow's Files then say how to make.
+  // A namespace's workflows, and a new one created. They are GET /api/v1/{ns}/workflows, every one
+  // whose runs the caller reads, each with its newest run, one never run among them, and nothing of
+  // its file, so that an operator finds here what it may run. Creating one is POST
+  // /api/v1/{ns}/workflows under workflow:write at the namespace's scope: an empty repository, its
+  // default branch born by the first push, which the workflow's Files then say how to make.
   let { api, place, me, namespace }: { api: API; place: Place; me: Me; namespace: string } = $props();
 
-  type Known = { workflow: string; run: string; state: string; created_at: string };
-  let known = $state<Known[] | null>(null);
+  type Listed = components["schemas"]["listedWorkflow"];
+  let known = $state<Listed[] | null>(null);
   let refused = $state<Explained | null>(null);
+  let reading = false;
 
   async function read() {
-    const { data, error, response } = await api.GET("/api/v1/runs", { params: { query: { namespace, limit: 200 } } });
+    reading = true;
+    const { data, error, response } = await api.GET("/api/v1/{ns}/workflows", { params: { path: { ns: namespace } } });
+    reading = false;
     if (!data) {
       refused = explain("load the workflows", refusal(response, error));
       return;
     }
-    const seen = new Map<string, Known>();
-    for (const r of data.runs) {
-      if (r.namespace === namespace && !seen.has(r.workflow)) seen.set(r.workflow, { workflow: r.workflow, run: r.run, state: r.state, created_at: r.created_at });
-    }
-    known = [...seen.values()].sort((a, b) => (a.workflow < b.workflow ? -1 : 1));
+    refused = null;
+    known = data.workflows;
   }
   $effect(() => {
     untrack(() => read());
   });
+
+  // Read again each time the live connection says a run of the namespace changed, since the newest
+  // run of each workflow is what the page shows.
+  const changes = useLive();
+  $effect(() =>
+    changes.when((c) => c.kind === "run" && c.namespace === namespace, () => {
+      if (!reading) read();
+    }),
+  );
 
   const mayCreate = $derived(holds(me, "workflow:write", namespace));
   let creating = $state(false);
@@ -71,25 +82,31 @@
   {/snippet}
 </PageHeader>
 
-<Pane title="Recently run">
+<Pane title="" label="Workflows of {namespace}">
   {#if refused}
     <Problem explained={refused} onretry={read} />
   {:else if !known}
     <p class="muted" role="status">Loading</p>
   {:else}
     <table>
-      <thead><tr><th>Workflow</th><th>Latest run</th><th>Created</th></tr></thead>
+      <thead><tr><th>Workflow</th><th>Latest run</th><th>Run at</th><th>Created</th></tr></thead>
       <tbody>
-        {#each known as k (k.workflow)}
-          {@const page = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow: k.workflow }}
-          {@const run = runAt(namespace, k.workflow, k.run)}
+        {#each known as k (k.name)}
+          {@const page = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow: k.name }}
           <tr>
-            <td><a class="term" href={place.href(page)} onclick={follow(place, page)}>{k.workflow}</a></td>
-            <td><StatePill state={k.state} /> <a class="code faint" href={place.href(run)} onclick={follow(place, run)}>{k.run}</a></td>
-            <td class="term"><time datetime={k.created_at}>{clock(k.created_at, now)}</time></td>
+            <td><a class="term" href={place.href(page)} onclick={follow(place, page)}>{k.name}</a></td>
+            {#if k.latest}
+              {@const run = runAt(namespace, k.name, k.latest.run)}
+              <td><StatePill state={k.latest.state} /> <a class="code faint" href={place.href(run)} onclick={follow(place, run)}>{k.latest.run}</a></td>
+              <td class="term"><time datetime={k.latest.created_at}>{clock(k.latest.created_at, now)}</time></td>
+            {:else}
+              <td class="muted">Never run</td>
+              <td></td>
+            {/if}
+            <td class="term muted"><time datetime={k.created_at}>{clock(k.created_at, now)}</time></td>
           </tr>
         {:else}
-          <tr><td colspan="3" class="muted">No runs yet</td></tr>
+          <tr><td colspan="4" class="muted">No workflows</td></tr>
         {/each}
       </tbody>
     </table>

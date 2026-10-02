@@ -999,7 +999,11 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List a namespace's workflows
+         * @description The workflows of the namespace whose runs the caller reads, by name in byte order: each with its name, when it was created, and its newest run, absent where it was never run. Nothing of its repository or its file is answered, which workflow:read guards, so that the listing tells an operator, who runs a workflow without reading it, no more than the runs it follows do. A namespace the caller reads the runs of no workflow in lists nothing, as one that does not exist. Requires run:read, asked of each workflow as GET /api/v1/runs asks it.
+         */
+        get: operations["listWorkflows"];
         put?: never;
         /**
          * Create a workflow repository
@@ -1064,6 +1068,31 @@ export interface paths {
          * @description The manual trigger: a run of the commit the request names, or reaches through a ref, or of the default branch's head, or while it is unborn the latest version a tree push recorded, with the workflow inputs bound against that version's declaration as agk run --local binds them and recorded as bound. Attributed to the caller, trigger_kind manual. The run is pinned to its commit whatever the ref or the branch does next. Counted against the namespace's max_runs_per_hour before it is written. Requires workflow:run.
          */
         post: operations["startRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/workflows/{name}/inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read the inputs a run takes
+         * @description What a manual run of the workflow takes, to whoever may ask for one: the version the ref resolves to, the default branch's head where none is named; each input it declares with its schema as written, whether it is required and its default; and the files of the version's tree those schemas reach by $ref, by path, so that a form is drawn and a value checked before the run is asked for. Nothing else of the workflow file is answered: an operator holds workflow:run without workflow:read, so that it starts a job without seeing the steps, images, queries and endpoints inside it, and the inputs are the workflow's boundary, which whoever asks for a run has to fill. Requires workflow:run.
+         */
+        get: operations["getRunInputs"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9448,6 +9477,216 @@ export interface components {
             verified: number;
         };
         /**
+         * @description One input a version declares, as its file writes it: what a form asks for and holds a value to before the run is asked for.
+         * @example {
+         *       "schema": {
+         *         "type": "string",
+         *         "pattern": "^[0-9]{4}-[0-9]{2}$"
+         *       },
+         *       "required": false,
+         *       "default": "2026-09"
+         *     }
+         */
+        declaredInput: {
+            /**
+             * @description The input's JSON Schema 2020-12 as written, an object of keywords or a boolean, a $ref naming a file of the version's tree among them. Absent where the input declares none, which takes any value as it comes.
+             * @example {
+             *       "type": "array",
+             *       "items": {
+             *         "type": "object",
+             *         "required": [
+             *           "id",
+             *           "amount"
+             *         ]
+             *       }
+             *     }
+             * @example {
+             *       "type": "string",
+             *       "pattern": "^[0-9]{4}-[0-9]{2}$"
+             *     }
+             */
+            schema?: unknown;
+            /**
+             * @description Whether a run supplying no value is refused, where the input declares no default.
+             * @example true
+             * @example false
+             */
+            required: boolean;
+            /**
+             * @description The value standing in for one a run does not supply, held to the schema like any other. Absent where the input declares none.
+             * @example 2026-09
+             * @example []
+             */
+            default?: unknown;
+        };
+        /**
+         * @description What a manual run of a workflow takes: the version a ref resolves to, the inputs it declares, and the files of its tree their schemas reach, and nothing else of the workflow file, since it is read under workflow:run and the steps, images, queries and endpoints are workflow:read's.
+         * @example {
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "inputs": {},
+         *       "files": {}
+         *     }
+         */
+        runInputs: {
+            /**
+             * @description The version answered, which a run asked for by the same ref now would be pinned to.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit: string;
+            /**
+             * @description Each input the version declares, by its name, empty where it declares none.
+             * @example {
+             *       "period": {
+             *         "schema": {
+             *           "type": "string",
+             *           "pattern": "^[0-9]{4}-[0-9]{2}$"
+             *         },
+             *         "required": false,
+             *         "default": "2026-09"
+             *       }
+             *     }
+             */
+            inputs: {
+                [key: string]: components["schemas"]["declaredInput"];
+            };
+            /**
+             * @description Each file of the version's tree the inputs' schemas reach by $ref, directly or through another, by its path in the tree, as parsed JSON, so that a $ref resolves without reading the tree, which workflow:read guards. Empty where no schema names a file.
+             * @example {
+             *       "schemas/order.json": {
+             *         "type": "object",
+             *         "required": [
+             *           "id",
+             *           "amount"
+             *         ],
+             *         "properties": {
+             *           "id": {
+             *             "type": "string"
+             *           },
+             *           "amount": {
+             *             "type": "number"
+             *           }
+             *         }
+             *       }
+             *     }
+             */
+            files: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * @description A workflow's newest run, by when it was created, as its runs' readers read it in a listing: what it is, where it stands and when it was asked for and ended.
+         * @example {
+         *       "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+         *       "state": "failed",
+         *       "trigger_kind": "manual",
+         *       "created_at": "2026-10-01T05:41:03Z",
+         *       "finished_at": "2026-10-01T05:42:55Z"
+         *     }
+         */
+        latestRun: {
+            /**
+             * @description The run's identifier.
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A
+             */
+            run: string;
+            /**
+             * @description Where the run stands now.
+             * @example failed
+             * @example running
+             */
+            state: components["schemas"]["runState"];
+            /**
+             * @description What started it.
+             * @example manual
+             * @example schedule
+             */
+            trigger_kind: components["schemas"]["triggerKind"];
+            /**
+             * Format: date-time
+             * @description When the run was asked for.
+             * @example 2026-10-01T05:41:03Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When it ended, absent while it has not.
+             * @example 2026-10-01T05:42:55Z
+             */
+            finished_at?: string;
+        };
+        /**
+         * @description One workflow of a namespace as its listing answers it to whoever reads its runs: its name, when it was created and its newest run, and nothing of its repository or its file, which workflow:read guards.
+         * @example {
+         *       "name": "monthly-invoicing",
+         *       "created_at": "2026-09-28T09:00:00Z",
+         *       "latest": {
+         *         "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+         *         "state": "failed",
+         *         "trigger_kind": "manual",
+         *         "created_at": "2026-10-01T05:41:03Z",
+         *         "finished_at": "2026-10-01T05:42:55Z"
+         *       }
+         *     }
+         * @example {
+         *       "name": "ledger-export",
+         *       "created_at": "2026-09-30T14:00:00Z"
+         *     }
+         */
+        listedWorkflow: {
+            /**
+             * @description The workflow's name in its namespace.
+             * @example monthly-invoicing
+             */
+            name: string;
+            /**
+             * Format: date-time
+             * @description When the workflow was created.
+             * @example 2026-09-28T09:00:00Z
+             */
+            created_at: string;
+            /**
+             * @description Its newest run, absent where it was never run.
+             * @example {
+             *       "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+             *       "state": "failed",
+             *       "trigger_kind": "manual",
+             *       "created_at": "2026-10-01T05:41:03Z",
+             *       "finished_at": "2026-10-01T05:42:55Z"
+             *     }
+             */
+            latest?: components["schemas"]["latestRun"];
+        };
+        /**
+         * Workflow list
+         * @description A namespace's workflows as the caller may see them, by name.
+         * @example {
+         *       "workflows": []
+         *     }
+         */
+        workflowList: {
+            /**
+             * @description Each workflow of the namespace whose runs the caller reads, by name in byte order. Empty where it reads the runs of none, a namespace that does not exist included.
+             * @example [
+             *       {
+             *         "name": "ledger-export",
+             *         "created_at": "2026-09-30T14:00:00Z"
+             *       },
+             *       {
+             *         "name": "monthly-invoicing",
+             *         "created_at": "2026-09-28T09:00:00Z",
+             *         "latest": {
+             *           "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+             *           "state": "failed",
+             *           "trigger_kind": "manual",
+             *           "created_at": "2026-10-01T05:41:03Z",
+             *           "finished_at": "2026-10-01T05:42:55Z"
+             *         }
+             *       }
+             *     ]
+             */
+            workflows: components["schemas"]["listedWorkflow"][];
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -10617,6 +10856,24 @@ export interface components {
          */
         identifier: string;
         /**
+         * Run state
+         * @description Where a run is, as the documentation fixes the vocabulary. Every component reads this one enumeration: the controller writes it, the API serves it, the console colours it and a phone notifies on it, and a seventh state invented in one of them would be a state the others cannot render.
+         * @example running
+         * @example waiting
+         * @example timed_out
+         * @enum {string}
+         */
+        runState: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "timed_out";
+        /**
+         * Trigger kind
+         * @description What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it.
+         * @example schedule
+         * @example manual
+         * @example workflow
+         * @enum {string}
+         */
+        triggerKind: "manual" | "schedule" | "webhook" | "event" | "mcp" | "terraform" | "workflow";
+        /**
          * Branch name
          * @description A branch as a person names it, main or feature/vat-rounding, without the refs/heads/ git keeps it under. Held to git's own rules for a ref name, those of git check-ref-format, since git refuses anything else before a push reaches the server: no space or control character and none of ~ ^ : ? * [ \, no component starting with a dot, no .. and no @{, no // and no .lock ending a component, nothing starting with - or / and nothing ending with / or ., and not @ alone.
          * @example main
@@ -11758,24 +12015,6 @@ export interface components {
              */
             moved_at?: components["schemas"]["timestamp"];
         };
-        /**
-         * Run state
-         * @description Where a run is, as the documentation fixes the vocabulary. Every component reads this one enumeration: the controller writes it, the API serves it, the console colours it and a phone notifies on it, and a seventh state invented in one of them would be a state the others cannot render.
-         * @example running
-         * @example waiting
-         * @example timed_out
-         * @enum {string}
-         */
-        runState: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "timed_out";
-        /**
-         * Trigger kind
-         * @description What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it.
-         * @example schedule
-         * @example manual
-         * @example workflow
-         * @enum {string}
-         */
-        triggerKind: "manual" | "schedule" | "webhook" | "event" | "mcp" | "terraform" | "workflow";
         /**
          * Run
          * @description One execution of one workflow at one commit, as the API lists and reads it: where it is, what it pins, how far it got, and what started it on whose behalf. Every run names its trigger kind and the principal it is attributed to, whatever created it, since a run appearing with neither is one nobody can account for.
@@ -12955,6 +13194,8 @@ export interface components {
         auditSince: components["schemas"]["timestamp"];
         /** @description The entries appended at this instant or before, in RFC 3339. */
         auditUntil: components["schemas"]["timestamp"];
+        /** @description The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs. */
+        inputsRef: string;
     };
     requestBodies: never;
     headers: {
@@ -15221,6 +15462,35 @@ export interface operations {
             404: components["responses"]["notFound"];
         };
     };
+    listWorkflows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workflows. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["workflowList"];
+                };
+            };
+            /** @description A request carrying two credentials, a bearer token beside the session cookie or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. A namespace the caller reads nothing of lists nothing. */
+            403: components["responses"]["forbidden"];
+        };
+    };
     createWorkflow: {
         parameters: {
             query?: never;
@@ -15455,6 +15725,67 @@ export interface operations {
                 headers: {
                     /** @description The whole seconds until one more run fits in the hour. */
                     "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    getRunInputs: {
+        parameters: {
+            query?: {
+                /** @description The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs. */
+                ref?: components["parameters"]["inputsRef"];
+            };
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The inputs the version declares, and the files their schemas name. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runInputs"];
+                };
+            };
+            /** @description A ref a branch and a tag both hold, or a request carrying two credentials, a bearer token beside the session cookie or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal of the workflow is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The version is a library's, which nothing runs, or its declaration is one a push now refuses, a schema naming a file the tree does not hold among them. */
+            422: {
+                headers: {
                     [name: string]: unknown;
                 };
                 content: {
