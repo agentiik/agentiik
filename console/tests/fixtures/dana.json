@@ -41,8 +41,7 @@
           "kind": "personal",
           "owner": "dana",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         },
         {
@@ -76,8 +75,7 @@
           "kind": "shared",
           "owner": "group:team-ops",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         }
       ]

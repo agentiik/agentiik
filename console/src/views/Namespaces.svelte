@@ -188,7 +188,7 @@
       {#each ["max_concurrent_tasks", "max_retention_days", "max_runs_per_hour"] as const as k (k)}
         <label>
           <span>{label[k]} <span class="term faint">{k}</span></span>
-          <input class="term" inputmode="numeric" bind:value={form[k]} placeholder={k === "max_runs_per_hour" ? "no bound" : ""} aria-invalid={wrong?.field === k} />
+          <input class="term" inputmode="numeric" bind:value={form[k]} placeholder={k === "max_concurrent_tasks" ? "" : "no bound"} aria-invalid={wrong?.field === k} />
         </label>
       {/each}
       <label>
