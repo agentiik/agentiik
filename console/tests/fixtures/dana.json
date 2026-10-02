@@ -10,7 +10,10 @@
         "display_name": "Dana Okafor",
         "admin": true,
         "suspended": false,
-        "created_at": "2026-09-20T08:00:00Z"
+        "created_at": "2026-09-20T08:00:00Z",
+        "email": "dana.okafor@example.com",
+        "given_name": "Dana",
+        "family_name": "Okafor"
       },
       "groups": [],
       "permissions": {
@@ -38,8 +41,7 @@
           "kind": "personal",
           "owner": "dana",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         },
         {
@@ -73,8 +75,7 @@
           "kind": "shared",
           "owner": "group:team-ops",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         }
       ]
@@ -6524,6 +6525,6086 @@
       ]
     }
   },
+  "GET /api/v1/stats/activity": {
+    "status": 200,
+    "body": {
+      "from": "2026-10-01T05:03:00Z",
+      "to": "2026-10-01T06:03:00Z",
+      "bucket": "1m",
+      "buckets": [
+        {
+          "since": "2026-10-01T05:03:00Z",
+          "until": "2026-10-01T05:03:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 6
+        },
+        {
+          "since": "2026-10-01T05:04:00Z",
+          "until": "2026-10-01T05:04:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 6
+        },
+        {
+          "since": "2026-10-01T05:05:00Z",
+          "until": "2026-10-01T05:05:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 7
+        },
+        {
+          "since": "2026-10-01T05:06:00Z",
+          "until": "2026-10-01T05:06:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 7
+        },
+        {
+          "since": "2026-10-01T05:07:00Z",
+          "until": "2026-10-01T05:07:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 8
+        },
+        {
+          "since": "2026-10-01T05:08:00Z",
+          "until": "2026-10-01T05:08:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 8
+        },
+        {
+          "since": "2026-10-01T05:09:00Z",
+          "until": "2026-10-01T05:09:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:10:00Z",
+          "until": "2026-10-01T05:10:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:11:00Z",
+          "until": "2026-10-01T05:11:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:12:00Z",
+          "until": "2026-10-01T05:12:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:13:00Z",
+          "until": "2026-10-01T05:13:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:14:00Z",
+          "until": "2026-10-01T05:14:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:15:00Z",
+          "until": "2026-10-01T05:15:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:16:00Z",
+          "until": "2026-10-01T05:16:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:17:00Z",
+          "until": "2026-10-01T05:17:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 8
+        },
+        {
+          "since": "2026-10-01T05:18:00Z",
+          "until": "2026-10-01T05:18:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 8
+        },
+        {
+          "since": "2026-10-01T05:19:00Z",
+          "until": "2026-10-01T05:19:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 7
+        },
+        {
+          "since": "2026-10-01T05:20:00Z",
+          "until": "2026-10-01T05:20:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 7
+        },
+        {
+          "since": "2026-10-01T05:21:00Z",
+          "until": "2026-10-01T05:21:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 6
+        },
+        {
+          "since": "2026-10-01T05:22:00Z",
+          "until": "2026-10-01T05:22:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 5
+        },
+        {
+          "since": "2026-10-01T05:23:00Z",
+          "until": "2026-10-01T05:23:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 5
+        },
+        {
+          "since": "2026-10-01T05:24:00Z",
+          "until": "2026-10-01T05:24:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 4
+        },
+        {
+          "since": "2026-10-01T05:25:00Z",
+          "until": "2026-10-01T05:25:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 3
+        },
+        {
+          "since": "2026-10-01T05:26:00Z",
+          "until": "2026-10-01T05:26:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 3
+        },
+        {
+          "since": "2026-10-01T05:27:00Z",
+          "until": "2026-10-01T05:27:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 2
+        },
+        {
+          "since": "2026-10-01T05:28:00Z",
+          "until": "2026-10-01T05:28:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 2
+        },
+        {
+          "since": "2026-10-01T05:29:00Z",
+          "until": "2026-10-01T05:29:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 2
+        },
+        {
+          "since": "2026-10-01T05:30:00Z",
+          "until": "2026-10-01T05:30:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 10,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 12
+        },
+        {
+          "since": "2026-10-01T05:31:00Z",
+          "until": "2026-10-01T05:31:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 4,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 12
+        },
+        {
+          "since": "2026-10-01T05:32:00Z",
+          "until": "2026-10-01T05:32:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 12
+        },
+        {
+          "since": "2026-10-01T05:33:00Z",
+          "until": "2026-10-01T05:33:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 12
+        },
+        {
+          "since": "2026-10-01T05:34:00Z",
+          "until": "2026-10-01T05:34:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 12
+        },
+        {
+          "since": "2026-10-01T05:35:00Z",
+          "until": "2026-10-01T05:35:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 12
+        },
+        {
+          "since": "2026-10-01T05:36:00Z",
+          "until": "2026-10-01T05:36:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 13
+        },
+        {
+          "since": "2026-10-01T05:37:00Z",
+          "until": "2026-10-01T05:37:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 3
+        },
+        {
+          "since": "2026-10-01T05:38:00Z",
+          "until": "2026-10-01T05:38:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 4
+        },
+        {
+          "since": "2026-10-01T05:39:00Z",
+          "until": "2026-10-01T05:39:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 4
+        },
+        {
+          "since": "2026-10-01T05:40:00Z",
+          "until": "2026-10-01T05:40:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 5
+        },
+        {
+          "since": "2026-10-01T05:41:00Z",
+          "until": "2026-10-01T05:41:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 6
+        },
+        {
+          "since": "2026-10-01T05:42:00Z",
+          "until": "2026-10-01T05:42:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 6
+        },
+        {
+          "since": "2026-10-01T05:43:00Z",
+          "until": "2026-10-01T05:43:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 7
+        },
+        {
+          "since": "2026-10-01T05:44:00Z",
+          "until": "2026-10-01T05:44:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 8
+        },
+        {
+          "since": "2026-10-01T05:45:00Z",
+          "until": "2026-10-01T05:45:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 8
+        },
+        {
+          "since": "2026-10-01T05:46:00Z",
+          "until": "2026-10-01T05:46:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:47:00Z",
+          "until": "2026-10-01T05:47:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 1
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:48:00Z",
+          "until": "2026-10-01T05:48:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:49:00Z",
+          "until": "2026-10-01T05:49:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:50:00Z",
+          "until": "2026-10-01T05:50:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:51:00Z",
+          "until": "2026-10-01T05:51:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:52:00Z",
+          "until": "2026-10-01T05:52:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:53:00Z",
+          "until": "2026-10-01T05:53:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:54:00Z",
+          "until": "2026-10-01T05:54:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 9
+        },
+        {
+          "since": "2026-10-01T05:55:00Z",
+          "until": "2026-10-01T05:55:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 8
+        },
+        {
+          "since": "2026-10-01T05:56:00Z",
+          "until": "2026-10-01T05:56:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 8
+        },
+        {
+          "since": "2026-10-01T05:57:00Z",
+          "until": "2026-10-01T05:57:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 7
+        },
+        {
+          "since": "2026-10-01T05:58:00Z",
+          "until": "2026-10-01T05:58:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 7
+        },
+        {
+          "since": "2026-10-01T05:59:00Z",
+          "until": "2026-10-01T05:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 6
+        },
+        {
+          "since": "2026-10-01T06:00:00Z",
+          "until": "2026-10-01T06:00:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 3,
+            "waiting": 1,
+            "succeeded": 7,
+            "failed": 1,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 17
+        },
+        {
+          "since": "2026-10-01T06:01:00Z",
+          "until": "2026-10-01T06:01:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 4,
+            "waiting": 1,
+            "succeeded": 2,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 17
+        },
+        {
+          "since": "2026-10-01T06:02:00Z",
+          "until": "2026-10-01T06:02:59.999999999Z",
+          "runs": {
+            "queued": 1,
+            "running": 2,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "tasks_in_flight_max": 16
+        }
+      ],
+      "now": {
+        "at": "2026-10-01T06:02:30Z",
+        "runs": {
+          "queued": 1,
+          "running": 7,
+          "waiting": 1
+        },
+        "tasks_in_flight": 17,
+        "slots": 24,
+        "runners_ready": 3,
+        "runners": 4
+      }
+    }
+  },
+  "GET /api/v1/dana/stats/runs?bucket=1d": {
+    "status": 200,
+    "body": {
+      "from": "2025-09-29T00:00:00Z",
+      "to": "2026-10-01T06:02:30Z",
+      "bucket": "1d",
+      "buckets": [
+        {
+          "since": "2025-09-29T00:00:00Z",
+          "until": "2025-09-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-09-30T00:00:00Z",
+          "until": "2025-09-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-01T00:00:00Z",
+          "until": "2025-10-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-02T00:00:00Z",
+          "until": "2025-10-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-03T00:00:00Z",
+          "until": "2025-10-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-04T00:00:00Z",
+          "until": "2025-10-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-05T00:00:00Z",
+          "until": "2025-10-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-06T00:00:00Z",
+          "until": "2025-10-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-07T00:00:00Z",
+          "until": "2025-10-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-08T00:00:00Z",
+          "until": "2025-10-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-09T00:00:00Z",
+          "until": "2025-10-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-10T00:00:00Z",
+          "until": "2025-10-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-11T00:00:00Z",
+          "until": "2025-10-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-12T00:00:00Z",
+          "until": "2025-10-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-13T00:00:00Z",
+          "until": "2025-10-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-14T00:00:00Z",
+          "until": "2025-10-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-15T00:00:00Z",
+          "until": "2025-10-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-16T00:00:00Z",
+          "until": "2025-10-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-17T00:00:00Z",
+          "until": "2025-10-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-18T00:00:00Z",
+          "until": "2025-10-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-19T00:00:00Z",
+          "until": "2025-10-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-20T00:00:00Z",
+          "until": "2025-10-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-21T00:00:00Z",
+          "until": "2025-10-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-22T00:00:00Z",
+          "until": "2025-10-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-23T00:00:00Z",
+          "until": "2025-10-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-24T00:00:00Z",
+          "until": "2025-10-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-25T00:00:00Z",
+          "until": "2025-10-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-26T00:00:00Z",
+          "until": "2025-10-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-27T00:00:00Z",
+          "until": "2025-10-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-28T00:00:00Z",
+          "until": "2025-10-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-29T00:00:00Z",
+          "until": "2025-10-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-30T00:00:00Z",
+          "until": "2025-10-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-10-31T00:00:00Z",
+          "until": "2025-10-31T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-01T00:00:00Z",
+          "until": "2025-11-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-02T00:00:00Z",
+          "until": "2025-11-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-03T00:00:00Z",
+          "until": "2025-11-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-04T00:00:00Z",
+          "until": "2025-11-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-05T00:00:00Z",
+          "until": "2025-11-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-06T00:00:00Z",
+          "until": "2025-11-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-07T00:00:00Z",
+          "until": "2025-11-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-08T00:00:00Z",
+          "until": "2025-11-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-09T00:00:00Z",
+          "until": "2025-11-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-10T00:00:00Z",
+          "until": "2025-11-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-11T00:00:00Z",
+          "until": "2025-11-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-12T00:00:00Z",
+          "until": "2025-11-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-13T00:00:00Z",
+          "until": "2025-11-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-14T00:00:00Z",
+          "until": "2025-11-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-15T00:00:00Z",
+          "until": "2025-11-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-16T00:00:00Z",
+          "until": "2025-11-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-17T00:00:00Z",
+          "until": "2025-11-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-18T00:00:00Z",
+          "until": "2025-11-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-19T00:00:00Z",
+          "until": "2025-11-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-20T00:00:00Z",
+          "until": "2025-11-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-21T00:00:00Z",
+          "until": "2025-11-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-22T00:00:00Z",
+          "until": "2025-11-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-23T00:00:00Z",
+          "until": "2025-11-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-24T00:00:00Z",
+          "until": "2025-11-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-25T00:00:00Z",
+          "until": "2025-11-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-26T00:00:00Z",
+          "until": "2025-11-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-27T00:00:00Z",
+          "until": "2025-11-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-28T00:00:00Z",
+          "until": "2025-11-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-29T00:00:00Z",
+          "until": "2025-11-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-11-30T00:00:00Z",
+          "until": "2025-11-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-01T00:00:00Z",
+          "until": "2025-12-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-02T00:00:00Z",
+          "until": "2025-12-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-03T00:00:00Z",
+          "until": "2025-12-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-04T00:00:00Z",
+          "until": "2025-12-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-05T00:00:00Z",
+          "until": "2025-12-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-06T00:00:00Z",
+          "until": "2025-12-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-07T00:00:00Z",
+          "until": "2025-12-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-08T00:00:00Z",
+          "until": "2025-12-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-09T00:00:00Z",
+          "until": "2025-12-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-10T00:00:00Z",
+          "until": "2025-12-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-11T00:00:00Z",
+          "until": "2025-12-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-12T00:00:00Z",
+          "until": "2025-12-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-13T00:00:00Z",
+          "until": "2025-12-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-14T00:00:00Z",
+          "until": "2025-12-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-15T00:00:00Z",
+          "until": "2025-12-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-16T00:00:00Z",
+          "until": "2025-12-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-17T00:00:00Z",
+          "until": "2025-12-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-18T00:00:00Z",
+          "until": "2025-12-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-19T00:00:00Z",
+          "until": "2025-12-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-20T00:00:00Z",
+          "until": "2025-12-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-21T00:00:00Z",
+          "until": "2025-12-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-22T00:00:00Z",
+          "until": "2025-12-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-23T00:00:00Z",
+          "until": "2025-12-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-24T00:00:00Z",
+          "until": "2025-12-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-25T00:00:00Z",
+          "until": "2025-12-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-26T00:00:00Z",
+          "until": "2025-12-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-27T00:00:00Z",
+          "until": "2025-12-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-28T00:00:00Z",
+          "until": "2025-12-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-29T00:00:00Z",
+          "until": "2025-12-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-30T00:00:00Z",
+          "until": "2025-12-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2025-12-31T00:00:00Z",
+          "until": "2025-12-31T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-01T00:00:00Z",
+          "until": "2026-01-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-02T00:00:00Z",
+          "until": "2026-01-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-03T00:00:00Z",
+          "until": "2026-01-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-04T00:00:00Z",
+          "until": "2026-01-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-05T00:00:00Z",
+          "until": "2026-01-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-06T00:00:00Z",
+          "until": "2026-01-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-07T00:00:00Z",
+          "until": "2026-01-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-08T00:00:00Z",
+          "until": "2026-01-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-09T00:00:00Z",
+          "until": "2026-01-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-10T00:00:00Z",
+          "until": "2026-01-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-11T00:00:00Z",
+          "until": "2026-01-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-12T00:00:00Z",
+          "until": "2026-01-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-13T00:00:00Z",
+          "until": "2026-01-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-14T00:00:00Z",
+          "until": "2026-01-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-15T00:00:00Z",
+          "until": "2026-01-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-16T00:00:00Z",
+          "until": "2026-01-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-17T00:00:00Z",
+          "until": "2026-01-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-18T00:00:00Z",
+          "until": "2026-01-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-19T00:00:00Z",
+          "until": "2026-01-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-20T00:00:00Z",
+          "until": "2026-01-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-21T00:00:00Z",
+          "until": "2026-01-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-22T00:00:00Z",
+          "until": "2026-01-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-23T00:00:00Z",
+          "until": "2026-01-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-24T00:00:00Z",
+          "until": "2026-01-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-25T00:00:00Z",
+          "until": "2026-01-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-26T00:00:00Z",
+          "until": "2026-01-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-27T00:00:00Z",
+          "until": "2026-01-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-28T00:00:00Z",
+          "until": "2026-01-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-29T00:00:00Z",
+          "until": "2026-01-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-30T00:00:00Z",
+          "until": "2026-01-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-01-31T00:00:00Z",
+          "until": "2026-01-31T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-01T00:00:00Z",
+          "until": "2026-02-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-02T00:00:00Z",
+          "until": "2026-02-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-03T00:00:00Z",
+          "until": "2026-02-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-04T00:00:00Z",
+          "until": "2026-02-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-05T00:00:00Z",
+          "until": "2026-02-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-06T00:00:00Z",
+          "until": "2026-02-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-07T00:00:00Z",
+          "until": "2026-02-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-08T00:00:00Z",
+          "until": "2026-02-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-09T00:00:00Z",
+          "until": "2026-02-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-10T00:00:00Z",
+          "until": "2026-02-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-11T00:00:00Z",
+          "until": "2026-02-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-12T00:00:00Z",
+          "until": "2026-02-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-13T00:00:00Z",
+          "until": "2026-02-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-14T00:00:00Z",
+          "until": "2026-02-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-15T00:00:00Z",
+          "until": "2026-02-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-16T00:00:00Z",
+          "until": "2026-02-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-17T00:00:00Z",
+          "until": "2026-02-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-18T00:00:00Z",
+          "until": "2026-02-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-19T00:00:00Z",
+          "until": "2026-02-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-20T00:00:00Z",
+          "until": "2026-02-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-21T00:00:00Z",
+          "until": "2026-02-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-22T00:00:00Z",
+          "until": "2026-02-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-23T00:00:00Z",
+          "until": "2026-02-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-24T00:00:00Z",
+          "until": "2026-02-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-25T00:00:00Z",
+          "until": "2026-02-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-26T00:00:00Z",
+          "until": "2026-02-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-27T00:00:00Z",
+          "until": "2026-02-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-02-28T00:00:00Z",
+          "until": "2026-02-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-01T00:00:00Z",
+          "until": "2026-03-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-02T00:00:00Z",
+          "until": "2026-03-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-03T00:00:00Z",
+          "until": "2026-03-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-04T00:00:00Z",
+          "until": "2026-03-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-05T00:00:00Z",
+          "until": "2026-03-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-06T00:00:00Z",
+          "until": "2026-03-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-07T00:00:00Z",
+          "until": "2026-03-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-08T00:00:00Z",
+          "until": "2026-03-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-09T00:00:00Z",
+          "until": "2026-03-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-10T00:00:00Z",
+          "until": "2026-03-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-11T00:00:00Z",
+          "until": "2026-03-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-12T00:00:00Z",
+          "until": "2026-03-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-13T00:00:00Z",
+          "until": "2026-03-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-14T00:00:00Z",
+          "until": "2026-03-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-15T00:00:00Z",
+          "until": "2026-03-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-16T00:00:00Z",
+          "until": "2026-03-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-17T00:00:00Z",
+          "until": "2026-03-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-18T00:00:00Z",
+          "until": "2026-03-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-19T00:00:00Z",
+          "until": "2026-03-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-20T00:00:00Z",
+          "until": "2026-03-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-21T00:00:00Z",
+          "until": "2026-03-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-22T00:00:00Z",
+          "until": "2026-03-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-23T00:00:00Z",
+          "until": "2026-03-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-24T00:00:00Z",
+          "until": "2026-03-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-25T00:00:00Z",
+          "until": "2026-03-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-26T00:00:00Z",
+          "until": "2026-03-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-27T00:00:00Z",
+          "until": "2026-03-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-28T00:00:00Z",
+          "until": "2026-03-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-29T00:00:00Z",
+          "until": "2026-03-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-30T00:00:00Z",
+          "until": "2026-03-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-03-31T00:00:00Z",
+          "until": "2026-03-31T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-01T00:00:00Z",
+          "until": "2026-04-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-02T00:00:00Z",
+          "until": "2026-04-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-03T00:00:00Z",
+          "until": "2026-04-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-04T00:00:00Z",
+          "until": "2026-04-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-05T00:00:00Z",
+          "until": "2026-04-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-06T00:00:00Z",
+          "until": "2026-04-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-07T00:00:00Z",
+          "until": "2026-04-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-08T00:00:00Z",
+          "until": "2026-04-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-09T00:00:00Z",
+          "until": "2026-04-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-10T00:00:00Z",
+          "until": "2026-04-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-11T00:00:00Z",
+          "until": "2026-04-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-12T00:00:00Z",
+          "until": "2026-04-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-13T00:00:00Z",
+          "until": "2026-04-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-14T00:00:00Z",
+          "until": "2026-04-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-15T00:00:00Z",
+          "until": "2026-04-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-16T00:00:00Z",
+          "until": "2026-04-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-17T00:00:00Z",
+          "until": "2026-04-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-18T00:00:00Z",
+          "until": "2026-04-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-19T00:00:00Z",
+          "until": "2026-04-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-20T00:00:00Z",
+          "until": "2026-04-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-21T00:00:00Z",
+          "until": "2026-04-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-22T00:00:00Z",
+          "until": "2026-04-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-23T00:00:00Z",
+          "until": "2026-04-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-24T00:00:00Z",
+          "until": "2026-04-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-25T00:00:00Z",
+          "until": "2026-04-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-26T00:00:00Z",
+          "until": "2026-04-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-27T00:00:00Z",
+          "until": "2026-04-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-28T00:00:00Z",
+          "until": "2026-04-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-29T00:00:00Z",
+          "until": "2026-04-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-04-30T00:00:00Z",
+          "until": "2026-04-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-01T00:00:00Z",
+          "until": "2026-05-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-02T00:00:00Z",
+          "until": "2026-05-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-03T00:00:00Z",
+          "until": "2026-05-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-04T00:00:00Z",
+          "until": "2026-05-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-05T00:00:00Z",
+          "until": "2026-05-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-06T00:00:00Z",
+          "until": "2026-05-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-07T00:00:00Z",
+          "until": "2026-05-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-08T00:00:00Z",
+          "until": "2026-05-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-09T00:00:00Z",
+          "until": "2026-05-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-10T00:00:00Z",
+          "until": "2026-05-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-11T00:00:00Z",
+          "until": "2026-05-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-12T00:00:00Z",
+          "until": "2026-05-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-13T00:00:00Z",
+          "until": "2026-05-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-14T00:00:00Z",
+          "until": "2026-05-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-15T00:00:00Z",
+          "until": "2026-05-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-16T00:00:00Z",
+          "until": "2026-05-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-17T00:00:00Z",
+          "until": "2026-05-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-18T00:00:00Z",
+          "until": "2026-05-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-19T00:00:00Z",
+          "until": "2026-05-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-20T00:00:00Z",
+          "until": "2026-05-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-21T00:00:00Z",
+          "until": "2026-05-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-22T00:00:00Z",
+          "until": "2026-05-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-23T00:00:00Z",
+          "until": "2026-05-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-24T00:00:00Z",
+          "until": "2026-05-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-25T00:00:00Z",
+          "until": "2026-05-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-26T00:00:00Z",
+          "until": "2026-05-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-27T00:00:00Z",
+          "until": "2026-05-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-28T00:00:00Z",
+          "until": "2026-05-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-29T00:00:00Z",
+          "until": "2026-05-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-30T00:00:00Z",
+          "until": "2026-05-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-05-31T00:00:00Z",
+          "until": "2026-05-31T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-01T00:00:00Z",
+          "until": "2026-06-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-02T00:00:00Z",
+          "until": "2026-06-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-03T00:00:00Z",
+          "until": "2026-06-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-04T00:00:00Z",
+          "until": "2026-06-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-05T00:00:00Z",
+          "until": "2026-06-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-06T00:00:00Z",
+          "until": "2026-06-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-07T00:00:00Z",
+          "until": "2026-06-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-08T00:00:00Z",
+          "until": "2026-06-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-09T00:00:00Z",
+          "until": "2026-06-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-10T00:00:00Z",
+          "until": "2026-06-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-11T00:00:00Z",
+          "until": "2026-06-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-12T00:00:00Z",
+          "until": "2026-06-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-13T00:00:00Z",
+          "until": "2026-06-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-14T00:00:00Z",
+          "until": "2026-06-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-15T00:00:00Z",
+          "until": "2026-06-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-16T00:00:00Z",
+          "until": "2026-06-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-17T00:00:00Z",
+          "until": "2026-06-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-18T00:00:00Z",
+          "until": "2026-06-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-19T00:00:00Z",
+          "until": "2026-06-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-20T00:00:00Z",
+          "until": "2026-06-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-21T00:00:00Z",
+          "until": "2026-06-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-22T00:00:00Z",
+          "until": "2026-06-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-23T00:00:00Z",
+          "until": "2026-06-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-24T00:00:00Z",
+          "until": "2026-06-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-25T00:00:00Z",
+          "until": "2026-06-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-26T00:00:00Z",
+          "until": "2026-06-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-27T00:00:00Z",
+          "until": "2026-06-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-28T00:00:00Z",
+          "until": "2026-06-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-29T00:00:00Z",
+          "until": "2026-06-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-06-30T00:00:00Z",
+          "until": "2026-06-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-01T00:00:00Z",
+          "until": "2026-07-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-02T00:00:00Z",
+          "until": "2026-07-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-03T00:00:00Z",
+          "until": "2026-07-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-04T00:00:00Z",
+          "until": "2026-07-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-05T00:00:00Z",
+          "until": "2026-07-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-06T00:00:00Z",
+          "until": "2026-07-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-07T00:00:00Z",
+          "until": "2026-07-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-08T00:00:00Z",
+          "until": "2026-07-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-09T00:00:00Z",
+          "until": "2026-07-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-10T00:00:00Z",
+          "until": "2026-07-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-11T00:00:00Z",
+          "until": "2026-07-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-12T00:00:00Z",
+          "until": "2026-07-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-13T00:00:00Z",
+          "until": "2026-07-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-14T00:00:00Z",
+          "until": "2026-07-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-15T00:00:00Z",
+          "until": "2026-07-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-16T00:00:00Z",
+          "until": "2026-07-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-17T00:00:00Z",
+          "until": "2026-07-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-18T00:00:00Z",
+          "until": "2026-07-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-19T00:00:00Z",
+          "until": "2026-07-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-20T00:00:00Z",
+          "until": "2026-07-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-21T00:00:00Z",
+          "until": "2026-07-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-22T00:00:00Z",
+          "until": "2026-07-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-23T00:00:00Z",
+          "until": "2026-07-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-24T00:00:00Z",
+          "until": "2026-07-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-25T00:00:00Z",
+          "until": "2026-07-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-26T00:00:00Z",
+          "until": "2026-07-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-27T00:00:00Z",
+          "until": "2026-07-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-28T00:00:00Z",
+          "until": "2026-07-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-29T00:00:00Z",
+          "until": "2026-07-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-30T00:00:00Z",
+          "until": "2026-07-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-07-31T00:00:00Z",
+          "until": "2026-07-31T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-01T00:00:00Z",
+          "until": "2026-08-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-02T00:00:00Z",
+          "until": "2026-08-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-03T00:00:00Z",
+          "until": "2026-08-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-04T00:00:00Z",
+          "until": "2026-08-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-05T00:00:00Z",
+          "until": "2026-08-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-06T00:00:00Z",
+          "until": "2026-08-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-07T00:00:00Z",
+          "until": "2026-08-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-08T00:00:00Z",
+          "until": "2026-08-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-09T00:00:00Z",
+          "until": "2026-08-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-10T00:00:00Z",
+          "until": "2026-08-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-11T00:00:00Z",
+          "until": "2026-08-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-12T00:00:00Z",
+          "until": "2026-08-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-13T00:00:00Z",
+          "until": "2026-08-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-14T00:00:00Z",
+          "until": "2026-08-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-15T00:00:00Z",
+          "until": "2026-08-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-16T00:00:00Z",
+          "until": "2026-08-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-17T00:00:00Z",
+          "until": "2026-08-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-18T00:00:00Z",
+          "until": "2026-08-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-19T00:00:00Z",
+          "until": "2026-08-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-20T00:00:00Z",
+          "until": "2026-08-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-21T00:00:00Z",
+          "until": "2026-08-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-22T00:00:00Z",
+          "until": "2026-08-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-23T00:00:00Z",
+          "until": "2026-08-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-24T00:00:00Z",
+          "until": "2026-08-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-25T00:00:00Z",
+          "until": "2026-08-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-26T00:00:00Z",
+          "until": "2026-08-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-27T00:00:00Z",
+          "until": "2026-08-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-28T00:00:00Z",
+          "until": "2026-08-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-29T00:00:00Z",
+          "until": "2026-08-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-30T00:00:00Z",
+          "until": "2026-08-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-08-31T00:00:00Z",
+          "until": "2026-08-31T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-01T00:00:00Z",
+          "until": "2026-09-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-02T00:00:00Z",
+          "until": "2026-09-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-03T00:00:00Z",
+          "until": "2026-09-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-04T00:00:00Z",
+          "until": "2026-09-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-05T00:00:00Z",
+          "until": "2026-09-05T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-06T00:00:00Z",
+          "until": "2026-09-06T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-07T00:00:00Z",
+          "until": "2026-09-07T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-08T00:00:00Z",
+          "until": "2026-09-08T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-09T00:00:00Z",
+          "until": "2026-09-09T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-10T00:00:00Z",
+          "until": "2026-09-10T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-11T00:00:00Z",
+          "until": "2026-09-11T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-12T00:00:00Z",
+          "until": "2026-09-12T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-13T00:00:00Z",
+          "until": "2026-09-13T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-14T00:00:00Z",
+          "until": "2026-09-14T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-15T00:00:00Z",
+          "until": "2026-09-15T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-16T00:00:00Z",
+          "until": "2026-09-16T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-17T00:00:00Z",
+          "until": "2026-09-17T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-18T00:00:00Z",
+          "until": "2026-09-18T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-19T00:00:00Z",
+          "until": "2026-09-19T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-20T00:00:00Z",
+          "until": "2026-09-20T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-21T00:00:00Z",
+          "until": "2026-09-21T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-22T00:00:00Z",
+          "until": "2026-09-22T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-23T00:00:00Z",
+          "until": "2026-09-23T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-24T00:00:00Z",
+          "until": "2026-09-24T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-25T00:00:00Z",
+          "until": "2026-09-25T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-26T00:00:00Z",
+          "until": "2026-09-26T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-27T00:00:00Z",
+          "until": "2026-09-27T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-28T00:00:00Z",
+          "until": "2026-09-28T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-29T00:00:00Z",
+          "until": "2026-09-29T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-09-30T00:00:00Z",
+          "until": "2026-09-30T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-10-01T00:00:00Z",
+          "until": "2026-10-01T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-10-02T00:00:00Z",
+          "until": "2026-10-02T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-10-03T00:00:00Z",
+          "until": "2026-10-03T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        },
+        {
+          "since": "2026-10-04T00:00:00Z",
+          "until": "2026-10-04T23:59:59.999999999Z",
+          "runs": {
+            "queued": 0,
+            "running": 0,
+            "waiting": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timed_out": 0
+          },
+          "retries": []
+        }
+      ],
+      "overall": {
+        "since": "2025-09-29T00:00:00Z",
+        "until": "2026-10-04T23:59:59.999999999Z",
+        "runs": {
+          "queued": 0,
+          "running": 0,
+          "waiting": 0,
+          "succeeded": 0,
+          "failed": 0,
+          "cancelled": 0,
+          "timed_out": 0
+        },
+        "retries": []
+      }
+    }
+  },
   "POST /api/v1/auth/sign-out": {
     "status": 204
   },
@@ -6798,7 +12879,10 @@
           "admin": false,
           "suspended": false,
           "created_at": "2026-09-20T08:05:00Z",
-          "last_sign_in_at": "2026-09-30T05:40:12Z"
+          "last_sign_in_at": "2026-09-30T05:40:12Z",
+          "email": "alice.martin@example.com",
+          "given_name": "Alice",
+          "family_name": "Martin"
         },
         {
           "kind": "user",
@@ -6806,7 +12890,9 @@
           "display_name": "Bob Martin",
           "admin": false,
           "suspended": false,
-          "created_at": "2026-09-29T16:20:00Z"
+          "created_at": "2026-09-29T16:20:00Z",
+          "given_name": "Bob",
+          "family_name": "Martin"
         },
         {
           "kind": "user",
@@ -6816,7 +12902,9 @@
           "suspended": true,
           "suspended_for": "no_passkey",
           "created_at": "2026-09-21T10:00:00Z",
-          "last_sign_in_at": "2026-09-24T09:12:40Z"
+          "last_sign_in_at": "2026-09-24T09:12:40Z",
+          "given_name": "Carol",
+          "family_name": "Diaz"
         },
         {
           "kind": "user",
@@ -6825,7 +12913,10 @@
           "admin": true,
           "suspended": false,
           "created_at": "2026-09-20T08:00:00Z",
-          "last_sign_in_at": "2026-09-30T06:00:02Z"
+          "last_sign_in_at": "2026-09-30T06:00:02Z",
+          "email": "dana.okafor@example.com",
+          "given_name": "Dana",
+          "family_name": "Okafor"
         }
       ]
     }
@@ -6855,6 +12946,88 @@
           "members": []
         }
       ]
+    }
+  },
+  "GET /api/v1/auth/policy": {
+    "status": 200,
+    "body": {
+      "password": "allowed",
+      "passkey": "required",
+      "user_verification": "required",
+      "device_bound_only": false,
+      "min_passkeys": 2
+    }
+  },
+  "GET /api/v1/finance/auth/policy": {
+    "status": 200,
+    "body": {
+      "device_bound_only": true
+    }
+  },
+  "GET /api/v1/auth/audit": {
+    "status": 200,
+    "body": {
+      "entries": [
+        {
+          "seq": 12,
+          "at": "2026-10-01T05:58:12.104331Z",
+          "actor": "dana",
+          "action": "runner.drain",
+          "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "result": "unchanged",
+          "detail": "{\"reason\":\"kernel update\"}",
+          "prev_hash": "24637695f17e6a9c5179b8e822d2ecfd1e643eb41cf5d5aeacb4697f0489785a",
+          "hash": "f7eda5597341c2424d2e1e0cfd7c6fd03761f07b490600527527364aa878a486"
+        },
+        {
+          "seq": 11,
+          "at": "2026-10-01T05:41:03.552100Z",
+          "actor": "alice",
+          "action": "run.cancel",
+          "namespace": "finance",
+          "target": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+          "result": "done",
+          "detail": "{\"workflow\":\"monthly-invoicing\",\"reason\":\"wrong month\"}",
+          "prev_hash": "f55c8239a4d1bdf18cd825d8de4255ec6fe95435462fcacd8b3df017ab4adabb",
+          "hash": "24637695f17e6a9c5179b8e822d2ecfd1e643eb41cf5d5aeacb4697f0489785a"
+        },
+        {
+          "seq": 10,
+          "at": "2026-10-01T05:12:44.008112Z",
+          "actor": "carol",
+          "action": "namespace.update",
+          "namespace": "finance",
+          "target": "finance",
+          "result": "done",
+          "detail": "{\"quotas\":{\"max_concurrent_tasks\":20,\"max_runs_per_hour\":500}}",
+          "prev_hash": "f95e893abe9003225ba02ab70c5f19f88229905ef6e1700d2ac0b1fd25320d5c",
+          "hash": "f55c8239a4d1bdf18cd825d8de4255ec6fe95435462fcacd8b3df017ab4adabb"
+        },
+        {
+          "seq": 9,
+          "at": "2026-09-30T17:02:19.900213Z",
+          "actor": "bruno",
+          "action": "signin.fail",
+          "target": "bruno",
+          "result": "done",
+          "detail": "{\"method\":\"password\",\"address\":\"192.0.2.44\"}",
+          "prev_hash": "5c7e1817bc645c3ab2d34d8f0ac72a70ecb8dcf01165175676ee3350beaabcd1",
+          "hash": "f95e893abe9003225ba02ab70c5f19f88229905ef6e1700d2ac0b1fd25320d5c"
+        },
+        {
+          "seq": 8,
+          "at": "2026-09-30T16:40:00.000001Z",
+          "actor": "dana",
+          "action": "user.create",
+          "target": "erin",
+          "result": "done",
+          "detail": "{\"admin\":false}",
+          "prev_hash": "767298e8a318063c0c301766a4ec30083429242c20ebfafb555e726ee1d9b795",
+          "hash": "5c7e1817bc645c3ab2d34d8f0ac72a70ecb8dcf01165175676ee3350beaabcd1"
+        }
+      ],
+      "head": 12,
+      "verified": 10
     }
   }
 }

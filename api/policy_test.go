@@ -280,7 +280,7 @@ func TestForbiddingPasswordsDeletesThemAndSuspendsWhoHoldsNoPasskey(t *testing.T
 
 	// frank, created since, holds nothing, and a change keeping passwords forbidden leaves him be.
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "frank", DisplayName: "Frank"})
+		return w.CreateUser(ctx, db.User{Login: "frank", Profile: db.Profile{GivenName: "Frank"}})
 	}); err != nil {
 		t.Fatal(err)
 	}

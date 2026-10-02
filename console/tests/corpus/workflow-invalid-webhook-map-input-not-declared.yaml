@@ -1,0 +1,27 @@
+# invalid: A webhook filling an input the workflow does not declare. map builds
+#   the run's inputs, each validated against its schema before the run exists,
+#   and an input nobody declared has none.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: price-quotes
+  namespace: sales
+
+on:
+  webhook:
+    - path: /quotes/requested
+      map:
+        client: ${{ trigger.body.client }}
+
+inputs:
+  customer:
+    schema: { type: string }
+
+steps:
+  quote:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

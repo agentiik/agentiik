@@ -271,7 +271,7 @@ func TestASessionRevokedOpensNothingFromTheNextRequest(t *testing.T) {
 	suspend := func(suspended bool) {
 		t.Helper()
 		if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-			return w.UpdateUser(ctx, db.User{Login: "carol", DisplayName: "Carol", Admin: true, Suspended: suspended})
+			return w.UpdateUser(ctx, db.User{Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true, Suspended: suspended})
 		}); err != nil {
 			t.Fatal(err)
 		}

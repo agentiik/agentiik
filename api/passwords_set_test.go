@@ -302,7 +302,7 @@ func TestARecoveryCodeReplacesThePasswordAndTheGeneratorBesideIt(t *testing.T) {
 func TestAPasswordSetFromACodeLiftsASuspensionForHoldingNoPasskey(t *testing.T) {
 	in := somePasswords(t)
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "frank", DisplayName: "Frank"})
+		return w.CreateUser(ctx, db.User{Login: "frank", Profile: db.Profile{GivenName: "Frank"}})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestWhatTheEnrolmentRouteRefuses(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "frank-martinez", DisplayName: "Frank"})
+		return w.CreateUser(ctx, db.User{Login: "frank-martinez", Profile: db.Profile{GivenName: "Frank"}})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestANamespaceForbiddingPasswordsForbidsSettingOne(t *testing.T) {
 func TestAPasswordThatCouldOnlyEnrolIsNotSet(t *testing.T) {
 	in := somePasswords(t)
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "frank", DisplayName: "Frank"})
+		return w.CreateUser(ctx, db.User{Login: "frank", Profile: db.Profile{GivenName: "Frank"}})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -576,7 +576,7 @@ func TestAPasswordIsSetFromAnySessionOfItsUser(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "frank-martinez", DisplayName: "Frank"})
+		return w.CreateUser(ctx, db.User{Login: "frank-martinez", Profile: db.Profile{GivenName: "Frank"}})
 	}); err != nil {
 		t.Fatal(err)
 	}

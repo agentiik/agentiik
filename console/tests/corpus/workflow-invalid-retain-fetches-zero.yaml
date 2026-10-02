@@ -1,0 +1,22 @@
+# invalid: A fetch count of zero, which would declare an output that may never
+#   be collected. A one-shot output is fetches: 1, and two consumers are
+#   fetches: 2.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#artifact-expiry
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: payroll
+  namespace: hr
+
+outputs:
+  payslips:
+    from: { step: render, port: out }
+    retain: { for: 24h, fetches: 0 }
+
+steps:
+  render:
+    image: ghcr.io/acme/agk-render@sha256:7b30caf011a8489951644e83116b325d0a49f234d44a76227657cc972af651df
+    outputs: [out]

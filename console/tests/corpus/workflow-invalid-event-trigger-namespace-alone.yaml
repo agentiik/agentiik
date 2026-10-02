@@ -1,0 +1,21 @@
+# invalid: An event trigger naming only the namespace it listens to. It would start
+#   a run on every event published there, so a subscription names a type, a source
+#   or a filter whichever namespace it hears.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: order-fulfilment
+  namespace: sales
+
+on:
+  event:
+    - namespace: erp
+
+steps:
+  ship:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

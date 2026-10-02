@@ -5,20 +5,25 @@
 // A namespace is the first segment of most of them, as it is of the API's routes. The others begin
 // with a word no namespace can be named, the reserved words of the namespace grammar: me for the
 // caller's own account, runners for what an administrator runs, users, groups and namespaces for whom
-// and what an administrator manages. A workflow is the segment after
-// workflows, and a run the segment after runs, each as the API names it; two runs read side by side
-// are the first's address, then against and the second.
+// and what an administrator manages. A workflow is the segment after workflows, and its runs are
+// under it: its runs, then a run as the API names it, and two runs read side by side are the
+// first's address, then against and the second. A run is always some workflow's, so it is reached
+// from that workflow and nowhere else.
+//
+// The addresses runs had before, a namespace then runs, are still read: the list as the namespace's
+// workflows, and a run as itself with its workflow not yet known, which its screen writes into the
+// address once it has read the run.
 
-export type View = "runs" | "workflows" | "statistics" | "sharing" | "settings";
+export type View = "workflows" | "statistics" | "sharing" | "variables" | "settings";
 
-export const views: readonly View[] = ["runs", "workflows", "statistics", "sharing", "settings"];
+export const views: readonly View[] = ["workflows", "statistics", "sharing", "variables", "settings"];
 
 export type Route =
   | { kind: "landing" }
   | { kind: "namespace"; namespace: string; view: View; workflow?: string; run?: string; against?: string; tab?: string }
   | { kind: "account"; tab?: string }
   | { kind: "runners"; tab?: string }
-  | { kind: "users" }
+  | { kind: "users"; tab?: string }
   | { kind: "groups" }
   | { kind: "namespaces" }
   | { kind: "unknown"; path: string };
@@ -53,30 +58,56 @@ export function read(pathname: string, root: string): Route {
   if (first === "me") {
     return third === undefined ? { kind: "account", tab: second } : { kind: "unknown", path: pathname };
   }
+  // The users' page has a tab of its own, the installation's sign-in policy, under the users' segment
+  // rather than one of its own, since a first segment of the console's is one no namespace may take;
+  // and the audit log is under it for the same reason, an entry of the sidebar of its own.
+  if (first === "users" && (second === "policy" || second === "audit") && third === undefined) {
+    return { kind: "users", tab: second };
+  }
   if (first === "users" || first === "groups" || first === "namespaces") {
     return second === undefined ? { kind: first } : { kind: "unknown", path: pathname };
   }
   if (first === "runners") {
     return third === undefined ? { kind: "runners", tab: second } : { kind: "unknown", path: pathname };
   }
-  if (second === "runs" && third !== undefined && fourth === "against" && rest.length === 1) {
-    return { kind: "namespace", namespace: first, view: "runs", run: third, against: rest[0] };
+  if (second === "runs") {
+    if (third === undefined) return { kind: "namespace", namespace: first, view: "workflows" };
+    if (fourth === undefined) return { kind: "namespace", namespace: first, view: "workflows", run: third };
+    if (fourth === "against" && rest.length === 1) return { kind: "namespace", namespace: first, view: "workflows", run: third, against: rest[0] };
+    return { kind: "unknown", path: pathname };
+  }
+  if (second === "workflows" && third !== undefined && fourth === "runs") {
+    const [run, against, other, ...beyond] = rest;
+    if (run === undefined) return { kind: "namespace", namespace: first, view: "workflows", workflow: third, tab: "runs" };
+    if (against === undefined) return { kind: "namespace", namespace: first, view: "workflows", workflow: third, run };
+    if (against === "against" && other !== undefined && beyond.length === 0) return { kind: "namespace", namespace: first, view: "workflows", workflow: third, run, against: other };
+    return { kind: "unknown", path: pathname };
   }
   if (rest.length > 0) {
     return { kind: "unknown", path: pathname };
   }
-  const view = (second ?? "runs") as View;
+  const view = (second ?? "workflows") as View;
   if (!views.includes(view)) {
     return { kind: "unknown", path: pathname };
   }
   switch (view) {
-    case "runs":
-      return fourth === undefined ? { kind: "namespace", namespace: first, view, run: third } : { kind: "unknown", path: pathname };
     case "workflows":
       return { kind: "namespace", namespace: first, view, workflow: third, tab: fourth };
     default:
       return third === undefined ? { kind: "namespace", namespace: first, view } : { kind: "unknown", path: pathname };
   }
+}
+
+// runAt is the address of a run, under the workflow it is a run of; and of two runs read side by
+// side where against names the second. A run whose workflow is not known yet is addressed as before,
+// and its screen writes the workflow in once it has read the run.
+export function runAt(namespace: string, workflow: string | undefined, run: string, against?: string): Route {
+  return { kind: "namespace", namespace, view: "workflows", ...(workflow ? { workflow } : {}), run, ...(against ? { against } : {}) };
+}
+
+// runsOf is the address of a workflow's runs.
+export function runsOf(namespace: string, workflow: string): Route {
+  return { kind: "namespace", namespace, view: "workflows", workflow, tab: "runs" };
 }
 
 // address is the path of a route relative to the console's root, which a link writes as it is, since
@@ -91,19 +122,22 @@ export function address(route: Route): string {
     case "runners":
       return route.tab ? `runners/${e(route.tab)}` : "runners";
     case "users":
+      return route.tab ? `users/${e(route.tab)}` : "users";
     case "groups":
     case "namespaces":
       return route.kind;
     case "unknown":
       return "./";
     case "namespace": {
-      let path = `${e(route.namespace)}/${route.view}`;
-      if (route.view === "runs" && route.run) {
-        path += `/${e(route.run)}`;
+      if (route.run) {
+        // A run whose workflow is not known yet keeps the address it was reached by.
+        let path = route.workflow ? `${e(route.namespace)}/workflows/${e(route.workflow)}/runs/${e(route.run)}` : `${e(route.namespace)}/runs/${e(route.run)}`;
         if (route.against) {
           path += `/against/${e(route.against)}`;
         }
+        return path;
       }
+      let path = `${e(route.namespace)}/${route.view}`;
       if (route.view === "workflows" && route.workflow) {
         path += `/${e(route.workflow)}`;
         if (route.tab) {

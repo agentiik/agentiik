@@ -1,4 +1,5 @@
 import { refusal, type API, type Me, type Namespace } from "../api/client";
+import { explain, type Explained } from "./problem";
 
 // Who the console is signed in as, and what it may see, read from GET /api/v1/me and GET
 // /api/v1/namespaces, again whenever something may have changed it.
@@ -14,10 +15,8 @@ export class Session {
   me = $state<Me | null>(null);
   namespaces = $state<Namespace[]>([]);
 
-  // answering is whether the installation answered the console's last read, which the top bar says
-  // in words; said is why it did not.
-  answering = $state(true);
-  said = $state("");
+  // failure is why the installation did not answer the console's last read, told for a person.
+  failure = $state<Explained | null>(null);
 
   readonly #api: API;
 
@@ -31,10 +30,9 @@ export class Session {
     try {
       me = await this.#api.GET("/api/v1/me");
     } catch (e) {
-      this.#unanswered(e instanceof Error ? e.message : String(e));
+      this.#unanswered(e);
       return;
     }
-    this.answering = true;
     switch (me.response.status) {
       case 401:
         this.me = null;
@@ -46,14 +44,14 @@ export class Session {
         return;
     }
     if (!me.data) {
-      this.#unanswered(refusal(me.response, me.error).message);
+      this.#unanswered(refusal(me.response, me.error));
       return;
     }
     let listed;
     try {
       listed = await this.#api.GET("/api/v1/namespaces");
     } catch (e) {
-      this.#unanswered(e instanceof Error ? e.message : String(e));
+      this.#unanswered(e);
       return;
     }
     this.me = me.data;
@@ -61,9 +59,8 @@ export class Session {
     this.standing = "signed-in";
   }
 
-  #unanswered(why: string) {
-    this.answering = false;
-    this.said = why;
+  #unanswered(cause: unknown) {
+    this.failure = explain("load your account", cause);
     if (this.standing === "reading") {
       this.standing = "unreachable";
     }

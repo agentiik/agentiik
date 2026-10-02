@@ -27,10 +27,16 @@ type Listening struct {
 // and whose type and source, each where it names one, are the event's: in the namespace published
 // into first, then by namespace, workflow and position. Whether one armed in another namespace may
 // hear it is the authorizer's to say, and its filter the graph's.
+//
+// A trigger hears a namespace by any name it answers to, its own or one it held before a rename,
+// since a workflow of another namespace keeps the name it was written with until somebody changes
+// it, and "a workflow naming the old name keeps working". The rename writes the triggers armed then
+// under the new name; one armed since from a file naming the old one names it still.
 func (w *Wide) Listening(ctx context.Context, published, eventType, source string) ([]Listening, error) {
 	rows, err := w.tx.Query(ctx,
 		`select namespace, workflow, position, commit, declared from triggers
-		 where kind = 'event' and hears = $1
+		 where kind = 'event'
+		   and (hears = $1 or hears = any (select unnest(n.former_names) from namespaces n where n.name = $1))
 		   and (type is null or type = $2) and (source is null or source = $3)
 		 order by namespace <> $1, namespace, workflow, position`, published, eventType, source)
 	if err != nil {

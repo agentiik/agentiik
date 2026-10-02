@@ -21,15 +21,24 @@ import (
 // Go of every package, the root's and the commands' included, whatever its build tags, the sign-in
 // page's HTML and scripts, the migrations, the images' Dockerfiles and scripts, go.mod, and whatever
 // a //go:embed directive puts in a binary, and names each that imports a mail package, requires a
-// module for mail, or holds a mail transport, a provider's name, the word email or a mailto: link.
-// Test files and testdata are not read: they ship nowhere, and a test may name what it refuses, as
-// this one does.
+// module for mail, or holds a mail transport, the program that sends mail, a provider's name or a
+// mailto: link. Test files and testdata are not read: they ship nowhere, and a test may name what it
+// refuses, as this one does.
+//
+// The word email is not among them, though it was until v0.6.0: a user has an email address, which
+// an administrator gives them for the people they work with to reach them by, and the word names
+// that field in the API, the users table and the console, as git's author lines had it name a field
+// in package repo. Refusing the word would refuse the field, and the field sends nothing: what a
+// mailer needs to send, a transport, a program, a package or a provider, is still refused here
+// wherever it is written, and a link that opens a message to be sent, mailto:, too, since a console
+// showing an address writes it as text for a person to copy rather than as a message the product
+// starts.
 func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 	// What no shipped file holds, whatever the case of its letters: the protocol mail is sent
-	// with, the program that sends it on a host, a link that opens a message to be sent, the word
-	// itself, which a mailer calling a provider's HTTP API writes somewhere, in a field, a route
-	// or a function's name, and the providers whose APIs send it.
-	words := []string{"smtp", "sendmail", "mailto:", "email", "e-mail", "sendgrid", "mailgun", "postmark", "mandrill", "sesv2", "sparkpost"}
+	// with, the program that sends it on a host, a link that opens a message to be sent, and the
+	// providers whose APIs send it, which a mailer calling one over HTTP writes somewhere, in a
+	// host, a module or a function's name.
+	words := []string{"smtp", "sendmail", "mailto:", "sendgrid", "mailgun", "mailjet", "postmark", "mandrill", "sesv2", "sparkpost", "sendinblue"}
 	// The packages that send or compose mail, and any module whose path says it does.
 	mailPackages := map[string]bool{"net/smtp": true, "net/mail": true}
 
@@ -47,13 +56,6 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 		}
 		lower := bytes.ToLower(b)
 		for _, word := range words {
-			// Git's author, committer and tagger lines carry an email address, and git names its
-			// own checks of them for it, missingEmail and badEmail among them. Package repo reads
-			// that format as the data a commit holds and sends nothing to anyone, so it may hold
-			// that word, and none of the others.
-			if word == "email" && strings.HasPrefix(filepath.ToSlash(path), "../repo/") {
-				continue
-			}
 			if bytes.Contains(lower, []byte(word)) {
 				t.Errorf("%s holds %q: nothing in the product sends mail or writes a link to be mailed", path, word)
 			}

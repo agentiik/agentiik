@@ -117,6 +117,15 @@ func (co *Core) call(ctx context.Context, e db.Evaluation, t graph.Task, now tim
 	}
 
 	namespace, name, _ := strings.Cut(t.Call.Workflow, "/")
+	// A call names the namespace it calls into as its file was written, which may be a name the
+	// namespace held before a rename: it calls the namespace that answers to it now.
+	if co.controller != nil && co.controller.pool != nil {
+		current, err := co.controller.pool.CurrentName(ctx, namespace)
+		if err != nil {
+			return "", "", err
+		}
+		namespace = current
+	}
 	target := t.Call.Workflow
 	if t.Call.Ref != "" {
 		target += "@" + t.Call.Ref
@@ -327,7 +336,11 @@ func (co *Core) answerOfCall(ctx context.Context, called db.Called, namespace st
 		if err != nil {
 			return graph.Result{}, err
 		}
-		envelope, err := artifact.GetEnvelope(ctx, co.objects, called.Namespace, out.Envelope.Digest, co.limits)
+		storage, err := co.storage(ctx, called.Namespace)
+		if err != nil {
+			return graph.Result{}, err
+		}
+		envelope, err := artifact.GetEnvelope(ctx, co.objects, storage, out.Envelope.Digest, co.limits)
 		if err != nil {
 			return graph.Result{}, fmt.Errorf("the output %s of run %s could not be read: %w", name, called.Run, err)
 		}

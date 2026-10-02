@@ -40,6 +40,16 @@ type statsRange struct {
 	Bucket   string
 	Buckets  db.Buckets
 	Previous bool
+
+	// Max is a range asked with range=max, to start at the first thing the route counts, which
+	// only the route knows: reach settles it once the route has read where that is, and until then
+	// it is the 24 hours before To.
+	Max bool
+
+	// asked is the bucket the query named, and bucketed whether the route counts in buckets, which
+	// reach settles the range with again.
+	asked    string
+	bucketed bool
 }
 
 // before is the span just before the range, in as many buckets of the same length, so that a chart
@@ -56,11 +66,11 @@ func (s statsRange) before() (from, to time.Time, b db.Buckets) {
 // readStatsRange reads the range a series is asked over, now being when the request is answered.
 // Where bucketed is false, as for a heatmap of the hours of a week, a bucket is read to be refused
 // where it is none and neither shapes the answer nor bounds the range, and the span before is not
-// taken.
+// taken. A range asked with range=max is read as the 24 hours before to, which reach then moves.
 func readStatsRange(query url.Values, now time.Time, bucketed bool) (statsRange, error) {
 	// Whether each was given rather than whether it is zero, since 0001-01-01T00:00:00Z is a time
 	// a query can name.
-	rng := statsRange{To: now.UTC()}
+	rng := statsRange{To: now.UTC(), bucketed: bucketed}
 	given := map[string]bool{}
 	for _, c := range []struct {
 		name string
@@ -76,6 +86,16 @@ func readStatsRange(query url.Values, now time.Time, bucketed bool) (statsRange,
 		}
 		*c.into, given[c.name] = at.UTC(), true
 	}
+	switch named := query.Get("range"); named {
+	case "":
+	case "max":
+		if given["from"] {
+			return statsRange{}, fmt.Errorf("from and range=max are both given, and both say where the range starts: one is given, not both")
+		}
+		rng.Max = true
+	default:
+		return statsRange{}, fmt.Errorf("range is %q, and the one range named is max, from the first thing the route counts", named)
+	}
 	if !given["from"] {
 		rng.From = rng.To.Add(-statsSpan)
 	}
@@ -83,21 +103,9 @@ func readStatsRange(query url.Values, now time.Time, bucketed bool) (statsRange,
 		return statsRange{}, fmt.Errorf("from is %s and to is %s, and a range runs from an instant to a later one", stamp(rng.From), stamp(rng.To))
 	}
 
-	rng.Bucket = query.Get("bucket")
-	switch span := rng.To.Sub(rng.From); {
-	case rng.Bucket != "":
-		if _, known := statsBuckets[rng.Bucket]; !known {
-			return statsRange{}, fmt.Errorf("bucket is %q, and a bucket is 1m, 15m, 1h or 1d", rng.Bucket)
-		}
-	// A chart of a few hundred points at most, whatever the range.
-	case span <= 2*time.Hour:
-		rng.Bucket = "1m"
-	case span <= 48*time.Hour:
-		rng.Bucket = "15m"
-	case span <= 14*24*time.Hour:
-		rng.Bucket = "1h"
-	default:
-		rng.Bucket = "1d"
+	rng.asked = query.Get("bucket")
+	if _, known := statsBuckets[rng.asked]; rng.asked != "" && !known {
+		return statsRange{}, fmt.Errorf("bucket is %q, and a bucket is 1m, 15m, 1h or 1d", rng.asked)
 	}
 	switch compare := query.Get("compare"); compare {
 	case "":
@@ -106,7 +114,47 @@ func readStatsRange(query url.Values, now time.Time, bucketed bool) (statsRange,
 	default:
 		return statsRange{}, fmt.Errorf("compare is %q, and the one comparison is previous, the same span just before", compare)
 	}
-	if !bucketed {
+	return rng.counted(false)
+}
+
+// reach settles a range asked with range=max at first, the first thing the route counts before
+// To, and leaves it the 24 hours before To where first is the zero time, there being nothing to
+// count. A range of buckets reaches back MaxBuckets of them at most, and starts where the last of
+// those does rather than being refused: what was asked is as far back as a series goes, and that
+// is as far as it can.
+func (s statsRange) reach(first time.Time) statsRange {
+	if !s.Max || first.IsZero() || !first.Before(s.To) {
+		return s
+	}
+	s.From = first.UTC()
+	settled, err := s.counted(true)
+	if err != nil {
+		// Never, since a range that reaches too far is moved rather than refused, and first is
+		// before To; the range read stands where it would be.
+		return s
+	}
+	return settled
+}
+
+// counted picks the bucket from the range where the query named none, and counts the buckets,
+// refusing more than MaxBuckets, or, where bounded is true, starting the range where the last
+// MaxBuckets begin.
+func (rng statsRange) counted(bounded bool) (statsRange, error) {
+	rng.Bucket = rng.asked
+	if rng.Bucket == "" {
+		switch span := rng.To.Sub(rng.From); {
+		// A chart of a few hundred points at most, whatever the range.
+		case span <= 2*time.Hour:
+			rng.Bucket = "1m"
+		case span <= 48*time.Hour:
+			rng.Bucket = "15m"
+		case span <= 14*24*time.Hour:
+			rng.Bucket = "1h"
+		default:
+			rng.Bucket = "1d"
+		}
+	}
+	if !rng.bucketed {
 		rng.Bucket = ""
 		return rng, nil
 	}
@@ -120,7 +168,11 @@ func readStatsRange(query url.Values, now time.Time, bucketed bool) (statsRange,
 	// refused all the same.
 	count := int64(last.Sub(first)/width) + 1
 	if count > db.MaxBuckets {
-		return statsRange{}, fmt.Errorf("from %s to %s is %d buckets of %s, and a series takes at most %d: more than any chart draws, which a query would pay for all the same", stamp(rng.From), stamp(rng.To), count, rng.Bucket, db.MaxBuckets)
+		if !bounded {
+			return statsRange{}, fmt.Errorf("from %s to %s is %d buckets of %s, and a series takes at most %d: more than any chart draws, which a query would pay for all the same", stamp(rng.From), stamp(rng.To), count, rng.Bucket, db.MaxBuckets)
+		}
+		first = last.Add(-time.Duration(db.MaxBuckets-1) * width)
+		rng.From, count = first, db.MaxBuckets
 	}
 	rng.Buckets = db.Buckets{First: first, Width: width, Count: int(count)}
 	return rng, nil
@@ -171,6 +223,13 @@ func (s *Server) runStatistics(w http.ResponseWriter, r *http.Request, who Princ
 
 	var out statsRuns
 	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
+		if rng.Max {
+			first, err := wide.FirstRun(ctx, among, rng.To)
+			if err != nil {
+				return err
+			}
+			rng = rng.reach(first)
+		}
 		var err error
 		out.Buckets, out.Overall, out.Histogram, err = runSeries(ctx, wide, among, rng.Buckets, bins)
 		if err != nil || !rng.Previous {
@@ -226,19 +285,24 @@ func runSeries(ctx context.Context, wide *db.Wide, among []db.Workflow, b db.Buc
 	return buckets, overall, histogram, nil
 }
 
+// runCounts is runs counted by state, as the API writes them.
+func runCounts(runs map[string]int) statsRunCounts {
+	return statsRunCounts{
+		Queued: runs["queued"], Running: runs["running"], Waiting: runs["waiting"],
+		Succeeded: runs["succeeded"], Failed: runs["failed"], Cancelled: runs["cancelled"],
+		TimedOut: runs["timed_out"],
+	}
+}
+
 // runBuckets is what the runs came to in each of b's buckets, as the API writes it.
 func runBuckets(counted []db.RunBucket, b db.Buckets) []statsRunsBucket {
 	buckets := make([]statsRunsBucket, len(counted))
 	for i, c := range counted {
 		since := b.First.Add(time.Duration(i) * b.Width)
 		buckets[i] = statsRunsBucket{
-			Since: stamp(since),
-			Until: stamp(since.Add(b.Width - time.Nanosecond)),
-			Runs: statsRunCounts{
-				Queued: c.Runs["queued"], Running: c.Runs["running"], Waiting: c.Runs["waiting"],
-				Succeeded: c.Runs["succeeded"], Failed: c.Runs["failed"], Cancelled: c.Runs["cancelled"],
-				TimedOut: c.Runs["timed_out"],
-			},
+			Since:     stamp(since),
+			Until:     stamp(since.Add(b.Width - time.Nanosecond)),
+			Runs:      runCounts(c.Runs),
 			Duration:  percentiles(c.Duration),
 			QueueWait: percentiles(c.QueueWait),
 			Retries:   make([]statsExitCode, len(c.Retries)),
