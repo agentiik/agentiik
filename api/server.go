@@ -190,6 +190,11 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			Needs{Permission: WorkflowWrite, Scope: Workflow}, s.recordImages},
 		{"POST", "/api/v1/{namespace}/workflows/{workflow}/runs",
 			Needs{Permission: WorkflowRun, Scope: Workflow}, s.start},
+		// What a manual run takes, read under what asking for one takes: the declaration and the
+		// files its schemas reach, and nothing else of the file, since an operator runs a workflow
+		// it does not read.
+		{"GET", "/api/v1/{namespace}/workflows/{workflow}/inputs",
+			Needs{Permission: WorkflowRun, Scope: Workflow}, s.runInputs},
 		// What the default branch's head has armed, read under what reading the workflow takes.
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/triggers",
 			Needs{Permission: WorkflowRead, Scope: Workflow}, s.listTriggers},
