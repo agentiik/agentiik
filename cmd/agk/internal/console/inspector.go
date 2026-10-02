@@ -21,12 +21,14 @@ import (
 // and each port the step published, with the items in its envelope, and the envelope itself under
 // run:read_data alone, hidden rather than refused to anybody else.
 
-// principal is the caller as GET /api/v1/me gives it: who, whether an administrator, and what they
-// hold where, by scope as a grant writes it.
+// principal is the caller as GET /api/v1/me gives it: who, whether an administrator, the groups
+// they are in as a grant names them, and what they hold where, by scope as a grant writes it.
 type principal struct {
-	Principal   string              `json:"principal"`
-	Admin       bool                `json:"admin"`
-	Permissions map[string][]string `json:"permissions"`
+	Principal     string              `json:"principal"`
+	Admin         bool                `json:"admin"`
+	Groups        []string            `json:"groups"`
+	Permissions   map[string][]string `json:"permissions"`
+	Notifications []notice            `json:"notifications"`
 }
 
 // holds says whether the caller holds a permission on a workflow, its own scope where /me carries
@@ -91,7 +93,8 @@ func (m Model) mayReadData() bool {
 	return m.run != nil && m.me.holds("run:read_data", m.run.Namespace, m.run.Workflow)
 }
 
-// stepOf is the step chosen, the first that failed where none is, or the first.
+// stepOf is the step chosen, or where none is the first that failed, the first going on, or the
+// first.
 func stepOf(run *db.RunDetail, chosen string) string {
 	for _, s := range run.Steps {
 		if string(s.Step) == chosen {
@@ -100,6 +103,12 @@ func stepOf(run *db.RunDetail, chosen string) string {
 	}
 	for _, s := range run.Steps {
 		if s.Verdict == agk.VerdictFailed {
+			return string(s.Step)
+		}
+	}
+	// Where nothing failed, the step going on is the one watched.
+	for _, s := range run.Steps {
+		if s.Verdict == agk.VerdictRunning {
 			return string(s.Step)
 		}
 	}
@@ -211,7 +220,7 @@ func exited(code int) string {
 func (m Model) runHeader(now time.Time) [][]part {
 	r := m.run
 	lines := [][]part{
-		{{strong, "Run "}, {muted, string(r.Run)}, {plain, "  " + r.Namespace + "/" + r.Workflow + "@" + short(r.Commit) + "  "}, {stateRole(r.State), "●"}, {plain, " " + r.State.String()}},
+		{{strong, "Run "}, {muted, string(r.Run)}, {plain, "  " + r.Namespace + "/" + r.Workflow + "@" + short(r.Commit) + "  "}, {stateRole(r.State), m.mark(r.State == agk.Running)}, {plain, " " + r.State.String()}},
 	}
 	about := []string{r.Trigger.String()}
 	if r.TriggeredBy != "" {
@@ -227,7 +236,7 @@ func (m Model) runHeader(now time.Time) [][]part {
 		}
 		about = append(about, replays)
 	}
-	lines = append(lines, []part{{muted, strings.Join(about, " · ")}})
+	lines = append(lines, fitted([]part{{muted, strings.Join(about, " · ")}}, sparkline(m.recent, now), m.width))
 	for _, s := range r.Steps {
 		if s.Verdict != agk.VerdictFailed {
 			continue
@@ -283,23 +292,34 @@ func (m Model) stepRow(s db.StepSummary, now time.Time, width int) []part {
 		longest = max(longest, len([]rune(string(other.Step))))
 	}
 	name := cellOf(string(s.Step), max(8, min(longest, width-12-8-1)))
-	return []part{
-		{verdictRole(s.Verdict), "●"}, {plain, " " + cellOf(s.Verdict.String(), 10) + " "}, {plain, name + " "},
-		{muted, padLeft(took(s.StartedAt, s.FinishedAt, now), 7) + " "}, {quiet, count},
+	row := []part{
+		{verdictRole(s.Verdict), m.mark(s.Verdict == agk.VerdictRunning)}, {plain, " " + cellOf(s.Verdict.String(), 10) + " "}, {plain, name + " "},
+		{muted, padLeft(took(s.StartedAt, s.FinishedAt, now), 7) + " "},
 	}
+	// A fan-out is a strip of its shards, one cell each where the pane has the room.
+	if cells := shardCells(tasks, shardsOf(tasks), 16); len(cells) > 0 {
+		row = append(append(row, cells...), part{plain, " "})
+	}
+	return append(row, part{quiet, count})
 }
 
-// stepLines is the step chosen: its image, each shard's last attempt, and its ports.
-func (m Model) stepLines(step string, now time.Time, width int) [][]part {
+// stepLines is the step chosen: its image, each shard's last attempt, and its ports, with the line
+// each port is written on.
+func (m Model) stepLines(step string, now time.Time, width int) (lines [][]part, at map[int]int, portsFrom int) {
 	s := summaryOf(m.run, step)
 	if s == nil {
-		return [][]part{{{quiet, "No step to show yet."}}}
+		return [][]part{{{quiet, "No step to show yet."}}}, nil, -1
 	}
-	lines := [][]part{{{strong, step}, {plain, "  "}, {verdictRole(s.Verdict), "●"}, {plain, " " + s.Verdict.String()}, {muted, "  " + took(s.StartedAt, s.FinishedAt, now)}}}
+	portsFrom = -1
+	at = map[int]int{}
+	lines = [][]part{{{strong, step}, {plain, "  "}, {verdictRole(s.Verdict), m.mark(s.Verdict == agk.VerdictRunning)}, {plain, " " + s.Verdict.String()}, {muted, "  " + took(s.StartedAt, s.FinishedAt, now)}}}
 	if s.Image != "" {
 		lines = append(lines, []part{{muted, "image   "}, {plain, s.Image}})
 	}
 	tasks := lastAttempts(m.run, step)
+	if of := shardsOf(tasks); of > 1 {
+		lines = append(lines, append([]part{{muted, "shards  "}}, doneBar(tasks, of)...))
+	}
 	if len(tasks) > 0 {
 		lines = append(lines, nil, []part{{quiet, "SHARD  STATE      ATTEMPT  EXIT                          RUNNER"}})
 	}
@@ -333,12 +353,13 @@ func (m Model) stepLines(step string, now time.Time, width int) [][]part {
 			exitRole = failedText
 		}
 		lines = append(lines, []part{
-			{plain, cellOf(shard, 6) + " "}, {taskRole(t.State), "●"}, {plain, " " + cellOf(t.State.String(), 9) + " "},
+			{plain, cellOf(shard, 6) + " "}, {taskRole(t.State), m.mark(taskRole(t.State) == runningText)}, {plain, " " + cellOf(t.State.String(), 9) + " "},
 			{plain, cellOf(fmt.Sprint(t.Attempt), 8) + " "}, {exitRole, cellOf(exit, 29) + " "}, {muted, where},
 		})
 	}
 	ports := portsOf(s)
 	if len(ports) > 0 {
+		portsFrom = len(lines) + 1
 		lines = append(lines, nil, []part{{quiet, "  PORT         ITEMS   SIZE      DIGEST"}})
 	}
 	for i, p := range ports {
@@ -351,6 +372,7 @@ func (m Model) stepLines(step string, now time.Time, width int) [][]part {
 		if !e.PurgedAt.IsZero() {
 			digest += ", purged"
 		}
+		at[len(lines)] = i
 		lines = append(lines, []part{{r, mark + cellOf(p, 12) + " "}, {plain, padLeft(fmt.Sprint(e.Items), 5) + "   " + cellOf(sizeOf(e.Size), 9) + " "}, {muted, digest}})
 	}
 	if len(ports) > 0 && m.mayReadData() {
@@ -371,7 +393,7 @@ func (m Model) stepLines(step string, now time.Time, width int) [][]part {
 			}
 		}
 	}
-	return lines
+	return lines, at, portsFrom
 }
 
 func sizeOf(bytes int64) string {
@@ -400,8 +422,8 @@ func padLeft(s string, width int) string {
 	return s
 }
 
-// runLines is the run view: the run's header, then its steps beside the step chosen where the
-// window has room, 120 columns and more, and above it where it has not.
+// runLines is the run's pane: the run's header, then its steps beside the step chosen where the
+// pane has room, 120 columns and more, and above it where it has not.
 func (m Model) runLines(t theme, height int) []string {
 	switch {
 	case m.runFailed != "":
@@ -422,13 +444,23 @@ func (m Model) runLines(t theme, height int) []string {
 	}
 	lines = append(lines, t.line(false, m.width))
 	step := stepOf(m.run, m.step)
+	lines = append(lines, m.runTabs(t, len(lines)))
+	switch m.runTabShown() {
+	case "graph":
+		return m.graphTab(t, lines, step, height, now)
+	case "ports":
+		return m.portsTab(t, lines, step, now)
+	}
 	left := m.width
 	if m.wide() {
 		left = max(40, m.width*2/5)
 	}
+	// The steps start on the line the header leaves them, beside the step chosen or above it.
+	at := t.at(0, len(lines))
 	var steps []string
 	steps = append(steps, t.line(false, left, part{quiet, fmt.Sprintf("STEPS %d", len(m.run.Steps))}))
 	for _, s := range m.run.Steps {
+		at.pick(len(steps), left, "step", string(s.Step))
 		steps = append(steps, t.line(string(s.Step) == step, left, within(m.stepRow(s, now, left), left)...))
 	}
 	right := m.width
@@ -436,11 +468,20 @@ func (m Model) runLines(t theme, height int) []string {
 		right = m.width - left - 2
 	}
 	var detail []string
-	for _, l := range m.stepLines(step, now, right) {
+	described, ports, _ := m.stepLines(step, now, right)
+	// The step chosen is beside the steps from 120 columns, and below them and a blank line under.
+	of := t.at(left+2, len(lines))
+	if !m.wide() {
+		of = t.at(0, len(lines)+len(steps)+1)
+	}
+	for i, l := range described {
+		if p, ok := ports[i]; ok {
+			of.pick(i, right, "port", fmt.Sprint(p))
+		}
 		detail = append(detail, t.line(false, right, within(l, right)...))
 	}
 	if !m.wide() {
-		return m.withLog(t, append(append(append(lines, steps...), t.line(false, m.width)), detail...), step, height)
+		return append(append(append(lines, steps...), t.line(false, m.width)), detail...)
 	}
 	gap := t.line(false, 2)
 	for i := 0; i < max(len(steps), len(detail)); i++ {
@@ -453,21 +494,5 @@ func (m Model) runLines(t theme, height int) []string {
 		}
 		lines = append(lines, l+gap+r)
 	}
-	return m.withLog(t, lines, step, height)
-}
-
-// withLog puts the log of the step chosen beneath the run, taking what the run leaves and never
-// under a third of the window, the run cut where it would take more: the log is what is read while
-// a step runs, and the run is read again on its own when the window is larger.
-func (m Model) withLog(t theme, lines []string, step string, height int) []string {
-	if m.o.Follow == nil {
-		return lines
-	}
-	room := max(6, height/3)
-	if len(lines)+1+room <= height {
-		room = height - len(lines) - 1
-	} else {
-		lines = lines[:max(0, height-room-1)]
-	}
-	return append(append(lines, t.line(false, m.width)), m.logLines(t, step, room)...)
+	return lines
 }

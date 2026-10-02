@@ -6,8 +6,8 @@ import { measure, type Finding } from "./measure";
 // widths its layout changes at, a large screen, a wide window, the last width with the sidebar
 // folded, the last with it shown as a drawer and a phone, in both themes, and measured: nothing runs off the page, every
 // control is one height and a row of them one band, what is centred in a row is centred on one line
-// and text side by side on one baseline, each pane's content starts under its title, and every box
-// starts on a whole pixel. A finding names the rule, the element and what was measured.
+// and text side by side on one baseline, each pane's content starts under its title, a chart's legend keeps its
+// columns and names each series on one line, nothing runs into the page's side margins, and every box starts on a whole pixel; and the policy refuses nothing a screen asks for. A finding names the rule, the element and what was measured.
 
 const screens: Record<string, string[]> = {
   alice: [
@@ -24,7 +24,11 @@ const screens: Record<string, string[]> = {
     "/finance/workflows/monthly-invoicing/mcp",
     "/finance/workflows/monthly-invoicing/statistics",
     "/finance/workflows/monthly-invoicing?edit=1&step=invoice",
+    "/finance/workflows/monthly-invoicing?edit=1&view=yaml",
+    "/finance/workflows/monthly-invoicing/settings",
+    "/alice/workflows/report/settings",
     "/finance/statistics",
+    "/finance/statistics?tab=quotas",
     "/finance/sharing",
     "/finance/variables",
     "/finance/settings",
@@ -38,7 +42,9 @@ const screens: Record<string, string[]> = {
     "/me/tokens",
     "/me/service-accounts",
   ],
-  dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/finance/settings", "/me"],
+  dana: ["/", "/runners", "/runners/statistics", "/users", "/users/policy", "/users/audit", "/groups", "/namespaces", "/namespaces?namespace=finance", "/finance/settings", "/me"],
+  // Nobody signed in: the sign-in page, whatever the address.
+  nobody: ["/"],
 };
 
 const widths = [2560, 1440, 1099, 759, 390];
@@ -62,12 +68,30 @@ for (const [who, paths] of Object.entries(screens)) {
           for (const path of paths) {
             const page = await context.newPage();
             await page.clock.install({ time: new Date("2026-10-01T06:02:30Z") });
+            // Whatever the policy refuses is drawn without it, a style or a script the screen then lacks.
+            await page.addInitScript(() => {
+              const refused: string[] = [];
+              (window as unknown as { refused: string[] }).refused = refused;
+              document.addEventListener("securitypolicyviolation", (e) => refused.push(`${e.violatedDirective} refused ${e.blockedURI} from ${e.sourceFile}:${e.lineNumber}`));
+            });
             await page.goto(server.url.replace(/\/$/, "") + path);
             await page.locator("main").first().waitFor();
             await page.evaluate(() => document.fonts.ready);
             // A chart is drawn once its box has been measured, on the frame after.
             await page.waitForTimeout(300);
+            // An editor lays its lines out as they come into view, as a person scrolls to them: the page is
+            // read down to its end, a window at a time, and back, so that what is measured is what is seen.
+            await page.evaluate(async () => {
+              const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+              for (let y = 0; y < document.documentElement.scrollHeight; y += window.innerHeight) {
+                window.scrollTo(0, y);
+                await frame();
+              }
+              window.scrollTo(0, 0);
+              await frame();
+            });
             for (const f of await page.evaluate(measure)) found.push({ path, ...f });
+            for (const detail of await page.evaluate(() => (window as unknown as { refused: string[] }).refused)) found.push({ path, rule: "policy", where: "document", detail });
             await page.close();
           }
           await context.close();

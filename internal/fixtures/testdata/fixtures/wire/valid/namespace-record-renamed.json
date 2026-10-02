@@ -3,8 +3,7 @@
   "kind": "shared",
   "owner": "bob-martin",
   "quotas": {
-    "max_concurrent_tasks": 20,
-    "max_retention_days": 90
+    "max_concurrent_tasks": 20
   },
   "former_names": [
     "stats",

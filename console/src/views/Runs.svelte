@@ -2,8 +2,10 @@
   import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
   import type { API, Me, Namespace } from "../api/client";
+  import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
   import PageHeader from "../components/PageHeader.svelte";
+  import RunForm from "../components/RunForm.svelte";
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import StepStrip from "../components/StepStrip.svelte";
@@ -13,7 +15,7 @@
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
-  import { workflowTabs } from "../lib/page";
+  import { settles, workflowTabs } from "../lib/page";
   import { runAt } from "../lib/route";
 
   // A workflow's runs, a tab of the workflow: newest first and kept live, the ones that failed lifted
@@ -25,7 +27,11 @@
 
   const filters = $derived({ ...filtersOf(place.query), workflow });
   const graph = $derived(holds(me, "workflow:read", namespace, workflow));
-  const tabs = $derived(workflowTabs(namespace, workflow, "runs", { shares: holds(me, "grant:manage", namespace, workflow), mcp: false, go: (r, q) => place.go(r, false, q) }).filter((t) => graph || t.label !== "Graph"));
+  const tabs = $derived(workflowTabs(namespace, workflow, "runs", { mcp: false, settles: settles(me, namespace, workflow), reads: graph }));
+  // Run asks for a run here too, to whoever may ask for one, which reading the workflow is not: an
+  // operator runs a workflow from its runs, the page it opens on.
+  const mayRun = $derived(holds(me, "workflow:run", namespace, workflow));
+  let running = $state(false);
   const list = $derived(new RunList(api, namespace, filters));
 
   let live = $state(true);
@@ -118,6 +124,7 @@
 
 <PageHeader title={workflow} icon="control-workflows" {place} {tabs}>
   {#snippet actions()}
+    {#if mayRun}<button class="control primary" onclick={() => (running = true)}><Icon name="control-run" size={14} />Run</button>{/if}
     <label class="live">
       <input type="checkbox" role="switch" bind:checked={live} />
       <span class="track" aria-hidden="true"><span class="knob"></span></span>
@@ -217,6 +224,10 @@
   </footer>
   {/if}
 </Pane>
+
+<Dialog title="Run {workflow}" bind:open={running} width={640}>
+  {#if running}<RunForm {api} {place} {namespace} {workflow} onclose={() => (running = false)} />{/if}
+</Dialog>
 
 <style>
   /* The filters wrap onto a second line where the window is too narrow for one. */

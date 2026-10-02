@@ -65,8 +65,8 @@ func (h *NamespaceHolds) Held() string {
 //
 // n.Kind is shared where it is empty, and n.Owner is written on the row alone: the grant that lets
 // an owner act on the namespace is its creator's to write, beside this, with GrantAccess. The
-// quotas are written as SetQuotas writes them, so a zero MaxConcurrentTasks or MaxRetentionDays
-// starts at the table's default, 20 or 90.
+// quotas are written as SetQuotas writes them, so a zero MaxConcurrentTasks starts at the table's
+// default, 20, and a zero MaxRetentionDays keeps what the namespace's runs produce for ever.
 //
 // The built-in identity is created with the namespace because "scheduled, webhook and event runs
 // are attributed to" it, and it "holds no grant until an owner gives it one", so creating it grants
@@ -199,10 +199,12 @@ type Namespace struct {
 
 // Quotas are what one namespace may consume.
 type Quotas struct {
-	// MaxConcurrentTasks and MaxRetentionDays are always set, at 20 and 90 unless an
-	// administrator set them otherwise.
+	// MaxConcurrentTasks is always set, at 20 unless an administrator set it otherwise.
 	MaxConcurrentTasks int
-	MaxRetentionDays   int
+
+	// MaxRetentionDays bounds how long the namespace keeps what its runs produce, and nothing
+	// where it is zero: an installation keeps what it ran until somebody decides otherwise.
+	MaxRetentionDays int
 
 	// The others bound nothing where they are zero, or nil for AllowedRunnerPools, which then
 	// allows every pool that accepts the namespace. MaxRunDuration is written on a timeout's
@@ -213,7 +215,7 @@ type Quotas struct {
 	AllowedRunnerPools []string
 }
 
-const namespaceColumns = `name, kind, coalesce(owner, ''), max_concurrent_tasks, max_retention_days,
+const namespaceColumns = `name, kind, coalesce(owner, ''), max_concurrent_tasks, coalesce(max_retention_days, 0),
 	coalesce(max_runs_per_hour, 0), coalesce(max_artifact_bytes, 0), coalesce(max_run_duration, ''),
 	allowed_runner_pools, created_at, storage, former_names, avatar_updated_at`
 
@@ -288,13 +290,13 @@ func (w *Wide) SetOwner(ctx context.Context, name, owner string) error {
 	return nil
 }
 
-// SetQuotas writes a namespace's quotas whole: a zero MaxConcurrentTasks or MaxRetentionDays keeps
-// the value it has, and any other zero, or a nil AllowedRunnerPools, bounds nothing.
+// SetQuotas writes a namespace's quotas whole: a zero MaxConcurrentTasks keeps the value it has, and
+// any other zero, or a nil AllowedRunnerPools, bounds nothing.
 func (w *Wide) SetQuotas(ctx context.Context, name string, q Quotas) error {
 	tag, err := w.tx.Exec(ctx,
 		`update namespaces
 		    set max_concurrent_tasks = coalesce($2, max_concurrent_tasks),
-		        max_retention_days   = coalesce($3, max_retention_days),
+		        max_retention_days   = $3,
 		        max_runs_per_hour = $4, max_artifact_bytes = $5, max_run_duration = $6,
 		        allowed_runner_pools = $7
 		  where name = $1`,

@@ -1,0 +1,24 @@
+agentiik  every namespace  alice   1 Runs   2 Workflows   3 Sharing  1 notifica…
+╭─ Runs every namespace · 12 runs ─────────────────────────────────────────────╮
+│ Failed, 3 of the last 12                                                     │
+│ ● failed    01JMZ8V1P9C… finance/monthly-invoic… 05:41:03  1m 52s alice      │
+│ ● failed    01JMZ8T7B2M… finance/dunning-remind… 05:30:00     22s finance/a… │
+│ ● timed_out 01JMZ8G4X6D… finance/vat-reconcile   01:18:39  9m 51s finance/a… │
+│                                                                              │
+│ STATE       RUN          WORKFLOW                STARTED     TOOK BY         │
+│ ⠋ running   01JMZ8W4K2R… finance/monthly-invoic… 06:00:12  1m 48s finance/a… │
+│ ● failed    01JMZ8V1P9C… finance/monthly-invoic… 05:41:03  1m 52s alice      │
+│ ● failed    01JMZ8T7B2M… finance/dunning-remind… 05:30:00     22s finance/a… │
+│ ⠋ running   01JMZ8S3H6X… finance/ledger-export   05:28:45 33m 15s finance/a… │
+│ ● queued    01JMZ8R0D4K… finance/vat-reconcile   05:22:10         finance/a… │
+│ ● succeeded 01JMZ8Q6F1T… finance/monthly-invoic… 04:58:31  3m 47s bruno      │
+│ ● succeeded 01JMZ8P2N8Y… finance/ledger-export   04:41:09     58s finance/a… │
+│ ● cancelled 01JMZ8N9J3W… finance/vat-reconcile   04:12:55  2m 16s alice      │
+│ ● succeeded 01JMZ8M5Z7Q… finance/dunning-remind… 03:30:00     41s finance/a… │
+│ ● succeeded 01JMZ8K1V4R… finance/ledger-export   02:41:12  1m 03s finance/a… │
+│ ● succeeded 01JMZ8H8C0K… finance/monthly-invoic… 02:00:07  4m 22s finance/a… │
+│ ● timed_out 01JMZ8G4X6D… finance/vat-reconcile   01:18:39  9m 51s finance/a… │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+↑↓ Move   enter Open   g Graph   / Filter   q Quit   ? Every key

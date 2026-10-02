@@ -41,8 +41,7 @@
           "kind": "personal",
           "owner": "dana",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         },
         {
@@ -76,8 +75,7 @@
           "kind": "shared",
           "owner": "group:team-ops",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         }
       ]
@@ -12948,6 +12946,88 @@
           "members": []
         }
       ]
+    }
+  },
+  "GET /api/v1/auth/policy": {
+    "status": 200,
+    "body": {
+      "password": "allowed",
+      "passkey": "required",
+      "user_verification": "required",
+      "device_bound_only": false,
+      "min_passkeys": 2
+    }
+  },
+  "GET /api/v1/finance/auth/policy": {
+    "status": 200,
+    "body": {
+      "device_bound_only": true
+    }
+  },
+  "GET /api/v1/auth/audit": {
+    "status": 200,
+    "body": {
+      "entries": [
+        {
+          "seq": 12,
+          "at": "2026-10-01T05:58:12.104331Z",
+          "actor": "dana",
+          "action": "runner.drain",
+          "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "result": "unchanged",
+          "detail": "{\"reason\":\"kernel update\"}",
+          "prev_hash": "24637695f17e6a9c5179b8e822d2ecfd1e643eb41cf5d5aeacb4697f0489785a",
+          "hash": "f7eda5597341c2424d2e1e0cfd7c6fd03761f07b490600527527364aa878a486"
+        },
+        {
+          "seq": 11,
+          "at": "2026-10-01T05:41:03.552100Z",
+          "actor": "alice",
+          "action": "run.cancel",
+          "namespace": "finance",
+          "target": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+          "result": "done",
+          "detail": "{\"workflow\":\"monthly-invoicing\",\"reason\":\"wrong month\"}",
+          "prev_hash": "f55c8239a4d1bdf18cd825d8de4255ec6fe95435462fcacd8b3df017ab4adabb",
+          "hash": "24637695f17e6a9c5179b8e822d2ecfd1e643eb41cf5d5aeacb4697f0489785a"
+        },
+        {
+          "seq": 10,
+          "at": "2026-10-01T05:12:44.008112Z",
+          "actor": "carol",
+          "action": "namespace.update",
+          "namespace": "finance",
+          "target": "finance",
+          "result": "done",
+          "detail": "{\"quotas\":{\"max_concurrent_tasks\":20,\"max_runs_per_hour\":500}}",
+          "prev_hash": "f95e893abe9003225ba02ab70c5f19f88229905ef6e1700d2ac0b1fd25320d5c",
+          "hash": "f55c8239a4d1bdf18cd825d8de4255ec6fe95435462fcacd8b3df017ab4adabb"
+        },
+        {
+          "seq": 9,
+          "at": "2026-09-30T17:02:19.900213Z",
+          "actor": "bruno",
+          "action": "signin.fail",
+          "target": "bruno",
+          "result": "done",
+          "detail": "{\"method\":\"password\",\"address\":\"192.0.2.44\"}",
+          "prev_hash": "5c7e1817bc645c3ab2d34d8f0ac72a70ecb8dcf01165175676ee3350beaabcd1",
+          "hash": "f95e893abe9003225ba02ab70c5f19f88229905ef6e1700d2ac0b1fd25320d5c"
+        },
+        {
+          "seq": 8,
+          "at": "2026-09-30T16:40:00.000001Z",
+          "actor": "dana",
+          "action": "user.create",
+          "target": "erin",
+          "result": "done",
+          "detail": "{\"admin\":false}",
+          "prev_hash": "767298e8a318063c0c301766a4ec30083429242c20ebfafb555e726ee1d9b795",
+          "hash": "5c7e1817bc645c3ab2d34d8f0ac72a70ecb8dcf01165175676ee3350beaabcd1"
+        }
+      ],
+      "head": 12,
+      "verified": 10
     }
   }
 }

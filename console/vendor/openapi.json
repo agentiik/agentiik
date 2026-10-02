@@ -3,9 +3,9 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Agentiik API",
-    "version": "0.5.0",
-    "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces and their quotas, grants and API tokens; the workflow repositories; the runs listed, read, followed, cancelled and replayed; and the statistics the console's charts read.",
-    "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, and the runs routes the console reads and acts with and the statistics routes of v0.6.0, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
+    "version": "0.6.0",
+    "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces, their quotas, secrets and variables, grants and API tokens; the runners and the audit log an administrator reads; the workflow repositories; the runs listed, read, followed, cancelled and replayed; and the statistics the console's charts read.",
+    "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, and every route the web console of v0.6.0 reads and acts with, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
   },
   "externalDocs": {
     "description": "The documentation, which decides what the API does: this document follows it.",
@@ -83,6 +83,10 @@
     {
       "name": "statistics",
       "description": "The series the web console's charts and agk console's compact forms read: a namespace's runs, a workflow's steps and ports, a namespace's load against its quotas, and, to an administrator, the pools and runners. From v0.6.0."
+    },
+    {
+      "name": "audit",
+      "description": "The audit log, read by an administrator: every act the installation recorded, chained so that a change or a removal leaves a break."
     }
   ],
   "security": [
@@ -925,6 +929,108 @@
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/audit": {
+      "get": {
+        "operationId": "getAuditLog",
+        "tags": [
+          "audit"
+        ],
+        "summary": "Read the audit log",
+        "description": "The audit log, the newest entries first, each as the export writes it, narrowed by who did what, where, to what and when, and a page at a time with before. Beside the page, head and verified say where the chain stands. Administrator only: the log is every namespace's and the installation's at once. Under auth, reserved since v0.2, rather than a word of its own, which would have to be reserved a release before the route is served. Reading is not recorded.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#audit-log"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/auditLimit"
+          },
+          {
+            "$ref": "#/components/parameters/auditBefore"
+          },
+          {
+            "$ref": "#/components/parameters/auditActor"
+          },
+          {
+            "$ref": "#/components/parameters/auditAction"
+          },
+          {
+            "$ref": "#/components/parameters/auditNamespace"
+          },
+          {
+            "$ref": "#/components/parameters/auditTarget"
+          },
+          {
+            "$ref": "#/components/parameters/auditSince"
+          },
+          {
+            "$ref": "#/components/parameters/auditUntil"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the log.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auditPage"
+                },
+                "examples": {
+                  "latest": {
+                    "summary": "the two latest entries",
+                    "value": {
+                      "entries": [
+                        {
+                          "seq": 4183,
+                          "at": "2026-10-02T09:15:44.008112Z",
+                          "actor": "dana",
+                          "action": "runner.drain",
+                          "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                          "result": "unchanged",
+                          "detail": "{\"reason\":\"kernel update\"}",
+                          "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                          "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+                        },
+                        {
+                          "seq": 4182,
+                          "at": "2026-10-02T09:14:07.512903Z",
+                          "actor": "carol",
+                          "action": "namespace.update",
+                          "namespace": "finance",
+                          "target": "finance",
+                          "result": "done",
+                          "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                          "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                          "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+                        }
+                      ],
+                      "head": 4183,
+                      "verified": 4182
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The query is refused: a limit outside 1 to 200, a before that is not a whole number from 1, an action that is not a thing and a verb, a since or an until not in RFC 3339, or since after until. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A caller who is not an administrator, or a session that may only enrol."
           }
         }
       }
@@ -2815,7 +2921,7 @@
           "namespaces"
         ],
         "summary": "Create a namespace",
-        "description": "Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20, max_retention_days 90 and the other four unset. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.",
+        "description": "Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20 and the other five unset, so that what its runs produce is kept until somebody decides otherwise. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#scopes-and-resolution"
@@ -2895,8 +3001,7 @@
                       "kind": "shared",
                       "owner": "bob-martin",
                       "quotas": {
-                        "max_concurrent_tasks": 20,
-                        "max_retention_days": 90
+                        "max_concurrent_tasks": 20
                       },
                       "former_names": [],
                       "avatar_updated_at": null
@@ -2959,8 +3064,7 @@
                           "kind": "personal",
                           "owner": "alice",
                           "quotas": {
-                            "max_concurrent_tasks": 20,
-                            "max_retention_days": 90
+                            "max_concurrent_tasks": 20
                           }
                         },
                         {
@@ -3053,8 +3157,7 @@
                       "name": "demo",
                       "kind": "shared",
                       "quotas": {
-                        "max_concurrent_tasks": 20,
-                        "max_retention_days": 90
+                        "max_concurrent_tasks": 20
                       },
                       "former_names": [],
                       "avatar_updated_at": null
@@ -3067,8 +3170,7 @@
                       "kind": "shared",
                       "owner": "group:finance-leads",
                       "quotas": {
-                        "max_concurrent_tasks": 20,
-                        "max_retention_days": 90
+                        "max_concurrent_tasks": 20
                       },
                       "former_names": [
                         "finance"
@@ -3179,8 +3281,7 @@
                       "kind": "shared",
                       "owner": "group:finance-leads",
                       "quotas": {
-                        "max_concurrent_tasks": 20,
-                        "max_retention_days": 90
+                        "max_concurrent_tasks": 20
                       },
                       "former_names": [
                         "finance"
@@ -3505,7 +3606,7 @@
           "namespaces"
         ],
         "summary": "Read a namespace's quotas",
-        "description": "The namespace's quotas, allowed_runner_pools among them. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another; the other four appear where they are set, and absent bound nothing of the namespace's own. Readable by an administrator and by every principal holding a grant in the namespace.",
+        "description": "The namespace's quotas, allowed_runner_pools among them. max_concurrent_tasks always holds a value, 20 until an administrator sets another; the other five appear where they are set, and absent bound nothing of the namespace's own. Readable by an administrator and by every principal holding a grant in the namespace.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#quotas-per-namespace"
@@ -3534,10 +3635,9 @@
                     }
                   },
                   "defaults": {
-                    "summary": "the two that always hold a value, at their defaults",
+                    "summary": "the one that always holds a value, at its default",
                     "value": {
-                      "max_concurrent_tasks": 20,
-                      "max_retention_days": 90
+                      "max_concurrent_tasks": 20
                     }
                   }
                 }
@@ -3567,7 +3667,7 @@
           "namespaces"
         ],
         "summary": "Set a namespace's quotas",
-        "description": "Sets the namespace's quotas. max_concurrent_tasks and max_retention_days always hold a value, so each keeps the one it has where the body leaves it out; each of the other four the body leaves out bounds nothing any more, so that the body is the whole of what they bound and what a Terraform apply sends is what the namespace holds after it. Administrator only, and audited as namespace.update with the quotas as they then stand. allowed_runner_pools names at least one pool that exists, since a pool's own empty list of namespaces means every one and the same spelling here would be read as its opposite.",
+        "description": "Sets the namespace's quotas. max_concurrent_tasks always holds a value, so it keeps the one it has where the body leaves it out; each of the other five the body leaves out bounds nothing any more, so that the body is the whole of what they bound and what a Terraform apply sends is what the namespace holds after it. Administrator only, and audited as namespace.update with the quotas as they then stand. allowed_runner_pools names at least one pool that exists, since a pool's own empty list of namespaces means every one and the same spelling here would be read as its opposite.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#quotas-per-namespace"
@@ -3596,7 +3696,7 @@
                   }
                 },
                 "two": {
-                  "summary": "two bounds, max_retention_days kept and the other three lifted",
+                  "summary": "two bounds, and the other four lifted",
                   "value": {
                     "max_concurrent_tasks": 20,
                     "max_runs_per_hour": 500
@@ -5285,6 +5385,76 @@
           "$ref": "#/components/parameters/ns"
         }
       ],
+      "get": {
+        "operationId": "listWorkflows",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List a namespace's workflows",
+        "description": "The workflows of the namespace whose runs the caller reads, by name in byte order: each with its name, when it was created, and its newest run, absent where it was never run. Nothing of its repository or its file is answered, which workflow:read guards, so that the listing tells an operator, who runs a workflow without reading it, no more than the runs it follows do. A namespace the caller reads the runs of no workflow in lists nothing, as one that does not exist. Requires run:read, asked of each workflow as GET /api/v1/runs asks it.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "200": {
+            "description": "The workflows.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/workflowList"
+                },
+                "examples": {
+                  "listed": {
+                    "summary": "one run and one never run",
+                    "value": {
+                      "workflows": [
+                        {
+                          "name": "ledger-export",
+                          "created_at": "2026-09-30T14:00:00Z"
+                        },
+                        {
+                          "name": "monthly-invoicing",
+                          "created_at": "2026-09-28T09:00:00Z",
+                          "latest": {
+                            "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                            "state": "failed",
+                            "trigger_kind": "manual",
+                            "created_at": "2026-10-01T05:41:03Z",
+                            "finished_at": "2026-10-01T05:42:55Z"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "none": {
+                    "summary": "a namespace the caller reads nothing of",
+                    "value": {
+                      "workflows": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A request carrying two credentials, a bearer token beside the session cookie or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. A namespace the caller reads nothing of lists nothing."
+          }
+        }
+      },
       "post": {
         "operationId": "createWorkflow",
         "tags": [
@@ -6021,6 +6191,155 @@
                     "summary": "max_runs_per_hour reached",
                     "value": {
                       "error": "namespace finance has created as many runs in the last 60 minutes as its max_runs_per_hour, 120, allows, and one more fits in 240 seconds"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no store": {
+                    "summary": "no object store",
+                    "value": {
+                      "error": "this installation has no object store attached, and an input's schema names a file of the version's tree, which is kept there"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/workflows/{name}/inputs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/workflow"
+        }
+      ],
+      "get": {
+        "operationId": "getRunInputs",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Read the inputs a run takes",
+        "description": "What a manual run of the workflow takes, to whoever may ask for one: the version the ref resolves to, the default branch's head where none is named; each input it declares with its schema as written, whether it is required and its default; and the files of the version's tree those schemas reach by $ref, by path, so that a form is drawn and a value checked before the run is asked for. Nothing else of the workflow file is answered: an operator holds workflow:run without workflow:read, so that it starts a job without seeing the steps, images, queries and endpoints inside it, and the inputs are the workflow's boundary, which whoever asks for a run has to fill. Requires workflow:run.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#inputs"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/inputsRef"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The inputs the version declares, and the files their schemas name.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runInputs"
+                },
+                "examples": {
+                  "declared": {
+                    "summary": "two inputs, one with a default",
+                    "value": {
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "inputs": {
+                        "orders": {
+                          "schema": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "id",
+                                "amount"
+                              ]
+                            }
+                          },
+                          "required": true
+                        },
+                        "period": {
+                          "schema": {
+                            "type": "string",
+                            "pattern": "^[0-9]{4}-[0-9]{2}$"
+                          },
+                          "required": false,
+                          "default": "2026-09"
+                        }
+                      },
+                      "files": {}
+                    }
+                  },
+                  "none": {
+                    "summary": "a workflow declaring no input",
+                    "value": {
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "inputs": {},
+                      "files": {}
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A ref a branch and a tag both hold, or a request carrying two credentials, a bearer token beside the session cookie or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal of the workflow is a 404."
+          },
+          "404": {
+            "description": "No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no ref": {
+                    "summary": "a ref naming nothing",
+                    "value": {
+                      "error": "nightly names no branch, no tag and no version of the workflow"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The version is a library's, which nothing runs, or its declaration is one a push now refuses, a schema naming a file the tree does not hold among them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "a library": {
+                    "summary": "a library's version",
+                    "value": {
+                      "error": "finance/common@c41d9e2a is a library, which nothing runs: it is included by the workflows that run"
                     }
                   }
                 }
@@ -7286,6 +7605,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -7748,6 +8070,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -7998,6 +8323,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8136,6 +8464,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8268,6 +8599,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8389,6 +8723,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/statsFrom"
+          },
+          {
+            "$ref": "#/components/parameters/statsRange"
           },
           {
             "$ref": "#/components/parameters/statsTo"
@@ -12213,7 +12550,7 @@
           },
           "quotas": {
             "$ref": "wire.schema.json#/$defs/namespaceRecord/properties/quotas",
-            "description": "What it may consume, an administrator's to write. max_concurrent_tasks and max_retention_days start at 20 and 90 where left out, and the other four bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later, an administrator's as well.",
+            "description": "What it may consume, an administrator's to write. max_concurrent_tasks starts at 20 where left out, and the other five bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later, an administrator's as well.",
             "examples": [
               {
                 "max_concurrent_tasks": 20,
@@ -12298,8 +12635,7 @@
                   "kind": "personal",
                   "owner": "alice",
                   "quotas": {
-                    "max_concurrent_tasks": 20,
-                    "max_retention_days": 90
+                    "max_concurrent_tasks": 20
                   }
                 },
                 {
@@ -12330,8 +12666,7 @@
                 "kind": "personal",
                 "owner": "alice",
                 "quotas": {
-                  "max_concurrent_tasks": 20,
-                  "max_retention_days": 90
+                  "max_concurrent_tasks": 20
                 }
               },
               {
@@ -19113,8 +19448,7 @@
           "media_type",
           "size",
           "sha256",
-          "status",
-          "expires_at"
+          "status"
         ],
         "additionalProperties": false,
         "description": "One file a step of the run published on a port, as its reference holds it: what the envelope's file names, and where it stands in its retention. The reference outlives the bytes, so that a file fetched past its retention answers 410 rather than 404 and the run keeps showing its name, size and digest with its collection recorded.",
@@ -19209,7 +19543,7 @@
           },
           "expires_at": {
             "$ref": "wire.schema.json#/$defs/timestamp",
-            "description": "When it stops being fetchable, its retain capped by the namespace's max_retention_days when it was written: an output's own retain where it declares one, defaults.retain otherwise.",
+            "description": "When it stops being fetchable, its retain capped by the namespace's max_retention_days when it was written: an output's own retain where it declares one, defaults.retain otherwise. Absent where nothing bounds it, neither a retain nor the namespace: the file is kept for ever.",
             "examples": [
               "2026-12-29T05:44:10Z"
             ]
@@ -20380,6 +20714,404 @@
             "reason": "disk replaced"
           }
         ]
+      },
+      "auditPage": {
+        "title": "Audit page",
+        "type": "object",
+        "required": [
+          "entries",
+          "head",
+          "verified"
+        ],
+        "additionalProperties": false,
+        "description": "A page of the audit log, the newest entries first, with where the chain stands: the last entry appended and the last one proved, so that a reader tells an entry the chain is known to hold from one the next term checks.",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/auditEntry"
+            },
+            "description": "The entries of the page, the newest first; a page shorter than its limit is the last.",
+            "examples": [
+              [
+                {
+                  "seq": 4183,
+                  "at": "2026-10-02T09:15:44.008112Z",
+                  "actor": "dana",
+                  "action": "runner.drain",
+                  "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                  "result": "unchanged",
+                  "detail": "{\"reason\":\"kernel update\"}",
+                  "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                  "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+                },
+                {
+                  "seq": 4182,
+                  "at": "2026-10-02T09:14:07.512903Z",
+                  "actor": "carol",
+                  "action": "namespace.update",
+                  "namespace": "finance",
+                  "target": "finance",
+                  "result": "done",
+                  "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                  "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                  "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+                }
+              ]
+            ]
+          },
+          "head": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The last entry appended, 0 where the log is empty, whatever the page holds.",
+            "examples": [
+              4183
+            ]
+          },
+          "verified": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The last entry the leading controller proved the chain to, at the start of its term: an entry after it holds as far as anybody has looked, and the next term checks it.",
+            "examples": [
+              4182
+            ]
+          }
+        },
+        "examples": [
+          {
+            "entries": [
+              {
+                "seq": 4183,
+                "at": "2026-10-02T09:15:44.008112Z",
+                "actor": "dana",
+                "action": "runner.drain",
+                "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                "result": "unchanged",
+                "detail": "{\"reason\":\"kernel update\"}",
+                "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+              },
+              {
+                "seq": 4182,
+                "at": "2026-10-02T09:14:07.512903Z",
+                "actor": "carol",
+                "action": "namespace.update",
+                "namespace": "finance",
+                "target": "finance",
+                "result": "done",
+                "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+              }
+            ],
+            "head": 4183,
+            "verified": 4182
+          }
+        ]
+      },
+      "declaredInput": {
+        "type": "object",
+        "description": "One input a version declares, as its file writes it: what a form asks for and holds a value to before the run is asked for.",
+        "required": [
+          "required"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "The input's JSON Schema 2020-12 as written, an object of keywords or a boolean, a $ref naming a file of the version's tree among them. Absent where the input declares none, which takes any value as it comes.",
+            "examples": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ]
+                }
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}$"
+              }
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether a run supplying no value is refused, where the input declares no default.",
+            "examples": [
+              true,
+              false
+            ]
+          },
+          "default": {
+            "description": "The value standing in for one a run does not supply, held to the schema like any other. Absent where the input declares none.",
+            "examples": [
+              "2026-09",
+              []
+            ]
+          }
+        },
+        "examples": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}$"
+            },
+            "required": false,
+            "default": "2026-09"
+          }
+        ]
+      },
+      "runInputs": {
+        "type": "object",
+        "description": "What a manual run of a workflow takes: the version a ref resolves to, the inputs it declares, and the files of its tree their schemas reach, and nothing else of the workflow file, since it is read under workflow:run and the steps, images, queries and endpoints are workflow:read's.",
+        "required": [
+          "commit",
+          "inputs",
+          "files"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "The version answered, which a run asked for by the same ref now would be pinned to.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Each input the version declares, by its name, empty where it declares none.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/declaredInput"
+            },
+            "examples": [
+              {
+                "period": {
+                  "schema": {
+                    "type": "string",
+                    "pattern": "^[0-9]{4}-[0-9]{2}$"
+                  },
+                  "required": false,
+                  "default": "2026-09"
+                }
+              }
+            ]
+          },
+          "files": {
+            "type": "object",
+            "description": "Each file of the version's tree the inputs' schemas reach by $ref, directly or through another, by its path in the tree, as parsed JSON, so that a $ref resolves without reading the tree, which workflow:read guards. Empty where no schema names a file.",
+            "additionalProperties": {
+              "description": "The file's JSON document.",
+              "examples": [
+                {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number"
+                    }
+                  }
+                }
+              ]
+            },
+            "examples": [
+              {
+                "schemas/order.json": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            "inputs": {},
+            "files": {}
+          }
+        ]
+      },
+      "latestRun": {
+        "type": "object",
+        "description": "A workflow's newest run, by when it was created, as its runs' readers read it in a listing: what it is, where it stands and when it was asked for and ended.",
+        "required": [
+          "run",
+          "state",
+          "trigger_kind",
+          "created_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The run's identifier.",
+            "examples": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+            ]
+          },
+          "state": {
+            "$ref": "wire.schema.json#/$defs/runState",
+            "description": "Where the run stands now.",
+            "examples": [
+              "failed",
+              "running"
+            ]
+          },
+          "trigger_kind": {
+            "$ref": "wire.schema.json#/$defs/triggerKind",
+            "description": "What started it.",
+            "examples": [
+              "manual",
+              "schedule"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the run was asked for.",
+            "examples": [
+              "2026-10-01T05:41:03Z"
+            ]
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it ended, absent while it has not.",
+            "examples": [
+              "2026-10-01T05:42:55Z"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+            "state": "failed",
+            "trigger_kind": "manual",
+            "created_at": "2026-10-01T05:41:03Z",
+            "finished_at": "2026-10-01T05:42:55Z"
+          }
+        ]
+      },
+      "listedWorkflow": {
+        "type": "object",
+        "description": "One workflow of a namespace as its listing answers it to whoever reads its runs: its name, when it was created and its newest run, and nothing of its repository or its file, which workflow:read guards.",
+        "required": [
+          "name",
+          "created_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The workflow's name in its namespace.",
+            "examples": [
+              "monthly-invoicing"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the workflow was created.",
+            "examples": [
+              "2026-09-28T09:00:00Z"
+            ]
+          },
+          "latest": {
+            "$ref": "#/components/schemas/latestRun",
+            "description": "Its newest run, absent where it was never run.",
+            "examples": [
+              {
+                "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                "state": "failed",
+                "trigger_kind": "manual",
+                "created_at": "2026-10-01T05:41:03Z",
+                "finished_at": "2026-10-01T05:42:55Z"
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "name": "monthly-invoicing",
+            "created_at": "2026-09-28T09:00:00Z",
+            "latest": {
+              "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+              "state": "failed",
+              "trigger_kind": "manual",
+              "created_at": "2026-10-01T05:41:03Z",
+              "finished_at": "2026-10-01T05:42:55Z"
+            }
+          },
+          {
+            "name": "ledger-export",
+            "created_at": "2026-09-30T14:00:00Z"
+          }
+        ]
+      },
+      "workflowList": {
+        "title": "Workflow list",
+        "type": "object",
+        "description": "A namespace's workflows as the caller may see them, by name.",
+        "required": [
+          "workflows"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/listedWorkflow"
+            },
+            "description": "Each workflow of the namespace whose runs the caller reads, by name in byte order. Empty where it reads the runs of none, a namespace that does not exist included.",
+            "examples": [
+              [
+                {
+                  "name": "ledger-export",
+                  "created_at": "2026-09-30T14:00:00Z"
+                },
+                {
+                  "name": "monthly-invoicing",
+                  "created_at": "2026-09-28T09:00:00Z",
+                  "latest": {
+                    "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                    "state": "failed",
+                    "trigger_kind": "manual",
+                    "created_at": "2026-10-01T05:41:03Z",
+                    "finished_at": "2026-10-01T05:42:55Z"
+                  }
+                }
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "workflows": []
+          }
+        ]
       }
     },
     "parameters": {
@@ -20672,7 +21404,7 @@
         "name": "from",
         "in": "query",
         "required": false,
-        "description": "The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to.",
+        "description": "The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max.",
         "schema": {
           "$ref": "wire.schema.json#/$defs/timestamp"
         },
@@ -20680,6 +21412,24 @@
           "morning": {
             "summary": "six in the morning",
             "value": "2026-09-30T06:00:00Z"
+          }
+        }
+      },
+      "statsRange": {
+        "name": "range",
+        "in": "query",
+        "required": false,
+        "description": "max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "max"
+          ]
+        },
+        "examples": {
+          "max": {
+            "summary": "from the first run",
+            "value": "max"
           }
         }
       },
@@ -21110,6 +21860,153 @@
           "runner": {
             "summary": "a runner",
             "value": "01jmz8x2d5f8qx7t2n5r8wd3hk"
+          }
+        }
+      },
+      "auditLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "How many entries a page holds, from 1 to 200, 50 where it is left out: a screenful, and few enough that a page is answered at once.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "examples": {
+          "a hundred": {
+            "summary": "a hundred entries",
+            "value": 100
+          }
+        }
+      },
+      "auditBefore": {
+        "name": "before",
+        "in": "query",
+        "required": false,
+        "description": "The seq a page ends after: the entries before it, the newest first. Left out, the page starts at the last entry appended.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "examples": {
+          "older": {
+            "summary": "the entries before 4182",
+            "value": 4182
+          }
+        }
+      },
+      "auditActor": {
+        "name": "actor",
+        "in": "query",
+        "required": false,
+        "description": "The entries done by this principal, matched exactly.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "carol": {
+            "summary": "what carol did",
+            "value": "carol"
+          }
+        }
+      },
+      "auditAction": {
+        "name": "action",
+        "in": "query",
+        "required": false,
+        "description": "The entries of this action, matched exactly.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z_]+\\.[a-z_]+$"
+        },
+        "examples": {
+          "sign-in failures": {
+            "summary": "the failed sign-ins",
+            "value": "signin.fail"
+          }
+        }
+      },
+      "auditNamespace": {
+        "name": "namespace",
+        "in": "query",
+        "required": false,
+        "description": "The entries done in this namespace, matched exactly, and - for the acts on the installation, which name none.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "finance": {
+            "summary": "what was done in finance",
+            "value": "finance"
+          }
+        }
+      },
+      "auditTarget": {
+        "name": "target",
+        "in": "query",
+        "required": false,
+        "description": "The entries done to this target, matched exactly.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "a run": {
+            "summary": "what was done to one run",
+            "value": "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          }
+        }
+      },
+      "auditSince": {
+        "name": "since",
+        "in": "query",
+        "required": false,
+        "description": "The entries appended at this instant or after, in RFC 3339.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/timestamp"
+        },
+        "examples": {
+          "this morning": {
+            "summary": "from six this morning",
+            "value": "2026-10-02T06:00:00Z"
+          }
+        }
+      },
+      "auditUntil": {
+        "name": "until",
+        "in": "query",
+        "required": false,
+        "description": "The entries appended at this instant or before, in RFC 3339.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/timestamp"
+        },
+        "examples": {
+          "this evening": {
+            "summary": "up to six this evening",
+            "value": "2026-10-02T18:00:00Z"
+          }
+        }
+      },
+      "inputsRef": {
+        "name": "ref",
+        "in": "query",
+        "required": false,
+        "description": "The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "branch": {
+            "summary": "a branch",
+            "value": "feature/vat-rounding"
+          },
+          "tag": {
+            "summary": "a tag",
+            "value": "v2.1.0"
           }
         }
       }

@@ -126,6 +126,69 @@ describe("the log of the task chosen", () => {
   });
 });
 
+describe("finding in the log and downloading it", () => {
+  function written(stream: Stream, lines: string[]) {
+    stream.send("dispatch", { task_id: `${failed}.invoice.2.3`, idempotency_key: chosen, attempt: 2, shard: { index: 3, of: 8 }, requeue: 0 });
+    lines.forEach((text, i) => stream.send("line", { task_id: `${failed}.invoice.2.3`, line: i + 1, at: "2026-09-30T05:42:30Z", text }));
+  }
+
+  it("finds in every line the stream delivered, not only the 500 drawn, each with its number", async () => {
+    const opened = streaming();
+    open(`/finance/runs/${failed}?step=invoice&pane=logs`);
+    await waitFor(() => expect(opened).toHaveLength(1));
+    const lines = Array.from({ length: 1200 }, (_, i) => `line ${i + 1}`);
+    lines[9] = "ERROR: VAT number not recognised for C-1043";
+    lines[599] = "warning: retrying, error was transient";
+    written(opened[0]!, lines);
+    await screen.findByText("line 1200");
+    expect(screen.queryByText(/VAT number not recognised/)).toBeNull();
+
+    await fireEvent.input(screen.getByRole("searchbox", { name: "Find in the log" }), { target: { value: "error" } });
+    expect(screen.getByRole("status").textContent).toBe("2 lines");
+    const log = screen.getByRole("region", { name: "Log of the task chosen" });
+    const shown = [...log.querySelectorAll(".line")].map((l) => l.textContent);
+    expect(shown).toEqual(["10ERROR: VAT number not recognised for C-1043\n", "600warning: retrying, error was transient\n"]);
+    expect([...log.querySelectorAll("mark")].map((m) => m.textContent)).toEqual(["ERROR", "error"]);
+
+    await fireEvent.input(screen.getByRole("searchbox", { name: "Find in the log" }), { target: { value: "nowhere" } });
+    expect(screen.getByText("Nothing found")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("0 lines");
+  });
+
+  it("downloads what the stream delivered as text, each dispatch under a line naming it", async () => {
+    const opened = streaming();
+    open(`/finance/runs/${failed}?step=invoice&pane=logs`);
+    await waitFor(() => expect(opened).toHaveLength(1));
+    const stream = opened[0]!;
+    written(stream, ["posting the invoice with token ****"]);
+    stream.send("gap", { task_id: `${failed}.invoice.2.3`, first_line: 2, lines: 3, reason: "the chunk holding them is gone from the store" });
+    stream.send("dispatch_end", { task_id: `${failed}.invoice.2.3`, lines: 4, truncated: true, final: true });
+    await screen.findByText("posting the invoice with token ****");
+
+    const saved: { name: string; blob: Blob }[] = [];
+    const created = URL.createObjectURL;
+    const revoked = URL.revokeObjectURL;
+    let last: Blob | undefined;
+    URL.createObjectURL = (b: Blob) => ((last = b), "blob:log");
+    URL.revokeObjectURL = () => {};
+    const click = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      saved.push({ name: this.download, blob: last! });
+    };
+    try {
+      await fireEvent.click(screen.getByRole("button", { name: "Download the log" }));
+    } finally {
+      URL.createObjectURL = created;
+      URL.revokeObjectURL = revoked;
+      HTMLAnchorElement.prototype.click = click;
+    }
+    expect(saved.map((s) => s.name)).toEqual([`${failed}-${chosen.replaceAll("/", "-")}.log`]);
+    expect(await saved[0]!.blob.text()).toBe(
+      [`# ${chosen}, dispatch 1 of attempt 2`, "posting the invoice with token ****", "# lines 2 to 4 unavailable: the chunk holding them is gone from the store", "# log truncated", ""].join("\n"),
+    );
+  });
+});
+
 describe("an envelope", () => {
   it("is drawn for a principal holding run:read_data, its items as JSON and their files listed", async () => {
     const s = scenario("alice");
@@ -297,6 +360,7 @@ describe("the files of a step and the outputs of a run", () => {
   it("says where a file stands, and what a HEAD answered", async () => {
     const live = { status: "live", expires_at: "2026-10-07T05:42:55Z", fetches_left: 1 } as Artifact;
     expect(retention(live, Date.parse("2026-01-01T00:00:00Z"))).toMatch(/^until .*, 1 fetch left$/);
+    expect(retention({ status: "live" } as Artifact, Date.parse("2026-01-01T00:00:00Z"))).toBe("kept for ever");
     expect(await fetchable(async () => Object.defineProperty(new Response(null, { status: 200 }), "type", { value: "opaqueredirect" }), "x")).toBe("");
     expect(await fetchable(async () => new Response(null, { status: 409 }), "x")).toMatch(/Download limit reached/);
     expect(await fetchable(async () => new Response(null, { status: 404 }), "x")).toBe("File not found.");

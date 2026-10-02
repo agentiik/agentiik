@@ -30,6 +30,9 @@ type namespaces struct {
 	principals
 	h                  http.Handler
 	carol, alice, erin string
+
+	// told is what the routes told Trouble, in order.
+	told *[]error
 }
 
 func someNamespaces(t *testing.T) namespaces {
@@ -39,7 +42,8 @@ func someNamespaces(t *testing.T) namespaces {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{Pool: in.pool}); err != nil {
+	told := &[]error{}
+	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{Pool: in.pool, Trouble: func(err error) { *told = append(*told, err) }}); err != nil {
 		t.Fatal(err)
 	}
 	err = in.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
@@ -66,6 +70,7 @@ func someNamespaces(t *testing.T) namespaces {
 		carol: in.token(t, "carol", nil, nil, later),
 		alice: in.token(t, "alice", nil, nil, later),
 		erin:  in.token(t, "erin", nil, nil, later),
+		told:  told,
 	}
 }
 
@@ -132,7 +137,7 @@ func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("creating a namespace answered %d: %s", w.Code, w.Body)
 	}
-	want := `{"name":"team-ops","kind":"shared","owner":"group:team-finance","quotas":{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_retention_days":90,"max_run_duration":"24h","allowed_runner_pools":["default","dmz"]},"former_names":[],"avatar_updated_at":null}`
+	want := `{"name":"team-ops","kind":"shared","owner":"group:team-finance","quotas":{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_run_duration":"24h","allowed_runner_pools":["default","dmz"]},"former_names":[],"avatar_updated_at":null}`
 	if strings.TrimSpace(w.Body.String()) != want {
 		t.Errorf("the namespace was answered as\n%s\nwant\n%s", w.Body, want)
 	}
@@ -176,12 +181,37 @@ func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 	// A namespace created with nothing but a name and an owner holds the two quotas that always
 	// hold a value, at their defaults; and one an administrator creates naming no owner is theirs.
 	w = in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"sandbox","owner":"bob"}`)
-	if w.Code != http.StatusCreated || strings.TrimSpace(w.Body.String()) != `{"name":"sandbox","kind":"shared","owner":"bob","quotas":{"max_concurrent_tasks":20,"max_retention_days":90},"former_names":[],"avatar_updated_at":null}` {
+	if w.Code != http.StatusCreated || strings.TrimSpace(w.Body.String()) != `{"name":"sandbox","kind":"shared","owner":"bob","quotas":{"max_concurrent_tasks":20},"former_names":[],"avatar_updated_at":null}` {
 		t.Errorf("a namespace with no quotas was answered %d %s", w.Code, w.Body)
 	}
 	w = in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"carols"}`)
 	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"owner":"carol"`) {
 		t.Errorf("an administrator's namespace naming no owner was answered %d %s", w.Code, w.Body)
+	}
+}
+
+// A namespace that could not be created is answered 500 with what could not be done, and the cause,
+// which is the installation's and names its tables, goes to Trouble alone, so that an operator
+// finds it in the API's log rather than nowhere.
+func TestANamespaceThatCouldNotBeCreatedSaysWhyInTheLog(t *testing.T) {
+	in := someNamespaces(t)
+	for _, stmt := range []string{
+		`create function refuse_for_the_test() returns trigger language plpgsql as $$ begin raise exception 'refused for the test'; end $$`,
+		`create trigger refuse_for_the_test before insert on namespaces for each row execute function refuse_for_the_test()`,
+	} {
+		if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := in.ask(t, "POST", "/api/v1/namespaces", in.alice, `{"name":"wesh"}`)
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "the namespace could not be created") || strings.Contains(w.Body.String(), "refused for the test") {
+		t.Fatalf("a namespace the database refused was answered %d %s, want 500 saying what could not be done and nothing of why", w.Code, w.Body)
+	}
+	if len(*in.told) != 1 {
+		t.Fatalf("Trouble was told %v, want the one cause", *in.told)
+	}
+	if got := (*in.told)[0].Error(); !strings.Contains(got, "POST /api/v1/namespaces: the namespace could not be created: ") || !strings.Contains(got, "refused for the test") {
+		t.Errorf("Trouble was told %q, want the request, what could not be done and the database's reason", got)
 	}
 }
 
@@ -193,7 +223,7 @@ func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 func TestAUserCreatesANamespaceTheyOwn(t *testing.T) {
 	in := someNamespaces(t)
 	w := in.ask(t, "POST", "/api/v1/namespaces", in.alice, `{"name":"alice-lab"}`)
-	if want := `{"name":"alice-lab","kind":"shared","owner":"alice","quotas":{"max_concurrent_tasks":20,"max_retention_days":90},"former_names":[],"avatar_updated_at":null}`; w.Code != http.StatusCreated || strings.TrimSpace(w.Body.String()) != want {
+	if want := `{"name":"alice-lab","kind":"shared","owner":"alice","quotas":{"max_concurrent_tasks":20},"former_names":[],"avatar_updated_at":null}`; w.Code != http.StatusCreated || strings.TrimSpace(w.Body.String()) != want {
 		t.Fatalf("a user creating a namespace was answered %d %s, want %s", w.Code, w.Body, want)
 	}
 	valid(t, "/$defs/namespaceRecord", w.Body.Bytes())
@@ -414,15 +444,14 @@ func TestANamespaceIsReadByWhoeverHoldsAGrantInIt(t *testing.T) {
 
 	// A namespace v0.2 made names no owner, and reads so.
 	w := in.ask(t, "GET", "/api/v1/namespaces/finance", in.carol, "")
-	if strings.TrimSpace(w.Body.String()) != `{"name":"finance","kind":"shared","quotas":{"max_concurrent_tasks":20,"max_retention_days":90},"former_names":[],"avatar_updated_at":null}` {
+	if strings.TrimSpace(w.Body.String()) != `{"name":"finance","kind":"shared","quotas":{"max_concurrent_tasks":20},"former_names":[],"avatar_updated_at":null}` {
 		t.Errorf("a namespace with no owner reads %s", w.Body)
 	}
 	valid(t, "/$defs/quotas", in.ask(t, "GET", "/api/v1/namespaces/finance/quotas", in.alice, "").Body.Bytes())
 }
 
-// PUT on a namespace's quotas writes them whole: max_concurrent_tasks and max_retention_days keep
-// their values where the body leaves them out, and each of the other four the body leaves out
-// bounds nothing any more. A pool that does not exist is refused and nothing changes, and every
+// PUT on a namespace's quotas writes them whole: max_concurrent_tasks keeps its value where the
+// body leaves it out, and each of the other five the body leaves out bounds nothing any more. A pool that does not exist is refused and nothing changes, and every
 // change is recorded as namespace.update.
 func TestANamespacesQuotasAreWrittenWhole(t *testing.T) {
 	in := someNamespaces(t)
@@ -434,7 +463,7 @@ func TestANamespacesQuotasAreWrittenWhole(t *testing.T) {
 	valid(t, "/$defs/quotas", w.Body.Bytes())
 
 	w = in.ask(t, "PUT", "/api/v1/namespaces/finance/quotas", in.carol, `{"max_runs_per_hour":10}`)
-	if want := `{"max_concurrent_tasks":7,"max_runs_per_hour":10,"max_retention_days":180}`; w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != want {
+	if want := `{"max_concurrent_tasks":7,"max_runs_per_hour":10}`; w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != want {
 		t.Errorf("setting one quota answered %d %s, want %s", w.Code, w.Body, want)
 	}
 	if got := in.ask(t, "GET", "/api/v1/namespaces/finance/quotas", in.alice, ""); strings.TrimSpace(got.Body.String()) != strings.TrimSpace(w.Body.String()) {
@@ -462,9 +491,9 @@ func TestANamespacesQuotasAreWrittenWhole(t *testing.T) {
 		t.Errorf("a refused write changed the quotas to %s", got.Body)
 	}
 
-	// {} lifts every bound it can, and keeps the two that always hold a value.
+	// {} lifts every bound it can, and keeps the one that always holds a value.
 	w = in.ask(t, "PUT", "/api/v1/namespaces/finance/quotas", in.carol, `{}`)
-	if want := `{"max_concurrent_tasks":7,"max_retention_days":180}`; strings.TrimSpace(w.Body.String()) != want {
+	if want := `{"max_concurrent_tasks":7}`; strings.TrimSpace(w.Body.String()) != want {
 		t.Errorf("an empty write answered %s, want %s", w.Body, want)
 	}
 	if got := in.entries(t); len(got) != 3 || got[0] != "carol namespace.update finance done" || got[2] != got[0] {
@@ -472,7 +501,7 @@ func TestANamespacesQuotasAreWrittenWhole(t *testing.T) {
 	}
 	var detail string
 	in.query(t, &detail, `select detail from audit_log where action = 'namespace.update' order by seq desc limit 1`)
-	if detail != `{"quotas":{"max_concurrent_tasks":7,"max_retention_days":180}}` {
+	if detail != `{"quotas":{"max_concurrent_tasks":7}}` {
 		t.Errorf("the last change is recorded with %s, and it is the quotas as they then stood", detail)
 	}
 }

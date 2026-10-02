@@ -2,18 +2,20 @@
   import { explain, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
   import { untrack } from "svelte";
-  import { refusal, type API, type Me } from "../api/client";
+  import { refusal, type API, type Me, type Namespace } from "../api/client";
   import type { components } from "../api/schema";
   import FileView from "../components/FileView.svelte";
   import Files from "../components/Files.svelte";
   import GraphCanvas from "../components/GraphCanvas.svelte";
   import Icon from "../components/Icon.svelte";
   import McpPanel from "../components/McpPanel.svelte";
+  import Notice from "../components/Notice.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import Pane from "../components/Pane.svelte";
   import RunForm from "../components/RunForm.svelte";
   import StatePill from "../components/StatePill.svelte";
   import StepDetail from "../components/StepDetail.svelte";
+  import WorkflowSettings from "../components/WorkflowSettings.svelte";
   import Refused from "./Refused.svelte";
   import { clock, took } from "../lib/format";
   import { authOf, layout, triggers } from "../lib/graph";
@@ -23,7 +25,7 @@
   import { follow, type Place } from "../lib/place.svelte";
   import { runAt, runsOf } from "../lib/route";
   import { RunReader } from "../lib/run.svelte";
-  import { workflowTabs } from "../lib/page";
+  import { settles as settlesOn, workflowTabs } from "../lib/page";
   import { blocks } from "../lib/yaml-blocks";
 
   // A workflow: the version a run naming no ref runs, the head of its default branch, with what
@@ -31,8 +33,17 @@
   // it, with the state of a run laid over it: the one the address names, or the workflow's latest,
   // read again while it runs. Beside the graph, the step chosen as it resolved, or the file it was
   // written in, each selecting the other.
-  // tab is the page's: its graph where it names none, its files, or the tools it publishes.
-  let { api, place, me, namespace, workflow, tab }: { api: API; place: Place; me: Me; namespace: string; workflow: string; tab?: string } = $props();
+  // tab is the page's: its graph where it names none, its files, the tools it publishes, or its
+  // settings, which a move offers the namespaces the caller reads as places to move it to.
+  let {
+    api,
+    place,
+    me,
+    namespace,
+    workflow,
+    tab,
+    namespaces = [],
+  }: { api: API; place: Place; me: Me; namespace: string; workflow: string; tab?: string; namespaces?: Namespace[] } = $props();
 
   type Detail = components["schemas"]["workflowDetail"];
   type Entry = components["schemas"]["historyEntry"];
@@ -135,6 +146,19 @@
     place.narrow(q);
   }
 
+  // A commit from the editor: on the default branch, the page reads the workflow again at its new
+  // head; on a new branch, its files are opened at that branch, where Run tries it.
+  let said = $state("");
+  async function committed(branch: string, _commit: string) {
+    if (detail && branch === detail.repository.default_branch) {
+      narrow({ edit: null, view: null });
+      await read();
+      said = `Committed to ${branch}.`;
+      return;
+    }
+    place.go({ kind: "namespace", namespace, view: "workflows", workflow, tab: "files" }, false, new URLSearchParams({ ref: branch }));
+  }
+
   // The visual editor, under workflow:write, over the file at the head of the default branch: the
   // address says it is open, so that Back leaves it.
   const mayEdit = $derived(holds(me, "workflow:write", namespace, workflow));
@@ -162,26 +186,19 @@
         ],
   );
 
-  const sharing = $derived({ kind: "namespace" as const, namespace, view: "sharing" as const });
   const shares = $derived(holds(me, "grant:manage", namespace, workflow));
-
-  // narrowed follows a view of the namespace narrowed to this workflow, as a plain click does and
-  // leaving every other click to the browser.
-  function narrowed(route: typeof sharing) {
-    return (e: MouseEvent) => {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      e.preventDefault();
-      place.go(route, false, new URLSearchParams({ workflow }));
-    };
-  }
   const statistics = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "statistics" });
   const graphTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow });
   const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
   const filesTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "files" });
   const runRoute = $derived(run ? runAt(namespace, workflow, run.run) : undefined);
-  const tabs = $derived(workflowTabs(namespace, workflow, tab, { shares, mcp: !!graph?.mcp, go: (r, q) => place.go(r, false, q) }));
+  // Its settings, to a caller who may change any of them.
+  const settles = $derived(settlesOn(me, namespace, workflow));
+  const tabs = $derived(workflowTabs(namespace, workflow, tab, { mcp: !!graph?.mcp, settles }));
   const now = Date.now();
 </script>
+
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <PageHeader title={workflow} icon="control-workflows" {place} tabs={tabs}>
   {#snippet subtitle()}
@@ -261,7 +278,7 @@
     <div class="runform">
       <Pane title="Run {workflow}">
         {#key runRef}
-          <RunForm {api} {place} {namespace} {workflow} {graph} commit={detail.version.commit} ref={runRef} onclose={() => (running = false)} />
+          <RunForm {api} {place} {namespace} {workflow} ref={runRef} onclose={() => (running = false)} />
         {/key}
       </Pane>
     </div>
@@ -274,13 +291,17 @@
     </Pane>
   {:else if tab === "files"}
     <Files {api} {place} {namespace} {workflow} repository={detail.repository} {history} {mayRun} onrun={runFrom} />
+  {:else if tab === "settings" && settles}
+    <WorkflowSettings {api} {place} {me} {namespace} {workflow} repository={detail.repository} {namespaces} />
+  {:else if tab === "settings"}
+    <Refused />
   {:else if tab === "mcp" && graph}
     <Pane title="MCP">
       <McpPanel {graph} {namespace} {workflow} />
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
     {#await import("../components/Editor.svelte") then { default: Editor }}
-      <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} bind:selected={editSelected} onclose={() => narrow({ edit: null })} />
+      <Editor {api} {me} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
     {/await}
   {:else if graph && laid}
     <div class="columns fills">

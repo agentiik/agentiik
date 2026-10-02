@@ -30,8 +30,8 @@
 
   async function read(r: Range) {
     refused = null;
-    const { from, to } = query(r);
-    const { data, error, response } = await api.GET("/api/v1/stats/pools", { params: { query: { from, to } } });
+    const { from, range: max, to } = query(r);
+    const { data, error, response } = await api.GET("/api/v1/stats/pools", { params: { query: { from, range: max, to } } });
     if (data && typeof data !== "string") pools = data;
     else refused = explain("load the statistics", refusal(response, error));
   }
@@ -42,9 +42,9 @@
   });
 
   async function exported(kind: "csv" | "json") {
-    const { from, to } = query(range);
+    const { from, range: max, to } = query(range);
     const { data, error, response } = await api.GET("/api/v1/stats/pools", {
-      params: { query: { from, to } },
+      params: { query: { from, range: max, to } },
       headers: { Accept: kind === "csv" ? "text/csv" : "application/json" },
       parseAs: "blob",
     });
@@ -54,7 +54,7 @@
     }
     const link = document.createElement("a");
     link.href = URL.createObjectURL(data as Blob);
-    link.download = `pools-${range.from.toISOString().slice(0, 10)}.${kind}`;
+    link.download = `pools-${(pools?.from ?? range.from.toISOString()).slice(0, 10)}.${kind}`;
     link.click();
     URL.revokeObjectURL(link.href);
   }
@@ -115,7 +115,7 @@
   {/snippet}
 </PageHeader>
 
-<RangeBar {ranged} bucket={pools?.bucket} comparable={false} />
+<RangeBar {ranged} bucket={pools?.bucket} from={pools?.from} comparable={false} />
 
 {#if refused}
   <Problem explained={refused} onretry={() => read(range)} />

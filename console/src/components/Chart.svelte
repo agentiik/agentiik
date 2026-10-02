@@ -11,6 +11,14 @@
     // dashed draws the span before the range, behind the range's own series.
     dashed?: boolean;
   };
+
+  import { SvelteMap } from "svelte/reactivity";
+
+  // The width each chart drawn at once needs for its values' axis, its widest label and the gap
+  // beside it. Every chart takes the widest of them, so that charts one above the other start their
+  // plots on one line, and none keeps room its labels do not fill: a fixed 64px left a chart of
+  // single figures with 50px of nothing at its left.
+  const needs = new SvelteMap<symbol, number>();
 </script>
 
 <script lang="ts">
@@ -49,6 +57,10 @@
     onback?: () => void;
     height?: number;
   } = $props();
+
+  // The longest series' name in characters, which sets how narrow a column of the legend may be, so
+  // that a name such as "refused for max_runs_per_hour" is never broken where its column ends.
+  const longest = $derived(series.reduce((n, s) => Math.max(n, s.label.length), 0));
 
   let holder: HTMLDivElement | undefined = $state();
   let chosen = $state<number | null>(null);
@@ -140,6 +152,40 @@
   // shape builds the chart again.
   const shapeOf = () => `${stacked} ${height} ${series.map((s) => `${s.label}/${s.kind}/${s.tone}/${s.dashed ?? false}`).join(" ")}`;
 
+  // gutter is the width of the values' axis: the widest label of this chart, measured in the axis'
+  // font, with uPlot's 5px gap and a pixel, or the widest any chart drawn with it needs, and nothing
+  // more, so that the labels start on the pane's edge as the text above them does.
+  const me = Symbol("chart");
+  function gutter(u: uPlot, values: string[] | null): number {
+    if (values && values.length > 0) {
+      const need = Math.ceil(widest(u, values)) + 6;
+      if (needs.get(me) !== need) needs.set(me, need);
+    }
+    return needs.size > 0 ? Math.max(...needs.values()) : 0;
+  }
+
+  // widest is the widest of labels in the axes' font, in CSS pixels, a label of two lines by its
+  // longer.
+  function widest(u: uPlot, labels: string[]): number {
+    u.ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
+    return Math.max(0, ...labels.flatMap((l) => l.split("\n")).map((l) => u.ctx.measureText(l).width)) / devicePixelRatio;
+  }
+
+  // fitted leaves out a time whose label, centred on its tick, would run past the chart's left edge,
+  // which the values' axis, as wide as its own labels, may leave less than half a time from the plot.
+  function fitted(u: uPlot, splits: number[], labels: string[]): string[] {
+    const left = (u.bbox?.left ?? 0) / devicePixelRatio;
+    return labels.map((label, i) => (left + u.valToPos(splits[i]!, "x") < widest(u, [label]) / 2 ? "" : label));
+  }
+
+  // Laid out again when another chart's labels widen or narrow the axis they share.
+  $effect(() => {
+    void [...needs.values()];
+    untrack(() => {
+      if (plot && holder) plot.setSize({ width: holder.clientWidth, height });
+    });
+  });
+
   function build(el: HTMLDivElement): uPlot {
     const bars = uPlot.paths.bars!({ size: [0.7, 60] });
     const stepped = uPlot.paths.stepped!({ align: 1 });
@@ -157,10 +203,13 @@
       // The legend is the chart's own, below it, at a size that never changes: uPlot's grows and
       // shrinks with the values it reads out, which moves the page under the pointer.
       legend: { show: false },
-      scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * 1.08 || 1] } },
+      // Above the highest value, a twelfth more; and where a limit is drawn, room for its label over
+      // its line as well, about 24px of the plot whatever its height, rather than a share of the
+      // limit, which left the label against the top and its line through the letters.
+      scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * (limit ? 1 + 24 / Math.max(48, height - 60) : 1.08) || 1] } },
       axes: [
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "12px Archivo, sans-serif" },
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: 64, values: (_u, vals) => vals.map((v) => format(v)), font: "12px Archivo, sans-serif" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (u, splits) => fitted(u, splits, ticks(splits)), font: "12px Archivo, sans-serif" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: (u, values) => gutter(u, values), values: (_u, vals) => vals.map((v) => format(v)), font: "12px Archivo, sans-serif" },
       ],
       series: [
         { label: "bucket", value: (_u, _v, _si, i) => (i === null || i === undefined ? "" : bounds(i)) },
@@ -213,7 +262,8 @@
             ctx.fillStyle = colour("--failed");
             ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
             ctx.textAlign = "right";
-            ctx.fillText(`${limit.label} ${format(limit.value)}`, u.bbox.left + u.bbox.width - 6 * devicePixelRatio, y - 5 * devicePixelRatio);
+            ctx.textBaseline = "bottom";
+            ctx.fillText(`${limit.label} ${format(limit.value)}`, u.bbox.left + u.bbox.width - 6 * devicePixelRatio, y - 4 * devicePixelRatio);
             ctx.restore();
           },
         ],
@@ -279,6 +329,7 @@
       ground.disconnect();
       plot?.destroy();
       plot = undefined;
+      needs.delete(me);
     };
   });
 
@@ -310,13 +361,15 @@
     aria-valuetext={chosen === null ? "no bucket chosen" : bounds(chosen)}
     onkeydown={key}
   ></div>
-  <div class="legend" aria-live="polite">
-    <p class="bucket term">{at !== null && since[at] ? bounds(at) : "\u00a0"}</p>
+  <!-- The series in columns of one width, each value read out at its column's end, and the bucket
+       read out under them, its line kept while nothing is pointed at so that nothing moves. -->
+  <div class="legend" aria-live="polite" style:--longest="{longest}ch">
     <ul>
       {#each series as s (s.label)}
-        <li><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label}<span class="value term">{at !== null && since[at] ? valueAt(s, at) : ""}</span></li>
+        <li><span class="swatch {s.tone}" class:line={s.kind === "line" || s.kind === "step"} class:dashed={s.dashed}></span><span class="name">{s.label}</span><span class="value term">{at !== null && since[at] ? valueAt(s, at) : ""}</span></li>
       {/each}
     </ul>
+    <p class="bucket term">{at !== null && since[at] ? bounds(at) : "\u00a0"}</p>
   </div>
   <details>
     <summary>Numbers</summary>
@@ -367,41 +420,66 @@
   }
 
   .bucket {
-    margin: 0;
+    margin: calc(var(--unit) * 2) 0 0;
     color: var(--text);
   }
 
+  /* Columns of one width, as many as the pane holds, so that the second column of every row starts
+     where the first row's does, each wide enough for the longest name beside its swatch and its value:
+     at 140px a column broke max_runs_per_hour in two. */
   .legend ul {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, max(140px, calc(var(--longest, 0ch) + 10px + var(--unit) * 4 + 7ch))), 1fr));
     gap: calc(var(--unit) * 2) calc(var(--unit) * 7);
-    margin: calc(var(--unit) * 1) 0 0;
+    margin: 0;
     padding: 0;
     list-style: none;
   }
 
-  /* A value has its room whether it is read out or not, so that nothing moves as the pointer does. */
+  .legend li {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .name {
+    min-width: 0;
+    overflow-wrap: break-word;
+  }
+
+  /* A value has its room whether it is read out or not, so that nothing moves as the pointer does,
+     at the end of its column, where the values of a column line up. */
   .value {
-    display: inline-block;
-    min-width: 8ch;
+    flex: none;
+    min-width: 6ch;
+    margin-left: auto;
     padding-left: calc(var(--unit) * 2);
     color: var(--text);
     font-variant-numeric: tabular-nums;
+    text-align: right;
   }
 
+  /* A swatch has the series' shape as well as its colour: a square for columns and areas, a stroke
+     for a line, dashed for the span before, so that two series of one hue, the runs running and the
+     tasks in flight say, are told apart. */
   .swatch {
-    display: inline-block;
+    flex: none;
     width: 10px;
     height: 10px;
     margin-right: calc(var(--unit) * 2);
     border-radius: 2px;
-    vertical-align: -1px;
+  }
+
+  .swatch.line,
+  .swatch.dashed {
+    height: 0;
+    border-top: 2px solid;
+    border-radius: 0;
+    background: none !important;
   }
 
   .swatch.dashed {
-    height: 0;
-    border-top: 2px dashed;
-    background: none !important;
+    border-top-style: dashed;
   }
 
   .swatch.succeeded { background: var(--succeeded); border-color: var(--succeeded); }

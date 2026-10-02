@@ -240,3 +240,25 @@ func TestJoinRefusesADaemonAcrossTheNetworkNamingDockerHost(t *testing.T) {
 		t.Errorf("join asked the API %d times, or wrote a file, before refusing", n)
 	}
 }
+
+// "A runner is a Linux host": on any other, join and serve say so before anything is read or
+// written, where join failed on /proc/meminfo, which a Mac has not, and version still answers.
+func TestARunnerIsALinuxHost(t *testing.T) {
+	j := newJoiner(t, 0, nil)
+	j.e.OS = "darwin"
+	if code := j.join(t); code != exitRefused {
+		t.Fatalf("join on darwin exited %d, want %d", code, exitRefused)
+	}
+	if !strings.Contains(j.err.String(), "agk-runner join: a runner is a Linux host, and this one is darwin") {
+		t.Fatalf("join on darwin said %q", j.err.String())
+	}
+	if j.joins.Load() != 0 || j.wrote() {
+		t.Fatalf("join on darwin reached the API or wrote a file")
+	}
+	if code := run(context.Background(), j.e, []string{"serve"}); code != exitRefused {
+		t.Fatalf("serve on darwin exited %d, want %d", code, exitRefused)
+	}
+	if code := run(context.Background(), j.e, []string{"version"}); code != exitSucceeded {
+		t.Fatalf("version on darwin exited %d, want %d", code, exitSucceeded)
+	}
+}

@@ -836,23 +836,27 @@ func (p *Pool) CompleteMove(ctx context.Context, m Move, copied MoveObjects, gra
 		// Kept no longer than the target keeps anything: "retain is capped by the namespace quota
 		// and cannot exceed it", reckoned from when the run finished and the artifact was written,
 		// as each was.
+		// A target that keeps everything for ever holds nothing to less than it was given; one that
+		// sets a bound holds to it what the source kept for ever too, a run with no expiry among them.
 		var days int
-		if err := tx.QueryRow(ctx, `select max_retention_days from namespaces where name = $1`, m.Target).Scan(&days); err != nil {
+		if err := tx.QueryRow(ctx, `select coalesce(max_retention_days, 0) from namespaces where name = $1`, m.Target).Scan(&days); err != nil {
 			return fmt.Errorf("db: the retention of %s could not be read: %w", m.Target, err)
 		}
-		keep := fmt.Sprintf("%d days", days)
-		if _, err := tx.Exec(ctx, `
-			update runs set expires_at = least(expires_at, finished_at + $3::interval)
-			where namespace = $1 and workflow = $2 and expires_at is not null and finished_at is not null
-			  and expires_at > finished_at + $3::interval`, m.Target, m.Workflow, keep); err != nil {
-			return fmt.Errorf("db: the runs of %s could not be held to %s's retention: %w", m.Workflow, m.Target, err)
-		}
-		if _, err := tx.Exec(ctx, `
-			update artifacts a set expires_at = a.created_at + $3::interval
-			from runs r
-			where r.namespace = a.namespace and r.id = a.run_id and r.namespace = $1 and r.workflow = $2
-			  and a.status = 'live' and a.expires_at > a.created_at + $3::interval`, m.Target, m.Workflow, keep); err != nil {
-			return fmt.Errorf("db: the artifacts of %s could not be held to %s's retention: %w", m.Workflow, m.Target, err)
+		if days > 0 {
+			keep := fmt.Sprintf("%d days", days)
+			if _, err := tx.Exec(ctx, `
+				update runs set expires_at = least(coalesce(expires_at, 'infinity'), finished_at + $3::interval)
+				where namespace = $1 and workflow = $2 and finished_at is not null
+				  and coalesce(expires_at, 'infinity') > finished_at + $3::interval`, m.Target, m.Workflow, keep); err != nil {
+				return fmt.Errorf("db: the runs of %s could not be held to %s's retention: %w", m.Workflow, m.Target, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				update artifacts a set expires_at = a.created_at + $3::interval
+				from runs r
+				where r.namespace = a.namespace and r.id = a.run_id and r.namespace = $1 and r.workflow = $2
+				  and a.status = 'live' and a.expires_at > a.created_at + $3::interval`, m.Target, m.Workflow, keep); err != nil {
+				return fmt.Errorf("db: the artifacts of %s could not be held to %s's retention: %w", m.Workflow, m.Target, err)
+			}
 		}
 		// Both namespaces hold something else now, which the next write into either counts.
 		if _, err := tx.Exec(ctx,

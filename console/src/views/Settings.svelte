@@ -8,12 +8,14 @@
   import Notice from "../components/Notice.svelte";
   import NamespaceMark from "../components/NamespaceMark.svelte";
   import SecretsSection from "../components/SecretsSection.svelte";
+  import NamespacePolicy from "../components/NamespacePolicy.svelte";
   import { holds } from "../lib/permissions";
   import { pictureOf, removePicture, setPicture } from "../lib/namespaces";
   import { photoBytes, photoTypes } from "../lib/profile";
 
   // A namespace's settings, in sections one under another, each a pane: General, its name and its
-  // picture; Secrets; and last, removing it. The name and the picture are changed by its owner,
+  // picture; Secrets; its sign-in policy, which an administrator writes and its members read; and
+  // last, removing it. The name and the picture are changed by its owner,
   // whoever holds grant:manage there, and by an administrator, as the API decides; anybody else reads
   // them. A personal namespace is named after its user's login and goes with its user, so it is
   // never offered a rename nor a removal.
@@ -153,6 +155,8 @@
   </Pane>
 
   <SecretsSection {api} {me} {namespace} />
+
+  <NamespacePolicy {api} {namespace} admin={me.admin} />
 
   {#if manages && !personal}
     <Pane title="Delete namespace" label="Delete namespace">

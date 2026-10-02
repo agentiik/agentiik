@@ -106,7 +106,7 @@ const counted = `
 	  join namespaces n on n.name = r.namespace
 	  where (r.namespace, r.workflow::text) in (select * from unnest($1::text[], $2::text[]))
 	    and r.created_at >= $3 and r.created_at < $4
-	    and r.created_at >= now() - make_interval(days => n.max_retention_days)
+	    and (n.max_retention_days is null or r.created_at >= now() - make_interval(days => n.max_retention_days))
 	)`
 
 // ms is a length of time in whole milliseconds, never below zero: the two instants of a run's
@@ -569,8 +569,8 @@ type QuotaBucket struct {
 }
 
 // QuotaStatistics counts what the namespace asked of its quotas, bucket by bucket, every bucket
-// answered, oldest first. A bucket that ended before the namespace's max_retention_days counts
-// nothing, as a series of its runs does: "a range reaches back as far as the namespace keeps its
+// answered, oldest first. A bucket that ended before the namespace's max_retention_days, where it
+// sets one, counts nothing, as a series of its runs does: "a range reaches back as far as the namespace keeps its
 // runs, and no further".
 //
 // Read through the namespace's own handle, since what it counts is every workflow of the namespace
@@ -581,7 +581,8 @@ func (n *NS) QuotaStatistics(ctx context.Context, b Buckets) ([]QuotaBucket, err
 	}
 	w, namespace := n, n.namespace
 	out := make([]QuotaBucket, b.Count)
-	var kept time.Time
+	// Where the namespace keeps its runs for ever, nothing bounds the range but the range itself.
+	var kept *time.Time
 	if err := w.tx.QueryRow(ctx,
 		`select now() - make_interval(days => max_retention_days) from namespaces where name = $1`,
 		namespace).Scan(&kept); err != nil {
@@ -591,8 +592,8 @@ func (n *NS) QuotaStatistics(ctx context.Context, b Buckets) ([]QuotaBucket, err
 		return nil, fmt.Errorf("db: the retention of namespace %s could not be read: %w", namespace, err)
 	}
 	first := b.First
-	if kept.After(first) {
-		first = kept
+	if kept != nil && kept.After(first) {
+		first = *kept
 	}
 	args := []any{namespace, b.First, b.End(), b.Width.Seconds(), first}
 	bucket := func(at string) string {
@@ -958,4 +959,68 @@ func (w *Wide) PoolStatistics(ctx context.Context, b Buckets) ([]PoolSeries, err
 		r.Silences = append(r.Silences, RunnerSilence{At: began, Length: ended.Sub(began), TasksLost: lost})
 	}
 	return pools, rows.Err()
+}
+
+// kept is the condition a run r of a namespace n meets while the namespace keeps it, as every series
+// counts it: within its max_retention_days, or always where it sets none.
+const kept = `(n.max_retention_days is null or r.created_at >= now() - make_interval(days => n.max_retention_days))`
+
+// firstOf answers the instant one query reads, the zero time where it reads none.
+func firstOf(ctx context.Context, tx pgx.Tx, what, query string, args ...any) (time.Time, error) {
+	var first *time.Time
+	if err := tx.QueryRow(ctx, query, args...).Scan(&first); err != nil {
+		return time.Time{}, fmt.Errorf("db: the first %s could not be read: %w", what, err)
+	}
+	if first == nil {
+		return time.Time{}, nil
+	}
+	return *first, nil
+}
+
+// FirstRun is when the first run of the workflows among, which the authorizer allowed, was created
+// before before, as a series counts it, and the zero time where there is none: where a series asked
+// with range=max starts.
+func (w *Wide) FirstRun(ctx context.Context, among []Workflow, before time.Time) (time.Time, error) {
+	if len(among) == 0 {
+		return time.Time{}, nil
+	}
+	namespaces, workflows := make([]string, len(among)), make([]string, len(among))
+	for i, wf := range among {
+		namespaces[i], workflows[i] = wf.Namespace, wf.Name
+	}
+	return firstOf(ctx, w.tx, "run", `
+		select min(r.created_at)
+		from runs r
+		join namespaces n on n.name = r.namespace
+		where (r.namespace, r.workflow::text) in (select * from unnest($1::text[], $2::text[]))
+		  and r.created_at < $3 and `+kept, namespaces, workflows, before)
+}
+
+// FirstRunAnywhere is when the first run of any namespace was created before before, as the
+// installation's activity counts it, and the zero time where there is none.
+func (w *Wide) FirstRunAnywhere(ctx context.Context, before time.Time) (time.Time, error) {
+	return firstOf(ctx, w.tx, "run", `
+		select min(r.created_at)
+		from runs r
+		join namespaces n on n.name = r.namespace
+		where r.created_at < $1 and `+kept, before)
+}
+
+// FirstCapacity is when a runner first reported what it offers before before, which is where the
+// chart of the pools has something to draw, and the zero time where none has.
+func (w *Wide) FirstCapacity(ctx context.Context, before time.Time) (time.Time, error) {
+	return firstOf(ctx, w.tx, "capacity", `select min(at) from runner_capacity where at < $1`, before)
+}
+
+// FirstLoad is when the namespace first created or refused a run before before, as its quota
+// statistics count them, and the zero time where it has done neither.
+func (n *NS) FirstLoad(ctx context.Context, before time.Time) (time.Time, error) {
+	return firstOf(ctx, n.tx, "run", `
+		select least(
+		  (select min(r.created_at) from runs r join namespaces n on n.name = r.namespace
+		    where r.namespace = $1 and r.created_at < $2 and `+kept+`),
+		  (select min(f.minute) from run_refusals f join namespaces n on n.name = f.namespace
+		    where f.namespace = $1 and f.minute < $2
+		      and (n.max_retention_days is null or f.minute >= now() - make_interval(days => n.max_retention_days))))`,
+		n.namespace, before)
 }

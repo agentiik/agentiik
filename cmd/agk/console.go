@@ -95,10 +95,14 @@ func consoleVerb(ctx context.Context, e Env, args []string) int {
 	return exitSucceeded
 }
 
-// ask sends what agk console asks of a run, cancelling or replaying it, both answered 202: asked,
-// and not yet done.
+// ask sends what agk console asks: cancelling or replaying a run, both answered 202, asked and not
+// yet done; and dismissing a notification, answered 204.
 func (at remote) ask(ctx context.Context, method, path string, body, out any) error {
-	return at.sendJSON(ctx, method, path, body, http.StatusAccepted, out)
+	want := http.StatusAccepted
+	if method == http.MethodDelete {
+		want = http.StatusNoContent
+	}
+	return at.sendJSON(ctx, method, path, body, want, out)
 }
 
 // themeVariable names the ground agk console draws on, light or dark, where the terminal does not

@@ -1,8 +1,11 @@
 <script lang="ts">
+  import Filter from "../components/Filter.svelte";
+  import { filtered } from "../lib/palette";
   import { explain, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
   import { refusal, type API, type Namespace } from "../api/client";
   import AdminTabs from "../components/AdminTabs.svelte";
+  import NamespacePolicy from "../components/NamespacePolicy.svelte";
   import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
@@ -138,10 +141,13 @@
     max_run_duration: "Longest run",
     allowed_runner_pools: "Pools it may send work to",
   };
+  // What the Filter field at the head leaves of the list, as typed into the address.
+  const namespacesShown = $derived(namespaces ? filtered(namespaces, place.query.get("q") ?? "", (n) => `${n.name} ${n.owner ?? ""}`) : []);
 </script>
 
 <AdminTabs {place} current="namespaces">
   {#snippet actions()}
+    <Filter {place} label="Filter the namespaces" />
     <button class="control primary" onclick={() => ((creating = true), (problem = null))}><Icon name="control-add" size={14} />New namespace</button>
   {/snippet}
 </AdminTabs>
@@ -158,7 +164,7 @@
     <table>
       <thead><tr><th>Namespace</th><th>Kind</th><th>Owner</th><th>Quotas</th><th class="end"></th></tr></thead>
       <tbody>
-        {#each namespaces as n (n.name)}
+        {#each namespacesShown as n (n.name)}
           <tr class:chosen={chosen === n.name}>
             <td><button class="name term" aria-pressed={chosen === n.name} onclick={() => choose(chosen === n.name ? undefined : n.name)}>{n.name}</button></td>
             <td class="muted">{n.kind}</td>
@@ -175,6 +181,8 @@
               {/if}
             </td>
           </tr>
+        {:else}
+          <tr><td colspan="5" class="muted">{namespaces.length === 0 ? "No namespaces" : "Nothing matches."}</td></tr>
         {/each}
       </tbody>
     </table>
@@ -187,7 +195,7 @@
       {#each ["max_concurrent_tasks", "max_retention_days", "max_runs_per_hour"] as const as k (k)}
         <label>
           <span>{label[k]} <span class="term faint">{k}</span></span>
-          <input class="term" inputmode="numeric" bind:value={form[k]} placeholder={k === "max_runs_per_hour" ? "no bound" : ""} aria-invalid={wrong?.field === k} />
+          <input class="term" inputmode="numeric" bind:value={form[k]} placeholder={k === "max_concurrent_tasks" ? "" : "no bound"} aria-invalid={wrong?.field === k} />
         </label>
       {/each}
       <label>
@@ -221,6 +229,7 @@
         <button class="control" type="button" onclick={() => choose(undefined)}>Close</button>
       </p>
     </form>
+    <NamespacePolicy {api} namespace={record.name} admin framed={false} />
   {/if}
 </Dialog>
 

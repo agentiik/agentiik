@@ -80,19 +80,18 @@ func TestTheInspectorOpensOnWhereTheRunFailed(t *testing.T) {
 	}
 }
 
-// From 120 columns the steps and the step chosen are side by side; under, one above the other.
+// The run's pane lays its steps beside the step chosen where it has room, and above it where it
+// has not; a step's name is whole at 120 columns.
 func TestTheInspectorLaysOutItsPanesByTheWindow(t *testing.T) {
-	wide := screen(inspecting(t, &installation{}, 160))
-	if !lineWith(wide, "● succeeded  normalize", "image ") {
-		t.Errorf("at 160 columns the steps and the step are not side by side:\n%s", wide)
+	if s := screen(inspecting(t, &installation{}, 300)); !lineWith(s, "● succeeded  normalize", "image ") {
+		t.Errorf("at 300 columns the steps and the step are not side by side:\n%s", s)
 	}
-	// At 120 columns, the narrowest side by side, a step's name is still whole.
-	if s := screen(inspecting(t, &installation{}, 120)); !lineWith(s, "● succeeded  normalize ", "image ") {
+	if s := screen(inspecting(t, &installation{}, 120)); !strings.Contains(s, "● succeeded  normalize ") {
 		t.Errorf("at 120 columns a step's name is cut:\n%s", s)
 	}
 	narrow := screen(inspecting(t, &installation{}, 100))
 	if lineWith(narrow, "● succeeded  normalize", "image ") {
-		t.Errorf("at 100 columns the panes are still side by side:\n%s", narrow)
+		t.Errorf("at 100 columns the steps and the step are still side by side:\n%s", narrow)
 	}
 	for i, l := range strings.Split(narrow, "\n") {
 		if w := len([]rune(l)); w != 100 {
@@ -158,7 +157,7 @@ func TestAnEnvelopeIsShownUnderRunReadDataAlone(t *testing.T) {
 func TestAnAdministratorSeesARunnersPoolAndLabels(t *testing.T) {
 	admin := &installation{me: &principal{Principal: "dana", Admin: true, Permissions: map[string][]string{"finance": {"run:read"}}},
 		runners: []db.Runner{{ID: "runner-dmz-02", Pool: "dmz", Labels: []string{"arch=amd64", "zone=dmz"}}}}
-	if s := screen(inspecting(t, admin, 200)); !strings.Contains(s, "runner-dmz-02 · pool dmz · arch=amd64,zone=dmz") {
+	if s := screen(inspecting(t, admin, 160)); !strings.Contains(s, "runner-dmz-02 · pool dmz · arch=amd64,zone=dmz") {
 		t.Errorf("an administrator does not see the runner's pool and labels:\n%s", s)
 	}
 	other := &installation{}

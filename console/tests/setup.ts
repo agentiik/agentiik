@@ -1,4 +1,4 @@
-import { cleanup } from "@testing-library/svelte";
+import { cleanup, configure } from "@testing-library/svelte";
 import { afterEach, beforeEach } from "vitest";
 import { standIn } from "./live";
 
@@ -28,6 +28,20 @@ if (typeof scope.ResizeObserver !== "function") {
     disconnect() {}
   };
 }
+
+// CodeMirror measures what it draws, which a document with no layout cannot: a range answers no
+// rectangle, and every box has no size.
+const rects = { length: 0, item: () => null, [Symbol.iterator]: function* () {} };
+const box = { x: 0, y: 0, top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, toJSON() {} };
+if (typeof Range !== "undefined") {
+  Range.prototype.getClientRects ??= () => rects as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () => box as DOMRect;
+}
+
+// Each screen is a chunk of its own, imported when it is first shown, which a machine running every
+// file at once may take longer than the second testing-library waits by default to transform: a
+// query that waits for a screen waits five.
+configure({ asyncUtilTimeout: 5000 });
 
 // The live connection is a stand-in in every test, which a test opens and speaks on: the document the
 // tests draw in would otherwise try to reach the stand-in address over the network.

@@ -24,8 +24,8 @@
   // there too.
   // graph says whether the caller reads the workflow itself, which its graph takes and its series do
   // not: the tab is left out for one who reads only its runs.
-  let { api, place, namespace, workflow, graph = false, shares = false }: { api: API; place: Place; namespace: string; workflow: string; graph?: boolean; shares?: boolean } = $props();
-  const tabs = $derived(workflowTabs(namespace, workflow, "statistics", { shares, mcp: false, go: (r, q) => place.go(r, false, q) }).filter((t) => graph || t.label !== "Graph"));
+  let { api, place, namespace, workflow, graph = false, settles = false }: { api: API; place: Place; namespace: string; workflow: string; graph?: boolean; settles?: boolean } = $props();
+  const tabs = $derived(workflowTabs(namespace, workflow, "statistics", { mcp: false, settles, reads: graph }));
 
   const ranged = new Ranged(() => place);
   const range = $derived(ranged.range);
@@ -43,7 +43,7 @@
     const [a, b, c, d] = await Promise.all([
       api.GET("/api/v1/{ns}/stats/runs", { params: { path, query: q } }),
       api.GET("/api/v1/{ns}/stats/steps", { params: { path, query: q } }),
-      api.GET("/api/v1/{ns}/stats/steps", { params: { path, query: { from: q.from, to: q.to, workflow, by: "hour" } } }),
+      api.GET("/api/v1/{ns}/stats/steps", { params: { path, query: { from: q.from, range: q.range, to: q.to, workflow, by: "hour" } } }),
       api.GET("/api/v1/{ns}/stats/ports", { params: { path, query: q } }),
     ]);
     for (const answer of [a, b, c, d]) {
@@ -89,7 +89,7 @@
 
   async function exported(kind: "csv" | "json") {
     const which = exports[exporting];
-    const q = which.by ? { from: query(range).from, to: query(range).to, workflow, by: which.by } : { ...query(range), workflow };
+    const q = which.by ? { from: query(range).from, range: query(range).range, to: query(range).to, workflow, by: which.by } : { ...query(range), workflow };
     const { data, error, response } = await api.GET(which.path, {
       params: { path: { ns: namespace }, query: q },
       headers: { Accept: kind === "csv" ? "text/csv" : "application/json" },
@@ -101,7 +101,7 @@
     }
     const link = document.createElement("a");
     link.href = URL.createObjectURL(data as Blob);
-    link.download = `${namespace}-${workflow}-${exporting}-${range.from.toISOString().slice(0, 10)}.${kind}`;
+    link.download = `${namespace}-${workflow}-${exporting}-${(runs?.from ?? range.from.toISOString()).slice(0, 10)}.${kind}`;
     link.click();
     URL.revokeObjectURL(link.href);
   }
@@ -171,7 +171,7 @@
   {/snippet}
 </PageHeader>
 
-<RangeBar {ranged} bucket={runs?.bucket}>
+<RangeBar {ranged} bucket={runs?.bucket} from={runs?.from}>
   <label class="select">
     <span class="muted">Export</span>
     <select bind:value={exporting}>

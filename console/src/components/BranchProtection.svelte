@@ -5,7 +5,7 @@
   import type { components } from "../api/schema";
   import Pane from "./Pane.svelte";
 
-  // A workflow's default branch and its protection, on the workflow's sharing panel: both are
+  // A workflow's default branch and its protection, in the workflow's settings: both are
   // grant:manage's, the permission that governs sharing, since who may move the branch production
   // runs is decided by whoever may share the workflow. A protected default branch takes grant:manage
   // to push to, force-push or delete; another branch takes workflow:write, so that changes reach
@@ -65,21 +65,28 @@
   }
 </script>
 
-<Pane title="Default branch" aside={`${namespace}/${workflow}`}>
+<Pane title="Default branch">
   {#if unread}
     <Problem explained={unread} onretry={read} />
   {:else if repository === null}
     <p class="muted">Loading</p>
   {:else}
+    <!-- Laid out as the settings' other sections are, a label beside each field. -->
     <form onsubmit={write} aria-label="Default branch of {namespace}/{workflow}">
-      <label>
-        <span>Default branch</span>
+      <label class="field">
+        <span class="label">Branch</span>
         <input class="term" bind:value={branch} required autocomplete="off" spellcheck="false" />
       </label>
-      <label class="check"><input type="checkbox" bind:checked={guarded} />Protected</label>
+      <div class="field">
+        <span class="label">Protection</span>
+        <label class="check"><input type="checkbox" bind:checked={guarded} />Protected</label>
+      </div>
       {#if problem}<Problem explained={problem} />{/if}
       {#if said}<p class="said" role="status">{said}</p>{/if}
-      <p><button class="control primary" disabled={working || !changed}>Save</button></p>
+      <div class="field">
+        <span></span>
+        <span><button class="control primary" disabled={working || !changed}>Save</button></span>
+      </div>
     </form>
   {/if}
 </Pane>
@@ -87,27 +94,30 @@
 <style>
   form {
     display: grid;
-    gap: calc(var(--unit) * 4);
+    gap: calc(var(--unit) * 6);
   }
 
-  label {
+  .field {
     display: grid;
-    gap: calc(var(--unit) * 2);
+    grid-template-columns: 120px minmax(0, 420px);
+    align-items: center;
+    gap: calc(var(--unit) * 3) calc(var(--unit) * 6);
     font-size: var(--type-control-size);
   }
 
-  label > span:first-child {
+  .label {
     color: var(--muted);
   }
 
-  label.check {
+  .check {
     display: flex;
     align-items: center;
     gap: calc(var(--unit) * 3);
   }
 
   input:not([type="checkbox"]) {
-    padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
+    height: var(--control-height);
+    padding: 0 calc(var(--unit) * 4);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
     background: var(--raised);
@@ -115,7 +125,13 @@
     font-size: var(--type-control-size);
   }
 
-  form p {
+  .said {
     margin: 0;
+  }
+
+  @media (max-width: 759px) {
+    .field {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>
