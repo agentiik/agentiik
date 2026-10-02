@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/agentiik/agentiik/audit"
 	"github.com/jackc/pgx/v5"
@@ -77,6 +78,73 @@ func (w *Wide) AuditEntries(ctx context.Context, seq int64, limit int) ([]audit.
 		return nil, fmt.Errorf("db: the audit log could not be read: %w", err)
 	}
 	return entries, nil
+}
+
+// AuditQuery is what a page of the audit log is narrowed to, as GET /api/v1/auth/audit asks for
+// one.
+// Each field left at its zero value narrows nothing.
+type AuditQuery struct {
+	// Before is the seq the page ends after: the entries before it.
+	Before int64
+
+	// Limit is the most entries the page holds.
+	Limit int
+
+	// Actor, Action and Target are matched exactly.
+	Actor, Action, Target string
+
+	// Namespace is matched exactly, and Installation keeps the acts on the installation alone,
+	// which name no namespace.
+	Namespace    string
+	Installation bool
+
+	// Since and Until bound the moment an entry was appended, both included.
+	Since, Until time.Time
+}
+
+// AuditPage answers a page of the audit log, the newest entries first, and where the chain stands:
+// head, the last entry appended, and verified, the last one a controller proved the chain to.
+//
+// The entries are read backwards along seq, which every entry is numbered by and the table is
+// keyed on, so that a page of the latest is read at once whatever the log's length. A narrowing
+// that matches little reads further for its page; the log is read by a person looking for
+// something, and how far back it goes is the length of what they asked about.
+func (w *Wide) AuditPage(ctx context.Context, q AuditQuery) (entries []audit.Entry, head, verified int64, err error) {
+	if q.Limit < 1 {
+		return nil, 0, 0, fmt.Errorf("db: a page of the audit log holds at least one entry, and %d were asked for", q.Limit)
+	}
+	rows, err := w.tx.Query(ctx,
+		`select seq, at, actor, action, coalesce(namespace, ''), target, result, detail, prev_hash, hash
+		   from audit_log
+		  where ($1 = 0 or seq < $1)
+		    and ($2 = '' or actor = $2)
+		    and ($3 = '' or action = $3)
+		    and ($4 = '' or target = $4)
+		    and ($5 = '' or namespace = $5)
+		    and (not $6 or namespace is null)
+		    and ($7::timestamptz is null or at >= $7)
+		    and ($8::timestamptz is null or at <= $8)
+		  order by seq desc
+		  limit $9`,
+		q.Before, q.Actor, q.Action, q.Target, q.Namespace, q.Installation, nilIfZero(q.Since), nilIfZero(q.Until), q.Limit)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("db: the audit log could not be read: %w", err)
+	}
+	entries, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (audit.Entry, error) {
+		var e audit.Entry
+		err := row.Scan(&e.Seq, &e.At, &e.Actor, &e.Action, &e.Namespace, &e.Target, &e.Result, &e.Detail, &e.PrevHash, &e.Hash)
+		return e, err
+	})
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("db: the audit log could not be read: %w", err)
+	}
+	if head, _, err = w.AuditHead(ctx); err != nil {
+		return nil, 0, 0, err
+	}
+	if err := w.tx.QueryRow(ctx, `select through from audit_verified`).Scan(&verified); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, 0, fmt.Errorf("db: how far the audit log was proved could not be read: %w", err)
+	}
+	return entries, head, verified, nil
 }
 
 // AuditHead is how many entries the audit log has been given and the hash of the last.

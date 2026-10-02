@@ -2980,7 +2980,7 @@
     },
     "namespace": {
       "title": "Namespace",
-      "description": "The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. Nothing renames a namespace, so one made before v0.3.0 under it keeps its name and the API still serves it, every route of it, with nothing to do; only its creation is refused: a reader validating what such an installation answers meets a refusal the API does not make.",
+      "description": "The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. A namespace made before v0.3.0 under one keeps its name until its owner renames it, and the API still serves it, every route of it, with nothing to do; only its creation, and a rename to one, are refused: a reader validating what such an installation answers meets a refusal the API does not make. A shared namespace is renamed by its owner or an administrator, every row naming it following in one transaction, and the name it leaves stays its own as a former name, which every address naming it still reaches and no other namespace or login takes while it lives. Its objects and sealed values stay under the name it was created with, its storage name, so that a rename copies nothing; that name is the installation's to keep and no record here carries it.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
       "maxLength": 255,
@@ -3360,7 +3360,7 @@
     },
     "user": {
       "title": "User",
-      "description": "A local account: a login, a display name and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with.",
+      "description": "A local account: a login and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, the display name made of their given and family names, the email address an administrator gave them, and when their photo was last set, null where they hold none: answered wherever a user is, so that every client draws a person the same way.",
       "type": "object",
       "required": [
         "kind",
@@ -3386,12 +3386,23 @@
         "display_name": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 256,
+          "maxLength": 257,
           "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
-          "description": "The name a person reads in the console and in the sharing panel: one line holding no control character, since it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Free text otherwise, because it is shown and never matched against: everything that decides access reads the login.",
+          "description": "The name a person reads in the console, in the sharing panel and at a terminal, which nobody writes: the user's given name and family name, each trimmed of the spaces at its ends and joined by one space, either alone where only one is said, and the login where neither is. Made as the user is read rather than kept beside the names, so that it never says otherwise than they do; a request writing it is refused. At most 257 characters, two names of 128 and the space between them, and one line holding no control character, since neither name holds one: it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Everything that decides access reads the login.",
           "examples": [
             "Alice Martin",
-            "Bob"
+            "Martin",
+            "carol"
+          ]
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 254,
+          "pattern": "^([^@\\x00-\\x20\\x7f-\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+@[^@\\x00-\\x20\\x7f-\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+)?$",
+          "description": "The email address an administrator gave the user, at POST /api/v1/users or PATCH /api/v1/users/{login}, and the empty string where none was given: for the people who read the record to reach them by, and for nothing else. The product sends no mail, and never signs anybody in, enrols them or recovers their account by mail, since a link sent to a mailbox would put the account back behind it. It is the administrator's to give and not the user's to change, since nothing proves an address. Held loosely: one @ with something on each side, no space or control character, and at most 254 characters, the longest address a mail path carries once its two angle brackets are counted; whether it reaches anybody is something only sending to it would tell. Read by the user, at GET /api/v1/me, and by administrators.",
+          "examples": [
+            "alice.martin@example.com",
+            ""
           ]
         },
         "admin": {
@@ -3422,6 +3433,82 @@
             "no_passkey"
           ]
         },
+        "given_name": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "The name the user is called by, set by the user at PATCH /api/v1/me or by an administrator creating them, and the empty string where neither has said it. The display name is made of it and the family name. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.",
+          "examples": [
+            "Alice",
+            ""
+          ]
+        },
+        "family_name": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "The user's family name, set by the user or by an administrator creating them, and the empty string where neither has said it: the second half of the display name. One line of at most 128 characters holding no control character.",
+          "examples": [
+            "Martin",
+            ""
+          ]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "What the user does, as they put it, set by the user, and the empty string where they have not said it: shown beside their name, so that whoever reads it in a sharing panel knows whom they are giving access to. One line of at most 128 characters holding no control character.",
+          "examples": [
+            "Technical lead",
+            ""
+          ]
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "Where the user works, as they put it, set by the user, and the empty string where they have not said it. Free text rather than a place a map knows, since it is read by people. One line of at most 128 characters holding no control character.",
+          "examples": [
+            "Lyon, France",
+            ""
+          ]
+        },
+        "timezone": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^([A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*)?$",
+          "description": "The time zone the user works in, an IANA name, set by the user, and the empty string where they have not said it: what a client turns an instant into the user's own hours with, so that a colleague reads when it is for them. The API refuses a name the IANA database does not hold, and Local, which is whatever zone the server is set to and names no place. At most 64 characters, twice the longest name the database holds.",
+          "examples": [
+            "Europe/Paris",
+            "America/Argentina/Buenos_Aires",
+            ""
+          ]
+        },
+        "bio": {
+          "type": "string",
+          "maxLength": 280,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "A line the user writes about themself, set by the user, and the empty string where they have not written one. At most 280 characters, a few sentences, since it is shown beside the name rather than read as a page, and one line holding no control character, as every field shown in a console and printed at a terminal is.",
+          "examples": [
+            "Writes the invoicing workflows, and reviews what touches payroll.",
+            ""
+          ]
+        },
+        "avatar_updated_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the user's photo was last set, and null where they hold none. The photo is read on its own, at GET /api/v1/me/avatar by the user and at GET /api/v1/users/{login}/avatar by an administrator, and a client adds this instant to its address, ?v=, so that a photo set again is fetched again rather than taken from a cache; where it is null, a client draws the user's initials. It changes only when the user sets a photo, and goes back to null when the photo is removed.",
+          "examples": [
+            "2026-09-28T10:15:00Z",
+            null
+          ]
+        },
         "created_at": {
           "$ref": "#/$defs/timestamp",
           "description": "When the account was created.",
@@ -3442,17 +3529,33 @@
           "kind": "user",
           "login": "alice",
           "display_name": "Alice Martin",
+          "email": "alice.martin@example.com",
           "admin": false,
           "suspended": false,
+          "given_name": "Alice",
+          "family_name": "Martin",
+          "title": "Technical lead",
+          "location": "Lyon, France",
+          "timezone": "Europe/Paris",
+          "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+          "avatar_updated_at": "2026-09-28T10:15:00Z",
           "created_at": "2026-09-27T09:00:00Z"
         },
         {
           "kind": "user",
           "login": "dave",
           "display_name": "Dave Moreau",
+          "email": "",
           "admin": false,
           "suspended": true,
           "suspended_for": "no_passkey",
+          "given_name": "Dave",
+          "family_name": "Moreau",
+          "title": "",
+          "location": "",
+          "timezone": "",
+          "bio": "",
+          "avatar_updated_at": null,
           "created_at": "2026-09-27T09:30:00Z",
           "last_sign_in_at": "2026-09-27T11:00:00Z"
         }
@@ -4273,7 +4376,7 @@
     },
     "namespaceRecord": {
       "title": "Namespace record",
-      "description": "A namespace as an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, and its quotas. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.",
+      "description": "A namespace as a user or an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.",
       "type": "object",
       "required": [
         "name",
@@ -4283,7 +4386,7 @@
       "properties": {
         "name": {
           "$ref": "#/$defs/namespace",
-          "description": "The namespace's name, the first path segment of its routes, which is why the reserved words are refused.",
+          "description": "The namespace's name, the first path segment of its routes, which is why the reserved words are refused. A rename changes it, and the name it leaves is listed in former_names.",
           "examples": [
             "finance",
             "alice"
@@ -4295,7 +4398,7 @@
             "personal",
             "shared"
           ],
-          "description": "personal for the namespace a user is given on first sign-in, shared for one an administrator creates for a team. The console's namespace switcher shows the personal one first and groups the shared ones after it.",
+          "description": "personal for the namespace a user is given on first sign-in, shared for one a user or an administrator creates for a team. The console's namespace switcher shows the personal one first and groups the shared ones after it.",
           "examples": [
             "shared",
             "personal"
@@ -4303,7 +4406,7 @@
         },
         "owner": {
           "$ref": "#/$defs/principalRef",
-          "description": "Who owns it: the user, for a personal namespace, and a user or a group for a shared one. The owner is who is told when an administrator widens their own access in it. Absent on a namespace from before v0.3.0, which v0.2 made with nobody to name; every principal holding the owner role on it is told instead. Never absent on a personal namespace, which is its user's.",
+          "description": "Who owns it: the user, for a personal namespace, and for a shared one the user who created it, or the user or group an administrator named. The owner is who is told when an administrator widens their own access in it. Absent on a namespace from before v0.3.0, which v0.2 made with nobody to name; every principal holding the owner role on it is told instead. Never absent on a personal namespace, which is its user's.",
           "examples": [
             "group:finance-leads",
             "alice"
@@ -4311,17 +4414,56 @@
         },
         "quotas": {
           "$ref": "#/$defs/quotas",
-          "description": "What this namespace may consume. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, so the API answers both; the other four appear where they are set, and absent bound nothing of the namespace's own.",
+          "description": "What this namespace may consume. max_concurrent_tasks always holds a value, 20 until an administrator sets another, so the API answers it; the other five appear where they are set, and absent bound nothing of the namespace's own.",
           "examples": [
             {
               "max_concurrent_tasks": 20,
               "max_runs_per_hour": 500,
-              "max_retention_days": 90
+              "max_retention_days": 365
             },
             {
-              "max_concurrent_tasks": 20,
-              "max_retention_days": 90
+              "max_concurrent_tasks": 20
             }
+          ]
+        },
+        "former_names": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "maxLength": 255,
+            "description": "One name the namespace answered to before a rename, on the grammar every namespace's name is written on. A word reserved since may be among them, the name of a namespace made before it was reserved and renamed since, so the reserved words are not refused here.",
+            "examples": [
+              "finance",
+              "finance-old"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "The names the namespace held before it was renamed, oldest first, and empty where it was never renamed. Each is still the namespace's: every address naming it, a route under /api/v1/{ns}/ or /api/v1/namespaces/{ns}, a webhook, an MCP endpoint and a repository's clone and push URL, reaches the namespace, and no other namespace or login takes it until the namespace is removed. A rename back to one of them takes it out of the list, since it is the name again.",
+          "examples": [
+            [],
+            [
+              "finance"
+            ],
+            [
+              "finance",
+              "accounting"
+            ]
+          ]
+        },
+        "avatar_updated_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the namespace's picture was last set, and null where it has none. The picture is read on its own, at GET /api/v1/namespaces/{ns}/avatar by whoever reads this record, and a client adds this instant to its address, ?v=, so that a picture set again is fetched again rather than taken from a cache; where it is null, a client draws the namespace's initial. It changes only when the picture is set, by its owner or an administrator, and goes back to null when the picture is removed.",
+          "examples": [
+            "2026-10-01T09:30:00Z",
+            null
           ]
         },
         "auth_policy": {
@@ -4365,30 +4507,171 @@
               "default",
               "dmz"
             ]
-          }
+          },
+          "former_names": [],
+          "avatar_updated_at": "2026-10-01T09:30:00Z"
         },
         {
           "name": "alice",
           "kind": "personal",
           "owner": "alice",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         },
         {
           "name": "demo",
           "kind": "shared",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
+        },
+        {
+          "name": "accounting",
+          "kind": "shared",
+          "owner": "bob-martin",
+          "quotas": {
+            "max_concurrent_tasks": 20
+          },
+          "former_names": [
+            "finance"
+          ],
+          "avatar_updated_at": null
+        }
+      ]
+    },
+    "auditEntry": {
+      "title": "Audit entry",
+      "description": "One entry of the audit log, as the export writes it on a line of its own and as GET /api/v1/auth/audit answers it: the act, who did it, where and to what, and the two hashes that chain it to the entry before. Every field is written as the hash covers it, so that a reader can check an entry it was handed without asking the installation anything more.",
+      "type": "object",
+      "required": [
+        "seq",
+        "at",
+        "actor",
+        "action",
+        "target",
+        "result",
+        "detail",
+        "prev_hash",
+        "hash"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The entry's number, from 1 with no gap, which the database gives it as it appends it under a lock: a number missing is an entry missing.",
+          "examples": [
+            4182
+          ]
+        },
+        "at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$",
+          "description": "When the act's transaction appended it, on the database's clock, in UTC to the microsecond, written exactly as the hash covers it.",
+          "examples": [
+            "2026-10-02T09:14:07.512903Z"
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "description": "Who did it: a principal as a grant names one, installation for what the installation did of itself, or operator for the bootstrap token.",
+          "examples": [
+            "carol",
+            "finance/deployer",
+            "installation"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "pattern": "^[a-z_]+\\.[a-z_]+$",
+          "description": "What was done, a thing and a verb, as the documentation lists them.",
+          "examples": [
+            "namespace.update",
+            "run.cancel",
+            "signin.fail"
+          ]
+        },
+        "namespace": {
+          "type": "string",
+          "description": "The namespace it was done in, left out for an act on the installation.",
+          "examples": [
+            "finance"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "What it was done to: a run, a namespace, a login, a runner, a grant, by the name or identifier its kind is known by.",
+          "examples": [
+            "finance",
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          ]
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "done",
+            "unchanged"
+          ],
+          "description": "done, or unchanged for an act asked of something already so, a second cancellation or a runner drained twice.",
+          "examples": [
+            "done",
+            "unchanged"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "description": "The act's particulars as the text of a JSON object, never a secret's value or a token: a string rather than an object, since a reader that re-encoded an object would reorder or respace the bytes the hash covers.",
+          "examples": [
+            "{\"quotas\":{\"max_concurrent_tasks\":7}}"
+          ]
+        },
+        "prev_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The hash of the entry before, 64 zeros before the first. Lowercase hexadecimal, 64 characters.",
+          "examples": [
+            "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a"
+          ]
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 over agentiik audit 1, the previous hash and the fields, as the documentation's Audit log sets out. Lowercase hexadecimal, 64 characters.",
+          "examples": [
+            "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "seq": 4182,
+          "at": "2026-10-02T09:14:07.512903Z",
+          "actor": "carol",
+          "action": "namespace.update",
+          "namespace": "finance",
+          "target": "finance",
+          "result": "done",
+          "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+          "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+          "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+        },
+        {
+          "seq": 4183,
+          "at": "2026-10-02T09:15:44.008112Z",
+          "actor": "dana",
+          "action": "runner.drain",
+          "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "result": "unchanged",
+          "detail": "{\"reason\":\"kernel update\"}",
+          "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+          "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
         }
       ]
     },
     "quotas": {
       "title": "Quotas",
-      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, and a write leaving either out keeps the value it has: the two were a namespace's bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other four bound nothing until they are set, and a write leaving one out removes its bound. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
+      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks always holds a value, 20 until an administrator sets another, and a write leaving it out keeps the value it has: it was one of a namespace's two bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other five bound nothing until they are set, and a write leaving one out removes its bound: max_retention_days, v0.2's other bound, among them from v0.6.0, so that an installation keeps what it ran until somebody decides otherwise. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -4422,7 +4705,7 @@
         "max_retention_days": {
           "type": "integer",
           "minimum": 1,
-          "description": "The upper bound on how long the namespace may ask to keep what its runs produce.",
+          "description": "The upper bound on how long the namespace may ask to keep what its runs produce, and how long a workflow declaring no retain keeps it. Absent, it bounds nothing, and what a run of a workflow declaring no retain produces is kept for ever: an installation keeps what it ran until somebody decides otherwise, and a namespace that must forget, one whose logs hold personal data for instance, sets it.",
           "examples": [
             180,
             30
@@ -4466,6 +4749,148 @@
             "default",
             "dmz"
           ]
+        }
+      ]
+    },
+    "namespaceVariable": {
+      "title": "Namespace variable",
+      "description": "A variable a namespace keeps beside those its workflows' files write, read through the vars context by the workflows it is shown to as a file's own are read, a name the file writes taking the file's value. A run reads the variables shown to its workflow once, when it is created, and keeps those its file does not write, so that a controller taking it over and a replay read what it read rather than what is true now. Not a secret: the value is answered to whoever reads the namespace's workflows, kept in clear on every run that read it and masked nowhere; a credential is a secret. Written whole, one variable per request, by whoever holds workflow:write at namespace scope.",
+      "type": "object",
+      "required": [
+        "name",
+        "value",
+        "visibility",
+        "updated_by",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier",
+          "description": "The variable's name, read as vars.<name>: the grammar a workflow file's vars names its keys with, so that an expression reads either alike, at most 255 characters.",
+          "examples": [
+            "ledger_url",
+            "reminder_days"
+          ]
+        },
+        "value": {
+          "description": "Any JSON value, as a workflow file's vars holds any value YAML writes, at most 64 KiB written as compact JSON. A number keeps the way it was written: one with no fraction and no exponent is an int in an expression, and any other a double, as a number of the file or of a run's inputs is, an exponent written out with a point.",
+          "examples": [
+            "https://ledger.example.com/api",
+            30,
+            2.5,
+            [
+              7,
+              14,
+              30
+            ],
+            {
+              "currency": "EUR",
+              "rounding": "half-even"
+            },
+            null
+          ]
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "all",
+            "selected"
+          ],
+          "description": "Which workflows of the namespace read it: all, every one of them, or selected, those workflows names and no other. It says which workflows read the variable and nothing about which people may: reading the variables takes workflow:read at namespace scope whatever their visibility.",
+          "examples": [
+            "all",
+            "selected"
+          ]
+        },
+        "workflows": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier",
+            "description": "A workflow of the namespace, by the name its metadata.name writes. A name no workflow holds yet is taken, and read by the workflow created under it later.",
+            "examples": [
+              "payment-reminders",
+              "monthly-invoicing"
+            ]
+          },
+          "description": "For selected alone, the workflows that read it, by name, sorted and each once, matched when a run is created: a rename rewrites the name in every list of the namespace, and a workflow deleted or moved leaves its name, read by whatever is created under it again. Empty is read by none, which keeps a variable aside without removing it. Absent for all.",
+          "examples": [
+            [
+              "payment-reminders"
+            ],
+            [
+              "monthly-invoicing",
+              "payment-reminders"
+            ],
+            []
+          ]
+        },
+        "updated_by": {
+          "$ref": "#/$defs/actor",
+          "description": "Who wrote it last.",
+          "examples": [
+            "alice",
+            "finance/nightly-sync"
+          ]
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it was written last.",
+          "examples": [
+            "2026-10-01T09:12:00Z"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "visibility": {
+            "const": "selected"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "workflows"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "workflows"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "name": "ledger_url",
+          "value": "https://ledger.example.com/api",
+          "visibility": "all",
+          "updated_by": "alice",
+          "updated_at": "2026-10-01T09:10:00Z"
+        },
+        {
+          "name": "reminder_days",
+          "value": [
+            7,
+            14,
+            30
+          ],
+          "visibility": "selected",
+          "workflows": [
+            "payment-reminders"
+          ],
+          "updated_by": "alice",
+          "updated_at": "2026-10-01T09:12:00Z"
+        },
+        {
+          "name": "dunning_days",
+          "value": 45,
+          "visibility": "selected",
+          "workflows": [],
+          "updated_by": "finance/nightly-sync",
+          "updated_at": "2026-10-01T09:15:30Z"
         }
       ]
     },
@@ -5462,7 +5887,7 @@
         },
         "retain": {
           "$ref": "#/$defs/duration",
-          "description": "The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding.",
+          "description": "The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding, and the run kept for ever where the namespace sets none either.",
           "examples": [
             "7d"
           ]
@@ -5947,7 +6372,7 @@
               },
               "retain": {
                 "$ref": "#/$defs/duration",
-                "description": "How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them.",
+                "description": "How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them. Absent where defaults.retain is, the namespace's max_retention_days then deciding, and the artifacts kept for ever where it sets none.",
                 "examples": [
                   "7d"
                 ]

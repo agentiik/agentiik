@@ -95,7 +95,7 @@ func TestACodeThatOpensNothingIsAFailedSignIn(t *testing.T) {
 	in.policy(t, "allowed", "optional")
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, login := range []string{"gina", "hank", "ivan"} {
-			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, db.User{Login: login}); err != nil {
 				return err
 			}
 		}
@@ -325,7 +325,7 @@ func TestAFirstAdministratorsLinkShutByTheBootstrapsEndIsRecordedSo(t *testing.T
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.CreateUser(ctx, db.User{Login: "zed", DisplayName: "Zed", Admin: true})
+		return w.CreateUser(ctx, db.User{Login: "zed", Profile: db.Profile{GivenName: "Zed"}, Admin: true})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestEveryRefusalOfACodeRecordsWhyItOpenedNothing(t *testing.T) {
 	in.policy(t, "allowed", "optional")
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, login := range []string{"kim", "lee", "max", "ned", "oli", "pat", "quin", "ros"} {
-			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, db.User{Login: login}); err != nil {
 				return err
 			}
 		}

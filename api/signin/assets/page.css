@@ -41,6 +41,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 
 body {
+  position: relative;
   margin: 0;
   min-height: 100vh;
   padding: 16px;
@@ -49,18 +50,49 @@ body {
   font: 16px/1.6 var(--sans);
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  isolation: isolate;
 }
+
+/* The ground, after the site's opening and the console's sign-in: the graph canvas's dotted grid
+   and a glow of the accent from the top, fading into the page. */
+body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(70% 55% at 50% 0%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 72%),
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--muted) 35%, transparent) 1px, transparent 1.4px) 0 0 / 22px 22px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+
+/* The mark beside the name, in the site's proportions: the mark 16 of its 14 units wide, the name
+   15 of them high and set 9 of them away. The mark's lighter bars are the accent mixed with the
+   ground rather than made see-through, so that the dots do not show through them. */
+.lockup {
+  --mark: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--mark) * 9 / 14);
+  margin: clamp(24px, 12vh, 128px) auto 40px;
+}
+.lockup svg { flex: none; width: calc(var(--mark) * 16 / 14); height: var(--mark); fill: var(--accent); }
+.lockup .mid { fill: color-mix(in srgb, var(--accent) 62%, var(--bg)); }
+.lockup .low { fill: color-mix(in srgb, var(--accent) 30%, var(--bg)); }
+.wordmark { font-size: calc(var(--mark) * 15 / 14); font-weight: 700; letter-spacing: -.02em; line-height: 1; }
 
 main {
   max-width: 28rem;
-  margin: clamp(16px, 10vh, 96px) auto 16px;
+  margin: 0 auto 16px;
   padding: 24px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: 0 12px 32px -12px color-mix(in srgb, var(--ink) 18%, transparent);
 }
 
-.brand { margin: 0 0 4px; color: var(--accent); font-weight: 600; letter-spacing: .02em; }
 h1 { margin: 0 0 16px; font-size: 1.5rem; line-height: 1.25; }
 h2 { margin: 24px 0 4px; font-size: 1rem; }
 p, ul { margin: 0 0 12px; }

@@ -523,6 +523,18 @@ type Caller struct {
 // administrator's powers.
 func (c Caller) Narrowed() bool { return c.scope.Narrows() }
 
+// Administers answers whether the caller administers the installation through the credential it
+// presented, asked as every administrator's route asks it, as grant:manage at the installation: never
+// through a narrowed one, since "an administrator's powers pass through a token only where its scope
+// does not narrow them away". A route about the caller's own asks it where an administrator may do
+// more there than anybody else, as creating a namespace for another owner.
+func (c Caller) Administers(ctx context.Context) (bool, error) {
+	if c.allow == nil {
+		return false, nil
+	}
+	return c.allow(ctx, GrantManage, Target{})
+}
+
 // Owned answers the namespaces the caller owns through the credential it presented, ordered by
 // name: none through a narrowed one, for the reason Narrowed gives.
 func (c Caller) Owned(ctx context.Context) ([]string, error) {

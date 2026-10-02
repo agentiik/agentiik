@@ -20,7 +20,7 @@ import (
 func TestASuspensionKeepsItsReasonAndIsLiftedForItAlone(t *testing.T) {
 	pool := identity(t)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		for _, u := range []User{{Login: "alice", DisplayName: "Alice"}, {Login: "bob", DisplayName: "Bob", Suspended: true}} {
+		for _, u := range []User{{Login: "alice", Profile: Profile{GivenName: "Alice"}}, {Login: "bob", Profile: Profile{GivenName: "Bob"}, Suspended: true}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}
@@ -50,7 +50,7 @@ func TestASuspensionKeepsItsReasonAndIsLiftedForItAlone(t *testing.T) {
 		if _, err := w.Suspend(ctx, "alice", SuspendedNoPasskey); err != nil {
 			return err
 		}
-		if err := w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.UpdateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			t.Errorf("writing alice as not suspended answered %v", err)
 		}
 		if alice, err := w.User(ctx, "alice"); err != nil || alice.SuspendedFor != "" {
@@ -82,7 +82,7 @@ func TestANamespacesPolicyReachesWhoHoldsARoleInIt(t *testing.T) {
 	gone := now.Add(-time.Minute)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, login := range []string{"alice", "bob", "carol", "dave", "erin", "frank"} {
-			if err := w.CreateUser(ctx, User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: login}); err != nil {
 				return err
 			}
 		}
@@ -130,7 +130,7 @@ func TestANamespacesPolicyReachesWhoHoldsARoleInIt(t *testing.T) {
 func TestHoldingAUserLetsARowReferringToItBeWritten(t *testing.T) {
 	pool := identity(t)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice", Admin: true}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}, Admin: true}); err != nil {
 			return err
 		}
 		return w.CreateGroup(ctx, "auditors")

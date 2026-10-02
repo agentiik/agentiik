@@ -139,9 +139,7 @@ describe("the sharing panel", () => {
     const lines = await screen.findByRole("list", { name: "Effective permissions of bruno on alice" });
     const secret = within(lines).getByText("secret:write").closest("li")!;
     expect(secret.classList.contains("taken")).toBe(true);
-    expect(secret.textContent).toContain("denied: deny secret:write at alice, over editor at alice");
-    // Whether bruno is in team-finance is an administrator's to read.
-    expect(screen.getByText(/Who is in a group is an administrator's to read/)).toBeTruthy();
+    expect(secret.textContent).toContain("denied by deny secret:write at alice");
   });
 
   it("reads anybody's groups for an administrator, and counts them", async () => {
@@ -153,7 +151,6 @@ describe("the sharing panel", () => {
     await fireEvent.change(screen.getByRole("combobox", { name: "Whom to resolve" }), { target: { value: "bruno" } });
     const lines = await screen.findByRole("list", { name: "Effective permissions of bruno on alice" });
     expect(within(lines).getByText("workflow:read").closest("li")!.textContent).toContain("through group:team-finance");
-    expect(screen.queryByText(/Who is in a group is an administrator's to read/)).toBeNull();
   });
 
   it("grants a role with an expiry from the one control, and reads the grants again", async () => {
@@ -165,7 +162,7 @@ describe("the sharing panel", () => {
     await fireEvent.change(within(form).getByRole("combobox", { name: "Gives" }), { target: { value: "role:editor" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Expires" }), { target: { value: "30d" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText("carol holds editor on alice.")).toBeTruthy();
+    expect(await screen.findByText("editor granted to carol.")).toBeTruthy();
     const posted = asked.find((a) => a.key === "POST /api/v1/alice/grants")!.body as { principal: string; role: string; expires_at: string };
     expect(posted.principal).toBe("carol");
     expect(posted.role).toBe("editor");
@@ -181,7 +178,7 @@ describe("the sharing panel", () => {
     await fireEvent.change(within(form).getByRole("combobox", { name: "What the principal is" }), { target: { value: "group" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Who" }), { target: { value: "team-ops" } });
     await fireEvent.change(within(form).getByRole("combobox", { name: "Gives" }), { target: { value: "deny:run:read_data" } });
-    expect(within(form).getByRole("button", { name: "Deny run:read_data" })).toBeTruthy();
+    expect(within(form).getByRole("button", { name: "Add" })).toBeTruthy();
     await fireEvent.submit(form);
     expect(await screen.findByText("This would leave no administrator able to sign in.")).toBeTruthy();
     expect(asked.find((a) => a.key === "POST /api/v1/alice/grants")!.body).toEqual({ principal: "group:team-ops", deny: "run:read_data" });
@@ -205,8 +202,8 @@ describe("the sharing panel", () => {
     const row = (await within(grants).findByText("alice/ci")).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
-    await fireEvent.click(within(row).getByRole("button", { name: "Revoke it" }));
-    expect(await screen.findByText(/The operator grant to alice\/ci is revoked/)).toBeTruthy();
+    await fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
+    expect(await screen.findByText("operator grant revoked for alice/ci.")).toBeTruthy();
     expect(asked.filter((a) => a.key.startsWith("DELETE")).map((a) => a.key)).toEqual(["DELETE /api/v1/alice/grants/01JMZ7A8F9G0H1J2K3M4N5P6Q7"]);
   });
 
@@ -232,65 +229,16 @@ describe("the sharing panel", () => {
     const operator = within(pane).getAllByRole("row").find((r) => r.querySelector("td")?.textContent === "operator")!;
     expect([...operator.querySelectorAll("td.mark")].map((c) => c.textContent)).toEqual(["no", "yes", "no", "no", "no", "no", "no"]);
     expect(operator.querySelector("td.lack")!.textContent).toBe("no");
-    expect(within(pane).getByText(/runs a workflow and follows its runs/)).toBeTruthy();
   });
 
-  it("says what sharing never exposes", async () => {
-    open("/alice/sharing");
-    const pane = await screen.findByRole("region", { name: "What sharing never exposes" });
-    expect(within(pane).getAllByRole("listitem")).toHaveLength(4);
-  });
-
-  it("is offered from a workflow's page to whoever may share that workflow, and opens its grants", async () => {
-    open("/finance/workflows/monthly-invoicing");
-    const plain = await screen.findByRole("navigation", { name: "finance/monthly-invoicing" });
-    expect(within(plain).queryByRole("link", { name: "Sharing" })).toBeNull();
-    cleanup();
-
+  it("is no tab of a workflow's page, whoever may share it", async () => {
     const s = scenario("alice");
     const permissions = (s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> }).permissions;
     permissions["finance/monthly-invoicing"] = [...permissions["finance"]!, "grant:manage"];
-    const { place } = open("/finance/workflows/monthly-invoicing", s);
-    const nav = await screen.findByRole("navigation", { name: "finance/monthly-invoicing" });
-    const tab = within(nav).getByRole("link", { name: "Sharing" });
-    expect(tab.getAttribute("href")).toBe("/finance/sharing?workflow=monthly-invoicing");
-    await fireEvent.click(tab);
-    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "sharing" });
-    expect(place.query.get("workflow")).toBe("monthly-invoicing");
-    expect(await screen.findByRole("button", { name: "finance/monthly-invoicing", pressed: true })).toBeTruthy();
-  });
-
-  it("names a workflow's default branch and protects it, sending only what changed", async () => {
-    const s = scenario("alice");
-    const repository = (s["GET /api/v1/alice/workflows/report"]!.body as { repository: Record<string, unknown> }).repository;
-    s["PATCH /api/v1/alice/workflows/report"] = { status: 200, body: { ...repository, protected: true } };
-    const asked: { key: string; body: unknown }[] = [];
-    const { fetcher } = installation(s);
-    const api = connect("http://stand-in/", async (input, init) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      if (request.method === "PATCH") asked.push({ key: new URL(request.url).pathname, body: JSON.parse(await request.clone().text()) });
-      return fetcher(request);
-    });
-    const place = new Place({ pathname: "/alice/sharing", search: "?workflow=report", baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
-    render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
-    const form = await screen.findByRole("form", { name: "Default branch of alice/report" });
-    expect((within(form).getByRole("textbox") as HTMLInputElement).value).toBe("main");
-    const write = within(form).getByRole("button", { name: "Write it" }) as HTMLButtonElement;
-    expect(write.disabled).toBe(true);
-    await fireEvent.click(within(form).getByRole("checkbox"));
-    await fireEvent.submit(form);
-    expect(await screen.findByText(/main is the default branch, protected: pushing to it takes grant:manage/)).toBeTruthy();
-    expect(asked).toEqual([{ key: "/api/v1/alice/workflows/report", body: { protected: true } }]);
-  });
-
-  it("says what the API refused of a default branch as it said it", async () => {
-    const s = scenario("alice");
-    s["PATCH /api/v1/alice/workflows/report"] = { status: 422, body: { error: "the repository holds no branch release" } };
-    open("/alice/sharing?workflow=report", s);
-    const form = await screen.findByRole("form", { name: "Default branch of alice/report" });
-    await fireEvent.input(within(form).getByRole("textbox"), { target: { value: "release" } });
-    await fireEvent.submit(form);
-    expect(await screen.findByText("The repository holds no branch release.")).toBeTruthy();
+    open("/finance/workflows/monthly-invoicing", s);
+    const nav = await screen.findByRole("navigation", { name: "monthly-invoicing, what is shown" });
+    expect(within(nav).getByRole("link", { name: "Settings" })).toBeTruthy();
+    expect(within(nav).queryByRole("link", { name: "Sharing" })).toBeNull();
   });
 
   it("is offered nowhere the caller holds no grant:manage, and answered as what does not exist", async () => {
@@ -298,6 +246,6 @@ describe("the sharing panel", () => {
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
     expect(screen.queryByRole("link", { name: "Sharing" })).toBeNull();
     open("/finance/sharing");
-    await waitFor(() => expect(screen.getAllByText("No such thing, or not yours.").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("This page does not exist, or is not shared with you.").length).toBeGreaterThan(0));
   });
 });

@@ -74,8 +74,8 @@ describe("the page of two runs", () => {
     expect(await screen.findByText("2 of 3 differ; they part at invoice")).toBeTruthy();
     expect(screen.getByText("first difference")).toBeTruthy();
     expect(screen.getByText("invoice in the two runs")).toBeTruthy();
-    expect(screen.getByText("Both were started with the same inputs.")).toBeTruthy();
-    expect(screen.getByText("It was dispatched with the same parameters in both.")).toBeTruthy();
+    expect(screen.getByText("Same inputs")).toBeTruthy();
+    expect(screen.getByText("Same parameters")).toBeTruthy();
   });
 
   it("compares what a port held when asked, as items and not as envelopes", async () => {
@@ -91,7 +91,7 @@ describe("the page of two runs", () => {
     const me = s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> };
     me.permissions.finance = me.permissions.finance!.filter((p) => p !== "run:read_data");
     open(`/finance/runs/${failed}/against/${good}`, s);
-    expect(await screen.findByText(/Their inputs and parameters are not compared/)).toBeTruthy();
+    expect(await screen.findByText(/Inputs hidden/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Compare the items" })).toBeNull();
   });
 
@@ -101,11 +101,11 @@ describe("the page of two runs", () => {
     const select = (await screen.findByLabelText("Compare with")) as HTMLSelectElement;
     expect(select.value).toBe(good);
     await fireEvent.click(screen.getByRole("link", { name: "Compare" }));
-    expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "runs", run: failed, against: good });
+    expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", run: failed, against: good });
   });
 
   it("answers as the API does for a run that is not there", async () => {
     open(`/finance/runs/${failed}/against/01JMZ0000000000000000000000`);
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
   });
 });

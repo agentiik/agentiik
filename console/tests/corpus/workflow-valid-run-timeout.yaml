@@ -1,0 +1,30 @@
+# valid: the root timeout, which bounds the whole run, written beside the step
+# limit of the same name, which bounds one shard. A run still going when the
+# root timeout expires ends in the timed_out state; a shard that outlives its
+# own limit is signalled and the run carries on.
+# covers: timeout at the root, defaults.timeout, steps.<name>.timeout.
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+timeout: 6h                  # the whole run, capped by max_run_duration
+
+defaults:
+  timeout: 10m               # one shard, where a step sets no limit
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    outputs: [ok]
+
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    needs:
+      - { step: normalize, port: ok, as: in }
+    timeout: 30m             # this step's shards, and not the run
+    outputs: [out]

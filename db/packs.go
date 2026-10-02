@@ -36,6 +36,9 @@ type RepositoryPack struct {
 	Namespace  string
 	Repository string
 	Pack
+
+	// Storage is the storage name of its namespace, which its files are kept under (NS.Storage).
+	Storage string
 }
 
 // CollectablePacks claims up to batch packs past the grace, receiving ones a push never made live
@@ -67,13 +70,15 @@ func (p *Pool) CollectablePacks(ctx context.Context, grace time.Duration, batch 
 			  limit $2
 			  for update skip locked
 			)
-			returning namespace, repository, name, size, objects, created_at`, int64(grace/time.Second), batch)
+			returning namespace, repository, name, size, objects, created_at,
+			          coalesce((select n.storage from namespaces n where n.name = git_packs.namespace), namespace)`,
+			int64(grace/time.Second), batch)
 		if err != nil {
 			return err
 		}
 		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (RepositoryPack, error) {
 			var r RepositoryPack
-			err := row.Scan(&r.Namespace, &r.Repository, &r.Name, &r.Size, &r.Objects, &r.CreatedAt)
+			err := row.Scan(&r.Namespace, &r.Repository, &r.Name, &r.Size, &r.Objects, &r.CreatedAt, &r.Storage)
 			return r, err
 		})
 		return err
