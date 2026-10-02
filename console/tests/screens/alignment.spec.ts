@@ -6,8 +6,8 @@ import { measure, type Finding } from "./measure";
 // widths its layout changes at, a large screen, a wide window, the last width with the sidebar
 // folded, the last with it shown as a drawer and a phone, in both themes, and measured: nothing runs off the page, every
 // control is one height and a row of them one band, what is centred in a row is centred on one line
-// and text side by side on one baseline, each pane's content starts under its title, and every box
-// starts on a whole pixel; and the policy refuses nothing a screen asks for. A finding names the rule, the element and what was measured.
+// and text side by side on one baseline, each pane's content starts under its title, a chart's legend keeps its
+// columns, and every box starts on a whole pixel; and the policy refuses nothing a screen asks for. A finding names the rule, the element and what was measured.
 
 const screens: Record<string, string[]> = {
   alice: [
