@@ -14,26 +14,11 @@
   import type { View } from "./lib/route";
   import type { Session } from "./lib/session.svelte";
   import { firstNamespace, fold, folded as wasFolded, keepNamespace, lastNamespace } from "./lib/shell";
-  import Account from "./views/Account.svelte";
-  import Fleet from "./views/Fleet.svelte";
-  import Groups from "./views/Groups.svelte";
-  import Home from "./views/Home.svelte";
-  import Namespaces from "./views/Namespaces.svelte";
-  import PoolStatistics from "./views/PoolStatistics.svelte";
+  import { titleOf } from "./lib/trail";
+  import Unloaded from "./components/Unloaded.svelte";
   import Refused from "./views/Refused.svelte";
-  import Run from "./views/Run.svelte";
-  import RunDiff from "./views/RunDiff.svelte";
-  import Runs from "./views/Runs.svelte";
-  import Settings from "./views/Settings.svelte";
   import NewNamespace from "./components/NewNamespace.svelte";
-  import Variables from "./views/Variables.svelte";
-  import Sharing from "./views/Sharing.svelte";
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
-  import Statistics from "./views/Statistics.svelte";
-  import Users from "./views/Users.svelte";
-  import Workflow from "./views/Workflow.svelte";
-  import Workflows from "./views/Workflows.svelte";
-  import WorkflowStatistics from "./views/WorkflowStatistics.svelte";
 
   // The console: who it is signed in as, the top bar, the screen the address names, and the key line.
   let { api, session, place, version, passkeys }: { api: API; session: Session; place: Place; version: string; passkeys: Passkeys } = $props();
@@ -41,6 +26,29 @@
   onMount(() => {
     session.read();
   });
+
+  // Each screen is a chunk of its own, loaded when it is first shown, so that the console's first load
+  // carries the shell and the screen opened rather than every screen there is. A chunk is fetched once
+  // and kept by the browser; the build names it by its content, so that a release never serves a stale one.
+  const screens = {
+    Account: () => import("./views/Account.svelte"),
+    Fleet: () => import("./views/Fleet.svelte"),
+    Groups: () => import("./views/Groups.svelte"),
+    Home: () => import("./views/Home.svelte"),
+    Namespaces: () => import("./views/Namespaces.svelte"),
+    PoolStatistics: () => import("./views/PoolStatistics.svelte"),
+    Run: () => import("./views/Run.svelte"),
+    RunDiff: () => import("./views/RunDiff.svelte"),
+    Runs: () => import("./views/Runs.svelte"),
+    Settings: () => import("./views/Settings.svelte"),
+    Sharing: () => import("./views/Sharing.svelte"),
+    Statistics: () => import("./views/Statistics.svelte"),
+    Users: () => import("./views/Users.svelte"),
+    Variables: () => import("./views/Variables.svelte"),
+    Workflow: () => import("./views/Workflow.svelte"),
+    Workflows: () => import("./views/Workflows.svelte"),
+    WorkflowStatistics: () => import("./views/WorkflowStatistics.svelte"),
+  };
 
   // The live connection, open while somebody is signed in: each screen reads again what it shows
   // when told it changed, the caller's notifications are read again here, and a connection the API
@@ -58,6 +66,11 @@
   });
 
   const route = $derived(place.route);
+
+  // The browser's tab names the screen, so that a row of tabs and the history read by what each shows.
+  $effect(() => {
+    document.title = session.standing === "signed-in" ? titleOf(route) : session.standing === "signed-out" ? "Sign in · Agentiik" : "Agentiik";
+  });
   const namespace = $derived(route.kind === "namespace" ? route.namespace : undefined);
 
   // The namespace whose views the sidebar lists: the one the screen is in, or else the one last
@@ -198,43 +211,43 @@
     <main class="screen">
       <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
-        <WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} shares={holds(session.me, "grant:manage", route.namespace, route.workflow)} />
+        {#await screens.WorkflowStatistics() then { default: WorkflowStatistics }}<WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} shares={holds(session.me, "grant:manage", route.namespace, route.workflow)} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && route.run === undefined && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
         <!-- A workflow's page: the API answers one the
              caller cannot read as one that does not exist, and the page says no more. -->
-        <Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} tab={route.tab} />
+        {#await screens.Workflow() then { default: Workflow }}<Workflow {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} tab={route.tab} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && runs && route.run && route.against}
-        <RunDiff {api} {place} me={session.me} namespace={route.namespace} a={route.run} b={route.against} />
+        {#await screens.RunDiff() then { default: RunDiff }}<RunDiff {api} {place} me={session.me} namespace={route.namespace} a={route.run} b={route.against} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && runs && route.run}
-        <Run {api} {place} me={session.me} namespace={route.namespace} id={route.run} />
+        {#await screens.Run() then { default: Run }}<Run {api} {place} me={session.me} namespace={route.namespace} id={route.run} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && runs && route.workflow}
-        <Runs {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} record={session.namespaces.find((n) => n.name === route.namespace)} />
+        {#await screens.Runs() then { default: Runs }}<Runs {api} {place} me={session.me} namespace={route.namespace} workflow={route.workflow} record={session.namespaces.find((n) => n.name === route.namespace)} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && (!known || !shown.some((v) => v.view === route.view) || route.run !== undefined || route.tab === "runs")}
         <Refused />
       {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow === undefined}
-        <Workflows {api} {place} me={session.me} namespace={route.namespace} />
+        {#await screens.Workflows() then { default: Workflows }}<Workflows {api} {place} me={session.me} namespace={route.namespace} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && route.view === "sharing"}
-        <Sharing {api} {place} me={session.me} namespace={route.namespace} />
+        {#await screens.Sharing() then { default: Sharing }}<Sharing {api} {place} me={session.me} namespace={route.namespace} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && route.view === "variables"}
-        <Variables {api} {place} me={session.me} namespace={route.namespace} />
+        {#await screens.Variables() then { default: Variables }}<Variables {api} {place} me={session.me} namespace={route.namespace} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && route.view === "settings"}
-        <Settings {api} {place} me={session.me} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} changed={() => session.read()} />
+        {#await screens.Settings() then { default: Settings }}<Settings {api} {place} me={session.me} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} changed={() => session.read()} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && route.view === "statistics"}
-        <Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />
+        {#await screens.Statistics() then { default: Statistics }}<Statistics {api} {place} namespace={route.namespace} record={session.namespaces.find((n) => n.name === route.namespace)} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "landing"}
-        <Home {api} {place} me={session.me} namespaces={session.namespaces} />
+        {#await screens.Home() then { default: Home }}<Home {api} {place} me={session.me} namespaces={session.namespaces} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "account"}
-        <Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />
+        {#await screens.Account() then { default: Account }}<Account {api} {place} me={session.me} tab={route.tab} {passkeys} changed={() => session.read()} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "users" && session.me.admin}
-        <Users {api} {place} me={session.me} />
+        {#await screens.Users() then { default: Users }}<Users {api} {place} me={session.me} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "groups" && session.me.admin}
-        <Groups {api} {place} />
+        {#await screens.Groups() then { default: Groups }}<Groups {api} {place} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespaces" && session.me.admin}
-        <Namespaces {api} {place} changed={() => session.read()} />
+        {#await screens.Namespaces() then { default: Namespaces }}<Namespaces {api} {place} changed={() => session.read()} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "runners" && route.tab === undefined && session.me.admin}
-        <Fleet {api} {place} namespaces={session.namespaces} {version} />
+        {#await screens.Fleet() then { default: Fleet }}<Fleet {api} {place} namespaces={session.namespaces} {version} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "runners" && route.tab === "statistics" && session.me.admin}
-        <PoolStatistics {api} {place} />
+        {#await screens.PoolStatistics() then { default: PoolStatistics }}<PoolStatistics {api} {place} />{:catch}<Unloaded />{/await}
       {:else}
         <Refused />
       {/if}

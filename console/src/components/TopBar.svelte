@@ -1,6 +1,7 @@
 <script lang="ts">
   import { follow, type Place } from "../lib/place.svelte";
-  import { runAt, runsOf, type Route } from "../lib/route";
+  import type { Route } from "../lib/route";
+  import { trailOf } from "../lib/trail";
   import Icon from "./Icon.svelte";
 
   // The line above the screen's own head: where the screen is, as a trail of links back up to the
@@ -16,46 +17,8 @@
     onmenu?: () => void;
   } = $props();
 
-  const labels: Record<string, string> = { workflows: "Workflows", statistics: "Statistics", sharing: "Sharing", settings: "Settings" };
-  const tabs: Record<string, string> = { runs: "Runs", files: "Files", statistics: "Statistics", mcp: "MCP", graph: "Graph", profile: "Profile", credentials: "Sign-in methods", tokens: "API tokens", "service-accounts": "Service accounts" };
-
   // The trail: each step a link but the last, which is where the screen is.
-  const trail = $derived.by((): { label: string; to?: Route; code?: boolean }[] => {
-    const r = route;
-    switch (r.kind) {
-      case "landing":
-        return [{ label: "Home" }];
-      case "account":
-        return [{ label: "Your account", to: r.tab ? { kind: "account" } : undefined }, ...(r.tab ? [{ label: tabs[r.tab] ?? r.tab }] : [])];
-      case "runners":
-        return [{ label: "Runners", to: r.tab ? { kind: "runners" } : undefined }, ...(r.tab ? [{ label: "Statistics" }] : [])];
-      case "users":
-        return [{ label: "Users" }];
-      case "groups":
-        return [{ label: "Groups" }];
-      case "namespaces":
-        return [{ label: "Namespaces" }];
-      case "unknown":
-        return [{ label: "Nothing here" }];
-      case "namespace": {
-        const out: { label: string; to?: Route; code?: boolean }[] = [{ label: r.namespace, to: { kind: "namespace", namespace: r.namespace, view: "workflows" } }];
-        const deeper = r.workflow !== undefined || r.run !== undefined;
-        out.push({ label: labels[r.view] ?? r.view, to: deeper ? { kind: "namespace", namespace: r.namespace, view: r.view } : undefined });
-        if (r.workflow) {
-          // A run is under its workflow's runs, each a link back up but the last.
-          const below = r.tab !== undefined || r.run !== undefined;
-          out.push({ label: r.workflow, to: below ? { kind: "namespace", namespace: r.namespace, view: "workflows", workflow: r.workflow } : undefined });
-          if (r.run) out.push({ label: "Runs", to: runsOf(r.namespace, r.workflow) });
-          else if (r.tab) out.push({ label: tabs[r.tab] ?? r.tab });
-        }
-        if (r.run) {
-          out.push({ label: r.run, code: true, to: r.against ? runAt(r.namespace, r.workflow, r.run) : undefined });
-          if (r.against) out.push({ label: `against ${r.against}`, code: true });
-        }
-        return out;
-      }
-    }
-  });
+  const trail = $derived(trailOf(route));
 
 </script>
 
