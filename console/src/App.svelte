@@ -347,7 +347,13 @@
     background: var(--surface);
   }
 
+  /* A screen's content is at most 1280px wide, centred in the room the sidebar leaves: wider, a
+     table's line runs further than the eye follows from a name to its last cell, and a wide window
+     shows the same page with more margin. */
   .screen {
+    justify-self: center;
+    width: 100%;
+    max-width: calc(1280px + 2 * (var(--padding-page) + 6px));
     min-width: 0;
     padding: calc(var(--padding-page) + 6px) calc(var(--padding-page) + 6px) calc(var(--padding-page) + 12px);
   }
