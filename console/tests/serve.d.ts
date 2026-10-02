@@ -1,6 +1,6 @@
 // The types of tests/serve.js, for the screen tests written in TypeScript.
 
-export type Scenario = Record<string, { status: number; body?: unknown; text?: string }>;
+export type Scenario = Record<string, { status: number; body?: unknown; text?: string; type?: string }>;
 
 export function consolePolicy(): string;
 
