@@ -570,16 +570,22 @@ func capacityOf(state, reported string, concurrency int64) int64 {
 	return concurrency
 }
 
+// longestRetention is the longest any namespace keeps its runs, as an interval, and null where one
+// keeps them for ever or there is no namespace, which no instant is older than.
+const longestRetention = `select case when count(*) = 0 or bool_or(max_retention_days is null) then null
+	        else make_interval(days => max(max_retention_days)) end from namespaces`
+
 // heard writes what a heartbeat at at settles for the chart of the pools: the silence since the one
 // before, where it lasted Silence or more, and what the runner offers, where it differs from what
 // was written last. The rows older than the longest any namespace keeps its runs are let go first,
-// since a series reaches back no further.
+// since a series reaches back no further; and none while a namespace keeps its runs for ever, since
+// its series reaches back as far as there is anything.
 func (w *Wide) heard(ctx context.Context, runner string, before *time.Time, at time.Time, capacity int64) error {
 	for _, stmt := range []string{
 		`delete from runner_silences where runner = $1
-		   and ended < now() - (select make_interval(days => coalesce(max(max_retention_days), 90)) from namespaces)`,
+		   and ended < now() - (` + longestRetention + `)`,
 		`delete from runner_capacity c where runner = $1
-		   and at < now() - (select make_interval(days => coalesce(max(max_retention_days), 90)) from namespaces)
+		   and at < now() - (` + longestRetention + `)
 		   and exists (select 1 from runner_capacity l where l.runner = c.runner and l.at > c.at)`,
 	} {
 		if _, err := w.tx.Exec(ctx, stmt, runner); err != nil {

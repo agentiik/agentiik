@@ -106,7 +106,7 @@ const counted = `
 	  join namespaces n on n.name = r.namespace
 	  where (r.namespace, r.workflow::text) in (select * from unnest($1::text[], $2::text[]))
 	    and r.created_at >= $3 and r.created_at < $4
-	    and r.created_at >= now() - make_interval(days => n.max_retention_days)
+	    and (n.max_retention_days is null or r.created_at >= now() - make_interval(days => n.max_retention_days))
 	)`
 
 // ms is a length of time in whole milliseconds, never below zero: the two instants of a run's
@@ -569,8 +569,8 @@ type QuotaBucket struct {
 }
 
 // QuotaStatistics counts what the namespace asked of its quotas, bucket by bucket, every bucket
-// answered, oldest first. A bucket that ended before the namespace's max_retention_days counts
-// nothing, as a series of its runs does: "a range reaches back as far as the namespace keeps its
+// answered, oldest first. A bucket that ended before the namespace's max_retention_days, where it
+// sets one, counts nothing, as a series of its runs does: "a range reaches back as far as the namespace keeps its
 // runs, and no further".
 //
 // Read through the namespace's own handle, since what it counts is every workflow of the namespace
@@ -581,7 +581,8 @@ func (n *NS) QuotaStatistics(ctx context.Context, b Buckets) ([]QuotaBucket, err
 	}
 	w, namespace := n, n.namespace
 	out := make([]QuotaBucket, b.Count)
-	var kept time.Time
+	// Where the namespace keeps its runs for ever, nothing bounds the range but the range itself.
+	var kept *time.Time
 	if err := w.tx.QueryRow(ctx,
 		`select now() - make_interval(days => max_retention_days) from namespaces where name = $1`,
 		namespace).Scan(&kept); err != nil {
@@ -591,8 +592,8 @@ func (n *NS) QuotaStatistics(ctx context.Context, b Buckets) ([]QuotaBucket, err
 		return nil, fmt.Errorf("db: the retention of namespace %s could not be read: %w", namespace, err)
 	}
 	first := b.First
-	if kept.After(first) {
-		first = kept
+	if kept != nil && kept.After(first) {
+		first = *kept
 	}
 	args := []any{namespace, b.First, b.End(), b.Width.Seconds(), first}
 	bucket := func(at string) string {

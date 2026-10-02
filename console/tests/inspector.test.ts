@@ -297,6 +297,7 @@ describe("the files of a step and the outputs of a run", () => {
   it("says where a file stands, and what a HEAD answered", async () => {
     const live = { status: "live", expires_at: "2026-10-07T05:42:55Z", fetches_left: 1 } as Artifact;
     expect(retention(live, Date.parse("2026-01-01T00:00:00Z"))).toMatch(/^until .*, 1 fetch left$/);
+    expect(retention({ status: "live" } as Artifact, Date.parse("2026-01-01T00:00:00Z"))).toBe("kept for ever");
     expect(await fetchable(async () => Object.defineProperty(new Response(null, { status: 200 }), "type", { value: "opaqueredirect" }), "x")).toBe("");
     expect(await fetchable(async () => new Response(null, { status: 409 }), "x")).toMatch(/Download limit reached/);
     expect(await fetchable(async () => new Response(null, { status: 404 }), "x")).toBe("File not found.");

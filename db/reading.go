@@ -209,8 +209,9 @@ type ArtifactSummary struct {
 
 	// Status is live while the artifact may be fetched, expired once its duration ran out, and
 	// collected once its fetches were spent; RetiredAt is when it stopped being live.
+	// ExpiresAt is left out where nothing bounds it, a file kept for ever.
 	Status    string    `json:"status"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 	RetiredAt time.Time `json:"retired_at,omitzero"`
 
 	// FetchesLeft is what remains of a fetch budget, which only a workflow output may declare,
@@ -305,7 +306,7 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 // a run that published none answers an empty list.
 func (n *NS) artifacts(ctx context.Context, run agk.RunID) ([]ArtifactSummary, error) {
 	rows, err := n.tx.Query(ctx, `
-		select step, port, name, media_type, size_bytes, digest, status, expires_at, retired_at, fetches_left
+		select step, port, name, media_type, size_bytes, digest, status, nullif(expires_at, 'infinity'), retired_at, fetches_left
 		from artifacts where namespace = $1 and run_id = $2
 		order by step, port, name`, n.namespace, string(run))
 	if err != nil {
@@ -316,14 +317,16 @@ func (n *NS) artifacts(ctx context.Context, run agk.RunID) ([]ArtifactSummary, e
 	for rows.Next() {
 		var a ArtifactSummary
 		var step, port, digest string
-		var retired *time.Time
-		if err := rows.Scan(&step, &port, &a.Name, &a.MediaType, &a.Size, &digest, &a.Status, &a.ExpiresAt, &retired, &a.FetchesLeft); err != nil {
+		var expires, retired *time.Time
+		if err := rows.Scan(&step, &port, &a.Name, &a.MediaType, &a.Size, &digest, &a.Status, &expires, &retired, &a.FetchesLeft); err != nil {
 			return nil, fmt.Errorf("db: an artifact of run %s could not be read: %w", run, err)
 		}
 		a.Step, a.Port = agk.Step(step), agk.Port(port)
 		a.URI = agk.URI{Run: run, Step: a.Step, Port: a.Port, Name: a.Name}
 		a.SHA256 = strings.TrimPrefix(digest, "sha256:")
-		a.ExpiresAt = a.ExpiresAt.UTC()
+		if expires != nil {
+			a.ExpiresAt = expires.UTC()
+		}
 		if retired != nil {
 			a.RetiredAt = retired.UTC()
 		}

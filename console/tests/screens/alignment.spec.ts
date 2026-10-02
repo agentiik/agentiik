@@ -41,7 +41,7 @@ const screens: Record<string, string[]> = {
     "/me/tokens",
     "/me/service-accounts",
   ],
-  dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/finance/settings", "/me"],
+  dana: ["/", "/runners", "/runners/statistics", "/users", "/users/policy", "/groups", "/namespaces", "/namespaces?namespace=finance", "/finance/settings", "/me"],
 };
 
 const widths = [2560, 1440, 1099, 759, 390];

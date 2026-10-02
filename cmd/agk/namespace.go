@@ -258,10 +258,10 @@ func namespaceDelete(ctx context.Context, e Env, args []string) int {
 // setting quotas by hand accepts for a command that never lifts what they did not name; the quotas
 // are printed as they then stand.
 func namespaceQuotas(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk namespace quotas", "agk namespace quotas <name> [--max-... <quota>] [--lift <quota>] [--server <url>] [-o json]\n\n\tThe quotas given are set and the others kept; --lift max_runs_per_hour lifts one, and is\n\trepeated for each. max_concurrent_tasks and max_retention_days always hold a value.")
+	fs := flags(e, "agk namespace quotas", "agk namespace quotas <name> [--max-... <quota>] [--lift <quota>] [--server <url>] [-o json]\n\n\tThe quotas given are set and the others kept; --lift max_runs_per_hour lifts one, and is\n\trepeated for each. max_concurrent_tasks always holds a value.")
 	quotas := withQuotas(fs)
 	var lifts lifted
-	fs.Var(&lifts, "lift", "A quota to lift, by its identifier, max_runs_per_hour, max_artifact_bytes, max_run_duration or allowed_runner_pools; repeated for each.")
+	fs.Var(&lifts, "lift", "A quota to lift, by its identifier, max_runs_per_hour, max_artifact_bytes, max_retention_days, max_run_duration or allowed_runner_pools; repeated for each.")
 	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	name, code, ok := oneNamespace(e, fs, args)
@@ -315,13 +315,13 @@ func (l *lifted) String() string { return strings.Join(*l, ",") }
 
 func (l *lifted) Set(name string) error {
 	switch name {
-	case "max_runs_per_hour", "max_artifact_bytes", "max_run_duration", "allowed_runner_pools":
+	case "max_runs_per_hour", "max_artifact_bytes", "max_retention_days", "max_run_duration", "allowed_runner_pools":
 		*l = append(*l, name)
 		return nil
-	case "max_concurrent_tasks", "max_retention_days":
-		return fmt.Errorf("%s always holds a value, 20 or 90 until an administrator sets another, and is set rather than lifted", name)
+	case "max_concurrent_tasks":
+		return fmt.Errorf("%s always holds a value, 20 until an administrator sets another, and is set rather than lifted", name)
 	}
-	return fmt.Errorf("%q is not a quota that can be lifted: max_runs_per_hour, max_artifact_bytes, max_run_duration and allowed_runner_pools can", name)
+	return fmt.Errorf("%q is not a quota that can be lifted: max_runs_per_hour, max_artifact_bytes, max_retention_days, max_run_duration and allowed_runner_pools can", name)
 }
 
 // against refuses a quota both given and lifted, which asks for two things at once.
@@ -329,7 +329,8 @@ func (l lifted) against(given api.Quotas) error {
 	for _, name := range l {
 		set := map[string]bool{
 			"max_runs_per_hour": given.MaxRunsPerHour != 0, "max_artifact_bytes": given.MaxArtifactBytes != 0,
-			"max_run_duration": given.MaxRunDuration != "", "allowed_runner_pools": given.AllowedRunnerPools != nil,
+			"max_retention_days": given.MaxRetentionDays != 0,
+			"max_run_duration":   given.MaxRunDuration != "", "allowed_runner_pools": given.AllowedRunnerPools != nil,
 		}[name]
 		if set {
 			return fmt.Errorf("%s is both given and lifted: a quota is set or lifted, not both", name)
@@ -366,6 +367,8 @@ func merged(now, given api.Quotas, lifts lifted) api.Quotas {
 			out.MaxRunsPerHour = 0
 		case "max_artifact_bytes":
 			out.MaxArtifactBytes = 0
+		case "max_retention_days":
+			out.MaxRetentionDays = 0
 		case "max_run_duration":
 			out.MaxRunDuration = ""
 		case "allowed_runner_pools":

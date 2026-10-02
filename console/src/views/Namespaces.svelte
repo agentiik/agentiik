@@ -3,6 +3,7 @@
   import Problem from "../components/Problem.svelte";
   import { refusal, type API, type Namespace } from "../api/client";
   import AdminTabs from "../components/AdminTabs.svelte";
+  import NamespacePolicy from "../components/NamespacePolicy.svelte";
   import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
@@ -187,7 +188,7 @@
       {#each ["max_concurrent_tasks", "max_retention_days", "max_runs_per_hour"] as const as k (k)}
         <label>
           <span>{label[k]} <span class="term faint">{k}</span></span>
-          <input class="term" inputmode="numeric" bind:value={form[k]} placeholder={k === "max_runs_per_hour" ? "no bound" : ""} aria-invalid={wrong?.field === k} />
+          <input class="term" inputmode="numeric" bind:value={form[k]} placeholder={k === "max_concurrent_tasks" ? "" : "no bound"} aria-invalid={wrong?.field === k} />
         </label>
       {/each}
       <label>
@@ -221,6 +222,7 @@
         <button class="control" type="button" onclick={() => choose(undefined)}>Close</button>
       </p>
     </form>
+    <NamespacePolicy {api} namespace={record.name} admin framed={false} />
   {/if}
 </Dialog>
 
