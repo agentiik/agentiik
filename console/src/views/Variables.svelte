@@ -1,7 +1,7 @@
 <script lang="ts">
   import Filter from "../components/Filter.svelte";
   import { filtered } from "../lib/palette";
-  import { explain, refused as refusedHere, type Explained } from "../lib/problem";
+  import { explain, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
   import type { Place } from "../lib/place.svelte";
   import { follow } from "../lib/place.svelte";
@@ -13,9 +13,9 @@
   import Pane from "../components/Pane.svelte";
   import Notice from "../components/Notice.svelte";
   import { holds } from "../lib/permissions";
-  import { shown, parsed } from "../lib/variables";
+  import { shown, written } from "../lib/variables";
 
-  // A namespace's variables: each by its name, with its value as JSON, the workflows that read it and
+  // A namespace's variables: each by its name, with its value, the workflows that read it and
   // who wrote it last. They are read by whoever reads the namespace's workflows, since a variable
   // serves every workflow it is shown to, and written by whoever may push to them, since a variable
   // changes what they do as a push does: workflow:read and workflow:write at the namespace's scope.
@@ -94,7 +94,7 @@
   }
 
   function edit(v: Variable) {
-    value = JSON.stringify(v.value, null, 2);
+    value = shown(v.value);
     visibility = v.visibility;
     chosen = [...(v.workflows ?? [])];
     typed = "";
@@ -114,17 +114,12 @@
   }
 
   // save sends the variable whole, its visibility and for selected its workflows each time, so that
-  // changing the value alone never widens it to every workflow. The value is held to JSON here,
-  // before anything is sent, which is how 30 is a number and "30" a string.
+  // changing the value alone never widens it to every workflow. The value is the text typed.
   function save(e: SubmitEvent) {
     e.preventDefault();
     const n = (editing || name).trim();
-    const json = parsed(value);
-    if (!json.ok) {
-      problem = refusedHere(`save ${n}`, json.why);
-      return;
-    }
-    const body = visibility === "selected" ? { value: json.value, visibility, workflows: chosen } : { value: json.value, visibility };
+    const v = written(value, variables?.find((x) => x.name === editing));
+    const body = visibility === "selected" ? { value: v, visibility, workflows: chosen } : { value: v, visibility };
     const done = editing ? `${n} updated.` : `${n} saved.`;
     return act(`save ${n}`, async () => {
       const { data, error, response } = await api.PUT("/api/v1/{ns}/variables/{name}", { params: { path: { ns: namespace, name: n } }, body });
@@ -181,10 +176,10 @@
         <thead><tr><th>Name</th><th>Value</th><th>Read by</th><th>Updated</th><th class="end"></th></tr></thead>
         <tbody>
           {#each variablesShown as v (v.name)}
-            {@const json = shown(v.value)}
+            {@const text = shown(v.value)}
             <tr>
               <td class="term">{v.name}</td>
-              <td class="value"><code class="code" title={json}>{json}</code></td>
+              <td class="value"><span title={text}>{text}</span></td>
               <td class="readers">
                 {#if v.visibility === "all"}
                   <span>All workflows</span>
@@ -232,8 +227,8 @@
         </label>
       {/if}
       <label>
-        <span>Value, as JSON</span>
-        <textarea class="code" bind:value rows="5" spellcheck="false" autocomplete="off" placeholder={'"https://ledger.example.com/api"'} required></textarea>
+        <span>Value</span>
+        <textarea bind:value rows="3" spellcheck="false" autocomplete="off" placeholder="https://ledger.example.com/api"></textarea>
       </label>
       <fieldset>
         <legend>Read by</legend>
@@ -291,15 +286,15 @@
     vertical-align: -2px;
   }
 
-  /* A value is any JSON value, a long one cut at the column's edge and whole under the pointer, so
-     that one variable holding a list does not widen the table for every other. */
+  /* A value is cut at the column's edge and whole under the pointer, so that one long value does not
+     widen the table for every other. */
   .value {
     width: 40%;
     min-width: 160px;
     max-width: 0;
   }
 
-  .value code {
+  .value span {
     display: block;
     overflow: hidden;
     text-overflow: ellipsis;
