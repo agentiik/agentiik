@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/internal/stopsignal"
@@ -74,6 +75,13 @@ type env struct {
 	// capabilities the agent holds and what its work root is mounted as. Nil is the
 	// kernel's own answers, which is what main gives.
 	Host driver.Host
+
+	// OS is the system the agent was built for, runtime.GOOS, which main gives. join and serve
+	// refuse any but linux, since "a runner is a Linux host": a task's containment, its user
+	// namespace, its cgroup and the host's memory read at /proc/meminfo are Linux's. The empty
+	// string, which a test leaves, checks nothing, so that join's tests run on the machine they
+	// are written on.
+	OS string
 }
 
 // command is one verb. The table is data so that the usage text and the dispatch cannot disagree.
@@ -119,6 +127,7 @@ func main() {
 		CredentialFile: runner.CredentialPath,
 		HelperFile:     runner.HelperPath,
 		Account:        lookupAccount,
+		OS:             runtime.GOOS,
 	}, os.Args[1:])
 	stop()
 	os.Exit(code)
@@ -137,6 +146,10 @@ func run(ctx context.Context, e env, args []string) int {
 	}
 	for _, c := range commands {
 		if c.name == args[0] {
+			if (c.name == "join" || c.name == "serve") && e.OS != "" && e.OS != "linux" {
+				fmt.Fprintf(e.Err, "agk-runner %s: a runner is a Linux host, and this one is %s: run agk-runner on a Linux machine or a Linux virtual machine (https://agentiik.github.io/docs#install-a-server)\n", c.name, e.OS)
+				return exitRefused
+			}
 			return c.run(ctx, e, args[1:])
 		}
 	}

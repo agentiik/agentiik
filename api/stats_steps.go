@@ -49,8 +49,16 @@ func (s *Server) stepStatistics(w http.ResponseWriter, r *http.Request, who Prin
 		return
 	}
 	order := stepOrder(latest)
-	out := statsSteps{From: stamp(rng.From), To: stamp(rng.To), Bucket: rng.Bucket, By: by, Workflow: workflow}
+	out := statsSteps{By: by, Workflow: workflow}
 	err = s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
+		if rng.Max {
+			first, err := wide.FirstRun(ctx, []db.Workflow{of}, rng.To)
+			if err != nil {
+				return err
+			}
+			rng = rng.reach(first)
+		}
+		out.From, out.To, out.Bucket = stamp(rng.From), stamp(rng.To), rng.Bucket
 		if by == "hour" {
 			hours, err := wide.StepHours(ctx, of, rng.From, rng.To)
 			if err != nil {

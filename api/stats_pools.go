@@ -26,6 +26,13 @@ func (s *RunnerAPI) poolStatistics(w http.ResponseWriter, r *http.Request, _ Pri
 	}
 	var pools []db.PoolSeries
 	err = s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
+		if rng.Max {
+			first, err := wide.FirstCapacity(ctx, rng.To)
+			if err != nil {
+				return err
+			}
+			rng = rng.reach(first)
+		}
 		var err error
 		pools, err = wide.PoolStatistics(ctx, rng.Buckets)
 		return err

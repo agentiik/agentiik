@@ -21,7 +21,7 @@ func TestATOTPStepIsRecordedOnceAndNeverGoesBack(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "bob", DisplayName: "Bob"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "bob", Profile: Profile{GivenName: "Bob"}}); err != nil {
 			return err
 		}
 		for _, c := range []Credential{
@@ -76,7 +76,7 @@ func TestASessionSaysWhatOpenedIt(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
 		if err := w.AddCredential(ctx, Credential{ID: "alice-password", Login: "alice", Type: CredentialPassword, PasswordHash: "$argon2id$..."}); err != nil {
@@ -114,7 +114,7 @@ func TestATOTPExistsOnlyBesideAPassword(t *testing.T) {
 	pool := identity(t)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, login := range []string{"alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: login}); err != nil {
 				return err
 			}
 		}
@@ -173,7 +173,7 @@ func TestAPasswordIsSetInPlaceOfTheOneHeld(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	later := now.Add(time.Hour)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "bob", DisplayName: "Bob"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "bob", Profile: Profile{GivenName: "Bob"}}); err != nil {
 			return err
 		}
 		set, replaced, err := w.SetPassword(ctx, "bob", "bob-password", "$argon2id$first", now)
@@ -238,7 +238,7 @@ func TestATOTPGeneratorWaitsForItsFirstCode(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "bob", DisplayName: "Bob"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "bob", Profile: Profile{GivenName: "Bob"}}); err != nil {
 			return err
 		}
 		started := TOTPEnrolment{Login: "bob", ID: "first", Sealed: []byte("sealed"), StartedAt: now, ExpiresAt: now.Add(TOTPEnrolmentLife)}

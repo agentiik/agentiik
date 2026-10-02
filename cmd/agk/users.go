@@ -33,29 +33,27 @@ import (
 // the administrator it just created is the one that ends it.
 const apiTokenPrefix = "agktoken_"
 
-// userCreate is agk user create LOGIN [--admin] [--display-name NAME].
+// userCreate is agk user create LOGIN [--admin] [--given-name NAME] [--family-name NAME] [--email
+// ADDRESS].
 func userCreate(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk user create", "agk user create <login> [--admin] [--display-name <name>] [--server <url>]")
+	fs := flags(e, "agk user create", "agk user create <login> [--admin] [--given-name <name>] [--family-name <name>] [--email <address>] [--server <url>]")
 	admin := fs.Bool("admin", false, "Makes the user an administrator. The first administrator is created this way with the bootstrap token.")
-	display := fs.String("display-name", "", "The name people read in the console and in the sharing panel. A user created without one reads as their login, and one asked for again keeps theirs.")
+	given := fs.String("given-name", "", "The name the user is called by. With the family name it makes the name people read in the console and in the sharing panel, and a user created with neither reads as their login. The user writes theirs once signed in.")
+	family := fs.String("family-name", "", "The user's family name, the second half of the name people read.")
+	email := fs.String("email", "", "An address for the people the user works with to reach them at. The installation sends nothing to it.")
 	server := fs.String("server", "", "The installation. "+serverDefault)
 	at, named, code, ok := administering(e, fs, args, server, 1, "agk user create names one login, the name the user signs in as")
 	if !ok {
 		return code
 	}
 	login := named[0]
-	// Only what was given is sent: the installation names a user created with no display name
-	// after their login, and one asked for again keeps what the command line leaves out, so that
-	// agk user create LOGIN run again prints a fresh link whatever the first run was given.
-	given := false
-	fs.Visit(func(f *flag.Flag) { given = given || f.Name == "display-name" })
-	if given && *display == "" {
-		fmt.Fprintln(e.Err, "--display-name is the name people read in the console, and it is empty: leave it out for the login")
-		return exitUsage
-	}
-
+	// Only what was given is sent, an empty value being none: the installation shows a user
+	// created with neither name by their login, and one asked for again keeps what the command
+	// line leaves out, so that agk user create LOGIN run again prints a fresh link whatever the
+	// first run was given.
+	asked := api.NewUser{Login: login, GivenName: *given, FamilyName: *family, Email: *email, Admin: *admin}
 	var made api.CreatedUser
-	status, err := at.send(ctx, http.MethodPost, "/api/v1/users", api.NewUser{Login: login, DisplayName: *display, Admin: *admin}, &made, http.StatusCreated, http.StatusOK)
+	status, err := at.send(ctx, http.MethodPost, "/api/v1/users", asked, &made, http.StatusCreated, http.StatusOK)
 	if err != nil {
 		return administrationRefused(e, err, "", login)
 	}
@@ -179,7 +177,12 @@ func userShow(ctx context.Context, e Env, args []string) int {
 	if u.Suspended {
 		kind += ", suspended"
 	}
-	fmt.Fprintf(e.Out, "%s (%s): %s\n", u.Login, u.DisplayName, kind)
+	// The name and the address as a mail client writes them, Name <address>, where there is one.
+	name := u.DisplayName
+	if u.Email != "" {
+		name += " <" + u.Email + ">"
+	}
+	fmt.Fprintf(e.Out, "%s (%s): %s\n", u.Login, name, kind)
 	signedIn := "never signed in"
 	if !u.LastSignInAt.IsZero() {
 		signedIn = "last signed in at " + u.LastSignInAt.UTC().Format(time.RFC3339)

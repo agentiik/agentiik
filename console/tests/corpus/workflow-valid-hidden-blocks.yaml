@@ -1,0 +1,58 @@
+# valid: reuse without a macro system. A hidden block is a name starting with a
+# dot, is never executed, and is named by a step's extends. It is accepted at
+# the root of the file and among the steps alike.
+# covers: include of a path, hidden blocks at both levels, extends, matrix.
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: regional-vat
+  namespace: finance
+
+include:
+  - path: ./common-bricks.yaml
+
+.api-brick:
+  timeout: 2m
+  retry: { max: 3, on: [transient] }
+  network: egress
+  resources: { cpu: "0.5", memory: 256Mi }
+
+.region-matrix:
+  strategy:
+    matrix:
+      region: [fr, be, ch]
+      profile: [standard, reduced]
+    max_parallel: 3
+
+steps:
+
+  .shared-egress:
+    network: egress
+    egress:
+      allow: ["vat.example.com:443"]
+
+  check-vat:
+    extends: .api-brick
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    egress:
+      allow: ["vat.example.com:443"]
+    script:
+      - agk items | jq -r '.data.vat_number' > /tmp/numbers
+    outputs: [out, error]
+
+  rate-table:
+    extends: .region-matrix
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    params:
+      region: ${{ matrix.region }}
+      profile: ${{ matrix.profile }}
+    outputs: [out]
+
+  publish:
+    extends: .shared-egress
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    needs: [rate-table]
+    outputs: [out]

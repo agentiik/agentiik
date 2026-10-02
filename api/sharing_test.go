@@ -52,7 +52,7 @@ func someSharing(t *testing.T) sharing {
 	}
 	err = in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, login := range []string{"frank", "gina", "hank", "ivan"} {
-			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: strings.ToUpper(login[:1]) + login[1:]}); err != nil {
+			if err := w.CreateUser(ctx, db.User{Login: login, Profile: db.Profile{GivenName: strings.ToUpper(login[:1]) + login[1:]}}); err != nil {
 				return err
 			}
 		}

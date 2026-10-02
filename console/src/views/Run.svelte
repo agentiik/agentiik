@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { explain, refused as refusedHere, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
+  import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import type { API, Me } from "../api/client";
   import CompareWith from "../components/CompareWith.svelte";
@@ -14,8 +17,10 @@
   import { band } from "../lib/exit";
   import { between, clock, took } from "../lib/format";
   import { moved, useKeys, type Binding } from "../lib/keys.svelte";
+  import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
+  import { runAt, runsOf } from "../lib/route";
   import { lastAttempt, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
   import { sentence } from "../lib/signin";
 
@@ -38,17 +43,15 @@
     untrack(() => r.read());
   });
 
-  // Read again every five seconds until the run has ended, and move the durations every second.
+  // Read again each time the live connection says the run changed, and move the durations every
+  // second.
+  const changes = useLive();
   $effect(() => {
     const r = reader;
-    const reading = setInterval(() => {
-      if (!r.ended && document.visibilityState === "visible") {
-        r.read();
-      }
-    }, 5000);
+    const reading = changes.when((c) => c.kind === "run" && c.run === id, () => r.read());
     const ticking = setInterval(() => (now = Date.now()), 1000);
     return () => {
-      clearInterval(reading);
+      reading();
       clearInterval(ticking);
     };
   });
@@ -102,14 +105,14 @@
 
   // Fetching a file asks the route first, which spends nothing, so that one gone since the run was
   // read is said to be finished rather than opening the API's refusal in place of the console.
-  let unfetched = $state("");
+  let unfetched = $state<Explained | null>(null);
 
   async function fetchFile(uri: string, name: string) {
-    unfetched = "";
+    unfetched = null;
     const url = new URL(address(uri), document.baseURI).href;
     const why = await fetchable(globalThis.fetch.bind(globalThis), url);
     if (why) {
-      unfetched = why;
+      unfetched = refusedHere(`download ${name}`, why);
       return;
     }
     const link = document.createElement("a");
@@ -123,17 +126,17 @@
   let confirming = $state(false);
   let acting = $state(false);
   let said = $state("");
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
 
-  async function act(work: () => Promise<void>) {
+  async function act(failed: string, work: () => Promise<void>) {
     if (acting) return;
     acting = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       await work();
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       acting = false;
       confirming = false;
@@ -141,19 +144,19 @@
   }
 
   function cancel() {
-    return act(async () => {
+    return act("cancel the run", async () => {
       if (!run) return;
       await cancelRun(api, run.run);
-      said = "Cancelling was asked: the controller stops the tasks in flight, and the run ends cancelled.";
+      said = "Cancelling.";
       await reader.read();
     });
   }
 
   function replay(from?: string) {
-    return act(async () => {
+    return act("replay the run", async () => {
       if (!run) return;
       const started = await replayRun(api, run.run, from);
-      place.go({ kind: "namespace", namespace: run.namespace, view: "runs", run: started });
+      place.go(runAt(run.namespace, run.workflow, started));
     });
   }
 
@@ -189,7 +192,14 @@
     return ms === undefined ? "" : took(ms);
   }
 
-  const runs = $derived({ kind: "namespace" as const, namespace, view: "runs" as const });
+  // A run reached by the address it had before runs were put under their workflow is written under
+  // its workflow once it is read, in place, so that the address names where the run is.
+  $effect(() => {
+    const route = place.route;
+    if (run && here && route.kind === "namespace" && route.run === id && route.workflow === undefined) {
+      place.go(runAt(namespace, run.workflow, id), true, place.query);
+    }
+  });
 
   // Replaying from a key asks first, as agk console's p does, since a key is pressed by mistake
   // more easily than a button naming the step is clicked.
@@ -211,7 +221,7 @@
     if (replaying && chosenStep) {
       const from = chosenStep;
       return [
-        { keys: ["y"], effect: `Replay from ${from}`, does: () => ((replaying = false), void replay(from)) },
+        { keys: ["y"], effect: "Replay from this step", does: () => ((replaying = false), void replay(from)) },
         { keys: ["n", "Escape"], effect: "Keep it", does: () => (replaying = false) },
       ];
     }
@@ -221,72 +231,78 @@
       out.push({ keys: ["[", "]"], effect: "Port", does: (key) => choose({ pane: tab, port: moved(openable, port, key === "]" ? "ArrowDown" : "ArrowUp")! }) });
     }
     if (mayRun && !reader.ended) out.push({ keys: ["c"], effect: "Cancel run", does: () => (confirming = true) });
-    if (mayRun && reader.ended && chosenStep && !run.replay_from_start_only) out.push({ keys: ["p"], effect: `Replay from ${chosenStep}`, does: () => (replaying = true) });
-    out.push({ keys: ["Escape"], effect: `All runs of ${namespace}`, does: () => place.go(runs) });
+    if (mayRun && reader.ended && chosenStep && !run.replay_from_start_only) out.push({ keys: ["p"], effect: "Replay from this step", does: () => (replaying = true) });
+    out.push({ keys: ["Escape"], effect: "Runs of the workflow", does: () => place.go(runsOf(namespace, run.workflow)) });
     return out;
   });
 </script>
 
+<PageHeader title={id} icon="control-runs" code {place}>
+  {#snippet subtitle()}
+    {#if run && here}
+      <span class="subtitle"><StatePill state={run.state} live={!reader.ended} />
+        {#if holds(me, "workflow:read", run.namespace, run.workflow)}
+          {@const page = { kind: "namespace" as const, namespace: run.namespace, view: "workflows" as const, workflow: run.workflow }}
+          <a class="name" href={place.href(page)} onclick={follow(place, page)}>{run.workflow}</a>
+        {:else}
+          <span class="name">{run.workflow}</span>
+        {/if}
+        <span class="code faint">{run.commit.slice(0, 7)}</span></span>
+    {/if}
+  {/snippet}
+</PageHeader>
+
 {#if reader.missing || (run && !here)}
   <Refused />
 {:else if reader.refused}
-  <Pane title="Run"><p class="refused" role="alert">The run could not be read: {reader.refused}</p></Pane>
+  <Pane title="Run"><Problem explained={reader.refused} onretry={() => reader.read()} /></Pane>
 {:else if run}
   <div class="inspector">
-    <Pane title="Run" aside="{run.namespace}/{run.workflow}@{run.commit.slice(0, 7)}">
+    <Pane title="Run">
       <div class="head">
-        <StatePill state={run.state} live={!reader.ended} />
-        <span class="mono id">{run.run}</span>
-        {#if holds(me, "workflow:read", run.namespace, run.workflow)}
-          {@const page = { kind: "namespace" as const, namespace: run.namespace, view: "workflows" as const, workflow: run.workflow }}
-          <a class="mono name" href={place.href(page)} onclick={follow(place, page)}>{run.workflow}</a>
-        {:else}
-          <span class="mono name">{run.workflow}</span>
-        {/if}
         <span class="muted">
-          <span class="mono">{run.trigger_kind}</span>
-          · created <time class="mono" datetime={run.created_at} title={run.created_at}>{clock(run.created_at, now)}</time>
-          {#if run.started_at}· took <span class="mono">{lasted(run.started_at, run.finished_at)}</span>{/if}
-          · by <span class="mono">{run.triggered_by}</span>
+          <span class="term">{run.trigger_kind}</span>
+          · created <time class="term" datetime={run.created_at} title={run.created_at}>{clock(run.created_at, now)}</time>
+          {#if run.started_at}· took <span class="term">{lasted(run.started_at, run.finished_at)}</span>{/if}
+          · by <span class="term">{run.triggered_by}</span>
         </span>
-        <a class="back" href={place.href(runs)} onclick={follow(place, runs)}>All runs of {namespace}</a>
       </div>
       {#if mayRun || reader.ended}
         <div class="actions">
           {#if mayRun && !reader.ended}
             {#if confirming}
-              <span>Cancel this run? Its tasks in flight are stopped.</span>
+              <span>Cancel this run?</span>
               <button class="control danger" disabled={acting} onclick={cancel}><Icon name="control-cancel" size={14} />Cancel run</button>
               <button class="control" disabled={acting} onclick={() => (confirming = false)}>Keep it running</button>
             {:else}
               <button class="control" disabled={acting} onclick={() => (confirming = true)}><Icon name="control-cancel" size={14} />Cancel run</button>
             {/if}
           {:else if mayRun && replaying && chosenStep && !run.replay_from_start_only}
-            <span>Replay this run from {chosenStep}? A new run starts there.</span>
-            <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
+            <span>Replay this run from {chosenStep}?</span>
+            <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from this step</button>
             <button class="control" disabled={acting} onclick={() => (replaying = false)}>Keep it</button>
           {:else if mayRun}
             {#if chosenStep && !run.replay_from_start_only}
-              <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from {chosenStep}</button>
+              <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from this step</button>
             {/if}
             <button class="control" disabled={acting} onclick={() => replay()}><Icon name="control-replay" size={14} />Replay from the start</button>
             {#if run.replay_from_start_only}
-              <span class="muted">An input a step would restart from has been purged, so this run replays from its start only.</span>
+              <span class="muted">from the start only</span>
             {/if}
           {/if}
           <!-- Reading a run against another needs nothing but run:read, which reading this one took. -->
           {#if reader.ended}<CompareWith {api} {place} {run} />{/if}
         </div>
         {#if said}<p class="muted" role="status">{said}</p>{/if}
-        {#if problem}<p class="refused" role="alert">{problem}</p>{/if}
+        {#if problem}<Problem explained={problem} />{/if}
       {/if}
       {#if run.reason}<p class="reason">{run.reason}</p>{/if}
       {#if run.replay_of}
-        <p class="muted">Replays <span class="mono">{run.replay_of}</span>{#if run.replay_from}&nbsp;from <span class="mono">{run.replay_from}</span>{/if}.</p>
+        <p class="muted">Replays <span class="code">{run.replay_of}</span>{#if run.replay_from}&nbsp;from <span class="term">{run.replay_from}</span>{/if}.</p>
       {/if}
       <ol class="path" aria-label="Steps in order">
         {#each run.steps as s (s.step)}
-          <li class={s.verdict}><span class="dot" aria-hidden="true"></span><span class="mono">{s.step}</span></li>
+          <li class={s.verdict}><span class="dot" aria-hidden="true"></span><span class="term">{s.step}</span></li>
         {/each}
       </ol>
     </Pane>
@@ -299,8 +315,8 @@
             <li>
               <button class="step" class:chosen={s.step === chosenStep} aria-pressed={s.step === chosenStep} onclick={() => choose({ step: s.step })}>
                 <StatePill state={s.verdict} live={!reader.ended} />
-                <span class="mono name">{s.step}</span>
-                <span class="mono muted took">{lasted(s.started_at, s.finished_at)}</span>
+                <span class="term name">{s.step}</span>
+                <span class="term muted took">{lasted(s.started_at, s.finished_at)}</span>
                 <span class="sub muted">
                   {#if s.verdict === "pending" && s.attempts === 0}
                     not reached
@@ -319,26 +335,28 @@
         </ul>
         {#if run.outputs && Object.keys(run.outputs).length > 0}
           <h3>Workflow outputs</h3>
-          <table class="outputs">
-            <thead><tr><th>Output</th><th>From</th><th class="number">Items</th><th>Files</th></tr></thead>
-            <tbody>
-              {#each Object.entries(run.outputs) as [name, out] (name)}
-                {@const held = run.artifacts.filter((a) => a.step === out.step && a.port === out.port)}
-                <tr class:chosen={name === output}>
-                  <td class="mono">
-                    {#if readsData}
-                      <button class="link" aria-pressed={name === output} onclick={() => choose({ output: name })}>{name}</button>
-                    {:else}
-                      {name}
-                    {/if}
-                  </td>
-                  <td class="mono muted">{out.step}.{out.port}</td>
-                  <td class="number mono">{out.count}</td>
-                  <td class="muted">{#if held.length === 0}none{:else}{held.length} · {retention(held[0]!, now)}{/if}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+          <div class="scroll">
+            <table class="outputs">
+              <thead><tr><th>Output</th><th>From</th><th class="number">Items</th><th>Files</th></tr></thead>
+              <tbody>
+                {#each Object.entries(run.outputs) as [name, out] (name)}
+                  {@const held = run.artifacts.filter((a) => a.step === out.step && a.port === out.port)}
+                  <tr class:chosen={name === output}>
+                    <td class="term">
+                      {#if readsData}
+                        <button class="link" aria-pressed={name === output} onclick={() => choose({ output: name })}>{name}</button>
+                      {:else}
+                        {name}
+                      {/if}
+                    </td>
+                    <td class="term muted">{out.step}.{out.port}</td>
+                    <td class="number term">{out.count}</td>
+                    <td class="muted">{#if held.length === 0}none{:else}{held.length} · {retention(held[0]!, now)}{/if}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
       </Pane>
 
@@ -347,7 +365,7 @@
           {#if task?.exit_code !== undefined}
             {@const meaning = band(task.exit_code)}
             <p class="exit {meaning.tone}">
-              <strong class="mono">exit {task.exit_code}</strong>
+              <strong class="code">exit {task.exit_code}</strong>
               <span>{meaning.name}: {meaning.handling}</span>
             </p>
           {/if}
@@ -355,13 +373,13 @@
           <dl class="header">
             {#if step.image}
               <dt>Image</dt>
-              <dd class="mono" title={step.image}>{shortImage(step.image)}</dd>
+              <dd class="code" title={step.image}>{shortImage(step.image)}</dd>
             {/if}
             {#if task}
               <dt>Task</dt>
-              <dd class="mono">attempt {task.attempt}{#if task.shard}&nbsp;· shard {task.shard.index} of {task.shard.of}{/if}</dd>
+              <dd class="term">attempt {task.attempt}{#if task.shard}&nbsp;· shard {task.shard.index} of {task.shard.of}{/if}</dd>
               <dt>Runner</dt>
-              <dd class="mono">{task.runner ?? (task.memoised_from ? `none, a cache hit of ${task.memoised_from}` : task.called ? `none, it called ${task.called}` : "not held yet")}</dd>
+              <dd class="term">{task.runner ?? (task.memoised_from ? `none, a cache hit of ${task.memoised_from}` : task.called ? `none, it called ${task.called}` : "not held yet")}</dd>
             {/if}
           </dl>
           {#if readsData && task?.params && Object.keys(task.params).length > 0}
@@ -370,31 +388,33 @@
               <pre class="json"><code>{#each tokens(task.params) as t, i (i)}<span class="t-{t.kind}">{t.text}</span>{/each}</code></pre>
             </details>
           {:else if task && !readsData && task.state !== "pending"}
-            <p class="faint">The parameters it was dispatched with are not shown: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+            <p class="faint">Parameters hidden (needs <span class="term">run:read_data</span>)</p>
           {/if}
 
-          <table class="tasks">
-            <thead>
-              <tr><th>Task</th><th>State</th><th>Runner</th><th class="number">Exit</th><th class="number">Took</th></tr>
-            </thead>
-            <tbody>
-              {#each tasks as t (t.task)}
-                <tr class:chosen={t.task === task?.task} onclick={() => choose({ step: step.step, task: t.task })}>
-                  <td class="mono">
-                    <button class="link" onclick={(e) => { e.stopPropagation(); choose({ step: step.step, task: t.task }); }}>
-                      {t.shard ? `${t.shard.index}/${t.shard.of} · ` : ""}attempt {t.attempt}
-                    </button>
-                  </td>
-                  <td><StatePill state={t.state} live={!reader.ended} /></td>
-                  <td class="mono muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : "")}</td>
-                  <td class="number mono">{t.exit_code ?? ""}</td>
-                  <td class="number mono">{lasted(t.started_at, t.finished_at)}</td>
-                </tr>
-              {:else}
-                <tr><td colspan="5" class="muted empty">No task of this step has been created.</td></tr>
-              {/each}
-            </tbody>
-          </table>
+          <div class="scroll">
+            <table class="tasks">
+              <thead>
+                <tr><th>Task</th><th>State</th><th>Runner</th><th class="number">Exit</th><th class="number">Took</th></tr>
+              </thead>
+              <tbody>
+                {#each tasks as t (t.task)}
+                  <tr class:chosen={t.task === task?.task} onclick={() => choose({ step: step.step, task: t.task })}>
+                    <td class="term">
+                      <button class="link" onclick={(e) => { e.stopPropagation(); choose({ step: step.step, task: t.task }); }}>
+                        {t.shard ? `${t.shard.index}/${t.shard.of} · ` : ""}attempt {t.attempt}
+                      </button>
+                    </td>
+                    <td><StatePill state={t.state} live={!reader.ended} /></td>
+                    <td class="term muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : "")}</td>
+                    <td class="number code">{t.exit_code ?? ""}</td>
+                    <td class="number term">{lasted(t.started_at, t.finished_at)}</td>
+                  </tr>
+                {:else}
+                  <tr><td colspan="5" class="muted empty">No tasks</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
 
           <div class="ports">
             <div class="sides" role="tablist" aria-label="What the step pane shows">
@@ -405,72 +425,76 @@
             </div>
             {#if tab === "files"}
               {#if files.length === 0}
-                <p class="muted">The step has published no file.</p>
+                <p class="muted">No files</p>
               {:else}
-                <table class="files">
-                  <thead><tr><th>File</th><th>Port</th><th>Media type</th><th class="number">Size</th><th>SHA-256</th><th>Retention</th><th></th></tr></thead>
-                  <tbody>
-                    {#each files as f (f.uri)}
-                      <tr class={f.status}>
-                        <td class="mono">{f.name}</td>
-                        <td class="mono muted port {f.port}">{f.port}</td>
-                        <td class="mono muted">{f.media_type}</td>
-                        <td class="number mono">{bytes(f.size)}</td>
-                        <td class="mono muted" title={f.sha256}>{f.sha256.slice(0, 12)}</td>
-                        <td class="muted">{retention(f, now)}</td>
-                        <td class="end">
-                          {#if readsData && f.status === "live"}
-                            <button class="control" onclick={() => fetchFile(f.uri, f.name)}><Icon name="control-download" size={14} />Download</button>
-                          {/if}
-                        </td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-                {#if unfetched}<p class="refused" role="alert">{unfetched}</p>{/if}
+                <div class="scroll">
+                  <table class="files">
+                    <thead><tr><th>File</th><th>Port</th><th>Media type</th><th class="number">Size</th><th>SHA-256</th><th>Retention</th><th></th></tr></thead>
+                    <tbody>
+                      {#each files as f (f.uri)}
+                        <tr class={f.status}>
+                          <td class="term">{f.name}</td>
+                          <td class="term muted port {f.port}">{f.port}</td>
+                          <td class="term muted">{f.media_type}</td>
+                          <td class="number term">{bytes(f.size)}</td>
+                          <td class="code muted" title={f.sha256}>{f.sha256.slice(0, 12)}</td>
+                          <td class="muted">{retention(f, now)}</td>
+                          <td class="end">
+                            {#if readsData && f.status === "live"}
+                              <button class="control" onclick={() => fetchFile(f.uri, f.name)}><Icon name="control-download" size={14} />Download</button>
+                            {/if}
+                          </td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+                {#if unfetched}<Problem explained={unfetched} />{/if}
                 {#if !readsData}
-                  <p class="faint">The files are listed and not fetched: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+                  <p class="faint">Download hidden (needs <span class="term">run:read_data</span>)</p>
                 {/if}
               {/if}
             {:else if tab === "logs"}
               {#if task}
                 <LogPane {api} run={run.run} step={step.step} task={task.task} />
               {:else}
-                <p class="muted">No task of this step has been created, so there is no log yet.</p>
+                <p class="muted">Not started</p>
               {/if}
             {:else if portNames.length === 0}
               <p class="muted">{tab === "output" ? "The step declares no output port." : "The step declares no input port."}</p>
             {:else}
-              <table class="envelopes">
-                <thead><tr><th>Port</th><th class="number">Items</th><th class="number">Size</th><th>Digest</th></tr></thead>
-                <tbody>
-                  {#each portNames as name (name)}
-                    {@const e = ports[name]}
-                    <tr class:chosen={readsData && e && name === port}>
-                      <td class="mono name port {name}">
-                        {#if readsData && e}
-                          <button class="link" aria-pressed={name === port} onclick={() => choose({ pane: tab, port: name })}>{name}</button>
+              <div class="scroll">
+                <table class="envelopes">
+                  <thead><tr><th>Port</th><th class="number">Items</th><th class="number">Size</th><th>Digest</th></tr></thead>
+                  <tbody>
+                    {#each portNames as name (name)}
+                      {@const e = ports[name]}
+                      <tr class:chosen={readsData && e && name === port}>
+                        <td class="term name port {name}">
+                          {#if readsData && e}
+                            <button class="link" aria-pressed={name === port} onclick={() => choose({ pane: tab, port: name })}>{name}</button>
+                          {:else}
+                            {name}
+                          {/if}
+                        </td>
+                        {#if e}
+                          <td class="number term">{e.items}</td>
+                          <td class="number term">{bytes(e.size)}</td>
+                          <td class="code muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
                         {:else}
-                          {name}
+                          <td colspan="3" class="muted">{tab === "output" ? "published when the step ends" : task ? "not handed to the task chosen" : "handed once a task is dispatched"}</td>
                         {/if}
-                      </td>
-                      {#if e}
-                        <td class="number mono">{e.items}</td>
-                        <td class="number mono">{bytes(e.size)}</td>
-                        <td class="mono muted" title={e.digest}>{shortDigest(e.digest)}{#if e.purged_at}&nbsp;· purged{/if}</td>
-                      {:else}
-                        <td colspan="3" class="muted">{tab === "output" ? "published when the step ends" : task ? "not handed to the task chosen" : "handed once a task is dispatched"}</td>
-                      {/if}
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
               {#if readsData && port}
                 <EnvelopePane {api} run={run.run} step={step.step} {port} side={tab} task={tab === "input" ? task : undefined} />
               {/if}
             {/if}
             {#if !readsData && (tab === "output" || tab === "input")}
-              <p class="faint">What the envelopes hold is not shown: you do not hold run:read_data on {run.namespace}/{run.workflow}.</p>
+              <p class="faint">Data hidden (needs <span class="term">run:read_data</span>)</p>
             {/if}
           </div>
         </Pane>
@@ -558,8 +582,8 @@
   }
 
   .path .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: var(--radius-round);
     background: var(--faint);
   }
@@ -578,7 +602,7 @@
 
   .columns {
     display: grid;
-    grid-template-columns: 380px 1fr;
+    grid-template-columns: 380px minmax(0, 1fr);
     gap: calc(var(--unit) * 7);
     align-items: start;
   }
@@ -717,7 +741,7 @@
     background: var(--sunken);
     font-family: var(--type-identifier-font);
     font-size: 12px;
-    line-height: 1.55;
+    --leading: 1.55;
   }
 
   .t-key {
@@ -741,6 +765,12 @@
     padding: calc(var(--unit) * 4) calc(var(--unit) * 6);
     border-radius: var(--radius-innerPanel);
     font-size: var(--type-navigation-size);
+  }
+
+  /* The code is one word, kept whole however narrow the pane, its meaning wrapping beside it. */
+  .exit strong {
+    flex: none;
+    white-space: nowrap;
   }
 
   .exit.failed {
@@ -767,6 +797,11 @@
     color: var(--text);
   }
 
+  /* A table wider than its pane, on a phone, scrolls within it rather than being cut at its edge. */
+  .scroll {
+    overflow-x: auto;
+  }
+
   table {
     width: 100%;
     border-collapse: collapse;
@@ -775,7 +810,7 @@
   th {
     height: var(--row-header);
     padding: 0 calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     color: var(--faint);
     font-size: var(--type-columnHead-size);
     font-weight: var(--type-columnHead-weight);
@@ -787,7 +822,7 @@
   td {
     height: 36px;
     padding: 0 calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     font-size: var(--type-identifier-size-min);
     white-space: nowrap;
   }
@@ -802,7 +837,7 @@
   }
 
   .tasks tr.chosen td:first-child {
-    box-shadow: inset 3px 0 0 var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent), inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
   }
 
   .number {
@@ -860,5 +895,23 @@
 
   .refused {
     color: var(--failed);
+  }
+
+  .subtitle {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--unit) * 5);
+  }
+
+  .subtitle .name {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
+  @media (max-width: 1099px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

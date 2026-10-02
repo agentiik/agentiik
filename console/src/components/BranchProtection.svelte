@@ -1,10 +1,11 @@
 <script lang="ts">
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "./Problem.svelte";
   import { refusal, type API } from "../api/client";
   import type { components } from "../api/schema";
-  import { sentence } from "../lib/signin";
   import Pane from "./Pane.svelte";
 
-  // A workflow's default branch and its protection, on the workflow's sharing panel: both are
+  // A workflow's default branch and its protection, in the workflow's settings: both are
   // grant:manage's, the permission that governs sharing, since who may move the branch production
   // runs is decided by whoever may share the workflow. A protected default branch takes grant:manage
   // to push to, force-push or delete; another branch takes workflow:write, so that changes reach
@@ -15,7 +16,7 @@
   type Repository = components["schemas"]["workflowDetail"]["repository"];
 
   let repository = $state<Repository | null>(null);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
 
   async function read() {
     const { data, error, response } = await api.GET("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: namespace, name: workflow } } });
@@ -23,8 +24,8 @@
       repository = data.repository;
       branch = data.repository.default_branch;
       guarded = data.repository.protected;
-      unread = "";
-    } else unread = refusal(response, error).message;
+      unread = null;
+    } else unread = explain("load the workflow", refusal(response, error));
   }
 
   $effect(() => {
@@ -34,7 +35,7 @@
   let branch = $state("");
   let guarded = $state(false);
   let working = $state(false);
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let said = $state("");
 
   const changed = $derived(repository !== null && (branch.trim() !== repository.default_branch || guarded !== repository.protected));
@@ -48,7 +49,7 @@
     if (branch.trim() !== repository.default_branch) body.default_branch = branch.trim();
     if (guarded !== repository.protected) body.protected = guarded;
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     api
       .PATCH("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: namespace, name: workflow } }, body })
@@ -57,29 +58,35 @@
         repository = data;
         branch = data.default_branch;
         guarded = data.protected;
-        said = `${data.default_branch} is the default branch${data.protected ? ", protected: pushing to it takes grant:manage" : ", unprotected: workflow:write pushes to it"}.`;
+        said = "Saved.";
       })
-      .catch((e: unknown) => (problem = sentence(e instanceof Error ? e.message : String(e))))
+      .catch((e: unknown) => (problem = explain("save the default branch", e)))
       .finally(() => (working = false));
   }
 </script>
 
-<Pane title="Default branch" aside={`${namespace}/${workflow}`}>
+<Pane title="Default branch">
   {#if unread}
-    <p class="problem" role="alert">The workflow could not be read: {unread}</p>
+    <Problem explained={unread} onretry={read} />
   {:else if repository === null}
-    <p class="muted">Reading the workflow.</p>
+    <p class="muted">Loading</p>
   {:else}
+    <!-- Laid out as the settings' other sections are, a label beside each field. -->
     <form onsubmit={write} aria-label="Default branch of {namespace}/{workflow}">
-      <label>
-        <span>The branch a run naming no ref runs</span>
-        <input class="mono" bind:value={branch} required autocomplete="off" spellcheck="false" />
+      <label class="field">
+        <span class="label">Branch</span>
+        <input class="term" bind:value={branch} required autocomplete="off" spellcheck="false" />
       </label>
-      <label class="check"><input type="checkbox" bind:checked={guarded} />Protected: pushing to it takes <span class="mono">grant:manage</span>, as a forced push and a deletion always do</label>
-      {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+      <div class="field">
+        <span class="label">Protection</span>
+        <label class="check"><input type="checkbox" bind:checked={guarded} />Protected</label>
+      </div>
+      {#if problem}<Problem explained={problem} />{/if}
       {#if said}<p class="said" role="status">{said}</p>{/if}
-      <p class="note muted">Another branch is pushed to with <span class="mono">workflow:write</span>, so that a change reaches the default branch through whoever may share the workflow. The protection moves with the branch named, and the branch it leaves is unprotected.</p>
-      <p><button class="control primary" disabled={working || !changed}>Write it</button></p>
+      <div class="field">
+        <span></span>
+        <span><button class="control primary" disabled={working || !changed}>Save</button></span>
+      </div>
     </form>
   {/if}
 </Pane>
@@ -87,27 +94,30 @@
 <style>
   form {
     display: grid;
-    gap: calc(var(--unit) * 4);
+    gap: calc(var(--unit) * 6);
   }
 
-  label {
+  .field {
     display: grid;
-    gap: calc(var(--unit) * 2);
+    grid-template-columns: 120px minmax(0, 420px);
+    align-items: center;
+    gap: calc(var(--unit) * 3) calc(var(--unit) * 6);
     font-size: var(--type-control-size);
   }
 
-  label > span:first-child {
+  .label {
     color: var(--muted);
   }
 
-  label.check {
+  .check {
     display: flex;
     align-items: center;
     gap: calc(var(--unit) * 3);
   }
 
   input:not([type="checkbox"]) {
-    padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
+    height: var(--control-height);
+    padding: 0 calc(var(--unit) * 4);
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-control);
     background: var(--raised);
@@ -115,15 +125,13 @@
     font-size: var(--type-control-size);
   }
 
-  form p {
+  .said {
     margin: 0;
   }
 
-  .note {
-    font-size: var(--type-control-size);
-  }
-
-  .problem {
-    color: var(--failed);
+  @media (max-width: 759px) {
+    .field {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

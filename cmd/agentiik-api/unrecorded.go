@@ -36,7 +36,7 @@ func unrecordedArtifacts(ctx context.Context, pool *db.Pool, objects, verb strin
 	}
 	done, err := purge.Backfill(ctx, pool, artifact.Dir(objects), 0)
 	if done.Runs > 0 {
-		fmt.Fprintf(out, "recorded the artifact files of %s v0.2 finished as %s, each expiring its namespace's max_retention_days after its run finished, so that the purges expire and collect them\n", counted(done.Runs, "run", "runs"), counted(done.Artifacts, "artifact", "artifacts"))
+		fmt.Fprintf(out, "recorded the artifact files of %s v0.2 finished as %s, each expiring its namespace's max_retention_days after its run finished, or kept for ever where it sets none, so that the purges expire and collect what is bounded\n", counted(done.Runs, "run", "runs"), counted(done.Artifacts, "artifact", "artifacts"))
 	}
 	if done.Unread > 0 {
 		fmt.Fprintf(out, "read %s of the runs v0.2 finished as nothing, gone from the store or no envelope: what they name is recorded by nothing, and the collection takes it in its time\n", counted(done.Unread, "envelope", "envelopes"))

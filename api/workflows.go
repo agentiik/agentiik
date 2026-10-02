@@ -92,6 +92,21 @@ type Repository struct {
 	CloneURL string  `json:"clone_url"`
 }
 
+// Ref is one branch or tag, wire.schema.json's ref: its commit null while it is unborn, and who moved
+// it and when left out then, since nobody has.
+type Ref struct {
+	Name      string     `json:"name"`
+	Commit    *string    `json:"commit"`
+	Protected bool       `json:"protected"`
+	MovedBy   string     `json:"moved_by,omitempty"`
+	MovedAt   *time.Time `json:"moved_at,omitempty"`
+}
+
+// Refs is what GET /api/v1/{ns}/workflows/{name}/refs answers, openapi.json's refs.
+type Refs struct {
+	Refs []Ref `json:"refs"`
+}
+
 // Version is a commit accepted as a version, wire.schema.json's version.
 type Version struct {
 	Commit    string    `json:"commit"`
@@ -171,6 +186,8 @@ func (s *Server) registerWorkflows(rt *Router) error {
 		// read the workflow is. And who owns which namespace, for a move between two.
 		{"PATCH", "/api/v1/{namespace}/workflows/{workflow}",
 			Needs{Permission: WorkflowRead, Scope: Workflow, Also: GrantManage, Asks: []Permission{WorkflowWrite}, Owning: true}, s.updateWorkflow},
+		{"GET", "/api/v1/{namespace}/workflows/{workflow}/refs",
+			Needs{Permission: WorkflowRead, Scope: Workflow}, s.listRefs},
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
 			Needs{Permission: WorkflowRead, Scope: Workflow}, s.readTree},
 		{"DELETE", "/api/v1/{namespace}/workflows/{workflow}",
@@ -180,7 +197,33 @@ func (s *Server) registerWorkflows(rt *Router) error {
 			return err
 		}
 	}
-	return nil
+	// A namespace's workflows, to whoever reads the runs of one, asked about each workflow as the
+	// listing of runs asks: every role holds run:read, an operator among them, which finds here the
+	// workflows it may run without reading them, and nothing of their files is answered.
+	return rt.HandleAcross("GET", "/api/v1/{namespace}/workflows", Across{Permission: RunRead}, s.listWorkflows)
+}
+
+// listWorkflows answers GET /api/v1/{ns}/workflows: each workflow of the namespace whose runs the
+// caller reads, by name, with when it was created and its newest run, and nothing of its repository
+// or its file, which workflow:read guards. A namespace the caller reads nothing of lists nothing, as
+// one that does not exist, so a listing is no way of learning which workflows exist.
+func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request, _ Principal, within Target, _ Holds) {
+	readable, ok := s.readable(w, r, within.Namespace, "", "the workflows could not be read")
+	if !ok {
+		return
+	}
+	var listed []db.ListedWorkflow
+	err := s.pool.Installation(r.Context(), db.RunListing, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		listed, err = wide.ListWorkflows(ctx, readable)
+		return err
+	})
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the workflows could not be read")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	write(w, http.StatusOK, map[string]any{"workflows": listed})
 }
 
 // repositoryOut is a workflow's repository as the wire writes it, its labels those the version at
@@ -755,11 +798,44 @@ func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// listRefs answers GET /api/v1/{ns}/workflows/{name}/refs: every branch and tag of the repository,
+// in git's order, for the console's ref switcher, which reaches git's advertisement with no session.
+// Listed whole, as the advertisement lists them to whoever may clone, which is whoever may read.
+func (s *Server) listRefs(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
+	var repository db.Repository
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		repository, err = ns.Repository(ctx, over.Workflow)
+		return err
+	})
+	if errors.Is(err, db.ErrNoWorkflow) {
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	}
+	if err != nil {
+		s.report(fmt.Errorf("api: the refs of %s/%s: %w", over.Namespace, over.Workflow, err))
+		fail(w, http.StatusInternalServerError, "the refs could not be read")
+		return
+	}
+	out := Refs{Refs: make([]Ref, 0, len(repository.Refs))}
+	for _, ref := range repository.Refs {
+		one := Ref{Name: ref.Name, Protected: ref.Protected}
+		if ref.Commit != "" {
+			one.Commit, one.MovedBy = ptr(ref.Commit), ref.MovedBy
+			if !ref.MovedAt.IsZero() {
+				one.MovedAt = ptr(ref.MovedAt.UTC())
+			}
+		}
+		out.Refs = append(out.Refs, one)
+	}
+	write(w, http.StatusOK, out)
+}
+
 // readTree answers GET /api/v1/{ns}/workflows/{name}/tree/{ref}: the files of the version a ref
 // names, or with ?path= one file's bytes.
 func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
 	ref := r.PathValue("ref")
-	var commit string
+	var commit, storage string
 	var files []db.TreeFile
 	status := http.StatusOK
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
@@ -768,12 +844,15 @@ func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, o
 		if _, err := ns.WorkflowRecord(ctx, over.Workflow); err != nil {
 			return err
 		}
+		var err error
+		if storage, err = ns.Storage(ctx); err != nil {
+			return err
+		}
 		var why error
 		commit, status, why = resolveRef(ctx, ns, over.Workflow, ref)
 		if why != nil {
 			return why
 		}
-		var err error
 		files, err = ns.Tree(ctx, over.Workflow, commit)
 		if errors.Is(err, db.ErrNoVersion) || errors.Is(err, db.ErrNoTree) {
 			status = http.StatusNotFound
@@ -818,7 +897,7 @@ func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, o
 			fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and a file of a tree is read from it")
 			return
 		}
-		body, err := s.objects.Open(r.Context(), artifact.Key(over.Namespace, f.SHA256))
+		body, err := s.objects.Open(r.Context(), artifact.Key(storage, f.SHA256))
 		if err != nil {
 			s.report(fmt.Errorf("api: %s of %s/%s@%s: %w", name, over.Namespace, over.Workflow, commit, err))
 			fail(w, http.StatusInternalServerError, "the file could not be read")

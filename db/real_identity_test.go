@@ -60,7 +60,7 @@ func TestAUserAGroupAndAServiceAccountAreEachOnePrincipal(t *testing.T) {
 	var users []User
 	var kinds []string
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		for _, u := range []User{{Login: "bob", DisplayName: "Bob"}, {Login: "alice", DisplayName: "Alice", Admin: true}} {
+		for _, u := range []User{{Login: "bob", Profile: Profile{GivenName: "Bob"}}, {Login: "alice", Profile: Profile{GivenName: "Alice"}, Admin: true}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}
@@ -112,7 +112,7 @@ func TestAUserAGroupAndAServiceAccountAreEachOnePrincipal(t *testing.T) {
 	// One name, one principal, whatever kind the second would have been, and nothing of a
 	// namespace nobody created.
 	err := pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
-		return w.CreateUser(ctx, User{Login: "alice", DisplayName: "Another Alice"})
+		return w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Another Alice"}})
 	})
 	if !errors.Is(err, ErrPrincipalExists) {
 		t.Errorf("a second alice was answered %v", err)
@@ -135,7 +135,10 @@ func TestAUserAGroupAndAServiceAccountAreEachOnePrincipal(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	var bob User
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.UpdateUser(ctx, User{Login: "bob", DisplayName: "Robert", Suspended: true}); err != nil {
+		if err := w.UpdateUser(ctx, User{Login: "bob", Suspended: true}); err != nil {
+			return err
+		}
+		if err := w.SetEmail(ctx, "bob", "bob.martin@example.com"); err != nil {
 			return err
 		}
 		if err := w.SignedIn(ctx, "bob", now); err != nil {
@@ -145,7 +148,7 @@ func TestAUserAGroupAndAServiceAccountAreEachOnePrincipal(t *testing.T) {
 		bob, err = w.User(ctx, "bob")
 		return err
 	})
-	if bob.DisplayName != "Robert" || !bob.Suspended || bob.Admin || !bob.LastSignInAt.Equal(now) {
+	if bob.Email != "bob.martin@example.com" || !bob.Suspended || bob.Admin || !bob.LastSignInAt.Equal(now) {
 		t.Errorf("bob reads as %+v", bob)
 	}
 
@@ -187,7 +190,7 @@ func TestGroupsAreListedWithTheirMembersAndWhatAPrincipalOwnsIsFound(t *testing.
 	var owned, none []Namespace
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []string{"bob", "alice"} {
-			if err := w.CreateUser(ctx, User{Login: u, DisplayName: u}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: u}); err != nil {
 				return err
 			}
 		}
@@ -236,8 +239,8 @@ func TestALinkEnrolsTheFirstCredentialAndTheAdministratorsSayWhoCanSignIn(t *tes
 	var admins []Administrator
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []User{
-			{Login: "alice", DisplayName: "Alice", Admin: true}, {Login: "bob", DisplayName: "Bob", Admin: true},
-			{Login: "carol", DisplayName: "Carol"}, {Login: "dave", DisplayName: "Dave", Admin: true, Suspended: true},
+			{Login: "alice", Profile: Profile{GivenName: "Alice"}, Admin: true}, {Login: "bob", Profile: Profile{GivenName: "Bob"}, Admin: true},
+			{Login: "carol", Profile: Profile{GivenName: "Carol"}}, {Login: "dave", Profile: Profile{GivenName: "Dave"}, Admin: true, Suspended: true},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
@@ -296,7 +299,7 @@ func TestACredentialIsARowOfItsOwn(t *testing.T) {
 	var all []Credential
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []string{"alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: u, DisplayName: u}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: u}); err != nil {
 				return err
 			}
 		}
@@ -377,10 +380,10 @@ func TestATokenOpensNothingOnceRevokedOrExpired(t *testing.T) {
 		CreatedAt: now, ExpiresAt: now.Add(90 * 24 * time.Hour)}
 	var found APIToken
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
-		if err := w.CreateUser(ctx, User{Login: "bob", DisplayName: "Bob"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "bob", Profile: Profile{GivenName: "Bob"}}); err != nil {
 			return err
 		}
 		if err := w.CreateGroup(ctx, "team-finance"); err != nil {
@@ -443,7 +446,7 @@ func TestAnEnrolmentCodeIsSpentOnceAndAnIdleSessionIsNotOpenedAgain(t *testing.T
 	again := first
 	again.Hash, again.IssuedAt, again.ExpiresAt = valueHash("again"), now.Add(time.Minute), now.Add(time.Hour+time.Minute)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice", Admin: true}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}, Admin: true}); err != nil {
 			return err
 		}
 		if replaced, err := w.IssueEnrolmentCode(ctx, first); err != nil || replaced {
@@ -513,10 +516,10 @@ func TestASuspendedUserOpensNothing(t *testing.T) {
 	robot := APIToken{ID: "01JQ3M8V", Hash: valueHash("agk_robot"), Principal: "finance/nightly-sync", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
 	session := Session{Hash: valueHash("session"), Login: "alice", Credential: passkey.ID, CreatedAt: now, IdleExpiresAt: now.Add(time.Hour)}
 	suspend := func(ctx context.Context, w *Wide, suspended bool) error {
-		return w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice", Suspended: suspended})
+		return w.UpdateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}, Suspended: suspended})
 	}
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
 		if err := w.CreateServiceAccount(ctx, ServiceAccount{Namespace: "finance", Name: "nightly-sync", CreatedBy: "alice"}); err != nil {
@@ -575,13 +578,13 @@ func TestASuspendedUserStillEnrolsThroughALink(t *testing.T) {
 		IssuedAt: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour + time.Minute)}
 	passkey := Credential{ID: "cGFzc2tleQ", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
 		if _, err := w.IssueEnrolmentCode(ctx, link); err != nil {
 			return err
 		}
-		return w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice", Suspended: true})
+		return w.UpdateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}, Suspended: true})
 	})
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		if _, err := w.EnrolmentCodeByHash(ctx, link.Hash, now.Add(time.Second)); err != nil {
@@ -613,7 +616,7 @@ func TestASuspendedUserStillEnrolsThroughALink(t *testing.T) {
 
 	// A session the passkey opened before a suspension is answered no more once it comes.
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.UpdateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
 		opened := now.Add(3 * time.Minute)
@@ -621,7 +624,7 @@ func TestASuspendedUserStillEnrolsThroughALink(t *testing.T) {
 			CreatedAt: opened, IdleExpiresAt: opened.Add(30 * time.Minute)}); err != nil {
 			return err
 		}
-		if err := w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice", Suspended: true}); err != nil {
+		if err := w.UpdateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}, Suspended: true}); err != nil {
 			return err
 		}
 		if _, err := w.SessionByHash(ctx, valueHash("opened-before"), opened.Add(time.Second)); !errors.Is(err, ErrNoSession) {
@@ -642,7 +645,7 @@ func TestAFirstAdministratorsLinkEndsWithTheBootstrapToken(t *testing.T) {
 	}
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []string{"alcie", "alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: u, DisplayName: u, Admin: true}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: u, Admin: true}); err != nil {
 				return err
 			}
 		}
@@ -690,7 +693,6 @@ func TestTheRecoveryCodesTheBootstrapTokenIssuedEndWithIt(t *testing.T) {
 	}
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []User{{Login: "alice", Admin: true}, {Login: "alcie", Admin: true}, {Login: "bob"}, {Login: "carol", Admin: true}, {Login: "dan"}} {
-			u.DisplayName = u.Login
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}
@@ -749,7 +751,6 @@ func TestALinkOpensNothingOnceItsUserHoldsACredential(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []User{{Login: "alice", Admin: true}, {Login: "bob"}} {
-			u.DisplayName = u.Login
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}
@@ -790,7 +791,7 @@ func TestTwoLinksIssuedAtOnceTakeTurns(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		return w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"})
+		return w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}})
 	})
 	errs := make(chan error, 2)
 	for _, value := range []string{"one", "two"} {
@@ -828,13 +829,13 @@ func TestANameIsALoginOrANamespaceAndACounterMovesForward(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
-		return w.CreateUser(ctx, User{Login: "finance", DisplayName: "Finance"})
+		return w.CreateUser(ctx, User{Login: "finance", Profile: Profile{GivenName: "Finance"}})
 	})
 	if !errors.Is(err, ErrNameTaken) {
 		t.Errorf("a login named after a namespace was answered %v", err)
 	}
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		return w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"})
+		return w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}})
 	})
 	err = pool.Installation(t.Context(), NamespaceAdministration, func(ctx context.Context, w *Wide) error {
 		_, err := w.CreateNamespace(ctx, Namespace{Name: "alice"})
@@ -881,7 +882,7 @@ func TestWhatIsSpentOrUsedIsRecordedAndNothingPastItsHour(t *testing.T) {
 	token := APIToken{ID: "01JQ3M8T", Hash: valueHash("agk_alice"), Principal: "alice", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
 	var accounts []ServiceAccount
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.CreateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}}); err != nil {
 			return err
 		}
 		if _, err := w.IssueEnrolmentCode(ctx, link); err != nil {

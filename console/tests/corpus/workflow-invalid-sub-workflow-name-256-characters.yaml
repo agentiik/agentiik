@@ -1,0 +1,16 @@
+# invalid: A sub-workflow called by a name of 256 characters. Each half of
+#   <namespace>/<name> is a name, at most 255 characters, since a workflow's
+#   name is a directory and a URL segment of its repository.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: dunning
+  namespace: finance
+
+steps:
+  remind:
+    workflow: finance/common-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

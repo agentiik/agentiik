@@ -63,14 +63,14 @@ describe("the manual run form", () => {
     await fireEvent.blur(orders);
     expect(await screen.findByText('at /0/amount: Instance type "string" is invalid. Expected "number".')).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Start the run" }));
-    expect(await screen.findByText("Some inputs are refused by their schema: nothing was sent.")).toBeTruthy();
+    expect(await screen.findByText(/Some inputs are invalid\./)).toBeTruthy();
     expect(sent).toEqual([]);
 
     await fireEvent.input(orders, { target: { value: '[{"order": "ORD-0001", "amount": 12}]' } });
     await fireEvent.click(screen.getByRole("button", { name: "Start the run" }));
     await new Promise((r) => setTimeout(r, 0));
     expect(sent).toEqual([{ path: "/api/v1/finance/workflows/monthly-invoicing/runs", body: { inputs: { orders: [{ order: "ORD-0001", amount: 12 }], customers: [] } } }]);
-    expect(place.route).toMatchObject({ kind: "namespace", view: "runs", run: "01JMZ9A2B3C4D5E6F7G8H9J0K1" });
+    expect(place.route).toMatchObject({ kind: "namespace", view: "workflows", run: "01JMZ9A2B3C4D5E6F7G8H9J0K1" });
   });
 
   it("checks an input whose schema names files of the tree against them", async () => {
@@ -91,7 +91,7 @@ describe("the manual run form", () => {
     await fireEvent.input(await screen.findByLabelText(/^orders/), { target: { value: '[{"order": "ORD-0001", "amount": 1}]' } });
     await fireEvent.click(screen.getByRole("button", { name: "Start the run" }));
     expect(await screen.findByText("input orders: schema: /0/order: does not match pattern; run refused")).toBeTruthy();
-    expect(screen.getByText("The API refused orders.")).toBeTruthy();
+    expect(screen.getByText(/The input orders is invalid\./)).toBeTruthy();
   });
 
   it("is offered only to a caller holding workflow:run", async () => {
