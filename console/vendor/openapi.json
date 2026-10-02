@@ -83,6 +83,10 @@
     {
       "name": "statistics",
       "description": "The series the web console's charts and agk console's compact forms read: a namespace's runs, a workflow's steps and ports, a namespace's load against its quotas, and, to an administrator, the pools and runners. From v0.6.0."
+    },
+    {
+      "name": "audit",
+      "description": "The audit log, read by an administrator: every act the installation recorded, chained so that a change or a removal leaves a break."
     }
   ],
   "security": [
@@ -925,6 +929,108 @@
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/audit": {
+      "get": {
+        "operationId": "getAuditLog",
+        "tags": [
+          "audit"
+        ],
+        "summary": "Read the audit log",
+        "description": "The audit log, the newest entries first, each as the export writes it, narrowed by who did what, where, to what and when, and a page at a time with before. Beside the page, head and verified say where the chain stands. Administrator only: the log is every namespace's and the installation's at once. Under auth, reserved since v0.2, rather than a word of its own, which would have to be reserved a release before the route is served. Reading is not recorded.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#audit-log"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/auditLimit"
+          },
+          {
+            "$ref": "#/components/parameters/auditBefore"
+          },
+          {
+            "$ref": "#/components/parameters/auditActor"
+          },
+          {
+            "$ref": "#/components/parameters/auditAction"
+          },
+          {
+            "$ref": "#/components/parameters/auditNamespace"
+          },
+          {
+            "$ref": "#/components/parameters/auditTarget"
+          },
+          {
+            "$ref": "#/components/parameters/auditSince"
+          },
+          {
+            "$ref": "#/components/parameters/auditUntil"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the log.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auditPage"
+                },
+                "examples": {
+                  "latest": {
+                    "summary": "the two latest entries",
+                    "value": {
+                      "entries": [
+                        {
+                          "seq": 4183,
+                          "at": "2026-10-02T09:15:44.008112Z",
+                          "actor": "dana",
+                          "action": "runner.drain",
+                          "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                          "result": "unchanged",
+                          "detail": "{\"reason\":\"kernel update\"}",
+                          "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                          "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+                        },
+                        {
+                          "seq": 4182,
+                          "at": "2026-10-02T09:14:07.512903Z",
+                          "actor": "carol",
+                          "action": "namespace.update",
+                          "namespace": "finance",
+                          "target": "finance",
+                          "result": "done",
+                          "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                          "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                          "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+                        }
+                      ],
+                      "head": 4183,
+                      "verified": 4182
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "The query is refused: a limit outside 1 to 200, a before that is not a whole number from 1, an action that is not a thing and a verb, a since or an until not in RFC 3339, or since after until. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "A caller who is not an administrator, or a session that may only enrol."
           }
         }
       }
@@ -7280,6 +7386,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -7742,6 +7851,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -7992,6 +8104,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8130,6 +8245,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8262,6 +8380,9 @@
             "$ref": "#/components/parameters/statsFrom"
           },
           {
+            "$ref": "#/components/parameters/statsRange"
+          },
+          {
             "$ref": "#/components/parameters/statsTo"
           },
           {
@@ -8383,6 +8504,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/statsFrom"
+          },
+          {
+            "$ref": "#/components/parameters/statsRange"
           },
           {
             "$ref": "#/components/parameters/statsTo"
@@ -20371,6 +20495,100 @@
             "reason": "disk replaced"
           }
         ]
+      },
+      "auditPage": {
+        "title": "Audit page",
+        "type": "object",
+        "required": [
+          "entries",
+          "head",
+          "verified"
+        ],
+        "additionalProperties": false,
+        "description": "A page of the audit log, the newest entries first, with where the chain stands: the last entry appended and the last one proved, so that a reader tells an entry the chain is known to hold from one the next term checks.",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/auditEntry"
+            },
+            "description": "The entries of the page, the newest first; a page shorter than its limit is the last.",
+            "examples": [
+              [
+                {
+                  "seq": 4183,
+                  "at": "2026-10-02T09:15:44.008112Z",
+                  "actor": "dana",
+                  "action": "runner.drain",
+                  "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                  "result": "unchanged",
+                  "detail": "{\"reason\":\"kernel update\"}",
+                  "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                  "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+                },
+                {
+                  "seq": 4182,
+                  "at": "2026-10-02T09:14:07.512903Z",
+                  "actor": "carol",
+                  "action": "namespace.update",
+                  "namespace": "finance",
+                  "target": "finance",
+                  "result": "done",
+                  "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                  "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                  "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+                }
+              ]
+            ]
+          },
+          "head": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The last entry appended, 0 where the log is empty, whatever the page holds.",
+            "examples": [
+              4183
+            ]
+          },
+          "verified": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The last entry the leading controller proved the chain to, at the start of its term: an entry after it holds as far as anybody has looked, and the next term checks it.",
+            "examples": [
+              4182
+            ]
+          }
+        },
+        "examples": [
+          {
+            "entries": [
+              {
+                "seq": 4183,
+                "at": "2026-10-02T09:15:44.008112Z",
+                "actor": "dana",
+                "action": "runner.drain",
+                "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                "result": "unchanged",
+                "detail": "{\"reason\":\"kernel update\"}",
+                "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+              },
+              {
+                "seq": 4182,
+                "at": "2026-10-02T09:14:07.512903Z",
+                "actor": "carol",
+                "action": "namespace.update",
+                "namespace": "finance",
+                "target": "finance",
+                "result": "done",
+                "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+                "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+                "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+              }
+            ],
+            "head": 4183,
+            "verified": 4182
+          }
+        ]
       }
     },
     "parameters": {
@@ -20663,7 +20881,7 @@
         "name": "from",
         "in": "query",
         "required": false,
-        "description": "The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to.",
+        "description": "The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max.",
         "schema": {
           "$ref": "wire.schema.json#/$defs/timestamp"
         },
@@ -20671,6 +20889,24 @@
           "morning": {
             "summary": "six in the morning",
             "value": "2026-09-30T06:00:00Z"
+          }
+        }
+      },
+      "statsRange": {
+        "name": "range",
+        "in": "query",
+        "required": false,
+        "description": "max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "max"
+          ]
+        },
+        "examples": {
+          "max": {
+            "summary": "from the first run",
+            "value": "max"
           }
         }
       },
@@ -21101,6 +21337,133 @@
           "runner": {
             "summary": "a runner",
             "value": "01jmz8x2d5f8qx7t2n5r8wd3hk"
+          }
+        }
+      },
+      "auditLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "How many entries a page holds, from 1 to 200, 50 where it is left out: a screenful, and few enough that a page is answered at once.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "examples": {
+          "a hundred": {
+            "summary": "a hundred entries",
+            "value": 100
+          }
+        }
+      },
+      "auditBefore": {
+        "name": "before",
+        "in": "query",
+        "required": false,
+        "description": "The seq a page ends after: the entries before it, the newest first. Left out, the page starts at the last entry appended.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "examples": {
+          "older": {
+            "summary": "the entries before 4182",
+            "value": 4182
+          }
+        }
+      },
+      "auditActor": {
+        "name": "actor",
+        "in": "query",
+        "required": false,
+        "description": "The entries done by this principal, matched exactly.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "carol": {
+            "summary": "what carol did",
+            "value": "carol"
+          }
+        }
+      },
+      "auditAction": {
+        "name": "action",
+        "in": "query",
+        "required": false,
+        "description": "The entries of this action, matched exactly.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z_]+\\.[a-z_]+$"
+        },
+        "examples": {
+          "sign-in failures": {
+            "summary": "the failed sign-ins",
+            "value": "signin.fail"
+          }
+        }
+      },
+      "auditNamespace": {
+        "name": "namespace",
+        "in": "query",
+        "required": false,
+        "description": "The entries done in this namespace, matched exactly, and - for the acts on the installation, which name none.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "finance": {
+            "summary": "what was done in finance",
+            "value": "finance"
+          }
+        }
+      },
+      "auditTarget": {
+        "name": "target",
+        "in": "query",
+        "required": false,
+        "description": "The entries done to this target, matched exactly.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "a run": {
+            "summary": "what was done to one run",
+            "value": "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          }
+        }
+      },
+      "auditSince": {
+        "name": "since",
+        "in": "query",
+        "required": false,
+        "description": "The entries appended at this instant or after, in RFC 3339.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/timestamp"
+        },
+        "examples": {
+          "this morning": {
+            "summary": "from six this morning",
+            "value": "2026-10-02T06:00:00Z"
+          }
+        }
+      },
+      "auditUntil": {
+        "name": "until",
+        "in": "query",
+        "required": false,
+        "description": "The entries appended at this instant or before, in RFC 3339.",
+        "schema": {
+          "$ref": "wire.schema.json#/$defs/timestamp"
+        },
+        "examples": {
+          "this evening": {
+            "summary": "up to six this evening",
+            "value": "2026-10-02T18:00:00Z"
           }
         }
       }

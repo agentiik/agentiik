@@ -221,9 +221,9 @@ const (
 	// and "a deny wins at any scope" only where the workflow is in the question.
 	RunListing Reason = "a listing of runs across the namespaces its caller can read"
 
-	// AuditLog is the audit log read across the installation, by the export and by a verification:
-	// "separate and append-only", one chain holding the acts of every namespace and of the
-	// installation itself, which no namespace's handle could read whole.
+	// AuditLog is the audit log read across the installation, by the export, by a verification and
+	// by an administrator reading it: "separate and append-only", one chain holding the acts of
+	// every namespace and of the installation itself, which no namespace's handle could read whole.
 	AuditLog Reason = "the audit log, one chain across the installation"
 
 	// NamespaceAdministration is a namespace created, removed, renamed, given a picture or given

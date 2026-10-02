@@ -171,6 +171,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the audit log
+         * @description The audit log, the newest entries first, each as the export writes it, narrowed by who did what, where, to what and when, and a page at a time with before. Beside the page, head and verified say where the chain stands. Administrator only: the log is every namespace's and the installation's at once. Under auth, reserved since v0.2, rather than a word of its own, which would have to be reserved a release before the route is served. Reading is not recorded.
+         */
+        get: operations["getAuditLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/auth/policy": {
         parameters: {
             query?: never;
@@ -9354,6 +9374,80 @@ export interface components {
             reason: string;
         };
         /**
+         * Audit page
+         * @description A page of the audit log, the newest entries first, with where the chain stands: the last entry appended and the last one proved, so that a reader tells an entry the chain is known to hold from one the next term checks.
+         * @example {
+         *       "entries": [
+         *         {
+         *           "seq": 4183,
+         *           "at": "2026-10-02T09:15:44.008112Z",
+         *           "actor": "dana",
+         *           "action": "runner.drain",
+         *           "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+         *           "result": "unchanged",
+         *           "detail": "{\"reason\":\"kernel update\"}",
+         *           "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+         *           "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+         *         },
+         *         {
+         *           "seq": 4182,
+         *           "at": "2026-10-02T09:14:07.512903Z",
+         *           "actor": "carol",
+         *           "action": "namespace.update",
+         *           "namespace": "finance",
+         *           "target": "finance",
+         *           "result": "done",
+         *           "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+         *           "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+         *           "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+         *         }
+         *       ],
+         *       "head": 4183,
+         *       "verified": 4182
+         *     }
+         */
+        auditPage: {
+            /**
+             * @description The entries of the page, the newest first; a page shorter than its limit is the last.
+             * @example [
+             *       {
+             *         "seq": 4183,
+             *         "at": "2026-10-02T09:15:44.008112Z",
+             *         "actor": "dana",
+             *         "action": "runner.drain",
+             *         "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+             *         "result": "unchanged",
+             *         "detail": "{\"reason\":\"kernel update\"}",
+             *         "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+             *         "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+             *       },
+             *       {
+             *         "seq": 4182,
+             *         "at": "2026-10-02T09:14:07.512903Z",
+             *         "actor": "carol",
+             *         "action": "namespace.update",
+             *         "namespace": "finance",
+             *         "target": "finance",
+             *         "result": "done",
+             *         "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+             *         "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+             *         "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+             *       }
+             *     ]
+             */
+            entries: components["schemas"]["auditEntry"][];
+            /**
+             * @description The last entry appended, 0 where the log is empty, whatever the page holds.
+             * @example 4183
+             */
+            head: number;
+            /**
+             * @description The last entry the leading controller proved the chain to, at the start of its term: an entry after it holds as far as anybody has looked, and the next term checks it.
+             * @example 4182
+             */
+            verified: number;
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -9622,6 +9716,92 @@ export interface components {
              * @example 3
              */
             min_passkeys: number;
+        };
+        /**
+         * Audit entry
+         * @description One entry of the audit log, as the export writes it on a line of its own and as GET /api/v1/auth/audit answers it: the act, who did it, where and to what, and the two hashes that chain it to the entry before. Every field is written as the hash covers it, so that a reader can check an entry it was handed without asking the installation anything more.
+         * @example {
+         *       "seq": 4182,
+         *       "at": "2026-10-02T09:14:07.512903Z",
+         *       "actor": "carol",
+         *       "action": "namespace.update",
+         *       "namespace": "finance",
+         *       "target": "finance",
+         *       "result": "done",
+         *       "detail": "{\"quotas\":{\"max_concurrent_tasks\":7}}",
+         *       "prev_hash": "5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+         *       "hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+         *     }
+         * @example {
+         *       "seq": 4183,
+         *       "at": "2026-10-02T09:15:44.008112Z",
+         *       "actor": "dana",
+         *       "action": "runner.drain",
+         *       "target": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+         *       "result": "unchanged",
+         *       "detail": "{\"reason\":\"kernel update\"}",
+         *       "prev_hash": "9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+         *       "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+         *     }
+         */
+        auditEntry: {
+            /**
+             * @description The entry's number, from 1 with no gap, which the database gives it as it appends it under a lock: a number missing is an entry missing.
+             * @example 4182
+             */
+            seq: number;
+            /**
+             * @description When the act's transaction appended it, on the database's clock, in UTC to the microsecond, written exactly as the hash covers it.
+             * @example 2026-10-02T09:14:07.512903Z
+             */
+            at: string;
+            /**
+             * @description Who did it: a principal as a grant names one, installation for what the installation did of itself, or operator for the bootstrap token.
+             * @example carol
+             * @example finance/deployer
+             * @example installation
+             */
+            actor: string;
+            /**
+             * @description What was done, a thing and a verb, as the documentation lists them.
+             * @example namespace.update
+             * @example run.cancel
+             * @example signin.fail
+             */
+            action: string;
+            /**
+             * @description The namespace it was done in, left out for an act on the installation.
+             * @example finance
+             */
+            namespace?: string;
+            /**
+             * @description What it was done to: a run, a namespace, a login, a runner, a grant, by the name or identifier its kind is known by.
+             * @example finance
+             * @example 01JMZ8V1P9C4XQ7K2N4D6F8H0A
+             */
+            target: string;
+            /**
+             * @description done, or unchanged for an act asked of something already so, a second cancellation or a runner drained twice.
+             * @example done
+             * @example unchanged
+             * @enum {string}
+             */
+            result: "done" | "unchanged";
+            /**
+             * @description The act's particulars as the text of a JSON object, never a secret's value or a token: a string rather than an object, since a reader that re-encoded an object would reorder or respace the bytes the hash covers.
+             * @example {"quotas":{"max_concurrent_tasks":7}}
+             */
+            detail: string;
+            /**
+             * @description The hash of the entry before, 64 zeros before the first. Lowercase hexadecimal, 64 characters.
+             * @example 5e2a1c0b9f8d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a
+             */
+            prev_hash: string;
+            /**
+             * @description SHA-256 over agentiik audit 1, the previous hash and the fields, as the documentation's Audit log sets out. Lowercase hexadecimal, 64 characters.
+             * @example 9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c
+             */
+            hash: string;
         };
         /**
          * Password
@@ -12703,8 +12883,10 @@ export interface components {
         historyFrom: components["schemas"]["commit"];
         /** @description How many commits a page lists, 50 where it is left out and 500 at the most, as GET /api/v1/runs lists runs. */
         historyLimit: number;
-        /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+        /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
         statsFrom: components["schemas"]["timestamp"];
+        /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+        statsRange: "max";
         /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
         statsTo: components["schemas"]["timestamp"];
         /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -12757,6 +12939,22 @@ export interface components {
         pool: components["schemas"]["name"];
         /** @description The runner, by the identifier the API minted at its join. */
         runner: components["schemas"]["properties-runner"];
+        /** @description How many entries a page holds, from 1 to 200, 50 where it is left out: a screenful, and few enough that a page is answered at once. */
+        auditLimit: number;
+        /** @description The seq a page ends after: the entries before it, the newest first. Left out, the page starts at the last entry appended. */
+        auditBefore: number;
+        /** @description The entries done by this principal, matched exactly. */
+        auditActor: string;
+        /** @description The entries of this action, matched exactly. */
+        auditAction: string;
+        /** @description The entries done in this namespace, matched exactly, and - for the acts on the installation, which name none. */
+        auditNamespace: string;
+        /** @description The entries done to this target, matched exactly. */
+        auditTarget: string;
+        /** @description The entries appended at this instant or after, in RFC 3339. */
+        auditSince: components["schemas"]["timestamp"];
+        /** @description The entries appended at this instant or before, in RFC 3339. */
+        auditUntil: components["schemas"]["timestamp"];
     };
     requestBodies: never;
     headers: {
@@ -13088,6 +13286,49 @@ export interface operations {
             /** @description The installation is addressed by an IP address and the policy forbids passwords, the error naming password; or, once the bootstrap token has ended, the change would leave no administrator able to sign in, the error naming password or device_bound_only, whichever takes their way in. */
             409: components["responses"]["conflict"];
             413: components["responses"]["tooLarge"];
+        };
+    };
+    getAuditLog: {
+        parameters: {
+            query?: {
+                /** @description How many entries a page holds, from 1 to 200, 50 where it is left out: a screenful, and few enough that a page is answered at once. */
+                limit?: components["parameters"]["auditLimit"];
+                /** @description The seq a page ends after: the entries before it, the newest first. Left out, the page starts at the last entry appended. */
+                before?: components["parameters"]["auditBefore"];
+                /** @description The entries done by this principal, matched exactly. */
+                actor?: components["parameters"]["auditActor"];
+                /** @description The entries of this action, matched exactly. */
+                action?: components["parameters"]["auditAction"];
+                /** @description The entries done in this namespace, matched exactly, and - for the acts on the installation, which name none. */
+                namespace?: components["parameters"]["auditNamespace"];
+                /** @description The entries done to this target, matched exactly. */
+                target?: components["parameters"]["auditTarget"];
+                /** @description The entries appended at this instant or after, in RFC 3339. */
+                since?: components["parameters"]["auditSince"];
+                /** @description The entries appended at this instant or before, in RFC 3339. */
+                until?: components["parameters"]["auditUntil"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the log. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["auditPage"];
+                };
+            };
+            /** @description The query is refused: a limit outside 1 to 200, a before that is not a whole number from 1, an action that is not a thing and a verb, a since or an until not in RFC 3339, or since after until. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, too. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A caller who is not an administrator, or a session that may only enrol. */
+            403: components["responses"]["forbidden"];
         };
     };
     getNamespaceAuthPolicy: {
@@ -15689,8 +15930,10 @@ export interface operations {
     getRunStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15732,8 +15975,10 @@ export interface operations {
     getStepStatistics: {
         parameters: {
             query: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15777,8 +16022,10 @@ export interface operations {
     getPortStatistics: {
         parameters: {
             query: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15820,8 +16067,10 @@ export interface operations {
     getQuotaStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15861,8 +16110,10 @@ export interface operations {
     getActivityStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15897,8 +16148,10 @@ export interface operations {
     getPoolStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
