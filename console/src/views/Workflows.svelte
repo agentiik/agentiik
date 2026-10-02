@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Filter from "../components/Filter.svelte";
+  import { filtered } from "../lib/palette";
   import { explain, refused as refusedHere, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
   import PageHeader from "../components/PageHeader.svelte";
@@ -74,10 +76,13 @@
   }
 
   const now = Date.now();
+  // What the Filter field at the head leaves of the list, as typed into the address.
+  const knownShown = $derived(known ? filtered(known, place.query.get("q") ?? "", (k) => k.name) : []);
 </script>
 
 <PageHeader title="Workflows" icon="control-workflows" count={known?.length} {place}>
   {#snippet actions()}
+    <Filter {place} label="Filter the workflows" />
     {#if mayCreate}<button class="control primary" onclick={() => ((creating = true), (said = null))}><Icon name="control-add" size={14} />New workflow</button>{/if}
   {/snippet}
 </PageHeader>
@@ -91,7 +96,7 @@
     <table>
       <thead><tr><th>Workflow</th><th>Latest run</th><th>Run at</th><th>Created</th></tr></thead>
       <tbody>
-        {#each known as k (k.name)}
+        {#each knownShown as k (k.name)}
           {@const page = { kind: "namespace" as const, namespace, view: "workflows" as const, workflow: k.name }}
           <tr>
             <td><a class="term" href={place.href(page)} onclick={follow(place, page)}>{k.name}</a></td>
@@ -106,7 +111,7 @@
             <td class="term muted"><time datetime={k.created_at}>{clock(k.created_at, now)}</time></td>
           </tr>
         {:else}
-          <tr><td colspan="4" class="muted">No workflows</td></tr>
+          <tr><td colspan="4" class="muted">{known.length === 0 ? "No workflows" : "Nothing matches."}</td></tr>
         {/each}
       </tbody>
     </table>

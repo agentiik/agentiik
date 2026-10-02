@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Filter from "../components/Filter.svelte";
+  import { filtered } from "../lib/palette";
   import { explain, refused as refusedHere, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
   import type { Place } from "../lib/place.svelte";
@@ -150,10 +152,13 @@
     { visibility: "all", label: "All workflows" },
     { visibility: "selected", label: "Selected workflows" },
   ];
+  // What the Filter field at the head leaves of the list, as typed into the address.
+  const variablesShown = $derived(variables ? filtered(variables, place.query.get("q") ?? "", (v) => v.name) : []);
 </script>
 
 <PageHeader title="Variables" icon="control-variables" count={variables?.length} {place}>
   {#snippet actions()}
+    <Filter {place} label="Filter the variables" />
     {#if reads && writes}
       <button class="control primary" onclick={create}><Icon name="control-add" size={14} />New variable</button>
     {/if}
@@ -175,7 +180,7 @@
       <table>
         <thead><tr><th>Name</th><th>Value</th><th>Read by</th><th>Updated</th><th class="end"></th></tr></thead>
         <tbody>
-          {#each variables as v (v.name)}
+          {#each variablesShown as v (v.name)}
             {@const json = shown(v.value)}
             <tr>
               <td class="term">{v.name}</td>
@@ -208,7 +213,7 @@
               </td>
             </tr>
           {:else}
-            <tr><td colspan="5" class="muted">{namespace} has no variable.</td></tr>
+            <tr><td colspan="5" class="muted">{#if variables.length === 0}{namespace} has no variable.{:else}Nothing matches.{/if}</td></tr>
           {/each}
         </tbody>
       </table>

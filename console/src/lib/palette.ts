@@ -117,3 +117,22 @@ export function opening(entries: readonly Entry[], last: readonly string[]): { r
   const taken = new Set(recent.map((e) => e.id));
   return { recent, rest: entries.filter((e) => !taken.has(e.id)) };
 }
+
+// filtered is the rows of a list every word typed matches, the closest first and in their order
+// among equals, a row matched by the text it is read by: what the Filter field at the head of a
+// screen leaves of a list the API answered whole.
+export function filtered<T>(rows: readonly T[], typed: string, text: (row: T) => string): T[] {
+  const words = typed.trim().split(/\s+/).filter((w) => w !== "");
+  if (words.length === 0) return [...rows];
+  const kept: { row: T; score: number; i: number }[] = [];
+  rows.forEach((row, i) => {
+    let score = 0;
+    for (const word of words) {
+      const m = matched(word, text(row));
+      if (m.score < 0) return;
+      score += m.score;
+    }
+    kept.push({ row, score, i });
+  });
+  return kept.sort((a, b) => b.score - a.score || a.i - b.i).map((k) => k.row);
+}
