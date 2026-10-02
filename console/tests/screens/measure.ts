@@ -59,7 +59,7 @@ export function measure(): Finding[] {
       const r = rect(el);
       if (r.right <= right + 0.5 && r.left >= left - 0.5) continue;
       let scrolls = false;
-      for (let p = el.parentElement; p && p !== screen && !scrolls; p = p.parentElement) scrolls = ["auto", "scroll"].includes(style(p).overflowX);
+      for (let p: HTMLElement | null = el.parentElement; p && p !== screen && !scrolls; p = p.parentElement) scrolls = ["auto", "scroll"].includes(style(p).overflowX);
       if (!scrolls) out.push({ rule: "margin", where: name(el), detail: `${r.left.toFixed(1)} to ${r.right.toFixed(1)}, the page ${left.toFixed(1)} to ${right.toFixed(1)}` });
     }
   }
