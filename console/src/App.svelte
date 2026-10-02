@@ -67,6 +67,11 @@
 
   const route = $derived(place.route);
 
+  // What a screen shows: its namespace, its workflow, its run and the run it is read against. A
+  // screen reads what it shows when it is drawn, so another namespace, workflow or run draws it
+  // again rather than leave it showing the one before; a tab, a step chosen or a query keeps it.
+  const screen = $derived(route.kind === "namespace" ? ["namespace", route.namespace, route.workflow ?? "", route.run ?? "", route.against ?? ""].join("\u0000") : route.kind);
+
   // The browser's tab names the screen, so that a row of tabs and the history read by what each shows.
   $effect(() => {
     document.title = session.standing === "signed-in" ? titleOf(route) : session.standing === "signed-out" ? "Sign in · Agentiik" : "Agentiik";
@@ -210,6 +215,7 @@
     {/if}
     <main class="screen">
       <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
+      {#key screen}
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
         {#await screens.WorkflowStatistics() then { default: WorkflowStatistics }}<WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} shares={holds(session.me, "grant:manage", route.namespace, route.workflow)} />{:catch}<Unloaded />{/await}
       {:else if route.kind === "namespace" && route.view === "workflows" && route.workflow && route.run === undefined && (route.tab === undefined || route.tab === "graph" || route.tab === "mcp" || route.tab === "files") && known && holdsSomewhereIn(session.me, "workflow:read", route.namespace)}
@@ -251,6 +257,7 @@
       {:else}
         <Refused />
       {/if}
+      {/key}
     </main>
   </div>
   <KeyLine {keys} />

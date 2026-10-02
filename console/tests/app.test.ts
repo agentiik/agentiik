@@ -34,6 +34,17 @@ describe("the console", () => {
     expect(screen.getByText("agentiik v0.6.0")).toBeTruthy();
   });
 
+  it("reads a screen again when the namespace, the workflow or the run it shows is another, rather than keep the one before", async () => {
+    const s = scenario("alice");
+    const runs = (s["GET /api/v1/runs"]!.body as { runs: Record<string, unknown>[] }).runs;
+    s["GET /api/v1/runs?namespace=alice"] = { status: 200, body: { runs: [{ ...runs[0], namespace: "alice", workflow: "report", run: "01JN0000000000000000000ALI" }] } };
+    const { place } = open("/finance/workflows", s);
+    expect(await screen.findByRole("link", { name: "monthly-invoicing" })).toBeTruthy();
+    place.go({ kind: "namespace", namespace: "alice", view: "workflows" });
+    expect(await screen.findByRole("link", { name: "report" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "monthly-invoicing" })).toBeNull();
+  });
+
   it("answers a namespace the caller holds nothing in as one that does not exist", async () => {
     const { asked } = open("/payroll/runs");
     expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
