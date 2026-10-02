@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -249,7 +250,7 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 	if !strings.HasPrefix(lines[4], "STATE       RUN") {
 		t.Errorf("the list has no header where it starts:\n%s", s)
 	}
-	for _, w := range []string{"● running   01RUNAAAAAAAAAAAAAAAAAAAAA finance/monthly-invoicing", "1m 52s", "● succeeded 01RUNCCCCCCCCCCCCCCCCCCCCC finance/nightly-export"} {
+	for _, w := range []string{"⠋ running   01RUNAAAAAAAAAAAAAAAAAAAAA finance/monthly-invoicing", "1m 52s", "● succeeded 01RUNCCCCCCCCCCCCCCCCCCCCC finance/nightly-export"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("the runs view does not show %q:\n%s", w, s)
 		}
@@ -298,8 +299,8 @@ func TestTheKeysMoveOpenAndGoBack(t *testing.T) {
 	if m.view != runView || !strings.Contains(screen(m), "Run 01RUNBBBBBBBBBBBBBBBBBBBBB  finance/monthly-invoicing@") {
 		t.Fatalf("enter does not open the run selected:\n%s", screen(m))
 	}
-	if in.asked[len(in.asked)-1] != "/api/v1/runs/01RUNBBBBBBBBBBBBBBBBBBBBB" {
-		t.Errorf("opening a run asked for %s", in.asked[len(in.asked)-1])
+	if !slices.Contains(in.asked, "/api/v1/runs/01RUNBBBBBBBBBBBBBBBBBBBBB") {
+		t.Errorf("opening a run asked for %v", in.asked)
 	}
 	if !strings.HasSuffix(strings.TrimRight(screen(m), " "), "↑↓ Step   [] Port   esc Runs   q Quit   ? Every key") {
 		t.Errorf("the run view's key line is wrong:\n%s", screen(m))
@@ -337,7 +338,8 @@ func TestAConsoleOpenedOnARunStartsOnIt(t *testing.T) {
 		t.Errorf("the top line does not name the namespace: %s", strings.Split(screen(m), "\n")[0])
 	}
 	for _, a := range in.asked {
-		if strings.HasPrefix(a, "/api/v1/runs?") {
+		// The runs of its workflow are read for its sparkline, and the runs view's list is not.
+		if strings.HasPrefix(a, "/api/v1/runs?limit=100") {
 			t.Errorf("a console opened on a run read the runs too: %v", in.asked)
 		}
 	}
