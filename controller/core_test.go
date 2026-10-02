@@ -1203,18 +1203,28 @@ func TestAnArtifactLivesAsLongAsTheWorkflowDeclared(t *testing.T) {
 
 // "Envelopes and logs ... live by the workflow's defaults.retain, resolved to one date when the
 // run finishes", within the namespace's max_retention_days, which also bounds a workflow that
-// declares none. The date is the one the envelope and log purges wait on.
+// declares none; and a run whose workflow declares none in a namespace that sets none is kept for
+// ever. The date is the one the envelope and log purges wait on, and no date is one they never
+// reach.
 func TestAFinishedRunKeepsItsEnvelopesAsLongAsItsWorkflowDeclared(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		workflow string
-		days     float64
+		bound    int
+		days     float64 // 0 is for ever
 	}{
-		{"by-defaults.retain", retainingWorkflow, 7},
-		{"by-the-namespace", theWorkflow, 90},
+		{"by-defaults.retain", retainingWorkflow, 0, 7},
+		{"by-the-namespace", theWorkflow, 90, 90},
+		{"for-ever", theWorkflow, 0, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			core, q, pool, super := decidingOn(t, c.workflow)
+			if c.bound != 0 {
+				if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+					`update namespaces set max_retention_days = $1 where name = 'finance'`, c.bound); err != nil {
+					t.Fatal(err)
+				}
+			}
 			createRun(t, pool)
 			if err := core.Decide(t.Context(), decidedRun); err != nil {
 				t.Fatal(err)
@@ -1235,8 +1245,13 @@ func TestAFinishedRunKeepsItsEnvelopesAsLongAsItsWorkflowDeclared(t *testing.T) 
 				string(decidedRun)).Scan(&state, &kept); err != nil {
 				t.Fatal(err)
 			}
-			if state != "succeeded" || kept == nil || *kept != c.days {
-				t.Errorf("the run is %s and keeps its envelopes %v days after it finished, want %.0f", state, kept, c.days)
+			switch {
+			case state != "succeeded":
+				t.Errorf("the run is %s", state)
+			case c.days == 0 && kept != nil:
+				t.Errorf("the run keeps its envelopes %v days after it finished, and should keep them for ever", *kept)
+			case c.days != 0 && (kept == nil || *kept != c.days):
+				t.Errorf("the run keeps its envelopes %v days after it finished, want %.0f", kept, c.days)
 			}
 		})
 	}
@@ -1350,46 +1365,73 @@ steps:
 }
 
 // A workflow that declares no retain still has its artifacts recorded, kept as long as the
-// namespace allows: an artifact left unrecorded would be bytes nothing expires, nothing collects and
-// max_artifact_bytes stops counting once its upload lapses.
+// namespace allows, and for ever where it sets no bound: an artifact left unrecorded would be bytes
+// nothing expires, nothing collects and max_artifact_bytes stops counting once its upload lapses.
+// For ever is written as infinity, which no purge reaches, since the column holds a date always.
 func TestAnArtifactOfAWorkflowDeclaringNoRetainLivesAsLongAsTheNamespaceAllows(t *testing.T) {
-	core, q, pool, super := deciding(t)
-	createRun(t, pool)
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
-	for pass := 1; pass <= 6; pass++ {
-		taken := q.taken()
-		if len(taken) == 0 {
-			break
-		}
-		for _, task := range taken {
-			core.answer(t, withAFile(t, task, core.now(), strings.Repeat("c", 64)))
-		}
-	}
-	rows, err := dbtest.Superuser(t, super).Query(t.Context(),
-		`select step, extract(epoch from (expires_at - created_at)) / 86400 from artifacts where run_id = $1 order by step`,
-		string(decidedRun))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lives := map[string]float64{}
-	for rows.Next() {
-		var step string
-		var days float64
-		if err := rows.Scan(&step, &days); err != nil {
-			t.Fatal(err)
-		}
-		lives[step] = days
-	}
-	rows.Close()
-	if len(lives) != 2 {
-		t.Fatalf("the run recorded the artifacts of %v, and both steps wrote one", lives)
-	}
-	for step, days := range lives {
-		if days < 89.99 || days > 90.01 {
-			t.Errorf("the artifact of %s lives %.2f days, and the namespace keeps 90", step, days)
-		}
+	for _, c := range []struct {
+		name  string
+		bound int // 0 sets none
+	}{{"by-the-namespace", 90}, {"for-ever", 0}} {
+		t.Run(c.name, func(t *testing.T) {
+			core, q, pool, super := deciding(t)
+			conn := dbtest.Superuser(t, super)
+			if c.bound != 0 {
+				if _, err := conn.Exec(t.Context(),
+					`update namespaces set max_retention_days = $1 where name = 'finance'`, c.bound); err != nil {
+					t.Fatal(err)
+				}
+			}
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			for pass := 1; pass <= 6; pass++ {
+				taken := q.taken()
+				if len(taken) == 0 {
+					break
+				}
+				for _, task := range taken {
+					core.answer(t, withAFile(t, task, core.now(), strings.Repeat("c", 64)))
+				}
+			}
+			rows, err := conn.Query(t.Context(),
+				`select step, expires_at = 'infinity',
+				        extract(epoch from (nullif(expires_at, 'infinity') - created_at)) / 86400
+				   from artifacts where run_id = $1 order by step`,
+				string(decidedRun))
+			if err != nil {
+				t.Fatal(err)
+			}
+			type life struct {
+				never bool
+				days  *float64
+			}
+			lives := map[string]life{}
+			for rows.Next() {
+				var step string
+				var l life
+				if err := rows.Scan(&step, &l.never, &l.days); err != nil {
+					t.Fatal(err)
+				}
+				lives[step] = l
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if len(lives) != 2 {
+				t.Fatalf("the run recorded the artifacts of %v, and both steps wrote one", lives)
+			}
+			for step, l := range lives {
+				switch {
+				case c.bound == 0 && !l.never:
+					t.Errorf("the artifact of %s lives %v days, and the namespace keeps it for ever", step, *l.days)
+				case c.bound != 0 && (l.days == nil || *l.days < float64(c.bound)-0.01 || *l.days > float64(c.bound)+0.01):
+					t.Errorf("the artifact of %s lives %v days, and the namespace keeps %d", step, l.days, c.bound)
+				}
+			}
+		})
 	}
 }
 
@@ -1440,13 +1482,21 @@ func TestAnIntermediateLivesAsLongAsItsRunAndAnOutputAsItDeclared(t *testing.T) 
 }
 
 // shardFileOf answers the status and the expiry of the artifact recorded for the file a shard of
-// invoice wrote, digest, beside the date its run keeps its envelopes until.
+// invoice wrote, digest, beside the date its run keeps its envelopes until: the zero time for
+// either where it is kept for ever, which the run writes as no date and the artifact as infinity.
 func shardFileOf(t *testing.T, super, digest string) (status string, lives, runExpires time.Time) {
 	t.Helper()
+	var file, run *time.Time
 	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
-		`select a.status, a.expires_at, r.expires_at from artifacts a join runs r on r.namespace = a.namespace and r.id = a.run_id
-		 where a.run_id = $1 and a.step = 'invoice' and a.digest = 'sha256:' || $2`, string(decidedRun), digest).Scan(&status, &lives, &runExpires); err != nil {
+		`select a.status, nullif(a.expires_at, 'infinity'), r.expires_at from artifacts a join runs r on r.namespace = a.namespace and r.id = a.run_id
+		 where a.run_id = $1 and a.step = 'invoice' and a.digest = 'sha256:' || $2`, string(decidedRun), digest).Scan(&status, &file, &run); err != nil {
 		t.Fatalf("the file of the shard is not recorded: %s", err)
+	}
+	if file != nil {
+		lives = *file
+	}
+	if run != nil {
+		runExpires = *run
 	}
 	return status, lives, runExpires
 }

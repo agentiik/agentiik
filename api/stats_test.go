@@ -363,3 +363,51 @@ func TestASeriesStopsWhereTheRetentionDoes(t *testing.T) {
 		t.Errorf("%s laid out %v past a retention of one day", path, got.Histogram)
 	}
 }
+
+// range=max starts a series at the first run it counts, among those its caller can read and no
+// other, so that where a series starts is no more a way of learning which runs exist than what it
+// counts is; a caller who can read none is answered the 24 hours before to, as where there is
+// nothing to count at all.
+func TestASeriesToTheMaxStartsAtTheFirstRunItsCallerCanRead(t *testing.T) {
+	s, from := laidOut(t)
+	finance := api.Target{Namespace: "finance"}
+	payroll := api.Target{Namespace: "finance", Workflow: "payroll"}
+	h := s.servedTo(t, denying{
+		allowed: granted{
+			"alice": {{api.RunRead, finance}},
+			"bob":   {{api.RunRead, payroll}},
+			"carol": {{api.RunRead, api.Target{Namespace: "team-ops"}}},
+			"dave":  {{api.RunRead, finance}},
+		},
+		denied: granted{"dave": {{api.RunRead, payroll}}},
+	})
+	to := from.Add(3 * time.Hour)
+	query := "?range=max&to=" + to.Format(time.RFC3339)
+	for _, c := range []struct {
+		as, path string
+		want     time.Time
+	}{
+		{"alice", "/api/v1/finance/stats/runs" + query, from},
+		{"alice", "/api/v1/finance/stats/runs" + query + "&workflow=payroll", from.Add(20 * time.Minute)},
+		{"bob", "/api/v1/finance/stats/runs" + query, from.Add(20 * time.Minute)},
+		{"carol", "/api/v1/finance/stats/runs" + query, to.Add(-24 * time.Hour)},
+		{"carol", "/api/v1/team-ops/stats/runs" + query, from.Add(2 * time.Minute)},
+		{"dave", "/api/v1/finance/stats/runs" + query, from},
+		{"dave", "/api/v1/finance/stats/runs" + query + "&workflow=payroll", to.Add(-24 * time.Hour)},
+	} {
+		got := series(t, h, c.as, c.path)
+		started, err := time.Parse(time.RFC3339Nano, got.From)
+		if err != nil {
+			t.Fatalf("%s was answered from %q: %v", c.path, got.From, err)
+		}
+		if !started.Equal(c.want) {
+			t.Errorf("%s asking for %s was answered from %s, want %s", c.as, c.path, got.From, c.want.Format(time.RFC3339))
+		}
+		if len(got.Buckets) == 0 || got.Buckets[0].Since > got.From {
+			t.Errorf("%s asking for %s was answered buckets from %v, which do not hold where it starts, %s", c.as, c.path, got.Buckets, got.From)
+		}
+	}
+	if w := statsOf(t, h, "alice", "/api/v1/finance/stats/runs?range=max&from="+from.Format(time.RFC3339), ""); w.Code != http.StatusBadRequest {
+		t.Errorf("range=max beside from was answered %d", w.Code)
+	}
+}

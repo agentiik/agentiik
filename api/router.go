@@ -76,6 +76,10 @@ type Router struct {
 	// route taking OnRun without it is refused at registration, as a runner route is.
 	runs FindRun
 
+	// names says which namespace a name in an address answers to now, and is nil where nothing
+	// was renamed or the installation keeps no names: see ServeNamespaces.
+	names CurrentNames
+
 	// routes is what was registered, in registration order, for the test that reads the
 	// list back and for an installation that wants to print its own surface.
 	routes []Route
@@ -174,6 +178,31 @@ func (rt *Router) ServeRunners(runners IdentifyRunner) { rt.runners = runners }
 // ServeRuns says where the namespace and workflow of a run are found. Without it, a route taking
 // OnRun is refused at registration.
 func (rt *Router) ServeRuns(runs FindRun) { rt.runs = runs }
+
+// CurrentNames says which name the namespace an address names answers to now: the name itself, or
+// for a name a namespace held before it was renamed, the name that namespace has. "The old name
+// stays the namespace's, as a former name, and is resolved wherever an address names a namespace",
+// so that a webhook sender, a git remote or a client configured with it keeps working. A name
+// nobody holds is answered as it is, and found absent by whatever asks of it. db.Pool is one.
+type CurrentNames interface {
+	CurrentName(ctx context.Context, name string) (string, error)
+}
+
+// ServeNamespaces says where the name a namespace answers to now is found. With it, every route
+// whose path names a namespace is authorised against, and handed, the namespace that answers to the
+// name its path carries, a former name reaching its namespace as its name does; without it, the
+// name is taken as it is written.
+func (rt *Router) ServeNamespaces(names CurrentNames) { rt.names = names }
+
+// current is the name the namespace named in an address answers to now, as ServeNamespaces says. A
+// name no namespace could carry is taken as it is, and refused as the absence it is, before the
+// database is asked about it, since a path can carry bytes PostgreSQL refuses to hold as text.
+func (rt *Router) current(ctx context.Context, name string) (string, error) {
+	if rt.names == nil || name == "" || NamespaceRef(name) != nil {
+		return name, nil
+	}
+	return rt.names.CurrentName(ctx, name)
+}
 
 // HandleRunner registers one route a runner reaches.
 //
@@ -646,6 +675,15 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 	if g.repository {
 		target.Workflow = strings.TrimSuffix(r.PathValue("repository"), ".git")
 	}
+	// The namespace the path names is the one that answers to its name now, a former name reaching
+	// it, and every question below is asked about that one, so that what an address renamed from
+	// reaches is what its new name does and no less.
+	current, err := rt.current(r.Context(), target.Namespace)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+		return
+	}
+	target.Namespace = current
 
 	if g.public {
 		h(w, r, "", target)
@@ -831,6 +869,11 @@ func (rt *Router) serveAcross(w http.ResponseWriter, r *http.Request, g guard, h
 			rt.deny(w, Namespace)
 			return
 		}
+		// Answered across the namespace that answers to the name now, a former name among them.
+		if within.Namespace, err = rt.current(r.Context(), within.Namespace); err != nil {
+			refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+			return
+		}
 	}
 	askable := func(over Target) error {
 		switch {
@@ -848,6 +891,17 @@ func (rt *Router) serveAcross(w http.ResponseWriter, r *http.Request, g guard, h
 			}
 		}
 		return rt.allowAmong(ctx, as, g.permission, over)
+	}))
+	// Such a route asks about each target itself, so what Still asks again is the credential alone:
+	// whether it still identifies the same principal. And whether the caller administers the
+	// installation, for a route that answers an administrator more.
+	request := r
+	r = r.WithContext(context.WithValue(r.Context(), stillKey{}, func(ctx context.Context) (bool, error) {
+		again, err := rt.identify(request.WithContext(ctx))
+		return err == nil && again.Principal == who, err
+	}))
+	r = r.WithContext(context.WithValue(r.Context(), administersKey{}, func(ctx context.Context) (bool, error) {
+		return rt.allow(ctx, as, GrantManage, Target{})
 	}))
 	h(w, r, who, within, func(ctx context.Context, over Target) (bool, error) {
 		if err := askable(over); err != nil {
@@ -1011,7 +1065,8 @@ func refuse(w http.ResponseWriter, status int, message string) {
 
 // Still answers, for the route serving r, whether its caller still holds what the route was
 // authorised by: the request's credential identified again as the same principal, and the
-// authorizer asked again about the same permission and the same target.
+// authorizer asked again about the same permission and the same target. A route taking Across
+// asks about each target itself, and is answered about the credential alone.
 //
 // A request is authorised once, when it arrives, and deleting a grant "revokes one grant, from the
 // next request". A route whose answer goes on for as long as its caller reads, a log stream, is one
@@ -1026,6 +1081,20 @@ func Still(r *http.Request) func(context.Context) (bool, error) {
 
 // stillKey is where the router leaves the question Still asks.
 type stillKey struct{}
+
+// Administers answers, for a route taking Across, whether its caller administers the
+// installation, asked as every administrator's route asks it, as grant:manage at the installation
+// through a credential that carries it, and asked again each time. A request the router did not
+// serve is answered no.
+func Administers(r *http.Request) func(context.Context) (bool, error) {
+	if administers, ok := r.Context().Value(administersKey{}).(func(context.Context) (bool, error)); ok {
+		return administers
+	}
+	return func(context.Context) (bool, error) { return false, nil }
+}
+
+// administersKey is where the router leaves the question Administers asks.
+type administersKey struct{}
 
 // gitPath says whether an escaped path is a repository's as git addresses one, /{namespace}/{name}.git/
 // and at least one segment more: what git's smart HTTP asks for, and nothing any other route of

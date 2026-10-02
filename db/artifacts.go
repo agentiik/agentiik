@@ -89,7 +89,8 @@ type Written struct {
 	Key string
 
 	// ExpiresAt is when the reference stops being fetchable, capped by the namespace:
-	// "retain is capped by the namespace quota and cannot exceed it".
+	// "retain is capped by the namespace quota and cannot exceed it". The zero time is a reference
+	// nothing bounds, kept for ever.
 	ExpiresAt time.Time
 
 	// Fetches is what is left of the budget, zero where there is none.
@@ -161,8 +162,14 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 		return Written{}, err
 	}
 
+	// Kept under the namespace's storage name, the name it was created with, which a rename leaves
+	// as it was, so that the key written is the one every object of the namespace is under.
+	storage, err := storageOf(ctx, tx, namespace)
+	if err != nil {
+		return Written{}, err
+	}
 	stored := "sha256:" + r.Digest
-	out := Written{Key: artifact.Key(namespace, r.Digest), Fetches: r.Fetches}
+	out := Written{Key: artifact.Key(storage, r.Digest), Fetches: r.Fetches}
 
 	// The object first, because the reference has a foreign key onto it, and counted up
 	// before the reference is written rather than after: a count that is momentarily too
@@ -180,18 +187,22 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 	if r.Fetches > 0 {
 		budget = &r.Fetches
 	}
-	var expires time.Time
+	// A reference nothing bounds, neither its retain nor the namespace, is kept for ever: written
+	// as infinity, which every comparison with now() reads as later, so that the purges, the
+	// quotas and the fetches treat it as live without a case of their own; and answered as no
+	// instant at all.
+	var expires *time.Time
 	var status Status
 	var existing string
 	err = tx.QueryRow(ctx,
 		`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type,
 		                        expires_at, fetches_left)
 		 values ($1, $2, $3, $4, $5, $6, $7, $8,
-		         now() + least($9::bigint * interval '1 microsecond', $10::int * interval '1 day'), $11)
+		         coalesce(now() + least($9::bigint * interval '1 microsecond', $10::int * interval '1 day'), 'infinity'), $11)
 		 on conflict (namespace, run_id, step, port, name) do nothing
-		 returning expires_at, status, digest`,
+		 returning nullif(expires_at, 'infinity'), status, digest`,
 		namespace, string(r.URI.Run), string(r.URI.Step), string(r.URI.Port), r.URI.Name,
-		stored, r.Size, r.MediaType, zeroIsNull64(r.For.Microseconds()), ceiling, budget).Scan(&expires, &status, &existing)
+		stored, r.Size, r.MediaType, zeroIsNull64(r.For.Microseconds()), zeroIsNull(ceiling), budget).Scan(&expires, &status, &existing)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// The reference was already there, so the count this call raised is one too
@@ -202,7 +213,7 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 		}
 		var left *int
 		if err := tx.QueryRow(ctx,
-			`select digest, expires_at, status, fetches_left from artifacts
+			`select digest, nullif(expires_at, 'infinity'), status, fetches_left from artifacts
 			 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5`,
 			namespace, string(r.URI.Run), string(r.URI.Step), string(r.URI.Port), r.URI.Name,
 		).Scan(&existing, &expires, &status, &left); err != nil {
@@ -211,7 +222,7 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 		if existing != stored {
 			return Written{}, fmt.Errorf("db: %s already names %s and this writes %s: a logical URI resolves to one physical key, and two digests under one URI is a URI that stopped meaning one thing", r.URI, existing, stored)
 		}
-		out.ExpiresAt, out.Status = expires, status
+		out.ExpiresAt, out.Status = never(expires), status
 		out.Fetches = 0
 		if left != nil {
 			out.Fetches = *left
@@ -221,7 +232,7 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 		return Written{}, fmt.Errorf("db: the reference could not be recorded: %w", err)
 	}
 
-	out.ExpiresAt, out.Status = expires, status
+	out.ExpiresAt, out.Status = never(expires), status
 	out.New = true
 	return out, nil
 }
@@ -238,7 +249,10 @@ type Resolved struct {
 	Size      int64
 	MediaType string
 
-	Status    Status
+	Status Status
+
+	// ExpiresAt is when the reference stops being fetchable, and the zero time where nothing
+	// bounds it.
 	ExpiresAt time.Time
 
 	// RetiredAt is when a retired reference was retired, and the zero time on a live
@@ -265,16 +279,17 @@ type Resolved struct {
 func (n *NS) Resolve(ctx context.Context, u agk.URI) (Resolved, error) {
 	out := Resolved{URI: u}
 	var stored string
+	var expires *time.Time
 	var retired *time.Time
 	var left *int
 	var lapsed bool
 	err := n.tx.QueryRow(ctx,
-		`select digest, size_bytes, media_type, status, expires_at, retired_at, fetches_left,
+		`select digest, size_bytes, media_type, status, nullif(expires_at, 'infinity'), retired_at, fetches_left,
 		        expires_at <= now(), cardinality(array(select h from unnest(fetches_held_until) h where h > now()))
 		 from artifacts
 		 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5`,
 		n.namespace, string(u.Run), string(u.Step), string(u.Port), u.Name,
-	).Scan(&stored, &out.Size, &out.MediaType, &out.Status, &out.ExpiresAt, &retired, &left, &lapsed, &out.Held)
+	).Scan(&stored, &out.Size, &out.MediaType, &out.Status, &expires, &retired, &left, &lapsed, &out.Held)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Resolved{URI: u}, ErrNoArtifact
 	}
@@ -283,7 +298,12 @@ func (n *NS) Resolve(ctx context.Context, u agk.URI) (Resolved, error) {
 	}
 
 	out.Digest = trimAlgorithm(stored)
-	out.Key = artifact.Key(n.namespace, out.Digest)
+	out.ExpiresAt = never(expires)
+	storage, err := n.Storage(ctx)
+	if err != nil {
+		return Resolved{URI: u}, err
+	}
+	out.Key = artifact.Key(storage, out.Digest)
 	if retired != nil {
 		out.RetiredAt = *retired
 	}
@@ -412,7 +432,17 @@ func (n *NS) retire(ctx context.Context, u agk.URI, status Status, stored string
 	return lower(ctx, n.tx, n.namespace, stored, u.Run)
 }
 
-// retentionCeiling is what the namespace lets a workflow ask for.
+// never is an expiry as the store answers it, nil where nothing bounds it, as the zero time: "kept
+// for ever" is the instant no expiry names.
+func never(at *time.Time) time.Time {
+	if at == nil {
+		return time.Time{}
+	}
+	return *at
+}
+
+// retentionCeiling is what the namespace lets a workflow ask for, in days, and zero where it sets no
+// bound.
 //
 // "retain is capped by the namespace quota and cannot exceed it; a workflow may always ask
 // for less." Read here rather than trusted from the caller, because a cap a caller applies
@@ -420,7 +450,7 @@ func (n *NS) retire(ctx context.Context, u agk.URI, status Status, stored string
 func retentionCeiling(ctx context.Context, tx pgx.Tx, namespace string) (int, error) {
 	var days int
 	err := tx.QueryRow(ctx,
-		`select max_retention_days from namespaces where name = $1`, namespace).Scan(&days)
+		`select coalesce(max_retention_days, 0) from namespaces where name = $1`, namespace).Scan(&days)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("db: namespace %q has no row, so the ceiling retain is capped by is unknown and nothing may be written under it", namespace)
 	}

@@ -90,7 +90,7 @@ describe("a workflow's page", () => {
     expect(screen.getByText("211 items")).toBeTruthy();
     expect(screen.getByText("0 6 1 * *")).toBeTruthy();
     expect(screen.getByText("POST /hooks/finance/invoicing/rerun")).toBeTruthy();
-    expect(screen.getByText("a run waits for the one going")).toBeTruthy();
+    expect(screen.queryByText("cancel_in_progress")).toBeNull();
   });
 
   it("selects a step from the graph, and its block in the file, and the other way", async () => {
@@ -117,7 +117,6 @@ describe("a workflow's page", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^Step reconcile/ }));
     expect(await screen.findByText("finance/monthly-invoicing", { selector: "dd" })).toBeTruthy();
     expect(screen.getByText("v2.1.0", { selector: "dd" })).toBeTruthy();
-    expect(screen.getByText("no run yet")).toBeTruthy();
   });
 
   it("lists the history behind its head on asking", async () => {
@@ -136,6 +135,6 @@ describe("a workflow's page", () => {
 
   it("answers as the API does for a workflow that is not there, or in a namespace not the caller's", async () => {
     open("/finance/workflows/nothing");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
   });
 });

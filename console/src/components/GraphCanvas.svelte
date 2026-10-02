@@ -21,14 +21,17 @@
 
   let zoom = $state(1);
   let holder: HTMLDivElement | undefined = $state();
+  let box: HTMLDivElement | undefined = $state();
 
   const margin = 32;
   const states = ["succeeded", "running", "pending", "failed", "skipped"];
 
+  // fit is the zoom at which the whole graph is seen in its box, as wide or as tall as the box lets it.
   function fit() {
-    if (!holder) return;
-    const w = holder.clientWidth - margin * 2;
-    zoom = Math.max(0.3, Math.min(1.5, Math.round((w / laid.width) * 20) / 20));
+    if (!holder || !box) return;
+    const w = (holder.clientWidth - margin * 2) / laid.width;
+    const h = (box.clientHeight - margin * 2) / laid.height;
+    zoom = Math.max(0.3, Math.min(1.5, Math.floor(Math.min(w, h) * 20) / 20));
   }
 
   const stepOf = (name: string) => run?.steps.find((s) => s.step === name);
@@ -55,7 +58,7 @@
 </script>
 
 <div class="canvas" bind:this={holder}>
-  <div class="scroll">
+  <div class="scroll" bind:this={box}>
     <div class="plane" style:width="{(laid.width + margin * 2) * zoom}px" style:height="{(laid.height + margin * 2) * zoom}px">
       <div class="scaled" style:transform="scale({zoom})" style:width="{laid.width + margin * 2}px" style:height="{laid.height + margin * 2}px">
         <svg class="edges" width={laid.width + margin * 2} height={laid.height + margin * 2} aria-hidden="true">
@@ -73,22 +76,22 @@
         </svg>
         <div class="layer" style:left="{margin}px" style:top="{margin}px">
           {#each laid.inputs as c (c.name)}
-            <span class="chip mono" style:left="{c.x}px" style:top="{c.y}px" style:width="{c.width}px" style:height="{chip.height}px" title="workflow input {c.name}{graph.inputs?.[c.name]?.required ? ', required' : ''}">{c.name}</span>
+            <span class="chip term" style:left="{c.x}px" style:top="{c.y}px" style:width="{c.width}px" style:height="{chip.height}px" title="workflow input {c.name}{graph.inputs?.[c.name]?.required ? ', required' : ''}">{c.name}</span>
           {/each}
           {#each laid.outputs as c (c.name)}
             {@const o = graph.outputs?.[c.name]}
             <span
-              class="chip mono"
+              class="chip term"
               style:left="{c.x}px"
               style:top="{c.y}px"
               style:width="{c.width}px"
               style:height="{chip.height}px"
               title="workflow output {c.name}: {o?.from.step}.{o?.from.port}{o?.retain?.for ? `, kept ${o.retain.for}` : ''}{o?.retain?.fetches ? `, ${o.retain.fetches} fetches` : ''}">{c.name}</span>
-            {#if o}<span class="from faint mono" style:left="{c.x}px" style:top="{c.y + chip.height + 4}px" style:width="{c.width}px">{o.from.step}.{o.from.port}{o.retain?.for ? ` · ${o.retain.for}` : ""}</span>{/if}
+            {#if o}<span class="from faint term" style:left="{c.x}px" style:top="{c.y + chip.height + 4}px" style:width="{c.width}px">{o.from.step}.{o.from.port}{o.retain?.for ? ` · ${o.retain.for}` : ""}</span>{/if}
           {/each}
           {#each laid.edges as e (`${e.from.step}.${e.from.port}>${e.to.step}.${e.to.port}`)}
             {@const n = items(e.from.step, e.from.port)}
-            {#if n !== undefined}<span class="count mono {e.kind}" style:left="{e.mid.x + 6}px" style:top="{e.mid.y - 8}px">{n} items</span>{/if}
+            {#if n !== undefined}<span class="count term {e.kind}" style:left="{e.mid.x + 6}px" style:top="{e.mid.y - 8}px">{n} items</span>{/if}
           {/each}
           {#each laid.nodes as p (p.step)}
             {@const s = graph.steps[p.step]!}
@@ -108,32 +111,32 @@
               onclick={() => onselect(p.step)}
             >
               <span class="head">
-                <span class="mono name">{p.step}</span>
-                {#if st}<span class="took mono">{lasted(p.step)}</span>{/if}
+                <span class="term name">{p.step}</span>
+                {#if st}<span class="took term">{lasted(p.step)}</span>{/if}
               </span>
               <span class="line">
                 {#if st}<StatePill state={st.verdict} />{/if}
-                <span class="mono muted what" title={s.image ?? (s.workflow ? `${s.workflow.workflow}@${s.workflow.ref ?? "default branch"}` : "")}>{what(s)}</span>
+                <span class="term muted what" title={s.image ?? (s.workflow ? `${s.workflow.workflow}@${s.workflow.ref ?? "default branch"}` : "")}>{what(s)}</span>
               </span>
               {#if sh}
                 <span class="shards" aria-label="{sh.ended} of {sh.of} shards ended">
                   {#each sh.tasks as t (t.task)}<span class="cell {t.state}" title="shard {t.shard?.index}: {t.state}"></span>{/each}
                   <span class="bar"><span class="fill" style:width="{(sh.ended / sh.of) * 100}%"></span></span>
-                  <span class="mono muted">{sh.ended} of {sh.of}</span>
+                  <span class="term muted">{sh.ended} of {sh.of}</span>
                 </span>
               {:else if child}
-                <span class="line mono muted">child run {child}</span>
+                <span class="line term muted">child run {child}</span>
               {:else if marks.length}
-                <span class="line mono faint marks" title={marks.join(" · ")}>{marks.join(" · ")}</span>
+                <span class="line term faint marks" title={marks.join(" · ")}>{marks.join(" · ")}</span>
               {/if}
             </button>
             {#each p.inputs as port (port.name)}
               <span class="port" style:left="{port.x - 4}px" style:top="{port.y - 4}px" aria-hidden="true"></span>
-              <span class="portname mono" style:left="{port.x + 7}px" style:top="{port.y - 19}px">{port.name}</span>
+              <span class="portname term" style:left="{port.x + 7}px" style:top="{port.y - 19}px">{port.name}</span>
             {/each}
             {#each p.outputs as port (port.name)}
               <span class="port {port.name === 'error' ? 'error' : port.name === 'rejected' ? 'rejected' : ''}" style:left="{port.x - 4}px" style:top="{port.y - 4}px" aria-hidden="true"></span>
-              <span class="portname mono" style:left="{port.x + 7}px" style:top="{port.y + 3}px">{port.name}</span>
+              <span class="portname term" style:left="{port.x + 7}px" style:top="{port.y + 3}px">{port.name}</span>
             {/each}
           {/each}
         </div>
@@ -143,7 +146,7 @@
 
   <div class="bar-bottom">
     <button class="control" aria-label="Zoom out" onclick={() => (zoom = Math.max(0.3, Math.round((zoom - 0.1) * 10) / 10))}><Icon name="control-zoom_out" size={14} /></button>
-    <span class="mono zoom">{Math.round(zoom * 100)}%</span>
+    <span class="term zoom">{Math.round(zoom * 100)}%</span>
     <button class="control" aria-label="Zoom in" onclick={() => (zoom = Math.min(2, Math.round((zoom + 0.1) * 10) / 10))}><Icon name="control-zoom_in" size={14} /></button>
     <button class="control" onclick={fit}><Icon name="control-fit" size={14} />Fit</button>
     <span class="legend" aria-label="Legend">
@@ -279,6 +282,7 @@
 
   .head {
     display: flex;
+    align-items: baseline;
     justify-content: space-between;
     gap: calc(var(--unit) * 4);
   }
@@ -344,7 +348,7 @@
 
   .bar {
     flex: 1;
-    height: 5px;
+    height: 6px;
     margin: 0 calc(var(--unit) * 3);
     overflow: hidden;
     border-radius: var(--radius-round);

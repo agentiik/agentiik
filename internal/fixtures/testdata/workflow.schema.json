@@ -177,7 +177,7 @@
     },
     "vars": {
       "title": "Variables",
-      "description": "Values written once and read anywhere an expression is allowed, through the vars context. They keep a currency or a threshold in a single place instead of repeated across steps. They are not secrets: they sit in the file and are readable by anyone who can read the workflow.",
+      "description": "Values written once and read anywhere an expression is allowed, through the vars context. They keep a currency or a threshold in a single place instead of repeated across steps. They are not secrets: they sit in the file and are readable by anyone who can read the workflow. On a server the vars context also holds the variables the owning namespace shows this workflow, set through the API rather than in a file, and a name written here takes this file's value, as a name an including file writes takes that file's; agk run --local reaches no namespace and reads these alone.",
       "$ref": "#/$defs/vars",
       "examples": [{ "currency": "EUR", "dunning_days": 30 }]
     },

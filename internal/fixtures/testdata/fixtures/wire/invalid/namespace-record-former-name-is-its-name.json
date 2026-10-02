@@ -1,0 +1,9 @@
+{
+  "name": "finance",
+  "kind": "shared",
+  "owner": "bob-martin",
+  "former_names": [
+    "accounting",
+    "finance"
+  ]
+}

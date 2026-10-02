@@ -133,6 +133,11 @@ type Fired struct {
 	Event       map[string]any
 	TriggerKind string
 	TriggeredBy string
+
+	// Vars are the variables the workflow's namespace shows it, which the file's own are laid over
+	// under vars, as the run the trigger starts reads them: the caller hands the run the same ones,
+	// so that what its map and its filter read is what its steps read.
+	Vars map[string]any
 }
 
 // Fill evaluates what an entry of the on block fills the workflow inputs with, its map, over what
@@ -192,7 +197,7 @@ func (g *Graph) firedContext(f Fired) expr.Context {
 		Run:     map[string]any{"attempt": int64(1), "trigger_kind": f.TriggerKind, "triggered_by": f.TriggeredBy},
 		Trigger: f.Trigger,
 		Event:   f.Event,
-		Vars:    map[string]any(wf.Vars),
+		Vars:    wf.Vars.Over(f.Vars),
 	}
 }
 

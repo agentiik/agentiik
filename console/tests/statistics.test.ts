@@ -5,32 +5,11 @@ import App from "../src/App.svelte";
 import { Place } from "../src/lib/place.svelte";
 import { filtersOf } from "../src/lib/runs.svelte";
 import { Session } from "../src/lib/session.svelte";
-import { queryOfRange, rangeOf } from "../src/lib/stats";
+import { query } from "../src/lib/range.svelte";
+import { described, queryOfRange, rangeOf } from "../src/lib/stats";
 import { answering, scenario } from "./scenario";
 
-// uPlot draws on a canvas, which a document with no browser has none of: the charts are drawn by a
-// stand-in here, and what these tests read is everything around them, the table of numbers included.
-vi.mock("uplot", () => {
-  class Plot {
-    over = document.createElement("div");
-    cursor: { idx: number | null } = { idx: null };
-    select = { left: 0, top: 0, width: 0, height: 0 };
-    constructor(_opts: unknown, _data: unknown, el: HTMLElement) {
-      el.appendChild(this.over);
-    }
-    setSize() {}
-    setSelect() {}
-    destroy() {}
-    posToVal() {
-      return 0;
-    }
-    valToPos() {
-      return 0;
-    }
-    static paths = { bars: () => () => null, stepped: () => () => null };
-  }
-  return { default: Plot };
-});
+vi.mock("uplot", () => import("./plot"));
 
 const now = Date.parse("2026-09-30T06:02:30Z");
 
@@ -48,6 +27,15 @@ describe("a statistics page's range", () => {
     expect(r.preset).toBeUndefined();
     expect(queryOfRange(r, q).toString()).toBe("tab=quotas&from=2026-09-29T10%3A00%3A00.000Z&to=2026-09-29T14%3A00%3A00.000Z");
     expect(rangeOf(new URLSearchParams("from=2026-09-29T14:00:00Z&to=2026-09-29T10:00:00Z"), now).preset).toBe("24h");
+  });
+
+  it("is asked to the max with range=max and no from, and starts where the API answers it does", () => {
+    const r = rangeOf(new URLSearchParams("range=max"), now);
+    expect(r.preset).toBe("max");
+    expect(query(r)).toEqual({ range: "max", from: undefined, to: "2026-09-30T06:02:30.000Z", compare: undefined });
+    expect(query(rangeOf(new URLSearchParams("range=7d"), now))).toMatchObject({ range: undefined, from: "2026-09-23T06:02:30.000Z" });
+    expect(described(r, "1d", "2025-03-14T09:26:53Z")).toBe("2025-03-14 09:26 to 2026-09-30 06:02 UTC · a bucket a day");
+    expect(queryOfRange(r, new URLSearchParams()).toString()).toBe("range=max");
   });
 });
 
@@ -77,14 +65,21 @@ describe("a namespace's statistics", () => {
     expect(Date.parse(q.get("to")!) - Date.parse(q.get("from")!)).toBe(7 * 86_400_000);
   });
 
-  it("opens the runs of a bucket chosen with the arrow keys", async () => {
+  it("asks to the max with range=max where Max is chosen", async () => {
+    const { asked, place } = open("/finance/statistics");
+    expect(await screen.findByText("Retries by exit code")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Max" }));
+    expect(place.query.get("range")).toBe("max");
+    await vi.waitFor(() => expect(asked.some((a) => a.startsWith("GET /api/v1/finance/stats/runs") && a.includes("range=max") && !a.includes("from="))).toBe(true));
+    expect(screen.getByRole("button", { name: "Max" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("opens no runs from a bucket, since a namespace's runs are listed under each workflow", async () => {
     const { place } = open("/finance/statistics");
     const [chart] = await screen.findAllByRole("slider");
     await fireEvent.keyDown(chart!, { key: "ArrowRight" });
     await fireEvent.keyDown(chart!, { key: "Enter" });
-    expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "runs" });
-    expect(place.query.get("since")).toBe("2026-09-29T07:00:00Z");
-    expect(place.query.get("until")).toBe("2026-09-29T07:59:59.999999999Z");
+    expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "statistics" });
   });
 
   it("holds each chart's numbers in a table, and the namespace's quotas beside its load", async () => {
@@ -97,6 +92,6 @@ describe("a namespace's statistics", () => {
 
   it("is not offered in a namespace the caller holds nothing in", async () => {
     open("/payroll/statistics");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
   });
 });

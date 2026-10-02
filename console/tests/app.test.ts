@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -17,39 +17,54 @@ function open(path: string, s: Scenario = scenario("alice")) {
 }
 
 describe("the console", () => {
-  it("opens on the caller's own namespace", async () => {
+  it("opens on the caller's home, every namespace together, and stays there", async () => {
     const { place } = open("/");
-    await screen.findByText("alice", { selector: ".login" });
-    expect(place.route).toEqual({ kind: "namespace", namespace: "alice", view: "runs", run: undefined });
+    await screen.findByRole("button", { name: "You, alice" });
+    expect(await screen.findByRole("region", { name: "Activity" })).toBeTruthy();
+    expect(place.route).toEqual({ kind: "landing" });
   });
 
-  it("lists a namespace's runs, and those that failed in the last hour apart", async () => {
-    open("/finance/runs");
+  it("lists a workflow's runs in a tab of the workflow, and offers no list of the namespace's runs", async () => {
+    open("/finance/workflows/monthly-invoicing/runs");
     expect(await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A")).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "Runs" }).getAttribute("aria-current")).toBe("page");
+    const tabs = within(screen.getByRole("navigation", { name: "monthly-invoicing, what is shown" }));
+    expect(tabs.getByRole("link", { name: "Runs" }).getAttribute("aria-current")).toBe("page");
+    expect(within(screen.getByRole("list", { name: "Views of finance" })).queryByRole("link", { name: "Runs" })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "You, alice" }));
     expect(screen.getByText("agentiik v0.6.0")).toBeTruthy();
+  });
+
+  it("reads a screen again when the namespace, the workflow or the run it shows is another, rather than keep the one before", async () => {
+    const s = scenario("alice");
+    const runs = (s["GET /api/v1/runs"]!.body as { runs: Record<string, unknown>[] }).runs;
+    s["GET /api/v1/runs?namespace=alice"] = { status: 200, body: { runs: [{ ...runs[0], namespace: "alice", workflow: "report", run: "01JN0000000000000000000ALI" }] } };
+    const { place } = open("/finance/workflows", s);
+    expect(await screen.findByRole("link", { name: "monthly-invoicing" })).toBeTruthy();
+    place.go({ kind: "namespace", namespace: "alice", view: "workflows" });
+    expect(await screen.findByRole("link", { name: "report" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "monthly-invoicing" })).toBeNull();
   });
 
   it("answers a namespace the caller holds nothing in as one that does not exist", async () => {
     const { asked } = open("/payroll/runs");
-    expect(await screen.findByText("No such thing, or not yours.")).toBeTruthy();
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
     expect(asked.some((a) => a.includes("namespace=payroll"))).toBe(false);
   });
 
   it("asks to sign in where the API knows no session", async () => {
     open("/finance/runs", { "GET /api/v1/me": { status: 401, body: { error: "sign in first" } } });
-    expect(await screen.findByText("This browser is not signed in to this installation.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Sign in with a passkey" })).toBeTruthy();
   });
 
   it("sends a session that may only enrol to the enrolment page", async () => {
     open("/finance/runs", { "GET /api/v1/me": { status: 403, body: { error: "enrol a passkey first" } } });
-    expect((await screen.findByRole("link", { name: "Enrol a passkey" })).getAttribute("href")).toBe("auth/enrol");
+    expect((await screen.findByRole("link", { name: "Set up a passkey" })).getAttribute("href")).toBe("auth/enrol");
   });
 });
 
 describe("a run's steps and commit in the list", () => {
   it("draws each run's steps as a strip, said in words, and its pinned commit", async () => {
-    open("/finance/runs");
+    open("/finance/workflows/monthly-invoicing/runs");
     const strip = await screen.findByRole("img", { name: /^Steps: normalize succeeded in 50s, invoice failed in 3m 07s, archive not reached$/ });
     const segments = strip.querySelectorAll(".segment");
     expect(segments).toHaveLength(3);
@@ -62,7 +77,7 @@ describe("a run's steps and commit in the list", () => {
   });
 
   it("says a run that reached no step yet has none", async () => {
-    open("/finance/runs");
+    open("/finance/workflows/monthly-invoicing/runs");
     expect(await screen.findByRole("img", { name: "No step has been reached" })).toBeTruthy();
   });
 });
@@ -72,7 +87,7 @@ describe("refusing as the API does", () => {
   // addresses are compared on what the console says of them and not on what they spell.
   async function refusedAt(path: string, s: Scenario, named: string[]): Promise<string> {
     open(path, s);
-    await screen.findByText("No such thing, or not yours.");
+    await screen.findByText("This page does not exist, or is not shared with you.");
     const drawn = document.body.innerHTML.replaceAll(/\s+/g, " ");
     document.body.innerHTML = "";
     return named.reduce((html, n) => html.replaceAll(n, "?"), drawn);

@@ -43,16 +43,3 @@ export function ordered(namespaces: readonly Namespace[], principal: string): { 
     shared: namespaces.filter((n) => n.kind === "shared").sort(byName),
   };
 }
-
-// home is the namespace the console opens on: the caller's personal one, or for a service account the
-// namespace it belongs to, or else the first it can read.
-export function home(me: Me, namespaces: readonly Namespace[]): string | undefined {
-  const { own, personal, shared } = ordered(namespaces, me.principal);
-  if (own) {
-    return own.name;
-  }
-  if (me.service_account) {
-    return me.service_account.namespace;
-  }
-  return (shared[0] ?? personal[0])?.name;
-}

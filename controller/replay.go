@@ -44,7 +44,7 @@ func (co *Core) reused(ctx context.Context, e db.Evaluation, g *graph.Graph) (ma
 	if err := asWritten(of.Document, &doc); err != nil {
 		return nil, "", fmt.Errorf("controller: the document of run %s could not be read: %w", of.Run, err)
 	}
-	state, err := Rehydrate(ctx, doc, of.Namespace, co.objects, co.limits)
+	state, err := Rehydrate(ctx, doc, storageOf(of), co.objects, co.limits)
 	if err != nil {
 		return nil, fmt.Sprintf("what the steps above %s produced in the run it replays, %s, could not be read back, and a replay from a step reuses it: %v; a replay from the start reuses nothing", e.ReplayFrom, e.ReplayOf, err), nil
 	}

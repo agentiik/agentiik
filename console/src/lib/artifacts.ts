@@ -12,10 +12,12 @@ export function retention(a: Artifact, now: number): string {
   switch (a.status) {
     case "live": {
       const left = a.fetches_left === undefined ? "" : `, ${a.fetches_left} ${a.fetches_left === 1 ? "fetch" : "fetches"} left`;
-      return `until ${clock(a.expires_at, now)}${left}`;
+      return `${a.expires_at ? `until ${clock(a.expires_at, now)}` : "kept for ever"}${left}`;
     }
-    case "expired":
-      return `expired ${a.retired_at ? clock(a.retired_at, now) : clock(a.expires_at, now)}, past its retain`;
+    case "expired": {
+      const at = a.retired_at ?? a.expires_at;
+      return `expired${at ? ` ${clock(at, now)}` : ""}, past its retain`;
+    }
     case "collected":
       return `collected ${a.retired_at ? clock(a.retired_at, now) : ""}, its fetches spent`.replace(" ,", ",");
   }
@@ -35,20 +37,20 @@ export async function fetchable(fetcher: typeof fetch, url: string): Promise<str
   try {
     answer = await fetcher(url, { method: "HEAD", redirect: "manual", credentials: "same-origin" });
   } catch (e) {
-    return `The file could not be asked about: ${e instanceof Error ? e.message : String(e)}`;
+    return `Agentiik did not answer when asked about the file. Check your connection, then try again. (The browser said: ${e instanceof Error ? e.message : String(e)})`;
   }
   if (answer.type === "opaqueredirect" || answer.ok || (answer.status >= 300 && answer.status < 400)) {
     return "";
   }
   switch (answer.status) {
     case 410:
-      return "This file existed and is finished: its retain ran out, or its fetches were spent.";
+      return "This file has expired.";
     case 409:
-      return "Every fetch this file has left is being served to somebody else right now. Ask again once a transfer ends.";
+      return "Download limit reached. Try again shortly.";
     case 404:
-      return "No such file, or not yours.";
+      return "File not found.";
     case 503:
-      return "This installation has no object store attached to serve the file from.";
+      return "File storage is not configured.";
   }
-  return `The file could not be fetched: ${answer.status} ${answer.statusText}`.trim();
+  return `The server refused to serve the file (it answered ${answer.status}${answer.statusText ? ` ${answer.statusText}` : ""}).`;
 }
