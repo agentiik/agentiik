@@ -6148,6 +6148,155 @@
         }
       }
     },
+    "/api/v1/{ns}/workflows/{name}/inputs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/workflow"
+        }
+      ],
+      "get": {
+        "operationId": "getRunInputs",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Read the inputs a run takes",
+        "description": "What a manual run of the workflow takes, to whoever may ask for one: the version the ref resolves to, the default branch's head where none is named; each input it declares with its schema as written, whether it is required and its default; and the files of the version's tree those schemas reach by $ref, by path, so that a form is drawn and a value checked before the run is asked for. Nothing else of the workflow file is answered: an operator holds workflow:run without workflow:read, so that it starts a job without seeing the steps, images, queries and endpoints inside it, and the inputs are the workflow's boundary, which whoever asks for a run has to fill. Requires workflow:run.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#inputs"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/inputsRef"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The inputs the version declares, and the files their schemas name.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runInputs"
+                },
+                "examples": {
+                  "declared": {
+                    "summary": "two inputs, one with a default",
+                    "value": {
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "inputs": {
+                        "orders": {
+                          "schema": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "id",
+                                "amount"
+                              ]
+                            }
+                          },
+                          "required": true
+                        },
+                        "period": {
+                          "schema": {
+                            "type": "string",
+                            "pattern": "^[0-9]{4}-[0-9]{2}$"
+                          },
+                          "required": false,
+                          "default": "2026-09"
+                        }
+                      },
+                      "files": {}
+                    }
+                  },
+                  "none": {
+                    "summary": "a workflow declaring no input",
+                    "value": {
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "inputs": {},
+                      "files": {}
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "A ref a branch and a tag both hold, or a request carrying two credentials, a bearer token beside the session cookie or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "Only for a session that may only enrol. Every other refusal of the workflow is a 404."
+          },
+          "404": {
+            "description": "No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no ref": {
+                    "summary": "a ref naming nothing",
+                    "value": {
+                      "error": "nightly names no branch, no tag and no version of the workflow"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The version is a library's, which nothing runs, or its declaration is one a push now refuses, a schema naming a file the tree does not hold among them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "a library": {
+                    "summary": "a library's version",
+                    "value": {
+                      "error": "finance/common@c41d9e2a is a library, which nothing runs: it is included by the workflows that run"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "no store": {
+                    "summary": "no object store",
+                    "value": {
+                      "error": "this installation has no object store attached, and an input's schema names a file of the version's tree, which is kept there"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/{ns}/workflows/{name}/refs": {
       "parameters": [
         {
@@ -20589,6 +20738,149 @@
             "verified": 4182
           }
         ]
+      },
+      "declaredInput": {
+        "type": "object",
+        "description": "One input a version declares, as its file writes it: what a form asks for and holds a value to before the run is asked for.",
+        "required": [
+          "required"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "The input's JSON Schema 2020-12 as written, an object of keywords or a boolean, a $ref naming a file of the version's tree among them. Absent where the input declares none, which takes any value as it comes.",
+            "examples": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ]
+                }
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}$"
+              }
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether a run supplying no value is refused, where the input declares no default.",
+            "examples": [
+              true,
+              false
+            ]
+          },
+          "default": {
+            "description": "The value standing in for one a run does not supply, held to the schema like any other. Absent where the input declares none.",
+            "examples": [
+              "2026-09",
+              []
+            ]
+          }
+        },
+        "examples": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}$"
+            },
+            "required": false,
+            "default": "2026-09"
+          }
+        ]
+      },
+      "runInputs": {
+        "type": "object",
+        "description": "What a manual run of a workflow takes: the version a ref resolves to, the inputs it declares, and the files of its tree their schemas reach, and nothing else of the workflow file, since it is read under workflow:run and the steps, images, queries and endpoints are workflow:read's.",
+        "required": [
+          "commit",
+          "inputs",
+          "files"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "The version answered, which a run asked for by the same ref now would be pinned to.",
+            "examples": [
+              "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+            ]
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Each input the version declares, by its name, empty where it declares none.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/declaredInput"
+            },
+            "examples": [
+              {
+                "period": {
+                  "schema": {
+                    "type": "string",
+                    "pattern": "^[0-9]{4}-[0-9]{2}$"
+                  },
+                  "required": false,
+                  "default": "2026-09"
+                }
+              }
+            ]
+          },
+          "files": {
+            "type": "object",
+            "description": "Each file of the version's tree the inputs' schemas reach by $ref, directly or through another, by its path in the tree, as parsed JSON, so that a $ref resolves without reading the tree, which workflow:read guards. Empty where no schema names a file.",
+            "additionalProperties": {
+              "description": "The file's JSON document.",
+              "examples": [
+                {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number"
+                    }
+                  }
+                }
+              ]
+            },
+            "examples": [
+              {
+                "schemas/order.json": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "amount"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "examples": [
+          {
+            "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+            "inputs": {},
+            "files": {}
+          }
+        ]
       }
     },
     "parameters": {
@@ -21464,6 +21756,26 @@
           "this evening": {
             "summary": "up to six this evening",
             "value": "2026-10-02T18:00:00Z"
+          }
+        }
+      },
+      "inputsRef": {
+        "name": "ref",
+        "in": "query",
+        "required": false,
+        "description": "The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "branch": {
+            "summary": "a branch",
+            "value": "feature/vat-rounding"
+          },
+          "tag": {
+            "summary": "a tag",
+            "value": "v2.1.0"
           }
         }
       }

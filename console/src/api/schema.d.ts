@@ -1070,6 +1070,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/{ns}/workflows/{name}/inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read the inputs a run takes
+         * @description What a manual run of the workflow takes, to whoever may ask for one: the version the ref resolves to, the default branch's head where none is named; each input it declares with its schema as written, whether it is required and its default; and the files of the version's tree those schemas reach by $ref, by path, so that a form is drawn and a value checked before the run is asked for. Nothing else of the workflow file is answered: an operator holds workflow:run without workflow:read, so that it starts a job without seeing the steps, images, queries and endpoints inside it, and the inputs are the workflow's boundary, which whoever asks for a run has to fill. Requires workflow:run.
+         */
+        get: operations["getRunInputs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/workflows/{name}/refs": {
         parameters: {
             query?: never;
@@ -9448,6 +9473,103 @@ export interface components {
             verified: number;
         };
         /**
+         * @description One input a version declares, as its file writes it: what a form asks for and holds a value to before the run is asked for.
+         * @example {
+         *       "schema": {
+         *         "type": "string",
+         *         "pattern": "^[0-9]{4}-[0-9]{2}$"
+         *       },
+         *       "required": false,
+         *       "default": "2026-09"
+         *     }
+         */
+        declaredInput: {
+            /**
+             * @description The input's JSON Schema 2020-12 as written, an object of keywords or a boolean, a $ref naming a file of the version's tree among them. Absent where the input declares none, which takes any value as it comes.
+             * @example {
+             *       "type": "array",
+             *       "items": {
+             *         "type": "object",
+             *         "required": [
+             *           "id",
+             *           "amount"
+             *         ]
+             *       }
+             *     }
+             * @example {
+             *       "type": "string",
+             *       "pattern": "^[0-9]{4}-[0-9]{2}$"
+             *     }
+             */
+            schema?: unknown;
+            /**
+             * @description Whether a run supplying no value is refused, where the input declares no default.
+             * @example true
+             * @example false
+             */
+            required: boolean;
+            /**
+             * @description The value standing in for one a run does not supply, held to the schema like any other. Absent where the input declares none.
+             * @example 2026-09
+             * @example []
+             */
+            default?: unknown;
+        };
+        /**
+         * @description What a manual run of a workflow takes: the version a ref resolves to, the inputs it declares, and the files of its tree their schemas reach, and nothing else of the workflow file, since it is read under workflow:run and the steps, images, queries and endpoints are workflow:read's.
+         * @example {
+         *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "inputs": {},
+         *       "files": {}
+         *     }
+         */
+        runInputs: {
+            /**
+             * @description The version answered, which a run asked for by the same ref now would be pinned to.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            commit: string;
+            /**
+             * @description Each input the version declares, by its name, empty where it declares none.
+             * @example {
+             *       "period": {
+             *         "schema": {
+             *           "type": "string",
+             *           "pattern": "^[0-9]{4}-[0-9]{2}$"
+             *         },
+             *         "required": false,
+             *         "default": "2026-09"
+             *       }
+             *     }
+             */
+            inputs: {
+                [key: string]: components["schemas"]["declaredInput"];
+            };
+            /**
+             * @description Each file of the version's tree the inputs' schemas reach by $ref, directly or through another, by its path in the tree, as parsed JSON, so that a $ref resolves without reading the tree, which workflow:read guards. Empty where no schema names a file.
+             * @example {
+             *       "schemas/order.json": {
+             *         "type": "object",
+             *         "required": [
+             *           "id",
+             *           "amount"
+             *         ],
+             *         "properties": {
+             *           "id": {
+             *             "type": "string"
+             *           },
+             *           "amount": {
+             *             "type": "number"
+             *           }
+             *         }
+             *       }
+             *     }
+             */
+            files: {
+                [key: string]: unknown;
+            };
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -12955,6 +13077,8 @@ export interface components {
         auditSince: components["schemas"]["timestamp"];
         /** @description The entries appended at this instant or before, in RFC 3339. */
         auditUntil: components["schemas"]["timestamp"];
+        /** @description The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs. */
+        inputsRef: string;
     };
     requestBodies: never;
     headers: {
@@ -15455,6 +15579,67 @@ export interface operations {
                 headers: {
                     /** @description The whole seconds until one more run fits in the hour. */
                     "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description An input's schema names a file of the version's tree, which is kept in the object store, and the installation has none attached. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    getRunInputs: {
+        parameters: {
+            query?: {
+                /** @description The version whose inputs are answered: a branch or a tag, by its short name or written in full, or a commit written whole that is a version, resolved as a run asked for by that ref resolves it. The default branch's head where none is named, which is what a run naming no ref runs. */
+                ref?: components["parameters"]["inputsRef"];
+            };
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The inputs the version declares, and the files their schemas name. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runInputs"];
+                };
+            };
+            /** @description A ref a branch and a tag both hold, or a request carrying two credentials, a bearer token beside the session cookie or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal of the workflow is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, or not the caller's to run, which read alike; a ref naming nothing; or a workflow with no version yet. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description The version is a library's, which nothing runs, or its declaration is one a push now refuses, a schema naming a file the tree does not hold among them. */
+            422: {
+                headers: {
                     [name: string]: unknown;
                 };
                 content: {
