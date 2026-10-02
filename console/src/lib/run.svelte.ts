@@ -1,4 +1,5 @@
 import { refusal, type API } from "../api/client";
+import { explain, type Explained } from "./problem";
 import type { components } from "../api/schema";
 
 // One run as the inspector reads it, from GET /api/v1/runs/{id}, again while it has not ended.
@@ -14,7 +15,7 @@ export class RunReader {
   run = $state<RunDetail | null>(null);
   // missing is a run the API answered 404 for: absent, or not the caller's, which read alike.
   missing = $state(false);
-  refused = $state("");
+  refused = $state<Explained | null>(null);
   readonly #api: API;
   readonly #id: string;
 
@@ -32,14 +33,14 @@ export class RunReader {
     if (data) {
       this.run = data;
       this.missing = false;
-      this.refused = "";
+      this.refused = null;
       return;
     }
     if (response.status === 404) {
       this.missing = true;
       return;
     }
-    this.refused = refusal(response, error).message;
+    this.refused = explain("load the run", refusal(response, error));
   }
 }
 

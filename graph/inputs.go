@@ -37,8 +37,25 @@ const InputSchemasMaxBytes = 128 << 10
 // An input with no schema is accepted as it comes, which is what a workflow says when the shape
 // of a value is not its business.
 func (wf *Workflow) DeclaredInputs(tree fs.FS) (map[string]schema.Input, error) {
+	declared, _, err := wf.declare(tree)
+	return declared, err
+}
+
+// InputFiles compiles the declaration as DeclaredInputs does, and answers each file of the tree
+// the inputs' schemas reach by $ref, directly or through another, by its path, as parsed JSON:
+// what a form needs beside the declaration to check a value before the run is asked for.
+func (wf *Workflow) InputFiles(tree fs.FS) (map[string]any, error) {
+	_, compiler, err := wf.declare(tree)
+	if err != nil {
+		return nil, err
+	}
+	return compiler.Reached(), nil
+}
+
+// declare compiles the declaration, and answers the compiler it was compiled with.
+func (wf *Workflow) declare(tree fs.FS) (map[string]schema.Input, *schema.Compiler, error) {
 	if wf == nil {
-		return nil, fmt.Errorf("there is no workflow to read the inputs of")
+		return nil, nil, fmt.Errorf("there is no workflow to read the inputs of")
 	}
 	compiler := schema.NewCompilerWithin(tree, InputSchemasMaxBytes)
 	out := make(map[string]schema.Input, len(wf.Inputs))
@@ -50,11 +67,11 @@ func (wf *Workflow) DeclaredInputs(tree fs.FS) (map[string]schema.Input, error) 
 		if len(in.Schema) > 0 && strings.TrimSpace(string(in.Schema)) != "null" {
 			compiled, err := compiler.Compile(in.Schema)
 			if err != nil {
-				return nil, fmt.Errorf("the workflow input %s: %w", name, err)
+				return nil, nil, fmt.Errorf("the workflow input %s: %w", name, err)
 			}
 			declared.Schema = compiled
 		}
 		out[name] = declared
 	}
-	return out, nil
+	return out, compiler, nil
 }

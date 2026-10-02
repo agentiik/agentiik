@@ -220,6 +220,11 @@ type Checking struct {
 	Namespace  string
 	Repository string
 
+	// FormerNamespaces are the names the namespace held before it was renamed, which
+	// metadata.namespace may still write: "a workflow naming the old name keeps working", and a
+	// repository pushed before the rename names the namespace as it was called then.
+	FormerNamespaces []string
+
 	// Stored says the commit is a version already, which is judged by the rules it was stored
 	// under and none added since.
 	Stored bool
@@ -339,7 +344,7 @@ func underItsName(wf *graph.Workflow, c Checking) error {
 		return &graph.Refusal{Rule: RuleMetadataNameNotRepository, At: wf.MetadataAt("name"), Detail: fmt.Sprintf(
 			"metadata.name is %s and the repository is %s: the name is the identity runs, grants and the git remote are addressed by, and the repository already holds one", wf.Metadata.Name, c.Repository)}
 	}
-	if c.Namespace != "" && wf.Metadata.Namespace != "" && wf.Metadata.Namespace != c.Namespace {
+	if c.Namespace != "" && wf.Metadata.Namespace != "" && wf.Metadata.Namespace != c.Namespace && !slices.Contains(c.FormerNamespaces, wf.Metadata.Namespace) {
 		return &graph.Refusal{Rule: RuleMetadataNamespaceNotRepository, At: wf.MetadataAt("namespace"), Detail: fmt.Sprintf(
 			"metadata.namespace is %s and the repository belongs to %s: a workflow reaches the secrets, the quotas and the runner pools of the namespace that owns it, and the file cannot move it to another", wf.Metadata.Namespace, c.Namespace)}
 	}

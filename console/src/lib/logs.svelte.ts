@@ -1,4 +1,5 @@
 import { refusal, type API } from "../api/client";
+import { explain, refused as refusedHere, type Explained } from "./problem";
 
 // A step's log as GET /api/v1/runs/{id}/steps/{step}/logs streams it: server-sent events, history
 // then live, each dispatch whole and one after the other, secrets masked before anything was
@@ -51,7 +52,7 @@ export class LogTail {
   dispatches = $state<Dispatch[]>([]);
   // verdict is the step's once the stream has said its log is over; the stream is closed then.
   verdict = $state<string | null>(null);
-  refused = $state("");
+  refused = $state<Explained | null>(null);
   reconnecting = $state(false);
 
   readonly #api: API;
@@ -132,9 +133,45 @@ export class LogTail {
     });
     if (response.ok) {
       await response.body?.cancel();
-      this.refused = "The log stream was cut, and the browser gave up on it.";
+      this.refused = refusedHere("follow the log", "The connection that streams the log was cut, and the browser stopped reconnecting. Reload the page to follow it again.");
       return;
     }
-    this.refused = refusal(response, error).message;
+    this.refused = explain("follow the log", refusal(response, error));
   }
+}
+
+// holding is the lines of a dispatch that hold what is typed, upper and lower case alike, each with
+// where it holds it: what Find leaves of the log, searched in every line the stream delivered
+// rather than in those drawn.
+export function holding(lines: readonly Line[], typed: string): { line: Line; at: number }[] {
+  const wanted = typed.toLowerCase();
+  if (wanted === "") return lines.map((line) => ({ line, at: -1 }));
+  const kept: { line: Line; at: number }[] = [];
+  for (const line of lines) {
+    const at = line.text.toLowerCase().indexOf(wanted);
+    if (at >= 0) kept.push({ line, at });
+  }
+  return kept;
+}
+
+// asText is what the stream delivered of a task's log, as Download the log saves it: each dispatch
+// under a line naming it, its lines as the runner wrote them, and where the API holds none of a
+// stretch, a line saying so.
+export function asText(dispatches: readonly Dispatch[]): string {
+  const out: string[] = [];
+  for (const d of dispatches) {
+    out.push(`# ${d.task}, dispatch ${d.requeue + 1} of attempt ${d.attempt}`);
+    const gaps = [...d.gaps].sort((a, b) => a.first - b.first);
+    let g = 0;
+    for (const l of d.lines) {
+      while (g < gaps.length && gaps[g]!.first < l.line) {
+        const gap = gaps[g++]!;
+        out.push(`# lines ${gap.first} to ${gap.first + gap.lines - 1} unavailable: ${gap.reason}`);
+      }
+      out.push(l.text);
+    }
+    for (; g < gaps.length; g++) out.push(`# lines ${gaps[g]!.first} to ${gaps[g]!.first + gaps[g]!.lines - 1} unavailable: ${gaps[g]!.reason}`);
+    if (d.over?.truncated) out.push("# log truncated");
+  }
+  return out.join("\n") + "\n";
 }

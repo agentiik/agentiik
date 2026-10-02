@@ -1,0 +1,15 @@
+{
+  "kind": "user",
+  "login": "alice",
+  "display_name": "Alice Martin",
+  "admin": false,
+  "suspended": false,
+  "given_name": "Alice",
+  "family_name": "Martin",
+  "title": "Technical lead",
+  "location": "Lyon, France",
+  "timezone": "Europe/Paris",
+  "bio": "Writes the invoicing workflows, and reviews what touches payroll.",
+  "avatar_updated_at": "2026-09-28T10:15:00Z",
+  "created_at": "2026-09-27T09:00:00Z"
+}

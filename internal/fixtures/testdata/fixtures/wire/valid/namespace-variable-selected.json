@@ -1,0 +1,15 @@
+{
+  "name": "reminder_days",
+  "value": [
+    7,
+    14,
+    30
+  ],
+  "visibility": "selected",
+  "workflows": [
+    "monthly-invoicing",
+    "payment-reminders"
+  ],
+  "updated_by": "alice",
+  "updated_at": "2026-10-01T09:12:00Z"
+}

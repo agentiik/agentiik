@@ -1,0 +1,22 @@
+# invalid: A one-shot output that says how many fetches it survives and not how
+#   long it lives. The two mechanisms compose: a one-shot artifact still has a
+#   duration, which is what expires it when nobody ever comes for it.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#artifact-expiry
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: payroll
+  namespace: hr
+
+outputs:
+  payslips:
+    from: { step: render, port: out }
+    retain: { fetches: 1 }
+
+steps:
+  render:
+    image: ghcr.io/acme/agk-render@sha256:7b30caf011a8489951644e83116b325d0a49f234d44a76227657cc972af651df
+    outputs: [out]

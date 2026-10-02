@@ -11,10 +11,18 @@
     // dashed draws the span before the range, behind the range's own series.
     dashed?: boolean;
   };
+
+  import { SvelteMap } from "svelte/reactivity";
+
+  // The width each chart drawn at once needs for its values' axis, its widest label and the gap
+  // beside it. Every chart takes the widest of them, so that charts one above the other start their
+  // plots on one line, and none keeps room its labels do not fill: a fixed 64px left a chart of
+  // single figures with 50px of nothing at its left.
+  const needs = new SvelteMap<symbol, number>();
 </script>
 
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import uPlot from "uplot";
   import "uplot/dist/uPlot.min.css";
 
@@ -52,6 +60,11 @@
 
   let holder: HTMLDivElement | undefined = $state();
   let chosen = $state<number | null>(null);
+  // pointed is the bucket under the pointer, which the legend reads out, or the one the arrow keys
+  // chose where the pointer is over none.
+  let pointed = $state<number | null>(null);
+  const at = $derived(pointed ?? chosen);
+  const valueAt = (s: Series, i: number) => (s.values[i] === null || s.values[i] === undefined ? "none" : format(s.values[i]!));
 
   const tones: Record<Tone, [string, number]> = {
     succeeded: ["--succeeded", 1],
@@ -77,14 +90,15 @@
     return since.map((s) => Date.parse(s) / 1000 + width / 2);
   }
 
-  // What each series draws: its values, or for a stack, the sum of it and every series under it. A
-  // dashed series, the span before, is drawn behind the stack and not on it.
+  // What each series draws: its values, or for a stack, the sum of it and every series under it. Only
+  // columns stack: a line, the span before dashed or another count beside the columns, is drawn over
+  // the stack and not on it.
   function drawn(): (number | null)[][] {
     if (!stacked) return series.map((s) => s.values);
     const sums: (number | null)[][] = [];
     let under: number[] = since.map(() => 0);
     for (const s of series) {
-      if (s.dashed) {
+      if (s.dashed || s.kind !== "bars") {
         sums.push(s.values);
         continue;
       }
@@ -119,13 +133,59 @@
     return `${from} to ${to} UTC`;
   }
 
-  function build(el: HTMLDivElement): uPlot {
+  // A stack is drawn from its top down, so that each series covers the part of the one above it
+  // that is not its own.
+  const ordered = () => (stacked ? [...series.keys()].reverse() : [...series.keys()]);
+
+  // dataOf is what uPlot draws: the buckets' middles, then each series in the order drawn.
+  function dataOf(): uPlot.AlignedData {
     const ys = drawn();
+    return [x(), ...ordered().map((i) => ys[i]!)];
+  }
+
+  // shapeOf is what a chart is built for, beside its numbers: its series and how each is drawn. New
+  // numbers in the same shape are drawn in place, as a live chart's are each time it is read; a new
+  // shape builds the chart again.
+  const shapeOf = () => `${stacked} ${height} ${series.map((s) => `${s.label}/${s.kind}/${s.tone}/${s.dashed ?? false}`).join(" ")}`;
+
+  // gutter is the width of the values' axis: the widest label of this chart, measured in the axis'
+  // font, with uPlot's 5px gap and a pixel, or the widest any chart drawn with it needs, and nothing
+  // more, so that the labels start on the pane's edge as the text above them does.
+  const me = Symbol("chart");
+  function gutter(u: uPlot, values: string[] | null): number {
+    if (values && values.length > 0) {
+      const need = Math.ceil(widest(u, values)) + 6;
+      if (needs.get(me) !== need) needs.set(me, need);
+    }
+    return needs.size > 0 ? Math.max(...needs.values()) : 0;
+  }
+
+  // widest is the widest of labels in the axes' font, in CSS pixels, a label of two lines by its
+  // longer.
+  function widest(u: uPlot, labels: string[]): number {
+    u.ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
+    return Math.max(0, ...labels.flatMap((l) => l.split("\n")).map((l) => u.ctx.measureText(l).width)) / devicePixelRatio;
+  }
+
+  // fitted leaves out a time whose label, centred on its tick, would run past the chart's left edge,
+  // which the values' axis, as wide as its own labels, may leave less than half a time from the plot.
+  function fitted(u: uPlot, splits: number[], labels: string[]): string[] {
+    const left = (u.bbox?.left ?? 0) / devicePixelRatio;
+    return labels.map((label, i) => (left + u.valToPos(splits[i]!, "x") < widest(u, [label]) / 2 ? "" : label));
+  }
+
+  // Laid out again when another chart's labels widen or narrow the axis they share.
+  $effect(() => {
+    void [...needs.values()];
+    untrack(() => {
+      if (plot && holder) plot.setSize({ width: holder.clientWidth, height });
+    });
+  });
+
+  function build(el: HTMLDivElement): uPlot {
     const bars = uPlot.paths.bars!({ size: [0.7, 60] });
     const stepped = uPlot.paths.stepped!({ align: 1 });
-    // A stack is drawn from its top down, so that each series covers the part of the one above it
-    // that is not its own.
-    const order = stacked ? [...series.keys()].reverse() : [...series.keys()];
+    const order = ordered();
     const opts: uPlot.Options = {
       width: el.clientWidth || 600,
       height,
@@ -136,11 +196,16 @@
         points: { size: 6 },
       },
       select: { show: true, left: 0, top: 0, width: 0, height: 0 },
-      legend: { live: true },
-      scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * 1.08 || 1] } },
+      // The legend is the chart's own, below it, at a size that never changes: uPlot's grows and
+      // shrinks with the values it reads out, which moves the page under the pointer.
+      legend: { show: false },
+      // Above the highest value, a twelfth more; and where a limit is drawn, room for its label over
+      // its line as well, about 24px of the plot whatever its height, rather than a share of the
+      // limit, which left the label against the top and its line through the letters.
+      scales: { x: { time: true }, y: { range: (_u, min, max) => [Math.min(0, min), Math.max(max, limit?.value ?? 0) * (limit ? 1 + 24 / Math.max(48, height - 60) : 1.08) || 1] } },
       axes: [
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (_u, splits) => ticks(splits), font: "11px JetBrains Mono, monospace" },
-        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: 64, values: (_u, vals) => vals.map((v) => format(v)), font: "11px JetBrains Mono, monospace" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { stroke: colour("--line") }, values: (u, splits) => fitted(u, splits, ticks(splits)), font: "12px Archivo, sans-serif" },
+        { stroke: colour("--muted"), grid: { stroke: colour("--line"), width: 1 }, ticks: { show: false }, size: (u, values) => gutter(u, values), values: (_u, vals) => vals.map((v) => format(v)), font: "12px Archivo, sans-serif" },
       ],
       series: [
         { label: "bucket", value: (_u, _v, _si, i) => (i === null || i === undefined ? "" : bounds(i)) },
@@ -165,6 +230,7 @@
         }),
       ],
       hooks: {
+        setCursor: [(u) => (pointed = u.cursor.idx ?? null)],
         setSelect: [
           (u) => {
             if (u.select.width > 4 && onzoom) {
@@ -190,47 +256,64 @@
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.fillStyle = colour("--failed");
-            ctx.font = `${11 * devicePixelRatio}px JetBrains Mono, monospace`;
+            ctx.font = `${12 * devicePixelRatio}px Archivo, sans-serif`;
             ctx.textAlign = "right";
-            ctx.fillText(`${limit.label} ${format(limit.value)}`, u.bbox.left + u.bbox.width - 6 * devicePixelRatio, y - 5 * devicePixelRatio);
+            ctx.textBaseline = "bottom";
+            ctx.fillText(`${limit.label} ${format(limit.value)}`, u.bbox.left + u.bbox.width - 6 * devicePixelRatio, y - 4 * devicePixelRatio);
             ctx.restore();
           },
         ],
       },
     };
-    const data: uPlot.AlignedData = [x(), ...order.map((i) => ys[i]!)];
-    return new uPlot(opts, data, el);
+    return new uPlot(opts, dataOf(), el);
   }
+
+  let plot: uPlot | undefined;
+  let built = "";
+  let rebuild = () => {};
+
+  // New numbers, read again on a live chart, are drawn into the chart there is.
+  $effect(() => {
+    void [series, since, width, limit];
+    untrack(() => {
+      if (!plot) return;
+      if (shapeOf() !== built) rebuild();
+      else plot.setData(dataOf());
+    });
+  });
 
   onMount(() => {
     if (!holder) return;
     const el = holder;
-    let plot = build(el);
+    plot = build(el);
+    built = shapeOf();
     let down = 0;
 
     // A click with no drag opens the runs of the bucket under the pointer.
     const pressed = (e: MouseEvent) => (down = e.clientX);
     const released = (e: MouseEvent) => {
-      if (Math.abs(e.clientX - down) < 4 && plot.cursor.idx !== null && plot.cursor.idx !== undefined) {
+      if (Math.abs(e.clientX - down) < 4 && plot?.cursor.idx !== null && plot?.cursor.idx !== undefined) {
         onpick?.(plot.cursor.idx);
       }
     };
     const twice = () => onback?.();
     const listen = () => {
-      plot.over.addEventListener("mousedown", pressed);
-      plot.over.addEventListener("mouseup", released);
-      plot.over.addEventListener("dblclick", twice);
+      plot?.over.addEventListener("mousedown", pressed);
+      plot?.over.addEventListener("mouseup", released);
+      plot?.over.addEventListener("dblclick", twice);
     };
     listen();
 
     // Drawn again at the new size when the page is, and in the new ground's colours when it changes.
-    const resized = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height }));
+    const resized = new ResizeObserver(() => plot?.setSize({ width: el.clientWidth, height }));
     resized.observe(el);
     const redraw = () => {
-      plot.destroy();
+      plot?.destroy();
       plot = build(el);
+      built = shapeOf();
       listen();
     };
+    rebuild = redraw;
     const system = matchMedia("(prefers-color-scheme: dark)");
     system.addEventListener("change", redraw);
     const ground = new MutationObserver(redraw);
@@ -240,7 +323,9 @@
       resized.disconnect();
       system.removeEventListener("change", redraw);
       ground.disconnect();
-      plot.destroy();
+      plot?.destroy();
+      plot = undefined;
+      needs.delete(me);
     };
   });
 
@@ -258,7 +343,7 @@
 </script>
 
 <figure class="chart">
-  <figcaption>{title}</figcaption>
+  <figcaption class="unseen">{title}</figcaption>
   <!-- A slider over the buckets, as the arrow keys move it; what it draws is in the table below. -->
   <div
     class="plot"
@@ -272,14 +357,16 @@
     aria-valuetext={chosen === null ? "no bucket chosen" : bounds(chosen)}
     onkeydown={key}
   ></div>
-  {#if chosen !== null && since[chosen]}
-    <p class="readout" aria-live="polite">
-      <span class="mono">{bounds(chosen)}</span>
+  <!-- The series in columns of one width, each value read out at its column's end, and the bucket
+       read out under them, its line kept while nothing is pointed at so that nothing moves. -->
+  <div class="legend" aria-live="polite">
+    <ul>
       {#each series as s (s.label)}
-        <span><span class="swatch {s.tone}" class:dashed={s.dashed}></span>{s.label} <span class="mono">{s.values[chosen] === null ? "none" : format(s.values[chosen] ?? 0)}</span></span>
+        <li><span class="swatch {s.tone}" class:line={s.kind === "line" || s.kind === "step"} class:dashed={s.dashed}></span><span class="name">{s.label}</span><span class="value term">{at !== null && since[at] ? valueAt(s, at) : ""}</span></li>
       {/each}
-    </p>
-  {/if}
+    </ul>
+    <p class="bucket term">{at !== null && since[at] ? bounds(at) : "\u00a0"}</p>
+  </div>
   <details>
     <summary>Numbers</summary>
     <table>
@@ -289,8 +376,8 @@
       <tbody>
         {#each since as at, i (at)}
           <tr>
-            <td class="mono">{bounds(i)}</td>
-            {#each series as s (s.label)}<td class="number mono">{s.values[i] === null || s.values[i] === undefined ? "" : format(s.values[i]!)}</td>{/each}
+            <td class="term">{bounds(i)}</td>
+            {#each series as s (s.label)}<td class="number term">{s.values[i] === null || s.values[i] === undefined ? "" : format(s.values[i]!)}</td>{/each}
           </tr>
         {/each}
       </tbody>
@@ -303,28 +390,14 @@
     margin: 0;
   }
 
-  figcaption {
-    margin-bottom: calc(var(--unit) * 3);
-    font-family: var(--type-sectionTitle-font);
-    font-size: var(--type-sectionTitle-size);
-    font-weight: var(--type-sectionTitle-weight);
-  }
-
   .plot {
     border-radius: var(--radius-control);
   }
 
-  .plot :global(.u-legend) {
-    margin-top: calc(var(--unit) * 3);
-    color: var(--muted);
-    font-family: var(--type-body-font);
-    font-size: var(--type-control-size);
-    text-align: left;
-  }
-
-  .plot :global(.u-legend .u-value) {
-    color: var(--text);
-    font-family: var(--type-identifier-font);
+  /* uPlot sets its own leading of 1.5, a fraction at 13.5px: the console's, in whole units, puts its
+     axes on pixels. */
+  .plot :global(.uplot) {
+    line-height: round(calc(var(--leading) * 1em), var(--unit));
   }
 
   .plot :global(.u-select) {
@@ -336,32 +409,78 @@
     border-color: var(--lineStrong);
   }
 
-  .readout {
-    display: flex;
-    flex-wrap: wrap;
-    gap: calc(var(--unit) * 3) calc(var(--unit) * 7);
-    margin: calc(var(--unit) * 3) 0 0;
+  .legend {
+    margin-top: calc(var(--unit) * 3);
+    color: var(--muted);
     font-size: var(--type-control-size);
   }
 
+  .bucket {
+    margin: calc(var(--unit) * 2) 0 0;
+    color: var(--text);
+  }
+
+  /* Columns of one width, as many as the pane holds, so that the second column of every row starts
+     where the first row's does. */
+  .legend ul {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: calc(var(--unit) * 2) calc(var(--unit) * 7);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .legend li {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* A value has its room whether it is read out or not, so that nothing moves as the pointer does,
+     at the end of its column, where the values of a column line up. */
+  .value {
+    flex: none;
+    min-width: 6ch;
+    margin-left: auto;
+    padding-left: calc(var(--unit) * 2);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  /* A swatch has the series' shape as well as its colour: a square for columns and areas, a stroke
+     for a line, dashed for the span before, so that two series of one hue, the runs running and the
+     tasks in flight say, are told apart. */
   .swatch {
-    display: inline-block;
+    flex: none;
     width: 10px;
     height: 10px;
     margin-right: calc(var(--unit) * 2);
     border-radius: 2px;
-    vertical-align: -1px;
+  }
+
+  .swatch.line,
+  .swatch.dashed {
+    height: 0;
+    border-top: 2px solid;
+    border-radius: 0;
+    background: none !important;
   }
 
   .swatch.dashed {
-    height: 0;
-    border-top: 2px dashed;
-    background: none !important;
+    border-top-style: dashed;
   }
 
   .swatch.succeeded { background: var(--succeeded); border-color: var(--succeeded); }
   .swatch.failed { background: var(--failed); border-color: var(--failed); }
-  .swatch.running, .swatch.accent { background: var(--accent); border-color: var(--accent); }
+  .swatch.running { background: var(--running); border-color: var(--running); }
+  .swatch.accent { background: var(--accent); border-color: var(--accent); }
   .swatch.waiting { background: var(--waiting); border-color: var(--waiting); }
   .swatch.quiet { background: var(--faint); border-color: var(--faint); }
   .swatch.accent-2 { background: var(--accentLine); border-color: var(--accentLine); }
@@ -386,7 +505,7 @@
   th,
   td {
     padding: calc(var(--unit) * 2) calc(var(--unit) * 4);
-    border-bottom: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
     text-align: left;
   }
 

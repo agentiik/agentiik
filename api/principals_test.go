@@ -49,10 +49,10 @@ func somePrincipals(t *testing.T) principals {
 	now := time.Now().UTC().Truncate(time.Second)
 	err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, u := range []db.User{
-			{Login: "alice", DisplayName: "Alice"},
-			{Login: "bob", DisplayName: "Bob"},
-			{Login: "carol", DisplayName: "Carol", Admin: true},
-			{Login: "dave", DisplayName: "Dave", Suspended: true},
+			{Login: "alice", Profile: db.Profile{GivenName: "Alice"}},
+			{Login: "bob", Profile: db.Profile{GivenName: "Bob"}},
+			{Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true},
+			{Login: "dave", Profile: db.Profile{GivenName: "Dave"}, Suspended: true},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err

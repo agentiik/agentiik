@@ -37,7 +37,7 @@ func TestServeAcceptsSessionsFromThePublicURL(t *testing.T) {
 	var session, enrolling *http.Cookie
 	now := time.Now()
 	err = in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateUser(ctx, db.User{Login: "carol", DisplayName: "Carol", Admin: true}); err != nil {
+		if err := w.CreateUser(ctx, db.User{Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true}); err != nil {
 			return err
 		}
 		if err := w.AddCredential(ctx, db.Credential{ID: "carol-passkey", Login: "carol", Type: db.CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}); err != nil {

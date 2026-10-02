@@ -67,7 +67,14 @@ func (p *Purger) orphans(ctx context.Context, out *Purged) (bool, error) {
 	}
 	namespace := w.namespaces[0]
 	if w.walk == nil {
-		walk, err := store.Walk(namespace)
+		// The namespace's objects are kept under its storage name, the name it was created with,
+		// which a rename leaves as it was.
+		storage, err := p.Pool.Storage(ctx, namespace)
+		if err != nil {
+			w.next()
+			return false, fmt.Errorf("the objects of namespace %s could not be found, and are walked again next round: %w", namespace, err)
+		}
+		walk, err := store.Walk(storage)
 		if err != nil {
 			w.next()
 			return false, fmt.Errorf("the objects of namespace %s could not be walked, and are walked again next round: %w", namespace, err)
@@ -80,6 +87,11 @@ func (p *Purger) orphans(ctx context.Context, out *Purged) (bool, error) {
 	}
 	if err != nil {
 		return false, fmt.Errorf("the objects of namespace %s could not be walked, and are walked again next round: %w", namespace, err)
+	}
+	// Asked under the name the namespace answers to now, since a walk lasts several passes and a
+	// rename between two of them leaves the rows naming the objects under its new name.
+	if namespace, err = p.Pool.CurrentName(ctx, namespace); err != nil {
+		return false, fmt.Errorf("the namespace whose objects were walked could not be found: %w", err)
 	}
 	n, err := p.adopt(ctx, namespace, found)
 	out.Orphans += n
@@ -146,10 +158,14 @@ func (p *Purger) namedByLiveRuns(ctx context.Context, namespace string) (map[str
 	if err != nil {
 		return nil, err
 	}
+	storage, err := p.Pool.Storage(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
 	named := map[string]bool{}
 	for _, digest := range envelopes {
 		named[digest] = true
-		e, err := artifact.GetEnvelope(ctx, p.Objects, namespace, digest, agk.DefaultLimits())
+		e, err := artifact.GetEnvelope(ctx, p.Objects, storage, digest, agk.DefaultLimits())
 		if err != nil {
 			return nil, fmt.Errorf("an envelope of a run of namespace %s still under way could not be read, and no orphan of the namespace is taken until it is: %w", namespace, err)
 		}

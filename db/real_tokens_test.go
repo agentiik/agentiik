@@ -25,7 +25,7 @@ func TestAListingHoldsOnlyTheTokensStillAccepted(t *testing.T) {
 	var listed, ofTeamOps, ofSuspended, asAlice []APIToken
 	var revoked APIToken
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		for _, u := range []User{{Login: "alice", DisplayName: "Alice"}, {Login: "bob", DisplayName: "Bob"}} {
+		for _, u := range []User{{Login: "alice", Profile: Profile{GivenName: "Alice"}}, {Login: "bob", Profile: Profile{GivenName: "Bob"}}} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
 			}
@@ -69,7 +69,7 @@ func TestAListingHoldsOnlyTheTokensStillAccepted(t *testing.T) {
 		if revoked, err = w.Token(ctx, "01B"); err != nil {
 			return err
 		}
-		if err := w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice", Suspended: true}); err != nil {
+		if err := w.UpdateUser(ctx, User{Login: "alice", Profile: Profile{GivenName: "Alice"}, Suspended: true}); err != nil {
 			return err
 		}
 		ofSuspended, err = w.TokensOf(ctx, "alice", nil, now)
