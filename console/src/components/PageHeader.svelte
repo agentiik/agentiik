@@ -120,6 +120,15 @@
     .icon {
       display: none;
     }
+
+    /* A row of acts holding a Filter field takes the width under the title, the field what its
+       buttons leave, rather than keeping its own width at the right, which pushed it in from the
+       title's edge or a button past the screen's. */
+    .actions:has(:global(.filter)) {
+      flex: 1 1 100%;
+      min-width: 0;
+      margin-left: 0;
+    }
   }
 
   .actions {
