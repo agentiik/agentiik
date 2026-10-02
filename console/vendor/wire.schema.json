@@ -4414,16 +4414,15 @@
         },
         "quotas": {
           "$ref": "#/$defs/quotas",
-          "description": "What this namespace may consume. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, so the API answers both; the other four appear where they are set, and absent bound nothing of the namespace's own.",
+          "description": "What this namespace may consume. max_concurrent_tasks always holds a value, 20 until an administrator sets another, so the API answers it; the other five appear where they are set, and absent bound nothing of the namespace's own.",
           "examples": [
             {
               "max_concurrent_tasks": 20,
               "max_runs_per_hour": 500,
-              "max_retention_days": 90
+              "max_retention_days": 365
             },
             {
-              "max_concurrent_tasks": 20,
-              "max_retention_days": 90
+              "max_concurrent_tasks": 20
             }
           ]
         },
@@ -4517,16 +4516,14 @@
           "kind": "personal",
           "owner": "alice",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         },
         {
           "name": "demo",
           "kind": "shared",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           }
         },
         {
@@ -4534,8 +4531,7 @@
           "kind": "shared",
           "owner": "bob-martin",
           "quotas": {
-            "max_concurrent_tasks": 20,
-            "max_retention_days": 90
+            "max_concurrent_tasks": 20
           },
           "former_names": [
             "finance"
@@ -4546,7 +4542,7 @@
     },
     "quotas": {
       "title": "Quotas",
-      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, and a write leaving either out keeps the value it has: the two were a namespace's bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other four bound nothing until they are set, and a write leaving one out removes its bound. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
+      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks always holds a value, 20 until an administrator sets another, and a write leaving it out keeps the value it has: it was one of a namespace's two bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other five bound nothing until they are set, and a write leaving one out removes its bound: max_retention_days, v0.2's other bound, among them from v0.6.0, so that an installation keeps what it ran until somebody decides otherwise. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -4580,7 +4576,7 @@
         "max_retention_days": {
           "type": "integer",
           "minimum": 1,
-          "description": "The upper bound on how long the namespace may ask to keep what its runs produce.",
+          "description": "The upper bound on how long the namespace may ask to keep what its runs produce, and how long a workflow declaring no retain keeps it. Absent, it bounds nothing, and what a run of a workflow declaring no retain produces is kept for ever: an installation keeps what it ran until somebody decides otherwise, and a namespace that must forget, one whose logs hold personal data for instance, sets it.",
           "examples": [
             180,
             30
@@ -5762,7 +5758,7 @@
         },
         "retain": {
           "$ref": "#/$defs/duration",
-          "description": "The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding.",
+          "description": "The workflow's defaults.retain, resolved through its includes: how long a run's envelopes and logs stay, capped by max_retention_days. Absent where nothing writes it, max_retention_days then deciding, and the run kept for ever where the namespace sets none either.",
           "examples": [
             "7d"
           ]
@@ -6247,7 +6243,7 @@
               },
               "retain": {
                 "$ref": "#/$defs/duration",
-                "description": "How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them.",
+                "description": "How long the step's artifacts stay fetchable: defaults.retain, since a step never writes one of its own, capped by the namespace's max_retention_days when a run writes them. Absent where defaults.retain is, the namespace's max_retention_days then deciding, and the artifacts kept for ever where it sets none.",
                 "examples": [
                   "7d"
                 ]
