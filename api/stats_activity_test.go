@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,11 @@ func TestTheInstallationsActivityAnswersAdministratorsAlone(t *testing.T) {
 	}
 	if len(got.Now.Runs) != 3 || got.Now.At == "" {
 		t.Errorf("now answered %+v", got.Now)
+	}
+
+	// range=max starts at the first thing counted, or the 24 hours before to where there is none.
+	if w, _ := call(t, h, "GET", "/api/v1/stats/activity?range=max&to=2026-09-30T08:00:00Z", "admin", nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"to":"2026-09-30T08:00:00Z"`) {
+		t.Errorf("the activity to the max answered %d: %s", w.Code, w.Body)
 	}
 
 	r, _ := http.NewRequestWithContext(t.Context(), "GET", "/api/v1/stats/activity"+query, nil)

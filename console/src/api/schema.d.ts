@@ -552,7 +552,7 @@ export interface paths {
         put?: never;
         /**
          * Create a namespace
-         * @description Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20, max_retention_days 90 and the other four unset. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.
+         * @description Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20 and the other five unset, so that what its runs produce is kept until somebody decides otherwise. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.
          */
         post: operations["createNamespace"];
         delete?: never;
@@ -635,12 +635,12 @@ export interface paths {
         };
         /**
          * Read a namespace's quotas
-         * @description The namespace's quotas, allowed_runner_pools among them. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another; the other four appear where they are set, and absent bound nothing of the namespace's own. Readable by an administrator and by every principal holding a grant in the namespace.
+         * @description The namespace's quotas, allowed_runner_pools among them. max_concurrent_tasks always holds a value, 20 until an administrator sets another; the other five appear where they are set, and absent bound nothing of the namespace's own. Readable by an administrator and by every principal holding a grant in the namespace.
          */
         get: operations["getQuotas"];
         /**
          * Set a namespace's quotas
-         * @description Sets the namespace's quotas. max_concurrent_tasks and max_retention_days always hold a value, so each keeps the one it has where the body leaves it out; each of the other four the body leaves out bounds nothing any more, so that the body is the whole of what they bound and what a Terraform apply sends is what the namespace holds after it. Administrator only, and audited as namespace.update with the quotas as they then stand. allowed_runner_pools names at least one pool that exists, since a pool's own empty list of namespaces means every one and the same spelling here would be read as its opposite.
+         * @description Sets the namespace's quotas. max_concurrent_tasks always holds a value, so it keeps the one it has where the body leaves it out; each of the other five the body leaves out bounds nothing any more, so that the body is the whole of what they bound and what a Terraform apply sends is what the namespace holds after it. Administrator only, and audited as namespace.update with the quotas as they then stand. allowed_runner_pools names at least one pool that exists, since a pool's own empty list of namespaces means every one and the same spelling here would be read as its opposite.
          */
         put: operations["setQuotas"];
         post?: never;
@@ -3207,7 +3207,7 @@ export interface components {
              */
             owner?: components["schemas"]["principalRef"];
             /**
-             * @description What it may consume, an administrator's to write. max_concurrent_tasks and max_retention_days start at 20 and 90 where left out, and the other four bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later, an administrator's as well.
+             * @description What it may consume, an administrator's to write. max_concurrent_tasks starts at 20 where left out, and the other five bound nothing until set; PUT /api/v1/namespaces/{ns}/quotas changes them later, an administrator's as well.
              * @example {
              *       "max_concurrent_tasks": 20,
              *       "max_runs_per_hour": 500,
@@ -3246,8 +3246,7 @@ export interface components {
          *           "kind": "personal",
          *           "owner": "alice",
          *           "quotas": {
-         *             "max_concurrent_tasks": 20,
-         *             "max_retention_days": 90
+         *             "max_concurrent_tasks": 20
          *           }
          *         },
          *         {
@@ -3278,8 +3277,7 @@ export interface components {
              *         "kind": "personal",
              *         "owner": "alice",
              *         "quotas": {
-             *           "max_concurrent_tasks": 20,
-             *           "max_retention_days": 90
+             *           "max_concurrent_tasks": 20
              *         }
              *       },
              *       {
@@ -8506,10 +8504,10 @@ export interface components {
              */
             status: "live" | "expired" | "collected";
             /**
-             * @description When it stops being fetchable, its retain capped by the namespace's max_retention_days when it was written: an output's own retain where it declares one, defaults.retain otherwise.
+             * @description When it stops being fetchable, its retain capped by the namespace's max_retention_days when it was written: an output's own retain where it declares one, defaults.retain otherwise. Absent where nothing bounds it, neither a retain nor the namespace: the file is kept for ever.
              * @example 2026-12-29T05:44:10Z
              */
-            expires_at: components["schemas"]["timestamp"];
+            expires_at?: components["schemas"]["timestamp"];
             /**
              * @description When it stopped being live. Absent while it is.
              * @example 2026-10-01T09:12:00Z
@@ -12709,8 +12707,10 @@ export interface components {
         historyFrom: components["schemas"]["commit"];
         /** @description How many commits a page lists, 50 where it is left out and 500 at the most, as GET /api/v1/runs lists runs. */
         historyLimit: number;
-        /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+        /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
         statsFrom: components["schemas"]["timestamp"];
+        /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+        statsRange: "max";
         /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
         statsTo: components["schemas"]["timestamp"];
         /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15695,8 +15695,10 @@ export interface operations {
     getRunStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15738,8 +15740,10 @@ export interface operations {
     getStepStatistics: {
         parameters: {
             query: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15783,8 +15787,10 @@ export interface operations {
     getPortStatistics: {
         parameters: {
             query: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15826,8 +15832,10 @@ export interface operations {
     getQuotaStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15867,8 +15875,10 @@ export interface operations {
     getActivityStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */
@@ -15903,8 +15913,10 @@ export interface operations {
     getPoolStatistics: {
         parameters: {
             query?: {
-                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to. */
+                /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
                 from?: components["parameters"]["statsFrom"];
+                /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
+                range?: components["parameters"]["statsRange"];
                 /** @description The end of the range, excluded, in RFC 3339: now where it is left out. */
                 to?: components["parameters"]["statsTo"];
                 /** @description How long a bucket is: 1m, 15m, 1h or 1d. Where it is left out it follows the range, so that a chart holds a few hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days, a day beyond. Buckets fall on whole minutes, quarters, hours and days in UTC, the first holding from and the last the instant before to. Refused with 400 where the range would take more than 1,000, which no chart draws and which a query would pay for all the same. */

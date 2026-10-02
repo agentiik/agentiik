@@ -66,6 +66,70 @@ func TestAStatsRangeIsReadAsDocumented(t *testing.T) {
 	}
 }
 
+// range=max is read as the 24 hours before to until the route says where what it counts begins, and
+// then starts there, its bucket following the span as any range's does, or the one asked for; and a
+// range reaching further back than a series goes starts where its 1,000th bucket does rather than
+// being refused. Where there is nothing to count, or what there is came after to, it stays the 24
+// hours before to.
+func TestARangeToTheMaxStartsAtTheFirstThingCounted(t *testing.T) {
+	now := time.Date(2026, 9, 30, 8, 7, 30, 0, time.UTC)
+	at := func(s string) time.Time {
+		t.Helper()
+		v, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for _, c := range []struct {
+		query, first string
+		from, bucket string
+		start        string
+		count        int
+	}{
+		{"range=max", "", "2026-09-29T08:07:30Z", "15m", "2026-09-29T08:00:00Z", 97},
+		{"range=max", "2026-09-30T09:00:00Z", "2026-09-29T08:07:30Z", "15m", "2026-09-29T08:00:00Z", 97},
+		{"range=max", "2026-09-30T07:00:00Z", "2026-09-30T07:00:00Z", "1m", "2026-09-30T07:00:00Z", 68},
+		{"range=max", "2026-09-20T10:15:00Z", "2026-09-20T10:15:00Z", "1h", "2026-09-20T10:00:00Z", 239},
+		{"range=max", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", "1d", "2025-01-01T00:00:00Z", 638},
+		{"range=max&to=2026-09-30T00:00:00Z", "2026-09-01T00:00:00Z", "2026-09-01T00:00:00Z", "1d", "2026-09-01T00:00:00Z", 29},
+		// Further back than 1,000 days, or than 1,000 of the bucket asked for.
+		{"range=max", "2020-01-01T00:00:00Z", "2024-01-05T00:00:00Z", "1d", "2024-01-05T00:00:00Z", 1000},
+		{"range=max&bucket=1h", "2026-08-01T00:00:00Z", "2026-08-19T17:00:00Z", "1h", "2026-08-19T17:00:00Z", 1000},
+	} {
+		query, err := url.ParseQuery(c.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rng, err := readStatsRange(query, now, true)
+		if err != nil {
+			t.Fatalf("%q was refused: %v", c.query, err)
+		}
+		if !rng.Max {
+			t.Fatalf("%q was not read as a range to the max", c.query)
+		}
+		var first time.Time
+		if c.first != "" {
+			first = at(c.first)
+		}
+		got := rng.reach(first)
+		if !got.From.Equal(at(c.from)) || got.Bucket != c.bucket || !got.Buckets.First.Equal(at(c.start)) || got.Buckets.Count != c.count {
+			t.Errorf("%q from %s was settled as from %s in %d buckets of %s from %s, want from %s in %d of %s from %s",
+				c.query, c.first, got.From, got.Buckets.Count, got.Bucket, got.Buckets.First, c.from, c.count, c.bucket, c.start)
+		}
+	}
+
+	// A range read without range=max is never moved.
+	query, _ := url.ParseQuery("from=2026-09-30T06:00:00Z")
+	rng, err := readStatsRange(query, now, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rng.reach(at("2026-01-01T00:00:00Z")); !got.From.Equal(rng.From) {
+		t.Errorf("a range given from was moved to %s", got.From)
+	}
+}
+
 // What a range adds is read too: the span before, shifted by whole buckets so that its buckets fall
 // on the same boundaries and end where the range's first begins, and a histogram of 1 to 100 bins.
 func TestAStatsRangeAddsTheSpanBeforeAndAHistogram(t *testing.T) {
@@ -132,6 +196,9 @@ func TestAStatsRangeThatIsNoneIsRefused(t *testing.T) {
 		{"from=2026-09-01T00:00:00Z&to=2026-09-30T00:00:00Z&bucket=1m", "at most 1000"},
 		{"from=0001-01-01T00:00:00Z&to=9999-12-31T00:00:00Z", "at most 1000"},
 		{"compare=next", "compare"},
+		{"range=all", "range"},
+		{"range=MAX", "range"},
+		{"range=max&from=2026-09-29T00:00:00Z", "both"},
 		{"histogram=0", "histogram"},
 		{"histogram=101", "histogram"},
 		{"histogram=twelve", "histogram"},
