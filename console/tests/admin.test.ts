@@ -40,24 +40,26 @@ describe("a namespace's quotas in the form", () => {
     expect(inUnits(1500)).toEqual({ amount: 1, unit: "MiB" });
   });
 
-  it("start from the two that always hold a value, and leave every other bound out where it is empty", () => {
+  it("start from the one that always holds a value, and leave every other bound out where it is empty", () => {
     const f = formOf(undefined);
     expect(f.max_concurrent_tasks).toBe("20");
-    expect(f.max_retention_days).toBe("90");
-    expect(bodyOf(f)).toEqual({ body: { max_concurrent_tasks: 20, max_retention_days: 90 } });
-    const g = { ...f, max_artifact: "500", max_artifact_unit: "GiB" as const, max_run_duration: "24h", allowed_runner_pools: ["dmz", "default"] };
-    expect(bodyOf(g)).toEqual({ body: { max_concurrent_tasks: 20, max_retention_days: 90, max_artifact_bytes: 536870912000, max_run_duration: "24h", allowed_runner_pools: ["default", "dmz"] } });
+    expect(f.max_retention_days).toBe("");
+    expect(bodyOf(f)).toEqual({ body: { max_concurrent_tasks: 20 } });
+    const g = { ...f, max_retention_days: "365", max_artifact: "500", max_artifact_unit: "GiB" as const, max_run_duration: "24h", allowed_runner_pools: ["dmz", "default"] };
+    expect(bodyOf(g)).toEqual({ body: { max_concurrent_tasks: 20, max_retention_days: 365, max_artifact_bytes: 536870912000, max_run_duration: "24h", allowed_runner_pools: ["default", "dmz"] } });
   });
 
   it("refuse what the API would, before anything is sent", () => {
     expect(bodyOf({ ...formOf(undefined), max_concurrent_tasks: "0" })).toMatchObject({ field: "max_concurrent_tasks" });
     expect(bodyOf({ ...formOf(undefined), max_run_duration: "1 day" })).toMatchObject({ field: "max_run_duration" });
     expect(bodyOf({ ...formOf(undefined), max_runs_per_hour: "2.5" })).toMatchObject({ field: "max_runs_per_hour" });
+    expect(bodyOf({ ...formOf(undefined), max_retention_days: "0" })).toMatchObject({ field: "max_retention_days" });
   });
 
   it("read on one line, what bounds nothing left out", () => {
     expect(summary({ max_concurrent_tasks: 20, max_retention_days: 180, allowed_runner_pools: ["default", "dmz"] })).toBe("20 tasks at once · kept 180 days · pools default, dmz");
     expect(summary({ max_concurrent_tasks: 40, max_retention_days: 90, max_artifact_bytes: 536870912000, max_run_duration: "24h" })).toBe("40 tasks at once · 500 GiB of artifacts · kept 90 days · runs 24h at most · every pool accepting it");
+    expect(summary({ max_concurrent_tasks: 20 })).toBe("20 tasks at once · every pool accepting it");
   });
 });
 
@@ -187,7 +189,7 @@ describe("the namespaces, for an administrator", () => {
 
   it("creates a shared namespace with its owner, and removes one on a second click, never a personal one", async () => {
     const s = scenario("dana");
-    s["POST /api/v1/namespaces"] = { status: 201, body: { name: "platform", kind: "shared", owner: "group:platform", quotas: { max_concurrent_tasks: 20, max_retention_days: 90 } } };
+    s["POST /api/v1/namespaces"] = { status: 201, body: { name: "platform", kind: "shared", owner: "group:platform", quotas: { max_concurrent_tasks: 20 } } };
     s["DELETE /api/v1/namespaces/team-ops"] = { status: 204 };
     const { asked } = open("/namespaces", s);
     await fireEvent.click(await screen.findByRole("button", { name: "New namespace" }));
@@ -209,7 +211,7 @@ describe("the namespaces, for an administrator", () => {
 
   it("are reached from the sidebar, and offered to nobody else", async () => {
     const { place } = open("/dana/runs");
-    const installation = await screen.findByRole("list", { name: "Installation" });
+    const installation = await screen.findByRole("list", { name: "Administration" });
     await fireEvent.click(within(installation).getByRole("link", { name: "Users" }));
     expect(place.route).toEqual({ kind: "users" });
     await fireEvent.click(within(installation).getByRole("link", { name: "Namespaces" }));

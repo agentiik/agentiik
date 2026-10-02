@@ -39,7 +39,7 @@ const screens: Record<string, string[]> = {
     "/me/tokens",
     "/me/service-accounts",
   ],
-  dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/finance/settings", "/me"],
+  dana: ["/", "/runners", "/runners/statistics", "/users", "/users/policy", "/groups", "/namespaces", "/namespaces?namespace=finance", "/finance/settings", "/me"],
   // Nobody signed in: the sign-in page, whatever the address.
   nobody: ["/"],
 };

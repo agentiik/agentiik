@@ -180,6 +180,18 @@ func TestASeriesOfQuotasCountsTheNamespacesLoad(t *testing.T) {
 		t.Errorf("the quotas in CSV were answered\n%q\nwant\n%q", csv, csvWant)
 	}
 
+	// range=max starts where the namespace first created or refused a run.
+	var first time.Time
+	if err := dbtest.Superuser(t, in.super).QueryRow(t.Context(),
+		`select least((select min(created_at) from runs where namespace = 'finance'),
+		              (select min(minute) from run_refusals where namespace = 'finance'))`).Scan(&first); err != nil {
+		t.Fatal(err)
+	}
+	got = quotas(t, in, in.alice, "/api/v1/finance/stats/quotas?range=max&to="+stamp(45))
+	if got.From != first.UTC().Format(time.RFC3339Nano) || got.To != stamp(45) {
+		t.Errorf("the quotas to the max answered from %s to %s, and the namespace's first run or refusal was at %s", got.From, got.To, first.UTC().Format(time.RFC3339Nano))
+	}
+
 	// A series reaches back as far as the namespace keeps its runs, and no further.
 	if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), `update namespaces set max_retention_days = 1 where name = 'finance'`); err != nil {
 		t.Fatal(err)

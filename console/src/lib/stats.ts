@@ -1,8 +1,10 @@
 // The range every chart of a statistics page is drawn over, as the address holds it, and what the
 // API's series become once they are drawn.
 //
-// "The last hour, 24 hours, 7, 30 or 90 days, or a span chosen, for every chart of the page at
-// once." The bucket is left to the API, which picks it from the range so that a chart holds a few
+// "The last hour, 24 hours, 7, 30 or 90 days, Max, or a span chosen, for every chart of the page at
+// once." Max is asked with range=max and starts where the API answers it does, at the first run the
+// page counts, so that until it answers it reads as the last 24 hours, which is what the API keeps
+// where there is nothing to count. The bucket is left to the API, which picks it from the range so that a chart holds a few
 // hundred points at most: a minute up to two hours, 15 minutes up to two days, an hour up to 14 days,
 // a day beyond.
 
@@ -12,6 +14,7 @@ export const presets = {
   "7d": { label: "7 days", ms: 7 * 86_400_000 },
   "30d": { label: "30 days", ms: 30 * 86_400_000 },
   "90d": { label: "90 days", ms: 90 * 86_400_000 },
+  max: { label: "Max", ms: 86_400_000 },
 } as const;
 
 export type Preset = keyof typeof presets;
@@ -46,11 +49,13 @@ export function queryOfRange(range: Range, rest: URLSearchParams): URLSearchPara
   return q;
 }
 
-// described is the range in words, for the line above the charts.
-export function described(range: Range, bucket: string | undefined): string {
+// described is the range in words, for the line above the charts, from where the API answered it
+// starts where it says, as it does for Max.
+export function described(range: Range, bucket: string | undefined, from?: string): string {
   const day = (d: Date) => d.toISOString().slice(0, 16).replace("T", " ");
   const every: Record<string, string> = { "1m": "a bucket a minute", "15m": "a bucket every 15 minutes", "1h": "a bucket an hour", "1d": "a bucket a day" };
-  return `${day(range.from)} to ${day(range.to)} UTC${bucket ? ` · ${every[bucket] ?? bucket}` : ""}`;
+  const start = from && !Number.isNaN(Date.parse(from)) ? new Date(from) : range.from;
+  return `${day(start)} to ${day(range.to)} UTC${bucket ? ` · ${every[bucket] ?? bucket}` : ""}`;
 }
 
 // seconds is an instant as uPlot's time axis counts it.
