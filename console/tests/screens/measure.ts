@@ -46,6 +46,24 @@ export function measure(): Finding[] {
     if (!inside) out.push({ rule: "outside", where: name(el), detail: `right ${r.right.toFixed(1)} > ${window.innerWidth}` });
   }
 
+  // Nothing on the screen runs into the page's side margins, unless inside a box that scrolls: a
+  // button there sits off the column every other edge keeps, and past the window on a phone.
+  const screen = document.querySelector("main.screen");
+  if (screen) {
+    const box = rect(screen);
+    const left = box.left + parseFloat(style(screen).paddingLeft);
+    const right = box.right - parseFloat(style(screen).paddingRight);
+    for (const el of all) {
+      // The bar across the top of a phone's screen runs the window's width on purpose.
+      if (!screen.contains(el) || el === screen || hidden(el) || style(el).position === "fixed" || el.closest("[role=dialog], header.bar")) continue;
+      const r = rect(el);
+      if (r.right <= right + 0.5 && r.left >= left - 0.5) continue;
+      let scrolls = false;
+      for (let p: HTMLElement | null = el.parentElement; p && p !== screen && !scrolls; p = p.parentElement) scrolls = ["auto", "scroll"].includes(style(p).overflowX);
+      if (!scrolls) out.push({ rule: "margin", where: name(el), detail: `${r.left.toFixed(1)} to ${r.right.toFixed(1)}, the page ${left.toFixed(1)} to ${right.toFixed(1)}` });
+    }
+  }
+
   // No box scrolls by a pixel or two: what overhangs a box that scrolls by so little is a box a
   // pixel too tall or too wide, and the wheel moves it.
   for (const el of all) {
@@ -214,6 +232,19 @@ export function measure(): Finding[] {
     const py = el.parentElement ? rect(el.parentElement).top + window.scrollY : 0;
     if (frac(y) && !frac(py)) out.push({ rule: "half-y", where: name(el), detail: `y=${y.toFixed(2)} in a parent at ${py.toFixed(2)}` });
     if (frac(r.height) && drawn(s) && !el.querySelector("*:not(svg *)")) out.push({ rule: "half-h", where: name(el), detail: `h=${r.height.toFixed(2)}` });
+  }
+
+  // A chart's legend that runs onto more than one row keeps its columns: every entry starts where an
+  // entry of the first row does, so that a second column reads down rather than zigzag.
+  for (const list of document.querySelectorAll(".chart .legend ul")) {
+    const items = [...list.children].filter(visible);
+    if (items.length < 2) continue;
+    const top = rect(items[0]!).top;
+    const columns = items.filter((li) => Math.abs(rect(li).top - top) < 0.6).map((li) => rect(li).left);
+    for (const li of items) {
+      const left = rect(li).left;
+      if (!columns.some((c) => Math.abs(c - left) < 0.6)) out.push({ rule: "legend-column", where: name(li), detail: `starts at ${left.toFixed(1)}, the columns at ${columns.map((c) => c.toFixed(1)).join(", ")}` });
+    }
   }
   return out;
 }
