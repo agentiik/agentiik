@@ -1,8 +1,15 @@
 <script lang="ts">
+  import Filter from "../components/Filter.svelte";
+  import { filtered } from "../lib/palette";
+  import { explain, type Explained } from "../lib/problem";
+  import Problem from "../components/Problem.svelte";
   import { refusal, type API, type Namespace } from "../api/client";
   import AdminTabs from "../components/AdminTabs.svelte";
+  import NamespacePolicy from "../components/NamespacePolicy.svelte";
+  import Dialog from "../components/Dialog.svelte";
   import Icon from "../components/Icon.svelte";
   import Pane from "../components/Pane.svelte";
+  import Notice from "../components/Notice.svelte";
   import type { Pool } from "../lib/fleet";
   import type { Place } from "../lib/place.svelte";
   import { bodyOf, formOf, summary, units, type Form } from "../lib/quotas";
@@ -16,14 +23,14 @@
 
   let namespaces = $state<Namespace[] | null>(null);
   let pools = $state<Pool[]>([]);
-  let unread = $state("");
+  let unread = $state<Explained | null>(null);
 
   async function reread() {
     const { data, error, response } = await api.GET("/api/v1/namespaces");
     if (data) {
       namespaces = data.namespaces;
-      unread = "";
-    } else unread = refusal(response, error).message;
+      unread = null;
+    } else unread = explain("load the namespaces", refusal(response, error));
   }
 
   $effect(() => {
@@ -32,13 +39,13 @@
   });
 
   let working = $state(false);
-  let problem = $state("");
+  let problem = $state<Explained | null>(null);
   let said = $state("");
 
-  async function act(work: () => Promise<string>) {
+  async function act(failed: string, work: () => Promise<string>) {
     if (working) return;
     working = true;
-    problem = "";
+    problem = null;
     said = "";
     try {
       // Said once the namespaces are read again, so that what it says is what the page shows.
@@ -47,7 +54,7 @@
       await changed();
       said = done;
     } catch (e) {
-      problem = sentence(e instanceof Error ? e.message : String(e));
+      problem = explain(failed, e);
     } finally {
       working = false;
     }
@@ -88,25 +95,27 @@
     }
     wrong = null;
     const ns = record.name;
-    return act(async () => {
+    return act("save the quotas", async () => {
       const { data, error, response } = await api.PUT("/api/v1/namespaces/{ns}/quotas", { params: { path: { ns } }, body: read.body });
       if (!data) throw refusal(response, error);
-      return `The quotas of ${ns} are written: ${summary(data)}.`;
+      return "Quotas saved.";
     });
   }
 
   // The form that creates a shared namespace.
+  let creating = $state(false);
   let name = $state("");
   let owner = $state("");
 
   function create(e: SubmitEvent) {
     e.preventDefault();
-    return act(async () => {
+    return act("create the namespace", async () => {
       const { data, error, response } = await api.POST("/api/v1/namespaces", { body: { name: name.trim(), kind: "shared", owner: owner.trim() } });
       if (!data) throw refusal(response, error);
+      creating = false;
       name = "";
       owner = "";
-      return `${data.name} is created, owned by ${data.owner}, who holds the owner role on it from now.`;
+      return `${data.name} created.`;
     });
   }
 
@@ -114,12 +123,12 @@
   let asking = $state("");
 
   function remove(n: Namespace) {
-    return act(async () => {
+    return act("remove the namespace", async () => {
       const answer = await api.DELETE("/api/v1/namespaces/{ns}", { params: { path: { ns: n.name } } });
       if (answer.error !== undefined || !answer.response.ok) throw refusal(answer.response, answer.error);
       asking = "";
       if (chosen === n.name) choose(undefined);
-      return `${n.name} is removed, with its grants and its authentication policy.`;
+      return `${n.name} removed.`;
     });
   }
 
@@ -132,136 +141,117 @@
     max_run_duration: "Longest run",
     allowed_runner_pools: "Pools it may send work to",
   };
+  // What the Filter field at the head leaves of the list, as typed into the address.
+  const namespacesShown = $derived(namespaces ? filtered(namespaces, place.query.get("q") ?? "", (n) => `${n.name} ${n.owner ?? ""}`) : []);
 </script>
 
-<AdminTabs {place} current="namespaces" />
+<AdminTabs {place} current="namespaces">
+  {#snippet actions()}
+    <Filter {place} label="Filter the namespaces" />
+    <button class="control primary" onclick={() => ((creating = true), (problem = null))}><Icon name="control-add" size={14} />New namespace</button>
+  {/snippet}
+</AdminTabs>
 
-{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
-{#if said}<p class="said" role="status">{said}</p>{/if}
+{#if problem && !creating}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
-<div class="columns">
-  <Pane title="Namespaces" aside={namespaces ? String(namespaces.length) : ""}>
-    {#if unread}
-      <p class="problem" role="alert">The namespaces could not be read: {unread}</p>
-    {:else if namespaces === null}
-      <p class="muted">Reading the namespaces.</p>
-    {:else}
-      <table>
-        <thead><tr><th>Namespace</th><th>Kind</th><th>Owner</th><th>Quotas</th><th class="end"></th></tr></thead>
-        <tbody>
-          {#each namespaces as n (n.name)}
-            <tr class:chosen={chosen === n.name}>
-              <td><button class="name mono" aria-pressed={chosen === n.name} onclick={() => choose(chosen === n.name ? undefined : n.name)}>{n.name}</button></td>
-              <td class="muted">{n.kind}</td>
-              <td class="mono">{#if n.owner}{n.owner}{:else}<span class="muted">nobody named</span>{/if}</td>
-              <td class="quotas">{summary(n.quotas)}</td>
-              <td class="end">
-                {#if n.kind === "shared"}
-                  {#if asking === n.name}
-                    <button class="control danger" disabled={working} onclick={() => remove(n)}>Remove {n.name}</button>
-                    <button class="control" onclick={() => (asking = "")}>Keep</button>
-                  {:else}
-                    <button class="control" disabled={working} onclick={() => (asking = n.name)}>Remove</button>
-                  {/if}
+<Pane title="Namespaces" aside={namespaces ? String(namespaces.length) : ""}>
+  {#if unread}
+    <Problem explained={unread} onretry={reread} />
+  {:else if namespaces === null}
+    <p class="muted">Loading</p>
+  {:else}
+    <table>
+      <thead><tr><th>Namespace</th><th>Kind</th><th>Owner</th><th>Quotas</th><th class="end"></th></tr></thead>
+      <tbody>
+        {#each namespacesShown as n (n.name)}
+          <tr class:chosen={chosen === n.name}>
+            <td><button class="name term" aria-pressed={chosen === n.name} onclick={() => choose(chosen === n.name ? undefined : n.name)}>{n.name}</button></td>
+            <td class="muted">{n.kind}</td>
+            <td class="term">{#if n.owner}{n.owner}{:else}<span class="muted">nobody named</span>{/if}</td>
+            <td class="quotas">{summary(n.quotas)}</td>
+            <td class="end">
+              {#if n.kind === "shared"}
+                {#if asking === n.name}
+                  <button class="control" onclick={() => (asking = "")}>Keep</button>
+                  <button class="control danger" disabled={working} onclick={() => remove(n)}>Remove</button>
+                {:else}
+                  <button class="control" disabled={working} onclick={() => (asking = n.name)}>Remove</button>
                 {/if}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-      <p class="foot muted">Choose a namespace to write its quotas. A personal namespace goes with its user. A shared one is removed only once it holds nothing, no workflow, run, secret, stored object or service account, and the API says what it still holds.</p>
-    {/if}
-  </Pane>
+              {/if}
+            </td>
+          </tr>
+        {:else}
+          <tr><td colspan="5" class="muted">{namespaces.length === 0 ? "No namespaces" : "Nothing matches."}</td></tr>
+        {/each}
+      </tbody>
+    </table>
+  {/if}
+</Pane>
 
-  <div class="side">
-    {#if record}
-      <Pane title="Quotas of {record.name}" focused>
-        <form onsubmit={write} aria-label="Quotas of {record.name}" novalidate>
-          {#each ["max_concurrent_tasks", "max_retention_days", "max_runs_per_hour"] as const as k (k)}
-            <label>
-              <span>{label[k]} <span class="mono faint">{k}</span></span>
-              <input class="mono" inputmode="numeric" bind:value={form[k]} placeholder={k === "max_runs_per_hour" ? "no bound" : ""} aria-invalid={wrong?.field === k} />
-            </label>
-          {/each}
-          <label>
-            <span>{label.max_artifact} <span class="mono faint">max_artifact_bytes</span></span>
-            <span class="pair">
-              <input class="mono" inputmode="numeric" bind:value={form.max_artifact} placeholder="no bound" aria-invalid={wrong?.field === "max_artifact"} />
-              <select bind:value={form.max_artifact_unit} aria-label="Unit of the artifacts kept">
-                {#each units as u (u.unit)}<option value={u.unit}>{u.unit}</option>{/each}
-              </select>
-            </span>
+<Dialog title={record ? `Quotas of ${record.name}` : ""} open={record !== undefined} width={560} onclose={() => choose(undefined)}>
+  {#if record}
+    <form onsubmit={write} aria-label="Quotas of {record.name}" novalidate>
+      {#each ["max_concurrent_tasks", "max_retention_days", "max_runs_per_hour"] as const as k (k)}
+        <label>
+          <span>{label[k]} <span class="term faint">{k}</span></span>
+          <input class="term" inputmode="numeric" bind:value={form[k]} placeholder={k === "max_concurrent_tasks" ? "" : "no bound"} aria-invalid={wrong?.field === k} />
+        </label>
+      {/each}
+      <label>
+        <span>{label.max_artifact} <span class="term faint">max_artifact_bytes</span></span>
+        <span class="pair">
+          <input class="term" inputmode="numeric" bind:value={form.max_artifact} placeholder="no bound" aria-invalid={wrong?.field === "max_artifact"} />
+          <select bind:value={form.max_artifact_unit} aria-label="Unit of the artifacts kept">
+            {#each units as u (u.unit)}<option value={u.unit}>{u.unit}</option>{/each}
+          </select>
+        </span>
+      </label>
+      <label>
+        <span>{label.max_run_duration} <span class="term faint">max_run_duration</span></span>
+        <input class="term" bind:value={form.max_run_duration} placeholder="no bound, such as 24h" aria-invalid={wrong?.field === "max_run_duration"} />
+      </label>
+      <fieldset>
+        <legend>{label.allowed_runner_pools} <span class="term faint">allowed_runner_pools</span></legend>
+        {#each pools as p (p.name)}
+          <label class="check">
+            <input type="checkbox" checked={form.allowed_runner_pools.includes(p.name)} onchange={(e) => toggle(p.name, e.currentTarget.checked)} />
+            <span class="term">{p.name}</span>
+            {#if !accepts(p, record.name)}<span class="muted">does not accept {record.name}</span>{/if}
           </label>
-          <label>
-            <span>{label.max_run_duration} <span class="mono faint">max_run_duration</span></span>
-            <input class="mono" bind:value={form.max_run_duration} placeholder="no bound, such as 24h" aria-invalid={wrong?.field === "max_run_duration"} />
-          </label>
-          <fieldset>
-            <legend>{label.allowed_runner_pools} <span class="mono faint">allowed_runner_pools</span></legend>
-            {#each pools as p (p.name)}
-              <label class="check">
-                <input type="checkbox" checked={form.allowed_runner_pools.includes(p.name)} onchange={(e) => toggle(p.name, e.currentTarget.checked)} />
-                <span class="mono">{p.name}</span>
-                {#if !accepts(p, record.name)}<span class="muted">does not accept {record.name}</span>{/if}
-              </label>
-            {:else}
-              <p class="muted">No pool can be read.</p>
-            {/each}
-            <p class="note muted">None ticked is no list: every pool that accepts {record.name}. A pool ticked that does not accept it takes none of its work all the same.</p>
-          </fieldset>
-          {#if wrong}<p class="problem" role="alert">{label[wrong.field]}: {wrong.problem}.</p>{/if}
-          <p class="buttons">
-            <button class="control primary" disabled={working}>Write the quotas</button>
-            <button class="control" type="button" onclick={() => choose(undefined)}>Close</button>
-          </p>
-        </form>
-      </Pane>
-    {/if}
+        {:else}
+          <p class="muted">No pools</p>
+        {/each}
+      </fieldset>
+      {#if wrong}<p class="problem" role="alert">{label[wrong.field]}: {wrong.problem}.</p>{/if}
+      <p class="buttons">
+        <button class="control primary" disabled={working}>Write the quotas</button>
+        <button class="control" type="button" onclick={() => choose(undefined)}>Close</button>
+      </p>
+    </form>
+    <NamespacePolicy {api} namespace={record.name} admin framed={false} />
+  {/if}
+</Dialog>
 
-    <Pane title="Create a namespace">
-      <form onsubmit={create} aria-label="Create a namespace">
-        <label>
-          <span>Name</span>
-          <input class="mono" bind:value={name} placeholder="finance" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
-        </label>
-        <label>
-          <span>Owner, a login or group:NAME</span>
-          <input class="mono" bind:value={owner} placeholder="group:finance-leads" required autocomplete="off" />
-        </label>
-        <p class="note muted">The owner is given the owner role on it as it is created, so that they can share it and act in it from the start. Its quotas are the defaults until written.</p>
-        <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create the namespace</button></p>
-      </form>
-    </Pane>
-  </div>
-</div>
+<Dialog title="New namespace" bind:open={creating}>
+  {#if problem}<Problem explained={problem} />{/if}
+  <form onsubmit={create} aria-label="Create a namespace">
+    <label>
+      <span>Name</span>
+      <input class="term" bind:value={name} placeholder="finance" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="255" autocomplete="off" />
+    </label>
+    <label>
+      <span>Owner, a login or group:NAME</span>
+      <input class="term" bind:value={owner} placeholder="group:finance-leads" required autocomplete="off" />
+    </label>
+    <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create the namespace</button></p>
+  </form>
+</Dialog>
 
 <style>
   .problem {
     margin: 0 0 calc(var(--unit) * 6);
     color: var(--failed);
-  }
-
-  .said {
-    margin: 0 0 calc(var(--unit) * 6);
-  }
-
-  .columns {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
-    gap: calc(var(--unit) * 8);
-    align-items: start;
-  }
-
-  /* The form goes under the list where the two side by side would squeeze the list's columns. */
-  @media (max-width: 1499px) {
-    .columns {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-
-  .side {
-    display: grid;
-    gap: calc(var(--unit) * 8);
   }
 
   table {
@@ -279,7 +269,7 @@
 
   td {
     padding: calc(var(--unit) * 3);
-    border-top: var(--border-hairline) solid var(--line);
+    box-shadow: inset 0 var(--border-hairline) 0 var(--line);
     vertical-align: middle;
   }
 
@@ -375,15 +365,6 @@
 
   form p {
     margin: 0;
-  }
-
-  .note,
-  .foot {
-    font-size: var(--type-control-size);
-  }
-
-  .foot {
-    margin: calc(var(--unit) * 6) 0 0;
   }
 
   .buttons {

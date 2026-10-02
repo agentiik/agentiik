@@ -1,0 +1,31 @@
+# invalid: A tool input naming something the workflow does not declare.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+
+mcp:
+  name: invoicing
+  tools:
+    - name: reconcile_month
+      description: Reconcile a whole month.
+      input:
+        from: { input: period }
+      mode: async
+
+steps:
+  reconcile:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [out]

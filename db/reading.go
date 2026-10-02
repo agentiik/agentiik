@@ -209,8 +209,9 @@ type ArtifactSummary struct {
 
 	// Status is live while the artifact may be fetched, expired once its duration ran out, and
 	// collected once its fetches were spent; RetiredAt is when it stopped being live.
+	// ExpiresAt is left out where nothing bounds it, a file kept for ever.
 	Status    string    `json:"status"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 	RetiredAt time.Time `json:"retired_at,omitzero"`
 
 	// FetchesLeft is what remains of a fetch budget, which only a workflow output may declare,
@@ -305,7 +306,7 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 // a run that published none answers an empty list.
 func (n *NS) artifacts(ctx context.Context, run agk.RunID) ([]ArtifactSummary, error) {
 	rows, err := n.tx.Query(ctx, `
-		select step, port, name, media_type, size_bytes, digest, status, expires_at, retired_at, fetches_left
+		select step, port, name, media_type, size_bytes, digest, status, nullif(expires_at, 'infinity'), retired_at, fetches_left
 		from artifacts where namespace = $1 and run_id = $2
 		order by step, port, name`, n.namespace, string(run))
 	if err != nil {
@@ -316,14 +317,16 @@ func (n *NS) artifacts(ctx context.Context, run agk.RunID) ([]ArtifactSummary, e
 	for rows.Next() {
 		var a ArtifactSummary
 		var step, port, digest string
-		var retired *time.Time
-		if err := rows.Scan(&step, &port, &a.Name, &a.MediaType, &a.Size, &digest, &a.Status, &a.ExpiresAt, &retired, &a.FetchesLeft); err != nil {
+		var expires, retired *time.Time
+		if err := rows.Scan(&step, &port, &a.Name, &a.MediaType, &a.Size, &digest, &a.Status, &expires, &retired, &a.FetchesLeft); err != nil {
 			return nil, fmt.Errorf("db: an artifact of run %s could not be read: %w", run, err)
 		}
 		a.Step, a.Port = agk.Step(step), agk.Port(port)
 		a.URI = agk.URI{Run: run, Step: a.Step, Port: a.Port, Name: a.Name}
 		a.SHA256 = strings.TrimPrefix(digest, "sha256:")
-		a.ExpiresAt = a.ExpiresAt.UTC()
+		if expires != nil {
+			a.ExpiresAt = expires.UTC()
+		}
 		if retired != nil {
 			a.RetiredAt = retired.UTC()
 		}
@@ -785,4 +788,82 @@ func (n *NS) stepExists(ctx context.Context, run agk.RunID, step agk.Step) error
 		return fmt.Errorf("%w: %s", ErrNoStep, step)
 	}
 	return nil
+}
+
+// ListedWorkflow is one workflow as a namespace's listing answers it to whoever reads its runs: its
+// name, when it was created, and its newest run, nil where it was never run. Nothing of its
+// repository or its file, which workflow:read guards.
+type ListedWorkflow struct {
+	Name      string     `json:"name"`
+	CreatedAt time.Time  `json:"created_at"`
+	Latest    *LatestRun `json:"latest,omitempty"`
+}
+
+// LatestRun is a workflow's newest run, by when it was created, as a listing of workflows names it.
+type LatestRun struct {
+	Run         agk.RunID       `json:"run"`
+	State       agk.RunState    `json:"state"`
+	TriggerKind agk.TriggerKind `json:"trigger_kind"`
+	CreatedAt   time.Time       `json:"created_at"`
+	FinishedAt  *time.Time      `json:"finished_at,omitempty"`
+}
+
+// ListWorkflows answers the workflows given, those not deleted, each with its newest run, by name
+// in byte order: the second half of a namespace's listing, given the workflows the authorizer
+// allowed. None given reads nothing, as Runs reads nothing, since the filter is the authorisation
+// decision and a missing one fails closed.
+func (w *Wide) ListWorkflows(ctx context.Context, among []Workflow) ([]ListedWorkflow, error) {
+	if len(among) == 0 {
+		return []ListedWorkflow{}, nil
+	}
+	namespaces := make([]string, len(among))
+	names := make([]string, len(among))
+	for i, wf := range among {
+		namespaces[i], names[i] = wf.Namespace, wf.Name
+	}
+	// The newest run of each, read beside it, by the index runs are listed by.
+	rows, err := w.tx.Query(ctx, `
+		select wf.name::text, wf.created_at, l.id::text, l.state::text, l.trigger, l.created_at, l.finished_at
+		from workflows wf
+		left join lateral (
+			select r.id, r.state, r.trigger, r.created_at, r.finished_at
+			from runs r
+			where r.namespace = wf.namespace and r.workflow = wf.name
+			order by r.created_at desc, r.id desc
+			limit 1
+		) l on true
+		where (wf.namespace, wf.name::text) in (select * from unnest($1::text[], $2::text[]))
+		  and wf.deleted_at is null
+		order by wf.namespace, wf.name::text collate "C"`, namespaces, names)
+	if err != nil {
+		return nil, fmt.Errorf("db: the workflows could not be listed: %w", err)
+	}
+	defer rows.Close()
+	out := []ListedWorkflow{}
+	for rows.Next() {
+		var lw ListedWorkflow
+		var run, state, trigger *string
+		var created *time.Time
+		var finished *time.Time
+		if err := rows.Scan(&lw.Name, &lw.CreatedAt, &run, &state, &trigger, &created, &finished); err != nil {
+			return nil, fmt.Errorf("db: a workflow listed could not be read: %w", err)
+		}
+		lw.CreatedAt = lw.CreatedAt.UTC()
+		if run != nil {
+			latest := &LatestRun{Run: agk.RunID(*run), CreatedAt: created.UTC()}
+			if err := latest.State.UnmarshalText([]byte(*state)); err != nil {
+				return nil, err
+			}
+			if err := latest.TriggerKind.UnmarshalText([]byte(*trigger)); err != nil {
+				return nil, err
+			}
+			if finished != nil {
+				at := finished.UTC()
+				latest.FinishedAt = &at
+			}
+			lw.Latest = latest
+		}
+		out = append(out, lw)
+	}
+	return out, rows.Err()
 }

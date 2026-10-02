@@ -175,6 +175,28 @@ type Event struct {
 // Vars are the workflow variables, read by expressions under the vars root.
 type Vars map[string]any
 
+// Over is what the vars root holds on a server: these, the workflow's own, laid over the variables
+// its namespace shows it, a name both write taking the file's value, as a name an including file
+// writes takes that file's. The file is the more specific of the two, written for this workflow and
+// kept with its commit, where a namespace's variable is changed in place, so a namespace fills in
+// what the file leaves unwritten and overrides nothing it decided.
+//
+// Neither is written into. Where the namespace shows nothing, the answer is the file's own, as agk
+// run --local reads them, which reaches no namespace.
+func (v Vars) Over(namespace map[string]any) map[string]any {
+	if len(namespace) == 0 {
+		return map[string]any(v)
+	}
+	out := make(map[string]any, len(namespace)+len(v))
+	for name, value := range namespace {
+		out[name] = value
+	}
+	for name, value := range v {
+		out[name] = value
+	}
+	return out
+}
+
 // Include is one entry of the include block: either a file of this repository, resolved
 // inside the same commit, or another repository at a ref.
 //

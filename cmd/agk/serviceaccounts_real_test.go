@@ -41,7 +41,7 @@ func anInstallationWithServiceAccounts(t *testing.T) accountsInstallation {
 			}
 		}
 		for login, value := range map[string]string{"alice": in.alice, "bob": in.bob} {
-			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, db.User{Login: login}); err != nil {
 				return err
 			}
 			hash := sha256.Sum256([]byte(value))

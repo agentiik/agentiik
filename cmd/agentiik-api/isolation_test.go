@@ -120,9 +120,9 @@ func someTenants(t *testing.T) *tenants {
 	x.credential = ulid.New()
 	err = in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, u := range []db.User{
-			{Login: "alice", DisplayName: "Alice"}, {Login: "mallory", DisplayName: "Mallory"},
-			{Login: "oscar", DisplayName: "Oscar"}, {Login: "carol", DisplayName: "Carol", Admin: true},
-			{Login: "victor", DisplayName: "Victor"}, {Login: "walter", DisplayName: "Walter"},
+			{Login: "alice", Profile: db.Profile{GivenName: "Alice"}}, {Login: "mallory", Profile: db.Profile{GivenName: "Mallory"}},
+			{Login: "oscar", Profile: db.Profile{GivenName: "Oscar"}}, {Login: "carol", Profile: db.Profile{GivenName: "Carol"}, Admin: true},
+			{Login: "victor", Profile: db.Profile{GivenName: "Victor"}}, {Login: "walter", Profile: db.Profile{GivenName: "Walter"}},
 		} {
 			if err := w.CreateUser(ctx, u); err != nil {
 				return err
@@ -167,7 +167,7 @@ func someTenants(t *testing.T) *tenants {
 	}
 
 	// finance, owned by alice, and hr, owned by mallory, so that she is somebody holding something.
-	for _, ns := range []api.NamespaceRecord{{Name: "finance", Owner: "alice"}, {Name: "hr", Owner: "mallory"}} {
+	for _, ns := range []api.NamespaceCreate{{Name: "finance", Owner: "alice"}, {Name: "hr", Owner: "mallory"}} {
 		x.must("POST", "/api/v1/namespaces", asker{bearer: theToken}, ns, http.StatusCreated)
 	}
 
@@ -182,6 +182,8 @@ func someTenants(t *testing.T) *tenants {
 	x.must("PUT", "/api/v1/finance/secrets/billing", x.as["alice"], api.Declare{Provider: "builtin", Value: &billing}, http.StatusCreated)
 	x.must("PUT", "/api/v1/finance/secrets/ledger", x.as["alice"], api.Declare{Provider: "env", Path: ledgerVariable}, http.StatusCreated)
 	x.values = []string{billing, ledger}
+	// And a variable, which a path names as it names a secret.
+	x.must("PUT", "/api/v1/finance/variables/currency", x.as["alice"], api.VariableWrite{Value: []byte(`"EUR"`), Visibility: "all"}, http.StatusCreated)
 
 	// oscar operates payroll, victor views finance and walter edits monthly-invoicing; the auditors
 	// view finance, by carol's power, which alice is told of, and edit monthly-invoicing.
@@ -309,6 +311,8 @@ func (x *tenants) present(route string) map[string]string {
 		named["name"] = "page.js"
 	case strings.Contains(route, "/secrets/"):
 		named["name"] = "billing"
+	case strings.Contains(route, "/variables/"):
+		named["name"] = "currency"
 	case strings.Contains(route, "/outputs/"):
 		named["name"] = "invoices"
 	case strings.Contains(route, "/service-accounts/"):
@@ -508,6 +512,7 @@ func TestNoAnswerOfAnyRouteCarriesASecretsValue(t *testing.T) {
 		"PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}": pushed,
 		"POST /api/v1/{namespace}/workflows/{workflow}/runs":             api.Start{Commit: theCommit, Inputs: map[string]any{"orders": []any{}}},
 		"PUT /api/v1/{namespace}/secrets/{name}":                         api.Declare{Provider: "env", Path: ledgerVariable},
+		"PUT /api/v1/{namespace}/variables/{name}":                       api.VariableWrite{Value: []byte(`"CHF"`), Visibility: "all"},
 		"POST /api/v1/{namespace}/grants":                                api.GrantRequest{Principal: "group:auditors", Role: "viewer"},
 		"POST /api/v1/{namespace}/workflows/{workflow}/grants":           api.GrantRequest{Principal: "group:auditors", Role: "viewer"},
 		"POST /api/v1/service-accounts":                                  api.NewServiceAccount{Namespace: "finance", Name: "deploy"},

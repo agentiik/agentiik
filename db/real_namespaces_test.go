@@ -14,7 +14,7 @@ func TestTheStoreRemovesAPersonalNamespaceAsAnyOther(t *testing.T) {
 	pool := identity(t)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, login := range []string{"alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: login, DisplayName: login}); err != nil {
+			if err := w.CreateUser(ctx, User{Login: login}); err != nil {
 				return err
 			}
 		}

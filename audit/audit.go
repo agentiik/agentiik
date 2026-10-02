@@ -46,7 +46,9 @@ import (
 // namespace changes; and from v0.3.0 the identity and access events: users, their credentials, enrolment
 // links and recovery codes, the sign-ins that succeed and fail, groups and their members, service
 // accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap;
-// and from v0.4.0 the workflow repository's. Approval arrives with the wait step in v0.8.0.
+// and from v0.4.0 the workflow repository's; and from v0.6.0 the profile's, what a user says of
+// themself, their photo, and what an administrator gives them, and a namespace's variables. Approval
+// arrives with the wait step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -70,13 +72,19 @@ const (
 	// RunnerDrain and RunnerRevoke are POST /api/v1/runners/{runner}/drain and /revoke.
 	RunnerDrain  = "runner.drain"
 	RunnerRevoke = "runner.revoke"
-	// NamespaceCreate, NamespaceDelete and NamespaceUpdate are the namespace changes, made by an
-	// administrator through /api/v1/namespaces or on the server by agentiik-api namespace: a
-	// namespace created, one removed, and its quotas set. A user's empty personal namespace removed
-	// with them is a NamespaceDelete too.
+	// NamespaceCreate, NamespaceDelete and NamespaceUpdate are the namespace changes made through
+	// /api/v1/namespaces or on the server by agentiik-api namespace: a namespace created, by any user
+	// or an administrator, one removed, by its owner or an administrator, and its quotas set, by an
+	// administrator. A user's empty personal namespace removed with them is a NamespaceDelete too.
+	// NamespaceRename is a namespace renamed, PATCH /api/v1/namespaces/{ns}, recorded on the
+	// installation with the new name as its target and from and to, since the namespace's own entries
+	// keep the name they were recorded under. NamespaceAvatar is its picture set, with the size it was
+	// stored at, or removed, with removed; never the picture.
 	NamespaceCreate = "namespace.create"
 	NamespaceDelete = "namespace.delete"
 	NamespaceUpdate = "namespace.update"
+	NamespaceRename = "namespace.rename"
+	NamespaceAvatar = "namespace.avatar"
 	// GrantCreate is a grant or a deny written, at POST /api/v1/{ns}/grants or on one workflow,
 	// recorded in its namespace with whom, where and what. The first written is a namespace's
 	// owner's, which its creation writes. GrantDelete is one revoked, recorded as it was. Either,
@@ -95,6 +103,18 @@ const (
 	UserCreate     = "user.create"
 	UserDelete     = "user.delete"
 	EnrolmentIssue = "enrolment.issue"
+	// UserProfile is what a user says of themself changed by them, PATCH /api/v1/me, recorded with
+	// the names of the fields that changed and never what they hold: the log is kept for good, and
+	// what a person wrote about themself is theirs to take back. UserAvatar is a user's photo set
+	// by them, PUT /api/v1/me/avatar, with the size it was stored at, or removed, by them or by an
+	// administrator at DELETE /api/v1/users/{login}/avatar, with removed; never the photo.
+	UserProfile = "user.profile"
+	UserAvatar  = "user.avatar"
+	// UserUpdate is what an administrator gives a user after creating them changed, PATCH
+	// /api/v1/users/{login}: their email address, recorded with the names of the fields that
+	// changed and never what they hold, as UserProfile is, since the log is kept for good and an
+	// address is somebody's to have removed.
+	UserUpdate = "user.update"
 	// GroupCreate and GroupDelete are a group created and removed, and GroupMemberAdd and
 	// GroupMemberRemove one member put in or taken out, since a member gains or loses what the
 	// group's grants give.
@@ -219,6 +239,18 @@ const (
 // secret. "Audit webhook secret writes", since whoever writes one decides who may start the
 // workflow's runs.
 const WebhookCredentialWrite = "webhook_credential.write"
+
+// VariableWrite is a namespace variable created or replaced, PUT /api/v1/{ns}/variables/{name}, and
+// VariableDelete one removed, DELETE on the same path: recorded in the namespace with the variable
+// as its target. A write records the visibility, the workflows a selected one names, whether it was
+// created, and the SHA-256 of the value written as compact JSON, never the value, which every run
+// that read it keeps: an entry of up to 64 KiB would make the log where values are read. A variable
+// changes what the workflows reading it do, so whoever changed it is named in the log for good, where
+// the row keeps only who wrote it last.
+const (
+	VariableWrite  = "variable.write"
+	VariableDelete = "variable.delete"
+)
 
 // The results an entry records.
 const (
