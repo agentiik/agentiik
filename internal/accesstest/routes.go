@@ -137,6 +137,7 @@ var Cases = []Case{
 	{Route: administer("GET", "/api/v1/runner-pools")},
 	{Route: administer("GET", "/api/v1/stats/pools")},
 	{Route: administer("GET", "/api/v1/stats/activity")},
+	{Route: administer("GET", "/api/v1/auth/audit")},
 	{Route: administer("POST", "/api/v1/runner-pools"), Refused: true},
 	{Route: administer("POST", "/api/v1/runner-pools/{pool}/join-tokens"), Refused: true},
 

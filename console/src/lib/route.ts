@@ -59,8 +59,9 @@ export function read(pathname: string, root: string): Route {
     return third === undefined ? { kind: "account", tab: second } : { kind: "unknown", path: pathname };
   }
   // The users' page has a tab of its own, the installation's sign-in policy, under the users' segment
-  // rather than one of its own, since a first segment of the console's is one no namespace may take.
-  if (first === "users" && second === "policy" && third === undefined) {
+  // rather than one of its own, since a first segment of the console's is one no namespace may take;
+  // and the audit log is under it for the same reason, an entry of the sidebar of its own.
+  if (first === "users" && (second === "policy" || second === "audit") && third === undefined) {
     return { kind: "users", tab: second };
   }
   if (first === "users" || first === "groups" || first === "namespaces") {

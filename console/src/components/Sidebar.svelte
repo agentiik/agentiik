@@ -45,12 +45,17 @@
 
   const icon: Record<View, string> = { workflows: "control-workflows", statistics: "control-statistics", sharing: "control-share", variables: "control-variables", settings: "control-settings" };
   const home = { kind: "landing" as const };
+  // The audit log is the users' segment's too, at users/audit, so an entry is open by its route's tab
+  // as well as its kind.
   const admin = [
-    { kind: "runners" as const, label: "Runners", icon: "control-runners" },
-    { kind: "users" as const, label: "Users", icon: "control-users" },
-    { kind: "groups" as const, label: "Groups", icon: "control-groups" },
-    { kind: "namespaces" as const, label: "Namespaces", icon: "control-namespaces" },
+    { to: { kind: "runners" as const }, label: "Runners", icon: "control-runners" },
+    { to: { kind: "users" as const }, label: "Users", icon: "control-users" },
+    { to: { kind: "groups" as const }, label: "Groups", icon: "control-groups" },
+    { to: { kind: "namespaces" as const }, label: "Namespaces", icon: "control-namespaces" },
+    { to: { kind: "users" as const, tab: "audit" }, label: "Audit log", icon: "control-history" },
   ];
+  const audited = $derived(route.kind === "users" && route.tab === "audit");
+  const opened = (to: (typeof admin)[number]["to"]) => route.kind === to.kind && ("tab" in to ? audited : !audited);
   const current = $derived(route.kind === "namespace" && route.namespace === namespace ? route.view : undefined);
 </script>
 
@@ -92,9 +97,9 @@
   {#if me.admin}
     {#if !folded}<p class="section">Administration</p>{:else}<hr />{/if}
     <ul class="entries" aria-label="Administration">
-      {#each admin as a (a.kind)}
+      {#each admin as a (a.label)}
         <li>
-          <a class="entry" class:open={route.kind === a.kind} aria-current={route.kind === a.kind ? "page" : undefined} href={place.href({ kind: a.kind })} onclick={follow(place, { kind: a.kind })} title={folded ? a.label : undefined}>
+          <a class="entry" class:open={opened(a.to)} aria-current={opened(a.to) ? "page" : undefined} href={place.href(a.to)} onclick={follow(place, a.to)} title={folded ? a.label : undefined}>
             <Icon name={a.icon} /><span class="label">{a.label}</span>
           </a>
         </li>
