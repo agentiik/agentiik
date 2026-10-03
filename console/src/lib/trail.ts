@@ -17,7 +17,8 @@ export function trailOf(r: Route): Step[] {
     case "runners":
       return [{ label: "Runners", to: r.tab ? { kind: "runners" } : undefined }, ...(r.tab ? [{ label: "Statistics" }] : [])];
     case "users":
-      return [{ label: "Users" }];
+      if (r.tab === "audit") return [{ label: "Audit log" }];
+      return [{ label: "Users", to: r.tab ? { kind: "users" } : undefined }, ...(r.tab ? [{ label: tabs[r.tab] ?? r.tab }] : [])];
     case "groups":
       return [{ label: "Groups" }];
     case "namespaces":

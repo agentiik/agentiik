@@ -232,6 +232,10 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 	if err != nil {
 		return nil, err
 	}
+	if err := pool.Current(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
 	// The API's connection to the bus creates the streams, which it would otherwise wait for
 	// the controller to, and each pool's consumer, since a runner may create neither: every
 	// pool's here, the default pool the installation was migrated with among them, and a new
@@ -352,7 +356,10 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewUsers(rt, api.UserOptions{Pool: pool, PublicURL: s.PublicURL, Now: s.now}); err != nil {
 		return nil, err
 	}
-	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{Pool: pool}); err != nil {
+	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{
+		Pool:    pool,
+		Trouble: func(err error) { log.Error("a namespace request was answered 500", "error", err) },
+	}); err != nil {
 		return nil, err
 	}
 	// Every write held to its namespace's max_artifact_bytes.

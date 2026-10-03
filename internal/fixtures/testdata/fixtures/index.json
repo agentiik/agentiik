@@ -1,5 +1,5 @@
 {
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "What each fixture pins. A fixture under valid/ must be accepted by the schema named beside it. A fixture under invalid/ must be refused; refused_by says by what. schema means the JSON Schema document alone refuses it, and a consumer can assert that with a validator and nothing else. validator means the documentation states the rule but JSON Schema cannot express it, because it needs the graph, the brick manifest, the included file or the expression language; those fixtures are schema valid on purpose and are refused by the workflow validator instead.",
   "schemas": {
     "workflow": "../workflow.schema.json",

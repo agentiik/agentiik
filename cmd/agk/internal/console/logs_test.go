@@ -104,7 +104,7 @@ func TestTheInspectorFollowsTheLogOfTheStepChosen(t *testing.T) {
 	// Each waits on a live log a moment, and needs nothing of the others.
 	t.Parallel()
 	logs := invoiceLogs()
-	m := followingLogs(t, &installation{}, logs, 160, 40)
+	m := followingLogs(t, &installation{}, logs, 100, 40)
 	s := screen(m)
 	for _, want := range []string{"LOG invoice  ● live", "invoice 2/3, attempt 4 | posting ORD-0002", "invoice 2/3, attempt 4 | the ledger answered 503"} {
 		if !strings.Contains(s, want) {
@@ -146,7 +146,7 @@ func TestWhatIsSaidAboutALogIsDrawn(t *testing.T) {
 		said:    map[string][]string{"invoice": {"invoice: run 01RUNBBBBBBBBBBBBBBBBBBBBB has no such step, or is not there, or not yours"}},
 		refused: map[string]bool{"invoice": true},
 	}
-	m := followingLogs(t, &installation{}, logs, 160, 40)
+	m := followingLogs(t, &installation{}, logs, 100, 40)
 	s := screen(m)
 	if !strings.Contains(s, "has no such step, or is not there, or not yours") || strings.Contains(s, "LOG invoice  ● live") || strings.Contains(s, "read to its end") {
 		t.Errorf("a refused log is not said so:\n%s", s)

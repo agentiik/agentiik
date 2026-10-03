@@ -1,0 +1,24 @@
+agentiik  every namespace  alice   1 Runs   2 Workflows   3 Sharing  1 notifica…
+Every key of this view
+
+  q, ctrl+c    Quit, handing the screen back as it was
+  ?            List every key, and close the list
+  :            Open the command palette: commands, views, runs, workflows and
+               namespaces
+  1            The runs
+  2            The workflows
+  3            The sharing of a namespace or a workflow, read only
+  ↑ ↓, k j     Move the selection over the runs
+  enter        Open the run selected
+  g            The graph of the run selected
+  /            Filter the runs as you type: words against what is loaded, and
+               namespace=, workflow=, state=, since= and until= asked of the
+               installation
+  esc          Clear the filter
+  mouse        A click selects a row, a step, a port or a tab and focuses its
+               pane, a second click opens it, the wheel scrolls what is under
+               the pointer, a border between two panes is dragged to move it;
+               shift and drag copy, as the terminal does
+
+
+esc Close   q Quit

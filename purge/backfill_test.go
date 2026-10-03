@@ -55,6 +55,7 @@ func (in *installation) refs(t *testing.T, content string) int {
 // it none; and a second Backfill records nothing and counts nothing again.
 func TestBackfillRecordsWhatV02LeftAndNothingTwice(t *testing.T) {
 	in := withInstallation(t)
+	in.exec(t, `update namespaces set max_retention_days = 90 where name = 'finance'`)
 	run, _ := in.v02(t, 10*24*time.Hour, file{"invoices.csv", "invoices"}, file{"totals.json", "totals"}, file{"kept.zip", "kept"})
 	digest, _ := in.put(t, "kept")
 	if err := in.pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
@@ -102,6 +103,32 @@ func TestBackfillRecordsWhatV02LeftAndNothingTwice(t *testing.T) {
 		if n := in.refs(t, content); n != 1 {
 			t.Errorf("after a second Backfill the object %q is counted %d times", content, n)
 		}
+	}
+}
+
+// In a namespace that sets no bound, the files v0.2 left are recorded as kept for ever, written as
+// infinity, which no purge reaches; and a run a controller finished with no expiry keeps none, as
+// one finished now would.
+func TestBackfillKeepsForEverWhatANamespaceSetsNoBoundFor(t *testing.T) {
+	in := withInstallation(t)
+	run, _ := in.v02(t, 10*24*time.Hour, file{"invoices.csv", "invoices"})
+	in.exec(t, `update runs set expires_at = null where id = '`+string(run)+`'`)
+
+	got, err := purge.Backfill(t.Context(), in.pool, in.store, 0)
+	if err != nil || got != (purge.Backfilled{Runs: 1, Artifacts: 1}) {
+		t.Fatalf("Backfill recorded %+v: %v", got, err)
+	}
+	if n := in.count(t, `select count(*) from artifacts where name = 'invoices.csv' and status = 'live' and expires_at = 'infinity'`); n != 1 {
+		t.Error("the file v0.2 left is not recorded as kept for ever")
+	}
+	if n := in.count(t, `select count(*) from runs where files_recorded and expires_at is null`); n != 1 {
+		t.Error("the run does not say its files are recorded, or was given an expiry")
+	}
+	if _, err := (&purge.Purger{Pool: in.pool, Objects: in.store}).Pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := in.count(t, `select count(*) from artifacts where name = 'invoices.csv' and status = 'live'`); n != 1 {
+		t.Error("a pass retired a file kept for ever")
 	}
 }
 

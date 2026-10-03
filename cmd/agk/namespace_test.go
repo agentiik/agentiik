@@ -100,11 +100,11 @@ func (in namespaceInstallation) as(t *testing.T, token string, args ...string) (
 func TestAgkAdministersANamespace(t *testing.T) {
 	in := aNamespaceInstallation(t)
 
-	code, out, errs := in.as(t, in.carol, "namespace", "create", "team-ops", "--owner", "alice", "--max-runs-per-hour", "500", "--allowed-runner-pools", "default")
+	code, out, errs := in.as(t, in.carol, "namespace", "create", "team-ops", "--owner", "alice", "--max-runs-per-hour", "500", "--max-retention-days", "365", "--allowed-runner-pools", "default")
 	want := "created namespace team-ops: shared, owned by alice\n" +
 		"  max_concurrent_tasks  20\n" +
 		"  max_runs_per_hour     500\n" +
-		"  max_retention_days    90\n" +
+		"  max_retention_days    365\n" +
 		"  allowed_runner_pools  default\n"
 	if code != exitSucceeded || out != want {
 		t.Fatalf("agk namespace create answered %d:\n%s%s\nwant\n%s", code, out, errs, want)
@@ -135,14 +135,14 @@ func TestAgkAdministersANamespace(t *testing.T) {
 	// One quota given is that one set, and every bound nobody named is kept, allowed_runner_pools
 	// among them; a bound goes only where --lift names it.
 	code, out, errs = in.as(t, in.carol, "namespace", "quotas", "team-ops", "--max-concurrent-tasks", "50")
-	want = "  max_concurrent_tasks  50\n  max_runs_per_hour     500\n  max_retention_days    90\n  allowed_runner_pools  default\n"
+	want = "  max_concurrent_tasks  50\n  max_runs_per_hour     500\n  max_retention_days    365\n  allowed_runner_pools  default\n"
 	if code != exitSucceeded || out != want {
 		t.Errorf("setting one quota answered %d:\n%s%s\nwant\n%s", code, out, errs, want)
 	}
-	code, out, errs = in.as(t, in.carol, "namespace", "quotas", "team-ops", "--lift", "allowed_runner_pools", "--lift", "max_runs_per_hour", "--max-run-duration", "4h")
-	want = "  max_concurrent_tasks  50\n  max_retention_days    90\n  max_run_duration      4h\n"
+	code, out, errs = in.as(t, in.carol, "namespace", "quotas", "team-ops", "--lift", "allowed_runner_pools", "--lift", "max_runs_per_hour", "--lift", "max_retention_days", "--max-run-duration", "4h")
+	want = "  max_concurrent_tasks  50\n  max_run_duration      4h\n"
 	if code != exitSucceeded || out != want {
-		t.Errorf("lifting two quotas answered %d:\n%s%s\nwant\n%s", code, out, errs, want)
+		t.Errorf("lifting three quotas answered %d:\n%s%s\nwant\n%s", code, out, errs, want)
 	}
 	if code, again, _ := in.as(t, in.alice, "namespace", "quotas", "team-ops"); code != exitSucceeded || again != out {
 		t.Errorf("the quotas read back as %q, and were set to %q", again, out)
@@ -184,7 +184,6 @@ func TestAgkNamespaceRefusesACommandLineThatIsWrong(t *testing.T) {
 		{"namespace", "show", "team-ops", "-o", "yaml"},
 		{"namespace", "list", "team-ops"},
 		{"namespace", "quotas", "team-ops", "--lift", "max_concurrent_tasks"},
-		{"namespace", "quotas", "team-ops", "--lift", "max_retention_days"},
 		{"namespace", "quotas", "team-ops", "--lift", "max-runs-per-hour"},
 		{"namespace", "quotas", "team-ops", "--lift", "max_runs_per_hour", "--max-runs-per-hour", "5"},
 		{"namespace", "create", "team-ops", "--owner", "alice", "--lift", "max_runs_per_hour"},
@@ -290,6 +289,8 @@ func TestAgkNamespaceQuotasSendsTheQuotasHeldWithTheFlagsOnTop(t *testing.T) {
 			`{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_retention_days":90,"allowed_runner_pools":["gpu"]}`},
 		{[]string{"--lift", "allowed_runner_pools"},
 			`{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_artifact_bytes":1024,"max_retention_days":90,"max_run_duration":"24h"}`},
+		{[]string{"--lift", "max_retention_days"},
+			`{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_artifact_bytes":1024,"max_run_duration":"24h","allowed_runner_pools":["default","dmz"]}`},
 	} {
 		mu.Lock()
 		sent = nil

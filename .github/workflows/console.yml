@@ -3,7 +3,8 @@ name: console
 # The web console, built and tested on its own: the client generated from openapi.json, regenerated
 # here and compared with the one committed so that the two never differ; its types and components;
 # its tests on recorded answers of the API; its build, which package console then has the API
-# accept, as agentiik-api would carry it; and its screens, drawn in a browser and measured.
+# accept, as agentiik-api would carry it, and which api's test of every shipped file reads for mail;
+# and its screens, drawn in a browser and measured.
 
 on:
   push:
@@ -39,4 +40,12 @@ jobs:
           go-version-file: go.mod
       - name: the build is one the API serves
         run: go test ./console
+        working-directory: .
+      # TestNothingSendsMailOrWritesALinkForIt reads what //go:embed puts in agentiik-api, the
+      # console's build among it, but test.yml's api jobs never build the console, so there it reads
+      # dist/'s .gitignore alone. It runs again here, on the build the steps above made. This job
+      # rather than those, because it has Node and the build already, where each of the three api
+      # shards would install and build the console for the one of them the test is dealt to.
+      - name: the build sends no mail
+        run: go test ./api -run '^TestNothingSendsMailOrWritesALinkForIt$'
         working-directory: .

@@ -174,24 +174,11 @@ func (s *Starter) Prepare(ctx context.Context, r Request) (Prepared, error) {
 	if r.Commit != "" && r.Ref != "" {
 		return Prepared{}, ErrCommitAndRef
 	}
-	p := Prepared{r: r, commit: r.Commit}
-	if p.commit == "" {
-		err := s.pool.In(ctx, r.Namespace, func(ctx context.Context, ns *db.NS) error {
-			var err error
-			if r.Ref != "" {
-				// A ref other than the default branch, resolved here, once, and the run pinned to
-				// the commit it names now, whatever the ref does next.
-				p.commit, err = ns.ResolveRef(ctx, r.Workflow, r.Ref)
-			} else {
-				// "A run naming no ref runs the default branch's head."
-				p.commit, err = ns.DefaultCommit(ctx, r.Workflow)
-			}
-			return err
-		})
-		if err != nil {
-			return Prepared{}, err
-		}
+	commit, err := s.resolve(ctx, r)
+	if err != nil {
+		return Prepared{}, err
 	}
+	p := Prepared{r: r, commit: commit}
 	g, err := s.versions.Graph(ctx, r.Namespace, r.Workflow, p.commit)
 	if err != nil {
 		return p, err
@@ -203,6 +190,70 @@ func (s *Starter) Prepare(ctx context.Context, r Request) (Prepared, error) {
 		}
 	}
 	return p, nil
+}
+
+// resolve answers the commit a run r asks for is of: the commit it names, or the one its ref
+// resolves to now, or the default branch's head where it names neither.
+func (s *Starter) resolve(ctx context.Context, r Request) (string, error) {
+	if r.Commit != "" {
+		return r.Commit, nil
+	}
+	var commit string
+	err := s.pool.In(ctx, r.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		if r.Ref != "" {
+			// A ref other than the default branch, resolved here, once, and the run pinned to
+			// the commit it names now, whatever the ref does next.
+			commit, err = ns.ResolveRef(ctx, r.Workflow, r.Ref)
+		} else {
+			// "A run naming no ref runs the default branch's head."
+			commit, err = ns.DefaultCommit(ctx, r.Workflow)
+		}
+		return err
+	})
+	return commit, err
+}
+
+// Declaration is what a manual run of one version takes: the commit a ref resolved to, the inputs
+// that version declares as its file writes them, and each file of its tree their schemas reach by
+// $ref, by its path, as parsed JSON.
+type Declaration struct {
+	Commit string
+	Inputs map[string]graph.Input
+	Files  map[string]any
+}
+
+// Declared answers what the run r asks for would take, without asking for it: the ref resolved
+// and the graph read as Prepare reads them, and the declaration compiled against the version's
+// tree as a run binds against it, so that a declaration a run would refuse is refused here too,
+// with the same errors. Nothing is written, and r's inputs are not read.
+//
+// It is what a form asks before a run is asked for, by whoever may ask for one: the inputs are the
+// workflow's boundary, and nothing else of the file is answered.
+func (s *Starter) Declared(ctx context.Context, r Request) (Declaration, error) {
+	if r.Commit != "" && r.Ref != "" {
+		return Declaration{}, ErrCommitAndRef
+	}
+	commit, err := s.resolve(ctx, r)
+	if err != nil {
+		return Declaration{}, err
+	}
+	g, err := s.versions.Graph(ctx, r.Namespace, r.Workflow, commit)
+	if err != nil {
+		return Declaration{Commit: commit}, err
+	}
+	wf := g.Workflow()
+	tree := &versionTree{ctx: ctx, pool: s.pool, objects: s.objects, namespace: r.Namespace, workflow: r.Workflow, commit: commit}
+	files, err := wf.InputFiles(tree)
+	switch {
+	case errors.Is(tree.trouble, ErrNoObjectStore):
+		return Declaration{Commit: commit}, ErrNoObjectStore
+	case tree.trouble != nil:
+		return Declaration{Commit: commit}, fmt.Errorf("the tree of %s/%s@%s could not be read to answer its inputs: %w", r.Namespace, r.Workflow, commit, tree.trouble)
+	case err != nil:
+		return Declaration{Commit: commit}, fmt.Errorf("%w: %v", ErrDeclarationRefused, err)
+	}
+	return Declaration{Commit: commit, Inputs: wf.Inputs, Files: files}, nil
 }
 
 // Create writes the run, tells the controller and records run.trigger, in the transaction ns

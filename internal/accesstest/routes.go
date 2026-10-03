@@ -137,6 +137,7 @@ var Cases = []Case{
 	{Route: administer("GET", "/api/v1/runner-pools")},
 	{Route: administer("GET", "/api/v1/stats/pools")},
 	{Route: administer("GET", "/api/v1/stats/activity")},
+	{Route: administer("GET", "/api/v1/auth/audit")},
 	{Route: administer("POST", "/api/v1/runner-pools"), Refused: true},
 	{Route: administer("POST", "/api/v1/runner-pools/{pool}/join-tokens"), Refused: true},
 
@@ -193,6 +194,7 @@ var Cases = []Case{
 
 	// Runs and their data.
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/runs", Permission: api.WorkflowRun, Scope: api.Workflow}, Refused: true},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/inputs", Permission: api.WorkflowRun, Scope: api.Workflow}},
 	// What the default branch's head has armed, "to whoever holds workflow:read".
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows/{workflow}/triggers", Permission: api.WorkflowRead, Scope: api.Workflow}},
 	// What a webhook checks its caller against, written by whoever may change the workflow, and the
@@ -208,6 +210,7 @@ var Cases = []Case{
 	// it answers 426 to whoever it lets through.
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/me/live", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
+	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/workflows", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/runs", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/steps", Permission: api.RunRead, Scope: api.Workflow, Across: true}},
 	{Route: api.Route{Method: "GET", Pattern: "/api/v1/{namespace}/stats/ports", Permission: api.RunRead, Scope: api.Workflow, Across: true}},

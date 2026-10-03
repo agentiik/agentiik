@@ -103,13 +103,14 @@ func TestAnInstallationOfV025UpgradesWithEverythingItHeld(t *testing.T) {
 	// The namespaces are as they were, shared and owned by nobody yet, with no bound the upgrade
 	// added: a workflow that ran under v0.2.5 is refused nothing.
 	type namespaceRow struct {
-		kind                  string
-		owner                 *string
-		retention, concurrent int
-		perHour               *int
-		artifactBytes         *int64
-		duration              *string
-		pools                 []string
+		kind          string
+		owner         *string
+		retention     *int
+		concurrent    int
+		perHour       *int
+		artifactBytes *int64
+		duration      *string
+		pools         []string
 	}
 	read := func(name string) namespaceRow {
 		var n namespaceRow
@@ -125,13 +126,25 @@ func TestAnInstallationOfV025UpgradesWithEverythingItHeld(t *testing.T) {
 		}
 		return n
 	}
-	for name, want := range map[string][2]int{"default": {90, 20}, "finance": {30, 7}} {
+	// The default namespace held v0.2.5's default of 90 days, which the upgrade takes for a
+	// default kept rather than a bound chosen and lifts; finance's 30 was chosen and stays.
+	days := func(n int) *int { return &n }
+	shown := func(days *int) any {
+		if days == nil {
+			return "no bound of"
+		}
+		return *days
+	}
+	for name, want := range map[string]struct {
+		retention  *int
+		concurrent int
+	}{"default": {nil, 20}, "finance": {days(30), 7}} {
 		n := read(name)
 		switch {
 		case n.kind != "shared" || n.owner != nil:
 			t.Errorf("namespace %s is %s and owned by %v after the upgrade, and v0.2.5's namespaces are shared ones nobody owns yet", name, n.kind, n.owner)
-		case n.retention != want[0] || n.concurrent != want[1]:
-			t.Errorf("namespace %s keeps %d days and %d tasks after the upgrade, and held %d and %d", name, n.retention, n.concurrent, want[0], want[1])
+		case (n.retention == nil) != (want.retention == nil) || n.retention != nil && *n.retention != *want.retention || n.concurrent != want.concurrent:
+			t.Errorf("namespace %s keeps %v days and %d tasks after the upgrade, and should keep %v and %d", name, shown(n.retention), n.concurrent, shown(want.retention), want.concurrent)
 		case n.perHour != nil || n.artifactBytes != nil || n.duration != nil || n.pools != nil:
 			t.Errorf("namespace %s was given bounds by the upgrade: %v runs an hour, %v bytes, %v per run, pools %v", name, n.perHour, n.artifactBytes, n.duration, n.pools)
 		}
@@ -200,7 +213,7 @@ func TestAnInstallationOfV025UpgradesWithEverythingItHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a namespace could not be created after the upgrade: %s", err)
 	}
-	if n := read("team-ops"); n.kind != "shared" || n.owner != nil || n.retention != 90 || n.concurrent != 20 {
+	if n := read("team-ops"); n.kind != "shared" || n.owner != nil || n.retention != nil || n.concurrent != 20 {
 		t.Errorf("a namespace created as v0.2.5's init creates one reads as %+v", n)
 	}
 	err = pool.Installation(ctx, AuditLog, func(ctx context.Context, w *Wide) error {

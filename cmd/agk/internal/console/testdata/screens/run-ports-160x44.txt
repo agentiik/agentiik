@@ -1,0 +1,44 @@
+agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   3 Sharing                                                 1 notification  ● live
+╭─ Runs every namespace · 12 runs ─────────────╮╭─ Run ────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Failed, 3 of the last 12                     ││ Run 01JMZ8V1P9C4XQ7K2N4D6F8H0A  finance/monthly-invoicing@a3f9c1e  ● failed                                  │
+│ ● failed    monthly-invoicing         1m 52s ││ manual · by alice · started 05:41:03 · took 1m 52s                        last 11 ▃▁▁▁▁▁▁█▁▁▁  median 1m 52s │
+│             01JMZ8V1P9C4 · manual · alice ·… ││ failed at invoice, shard 3/8: exit 108, transient failure, attempt 2                                         │
+│ ● failed    dunning-reminders            22s ││                                                                                                              │
+│             01JMZ8T7B2M0 · schedule · finan… ││ Steps   Graph   Ports                                                                                        │
+│ ● timed_out vat-reconcile             9m 51s ││ invoice  ● failed  1m 50s                                                                                    │
+│             01JMZ8G4X6D2 · event · finance/… ││                                                                                                              │
+│                                              ││   PORT         ITEMS   SIZE      DIGEST                                                                      │
+│ STATE       WORKFLOW                    TOOK ││ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c     │
+│ ⠋ running   monthly-invoicing         1m 48s ││   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5     │
+│             01JMZ8W4K2R7 · schedule · finan… ││                                                                                                              │
+│ ● failed    monthly-invoicing         1m 52s ││ The envelope could not be read: no such thing, or not yours                                                  │
+│             01JMZ8V1P9C4 · manual · alice ·… ││                                                                                                              │
+│ ● failed    dunning-reminders            22s ││                                                                                                              │
+│             01JMZ8T7B2M0 · schedule · finan… ││                                                                                                              │
+│ ⠋ running   ledger-export            33m 15s ││                                                                                                              │
+│             01JMZ8S3H6X8 · webhook · financ… ││                                                                                                              │
+│ ● queued    vat-reconcile                    ││                                                                                                              │
+│             01JMZ8R0D4K2 · event · finance/… ││                                                                                                              │
+│ ● succeeded monthly-invoicing         3m 47s ││                                                                                                              │
+│             01JMZ8Q6F1T7 · manual · bruno ·… ││                                                                                                              │
+│ ● succeeded ledger-export                58s ││                                                                                                              │
+│             01JMZ8P2N8Y5 · webhook · financ… ││                                                                                                              │
+│ ● cancelled vat-reconcile             2m 16s ││                                                                                                              │
+│             01JMZ8N9J3W1 · manual · alice ·… ││                                                                                                              │
+│ ● succeeded dunning-reminders            41s ││                                                                                                              │
+│             01JMZ8M5Z7Q3 · schedule · finan… ││                                                                                                              │
+│ ● succeeded ledger-export             1m 03s ││                                                                                                              │
+│             01JMZ8K1V4R9 · webhook · financ… ││                                                                                                              │
+│ ● succeeded monthly-invoicing         4m 22s ││                                                                                                              │
+│             01JMZ8H8C0K6 · schedule · finan… ││                                                                                                              │
+│ ● timed_out vat-reconcile             9m 51s ││                                                                                                              │
+│             01JMZ8G4X6D2 · event · finance/… ││                                                                                                              │
+│                                              ││                                                                                                              │
+│                                              ││                                                                                                              │
+│                                              ││                                                                                                              │
+│                                              ││                                                                                                              │
+│                                              ││                                                                                                              │
+│                                              ││                                                                                                              │
+│                                              ││                                                                                                              │
+╰──────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+tab Next pane   ↑↓ Port   g Graph   esc Runs   q Quit   ? Every key

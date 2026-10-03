@@ -12,10 +12,12 @@ export function retention(a: Artifact, now: number): string {
   switch (a.status) {
     case "live": {
       const left = a.fetches_left === undefined ? "" : `, ${a.fetches_left} ${a.fetches_left === 1 ? "fetch" : "fetches"} left`;
-      return `until ${clock(a.expires_at, now)}${left}`;
+      return `${a.expires_at ? `until ${clock(a.expires_at, now)}` : "kept for ever"}${left}`;
     }
-    case "expired":
-      return `expired ${a.retired_at ? clock(a.retired_at, now) : clock(a.expires_at, now)}, past its retain`;
+    case "expired": {
+      const at = a.retired_at ?? a.expires_at;
+      return `expired${at ? ` ${clock(at, now)}` : ""}, past its retain`;
+    }
     case "collected":
       return `collected ${a.retired_at ? clock(a.retired_at, now) : ""}, its fetches spent`.replace(" ,", ",");
   }

@@ -23,7 +23,7 @@ export type Route =
   | { kind: "namespace"; namespace: string; view: View; workflow?: string; run?: string; against?: string; tab?: string }
   | { kind: "account"; tab?: string }
   | { kind: "runners"; tab?: string }
-  | { kind: "users" }
+  | { kind: "users"; tab?: string }
   | { kind: "groups" }
   | { kind: "namespaces" }
   | { kind: "unknown"; path: string };
@@ -57,6 +57,12 @@ export function read(pathname: string, root: string): Route {
   }
   if (first === "me") {
     return third === undefined ? { kind: "account", tab: second } : { kind: "unknown", path: pathname };
+  }
+  // The users' page has a tab of its own, the installation's sign-in policy, under the users' segment
+  // rather than one of its own, since a first segment of the console's is one no namespace may take;
+  // and the audit log is under it for the same reason, an entry of the sidebar of its own.
+  if (first === "users" && (second === "policy" || second === "audit") && third === undefined) {
+    return { kind: "users", tab: second };
   }
   if (first === "users" || first === "groups" || first === "namespaces") {
     return second === undefined ? { kind: first } : { kind: "unknown", path: pathname };
@@ -116,6 +122,7 @@ export function address(route: Route): string {
     case "runners":
       return route.tab ? `runners/${e(route.tab)}` : "runners";
     case "users":
+      return route.tab ? `users/${e(route.tab)}` : "users";
     case "groups":
     case "namespaces":
       return route.kind;

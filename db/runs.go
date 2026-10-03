@@ -538,7 +538,8 @@ type Decision struct {
 	// it has finished, and zero where it declares none. "Envelopes and logs are not declared one
 	// at a time the way an output is, so they live by the workflow's defaults.retain, resolved to
 	// one date when the run finishes": SaveDecision resolves it, capped by the namespace's
-	// max_retention_days, which also bounds a workflow that declares none.
+	// max_retention_days, which also bounds a workflow that declares none where the namespace sets
+	// it; neither, and they are kept for ever.
 	Retain time.Duration
 
 	// Outputs are the run's declared outputs as digests, written when it succeeds.
@@ -746,7 +747,9 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 // The retention the workflow declared, capped by the namespace's max_retention_days, which is read
 // here rather than trusted from the caller, as an artifact's is: "retain is capped by the namespace
 // quota and cannot exceed it; a workflow may always ask for less". A workflow that declares none is
-// kept as long as the namespace allows, since the ceiling is what bounds what nobody asked for.
+// kept as long as the namespace allows, since the ceiling is what bounds what nobody asked for, and
+// for ever where the namespace sets no ceiling either: the zero time is then the answer, which the
+// row writes as no expiry and no purge ever reaches.
 func runExpiry(ctx context.Context, tx pgx.Tx, d Decision) (time.Time, error) {
 	if d.FinishedAt.IsZero() {
 		return time.Time{}, nil
@@ -759,7 +762,10 @@ func runExpiry(ctx context.Context, tx pgx.Tx, d Decision) (time.Time, error) {
 		return time.Time{}, err
 	}
 	keep := time.Duration(days) * 24 * time.Hour
-	if d.Retain > 0 && d.Retain < keep {
+	switch {
+	case days == 0 && d.Retain == 0:
+		return time.Time{}, nil
+	case days == 0 || (d.Retain > 0 && d.Retain < keep):
 		keep = d.Retain
 	}
 	return d.FinishedAt.Add(keep), nil

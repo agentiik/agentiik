@@ -159,9 +159,12 @@ describe("what you sign in with", () => {
       }),
       { unavailable: "", credentials: a.credentials },
     );
-    await fireEvent.input(await screen.findByLabelText(/^Name$/), { target: { value: "desk" } });
-    await fireEvent.click(screen.getByRole("button", { name: "Add a passkey" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Add a passkey" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a passkey" });
+    await fireEvent.input(within(dialog).getByLabelText(/^Name$/), { target: { value: "desk" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Add a passkey" }));
     expect(await screen.findByText("Passkey added.")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Add a passkey" })).toBeNull();
     expect(asked.find((x) => x.key === "POST /api/v1/auth/passkey/options")?.body).toEqual({ ceremony: "registration" });
     expect(asked.find((x) => x.key === "POST /api/v1/auth/passkey/verify")?.body).toMatchObject({ ceremony: "registration", label: "desk", credential: { id: "bmV3UGFzc2tleQ" } });
     const publicKey = a.asked.create[0]!.publicKey!;
@@ -184,9 +187,11 @@ describe("what you sign in with", () => {
       { unavailable: "", credentials: a.credentials },
     );
     await fireEvent.click(await screen.findByRole("button", { name: "Add a passkey" }));
-    expect(await screen.findByText(/Sign in again to add a passkey/)).toBeTruthy();
-    expect(screen.getByLabelText("Or with your password")).toBeTruthy();
-    await fireEvent.click(screen.getByRole("button", { name: "Sign in again with a passkey" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a passkey" });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Add a passkey" }));
+    expect(await within(dialog).findByText(/Sign in again to add a passkey/)).toBeTruthy();
+    expect(within(dialog).getByLabelText("Or with your password")).toBeTruthy();
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Sign in again with a passkey" }));
     expect(await screen.findByText("Passkey added.")).toBeTruthy();
     expect(a.asked.get).toHaveLength(1);
     expect(asked.filter((x) => x.key === "POST /api/v1/auth/passkey/options").map((x) => x.body)).toEqual([{ ceremony: "registration" }, { ceremony: "assertion" }, { ceremony: "registration" }]);
@@ -230,17 +235,21 @@ describe("API tokens", () => {
       api_token: { id: "01M2AD1R3T5W7Y9A1C3E5G7J9P", principal: "finance/deployer", device_label: "deploy pipeline", created_at: "2026-10-01T09:00:00Z", expires_at: "2026-10-31T09:00:00Z" },
     };
     const { asked } = open("/me/tokens", alice({ "POST /api/v1/auth/tokens": { status: 201, body: issued } }));
-    const select = (await screen.findByLabelText("For")) as HTMLSelectElement;
+    await fireEvent.click(await screen.findByRole("button", { name: "Mint a token" }));
+    const dialog = await screen.findByRole("dialog", { name: "Mint a token" });
+    const select = within(dialog).getByLabelText("For") as HTMLSelectElement;
     await waitFor(() => expect(within(select).queryByText("finance/deployer")).toBeTruthy());
     expect(within(select).queryByText("finance/agentiik")).toBeNull();
     await fireEvent.change(select, { target: { value: "finance/deployer" } });
-    await fireEvent.input(screen.getByLabelText(/^Label$/), { target: { value: "deploy pipeline" } });
-    await fireEvent.change(screen.getByLabelText("Expires in"), { target: { value: "30" } });
-    await fireEvent.click(screen.getByLabelText("workflow:run"));
-    await fireEvent.input(screen.getByLabelText(/^Scope/), { target: { value: "finance/monthly-invoicing, finance/monthly-invoicing" } });
+    await fireEvent.input(within(dialog).getByLabelText(/^Label$/), { target: { value: "deploy pipeline" } });
+    await fireEvent.change(within(dialog).getByLabelText("Expires in"), { target: { value: "30" } });
+    await fireEvent.click(within(dialog).getByLabelText("workflow:run"));
+    await fireEvent.input(within(dialog).getByLabelText(/^Scope/), { target: { value: "finance/monthly-invoicing, finance/monthly-invoicing" } });
     const before = Date.now();
-    await fireEvent.click(screen.getByRole("button", { name: "Mint the token" }));
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Mint the token" }));
     expect(await screen.findByText(issued.token)).toBeTruthy();
+    // The dialog closes on the token, which the screen shows once.
+    expect(screen.queryByRole("dialog", { name: "Mint a token" })).toBeNull();
     expect(screen.getByText(/Shown once: copy it now\./)).toBeTruthy();
     const body = asked.find((a) => a.key === "POST /api/v1/auth/tokens")?.body as Record<string, unknown>;
     expect(body).toMatchObject({ principal: "finance/deployer", device_label: "deploy pipeline", scope: { permissions: ["workflow:run"], within: ["finance/monthly-invoicing"] } });
@@ -255,10 +264,21 @@ describe("API tokens", () => {
       "/me/tokens",
       alice({ "POST /api/v1/auth/tokens": { status: 201, body: { token: "agktoken_abc", api_token: { id: "01M2AD1R3T5W7Y9A1C3E5G7J9Q", principal: "alice", created_at: "2026-10-01T09:00:00Z", expires_at: "2026-12-30T09:00:00Z" } } } }),
     );
-    await fireEvent.click(await screen.findByRole("button", { name: "Mint the token" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Mint a token" }));
+    await fireEvent.click(within(await screen.findByRole("dialog", { name: "Mint a token" })).getByRole("button", { name: "Mint the token" }));
     expect(await screen.findByText("agktoken_abc")).toBeTruthy();
     const body = asked.find((a) => a.key === "POST /api/v1/auth/tokens")?.body as Record<string, unknown>;
     expect(Object.keys(body)).toEqual(["expires_at"]);
+  });
+
+  it("keeps the dialog open on a refusal and says why inside it, not behind it", async () => {
+    open("/me/tokens", alice({ "POST /api/v1/auth/tokens": { status: 403, body: { error: "a token narrows its principal's rights and never widens them" } } }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Mint a token" }));
+    const dialog = await screen.findByRole("dialog", { name: "Mint a token" });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Mint the token" }));
+    expect(await within(dialog).findByText("Could not create the token.")).toBeTruthy();
+    expect(within(dialog).getByText(/a token narrows its principal's rights and never widens them/)).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Mint a token" })).toBe(dialog);
   });
 
   it("reads a scope and a typed list as the API writes them", () => {

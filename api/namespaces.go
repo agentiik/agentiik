@@ -143,8 +143,10 @@ func (n *NamespaceCreate) field(b *body, name string) error {
 //
 // Each is left out where it is not set, and none is ever written as zero or empty: each count
 // "starts at one", and an empty allowed_runner_pools is refused rather than read. An answer always
-// writes max_concurrent_tasks and max_retention_days, which "always hold a value, 20 and 90 until
-// an administrator sets another", and the other four where they are set.
+// writes max_concurrent_tasks, which "always holds a value, 20 until an administrator sets
+// another", and the other five where they are set: max_retention_days among them, which bounds
+// nothing until it is set, so that an installation keeps what it ran until somebody decides
+// otherwise.
 type Quotas struct {
 	MaxConcurrentTasks int      `json:"max_concurrent_tasks,omitempty"`
 	MaxRunsPerHour     int      `json:"max_runs_per_hour,omitempty"`
@@ -320,12 +322,26 @@ type NamespaceOptions struct {
 
 	// Now is the clock a statistics range defaults to, an argument so that a test has one.
 	Now func() time.Time
+
+	// Trouble is told why a request was answered 500, which the caller is not, since the cause is
+	// the installation's and may name its tables: without it, an operator reading the API's log
+	// would find the request and nothing of what went wrong. Nil drops it.
+	Trouble func(error)
 }
 
 // NamespaceAPI serves /api/v1/namespaces, and a namespace's load against its quotas.
 type NamespaceAPI struct {
-	pool *db.Pool
-	now  func() time.Time
+	pool    *db.Pool
+	now     func() time.Time
+	trouble func(error)
+}
+
+// broke answers 500 with what could not be done, and tells Trouble why.
+func (s *NamespaceAPI) broke(w http.ResponseWriter, r *http.Request, message string, err error) {
+	if s.trouble != nil {
+		s.trouble(fmt.Errorf("%s %s: %s: %w", r.Method, r.URL.Path, message, err))
+	}
+	fail(w, http.StatusInternalServerError, message)
 }
 
 // NewNamespaces registers the namespace routes on a router. The router's authorizer has to say
@@ -341,7 +357,7 @@ func NewNamespaces(rt *Router, o NamespaceOptions) (*NamespaceAPI, error) {
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
-	s := &NamespaceAPI{pool: o.Pool, now: o.Now}
+	s := &NamespaceAPI{pool: o.Pool, now: o.Now, trouble: o.Trouble}
 	// A namespace renamed answers to its former names on every route naming it, these among them.
 	rt.ServeNamespaces(o.Pool)
 
@@ -452,7 +468,7 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, caller Cal
 	who := caller.Principal
 	admin, err := caller.Administers(r.Context())
 	if err != nil {
-		fail(w, http.StatusInternalServerError, "the request could not be authorised")
+		s.broke(w, r, "the request could not be authorised", err)
 		return
 	}
 	switch {
@@ -554,7 +570,7 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, caller Cal
 		fail(w, http.StatusUnprocessableEntity, missing.Error())
 		return
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace could not be created")
+		s.broke(w, r, "the namespace could not be created", err)
 		return
 	}
 	write(w, http.StatusCreated, recordOf(created))
@@ -571,7 +587,7 @@ func (s *NamespaceAPI) list(w http.ResponseWriter, r *http.Request, _ Principal,
 		return err
 	})
 	if err != nil {
-		fail(w, http.StatusInternalServerError, "the namespaces could not be read")
+		s.broke(w, r, "the namespaces could not be read", err)
 		return
 	}
 	seen := NamespaceList{Namespaces: []NamespaceRecord{}}
@@ -619,7 +635,7 @@ func (s *NamespaceAPI) read(w http.ResponseWriter, r *http.Request, name string)
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
 		return db.Namespace{}, false
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace could not be read")
+		s.broke(w, r, "the namespace could not be read", err)
 		return db.Namespace{}, false
 	}
 	return n, true
@@ -645,7 +661,7 @@ func (s *NamespaceAPI) remove(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, http.StatusConflict, holds.Held())
 		return
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace could not be removed")
+		s.broke(w, r, "the namespace could not be removed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -688,11 +704,10 @@ func RemoveNamespace(ctx context.Context, pool *db.Pool, name string, who Princi
 
 // setQuotas is PUT /api/v1/namespaces/{namespace}/quotas: the namespace's quotas, whole.
 //
-// "max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an
-// administrator sets another, and a write that leaves either out keeps the value it has. The other
-// four bound nothing until they are set, and a write that leaves one out removes its bound." So the
-// body is the whole of what the four bound, and what a Terraform apply sends is what the namespace
-// holds after it.
+// "max_concurrent_tasks always holds a value, 20 until an administrator sets another, and a write
+// that leaves it out keeps the value it has. The other five bound nothing until they are set, and a
+// write that leaves one out removes its bound." So the body is the whole of what the five bound,
+// and what a Terraform apply sends is what the namespace holds after it.
 func (s *NamespaceAPI) setQuotas(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := over.Namespace
 	if NamespaceRef(name) != nil {
@@ -730,7 +745,7 @@ func (s *NamespaceAPI) setQuotas(w http.ResponseWriter, r *http.Request, who Pri
 		fail(w, http.StatusUnprocessableEntity, missing.Error())
 		return
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace's quotas could not be set")
+		s.broke(w, r, "the namespace's quotas could not be set", err)
 		return
 	}
 	write(w, http.StatusOK, quotasOf(set.Quotas))
@@ -818,7 +833,7 @@ func (s *NamespaceAPI) update(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, http.StatusConflict, waits.Held())
 		return
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the namespace could not be renamed")
+		s.broke(w, r, "the namespace could not be renamed", err)
 		return
 	}
 	write(w, http.StatusOK, recordOf(renamed))
@@ -849,7 +864,7 @@ func (s *NamespaceAPI) avatar(w http.ResponseWriter, r *http.Request, _ Principa
 		fail(w, http.StatusNotFound, noNamespaceAvatar)
 		return
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the picture could not be read")
+		s.broke(w, r, "the picture could not be read", err)
 		return
 	}
 	servePicture(w, r, picture, at)
@@ -882,7 +897,7 @@ func (s *NamespaceAPI) setAvatar(w http.ResponseWriter, r *http.Request, who Pri
 	case errors.Is(err, db.ErrNoNamespace):
 		fail(w, http.StatusNotFound, "there is no namespace of that name")
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the picture could not be stored")
+		s.broke(w, r, "the picture could not be stored", err)
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -918,7 +933,7 @@ func (s *NamespaceAPI) removeAvatar(w http.ResponseWriter, r *http.Request, who 
 	case errors.Is(err, db.ErrNoNamespace):
 		fail(w, http.StatusNotFound, "there is no namespace of that name")
 	case err != nil:
-		fail(w, http.StatusInternalServerError, "the picture could not be removed")
+		s.broke(w, r, "the picture could not be removed", err)
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}

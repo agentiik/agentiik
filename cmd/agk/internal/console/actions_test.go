@@ -2,6 +2,7 @@ package console
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -60,7 +61,7 @@ func TestARunGoingOnIsCancelledOnceAskedY(t *testing.T) {
 	if !strings.Contains(screen(m), "Cancelling was asked: the controller stops the tasks in flight, and the run ends cancelled.") {
 		t.Errorf("the cancel asked is not said:\n%s", screen(m))
 	}
-	if len(in.asked) == reads || in.asked[len(in.asked)-1] != "/api/v1/runs/"+failedRun {
+	if !slices.Contains(in.asked[reads:], "/api/v1/runs/"+failedRun) {
 		t.Errorf("the run is not read again once its cancel is asked: %v", in.asked[reads:])
 	}
 }
@@ -86,7 +87,7 @@ func TestARunOverIsReplayedFromTheStepChosen(t *testing.T) {
 	if len(in.sent) != 1 || in.sent[0] != `POST /api/v1/runs/`+failedRun+`/replay {"step":"invoice"}` {
 		t.Fatalf("y sent %v", in.sent)
 	}
-	if m.view != runView || m.selected != replayRun || in.asked[len(in.asked)-1] != "/api/v1/runs/"+replayRun {
+	if m.view != runView || m.selected != replayRun || !slices.Contains(in.asked, "/api/v1/runs/"+replayRun) {
 		t.Errorf("the run the replay started is not opened: %q, %v", m.selected, in.asked)
 	}
 }
@@ -125,5 +126,26 @@ func TestAReplaySaysWhatItReplays(t *testing.T) {
 	d.ReplayOf, d.ReplayFrom = "01RUNORIGINALORIGINALORIGI", "invoice"
 	if s := screen(openedOn(t, &installation{}, d, 160)); !strings.Contains(s, "replays 01RUNORIGINALORIGINALORIGI from invoice") {
 		t.Errorf("a replay does not say what it replays:\n%s", s)
+	}
+}
+
+// A token narrowed to one workflow narrows the console as it narrows every request: GET
+// /api/v1/me answers what it keeps, and what it does not keep is neither offered nor asked for.
+func TestATokensScopeNarrowsTheConsole(t *testing.T) {
+	narrowed := &principal{Principal: "alice", Permissions: map[string][]string{"finance/monthly-invoicing": {"workflow:read", "run:read"}}}
+	in := &installation{me: narrowed, runs: someRuns(), envelopes: map[string]any{}}
+	m := openedOn(t, in, aFailedRun(), 160)
+	last := lastLine(m)
+	if strings.Contains(last, "c Cancel") || strings.Contains(last, "p Replay") {
+		t.Errorf("a token keeping no workflow:run is offered %q", last)
+	}
+	for _, a := range in.asked {
+		if strings.Contains(a, "/outputs/") || strings.HasSuffix(a, "/grants") || a == "/api/v1/runners" {
+			t.Errorf("a token keeping neither run:read_data nor grant:manage asked %s", a)
+		}
+	}
+	m = press(t, m, keyC, keyP, tea.KeyPressMsg{Code: '3', Text: "3"})
+	if len(in.sent) != 0 || !strings.Contains(screen(m), "you hold it nowhere") {
+		t.Errorf("a narrowed token sent %v, and its sharing shows:\n%s", in.sent, screen(m))
 	}
 }

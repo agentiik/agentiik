@@ -6,8 +6,8 @@ import { measure, type Finding } from "./measure";
 // widths its layout changes at, a large screen, a wide window, the last width with the sidebar
 // folded, the last with it shown as a drawer and a phone, in both themes, and measured: nothing runs off the page, every
 // control is one height and a row of them one band, what is centred in a row is centred on one line
-// and text side by side on one baseline, each pane's content starts under its title, and every box
-// starts on a whole pixel; and the policy refuses nothing a screen asks for. A finding names the rule, the element and what was measured.
+// and text side by side on one baseline, each pane's content starts under its title, a chart's legend keeps its
+// columns and names each series on one line, nothing runs into the page's side margins, and every box starts on a whole pixel; and the policy refuses nothing a screen asks for. A finding names the rule, the element and what was measured.
 
 const screens: Record<string, string[]> = {
   alice: [
@@ -25,7 +25,10 @@ const screens: Record<string, string[]> = {
     "/finance/workflows/monthly-invoicing/statistics",
     "/finance/workflows/monthly-invoicing?edit=1&step=invoice",
     "/finance/workflows/monthly-invoicing?edit=1&view=yaml",
+    "/finance/workflows/monthly-invoicing/settings",
+    "/alice/workflows/report/settings",
     "/finance/statistics",
+    "/finance/statistics?tab=quotas",
     "/finance/sharing",
     "/finance/variables",
     "/finance/settings",
@@ -39,7 +42,9 @@ const screens: Record<string, string[]> = {
     "/me/tokens",
     "/me/service-accounts",
   ],
-  dana: ["/", "/runners", "/runners/statistics", "/users", "/groups", "/namespaces", "/finance/settings", "/me"],
+  dana: ["/", "/runners", "/runners/statistics", "/users", "/users/policy", "/users/audit", "/groups", "/namespaces", "/namespaces?namespace=finance", "/finance/settings", "/me"],
+  // Nobody signed in: the sign-in page, whatever the address.
+  nobody: ["/"],
 };
 
 const widths = [2560, 1440, 1099, 759, 390];

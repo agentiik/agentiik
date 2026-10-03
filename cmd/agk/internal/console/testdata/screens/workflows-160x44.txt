@@ -1,0 +1,44 @@
+agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   3 Sharing                                                 1 notification  ● live
+Workflows                                                                                       4 workflows named by the last 200 runs, since the API lists none
+WORKFLOW                                                                                                 LATEST      STARTED           RUNS LAST 20
+finance/dunning-reminders                                                                                ● failed    05:30:00             2 █▄
+finance/ledger-export                                                                                    ⠋ running   05:28:45             3 ▁▁█
+finance/monthly-invoicing                                                                                ⠋ running   06:00:12             4 █▇▃▃
+finance/vat-reconcile                                                                                    ● queued    05:22:10             3 █▂
+
+finance/dunning-reminders
+The workflow could not be read: no such thing, or not yours
+last 20   █▄  median 31s
+30 days   no run ended in 30 days
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ Move   enter Graph   esc Runs   q Quit   ? Every key

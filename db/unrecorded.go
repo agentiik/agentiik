@@ -20,7 +20,8 @@ import (
 // run that has it unset was finished by a controller that did not, which migration 0041 sets out.
 // init, migrate and the controller that leads record their files as a decision would have, an
 // artifact of the run for every file its envelopes name, the shards' included, expiring the
-// namespace's max_retention_days after the run finished, as migration 0038 dates the run's
+// namespace's max_retention_days after the run finished, or kept for ever where it sets none, as
+// migration 0038 dates the run's
 // envelopes and logs, which a run finished after that migration is given here too: no file is
 // collected while an envelope naming it is kept. From there the purges retire and collect them as
 // any other.
@@ -150,7 +151,8 @@ type Recorded struct {
 }
 
 // RecordUnrecorded records the files of each run as its artifacts, expiring its namespace's
-// max_retention_days after it finished, and sets the run's files_recorded, all in one
+// max_retention_days after it finished, or kept for ever where it sets none, and sets the run's
+// files_recorded, all in one
 // transaction. A run given no expiry, as one a v0.2 controller finished after migration 0038 is,
 // is given the same, for its envelopes and logs.
 //
@@ -319,7 +321,7 @@ func (p *Pool) RecordUnrecorded(ctx context.Context, runs []Recording) (Recorded
 			written, err := pairsOf(ctx, w.tx, `
 				insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at)
 				select g.namespace, g.run_id, g.step, g.port, g.name, g.digest, g.size, g.media_type,
-				       r.finished_at + n.max_retention_days * interval '1 day'
+				       coalesce(r.finished_at + n.max_retention_days * interval '1 day', 'infinity')
 				from unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[], $8::text[])
 				  as g(namespace, run_id, step, port, name, digest, size, media_type)
 				join runs r on r.namespace = g.namespace and r.id = g.run_id

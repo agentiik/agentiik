@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
@@ -65,6 +67,15 @@ type installation struct {
 	failing   error
 	asked     []string
 
+	// graph is the resolved graph the workflow's route answers, as JSON, and detail the whole of
+	// its answer where a test gives one; stats is what the statistics route answers.
+	graph, detail, stats string
+
+	// grants are what each grants route answers, by path, and groups the groups an administrator
+	// reads.
+	grants map[string][]access.Grant
+	groups []api.Group
+
 	// sent is what was sent, as method, path and body, and refusing why a send is refused.
 	sent     []string
 	refusing error
@@ -111,6 +122,17 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 			listed = append(listed, api.RunnerPool{Pool: p})
 		}
 		answer = map[string]any{"runner_pools": listed}
+	case strings.HasSuffix(path, "/grants"):
+		g, ok := in.grants[path]
+		if !ok {
+			return errors.New("no such namespace or workflow, or not yours to share")
+		}
+		answer = map[string]any{"grants": g}
+	case path == "/api/v1/groups":
+		if in.me == nil || !in.me.Admin {
+			return errors.New("no such thing, or not yours")
+		}
+		answer = map[string]any{"groups": in.groups}
 	case strings.HasPrefix(path, "/api/v1/runs?"):
 		answer = map[string]any{"runs": in.runs}
 	case strings.Contains(path, "/steps/"):
@@ -121,6 +143,12 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 		answer = e
 	case strings.HasPrefix(path, "/api/v1/runs/"):
 		answer = in.run
+	case strings.Contains(path, "/workflows/") && in.detail != "":
+		answer = json.RawMessage(in.detail)
+	case strings.Contains(path, "/workflows/") && in.graph != "":
+		answer = map[string]any{"graph": json.RawMessage(in.graph)}
+	case strings.Contains(path, "/stats/runs?") && in.stats != "":
+		answer = json.RawMessage(in.stats)
 	default:
 		return fmt.Errorf("no route %s", path)
 	}
@@ -243,13 +271,16 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 			t.Errorf("the top line does not say %q: %s", w, lines[0])
 		}
 	}
-	if !strings.HasPrefix(lines[1], "Failed, 1 of the last 3") || !strings.HasPrefix(lines[2], "● failed    01RUNBBBBBBBBBBBBBBBBBBBBB") {
+	if !strings.HasPrefix(lines[1], "╭─ Runs every namespace · 3 runs ─") || !strings.HasSuffix(lines[23-1], "╯") {
+		t.Errorf("the runs are not a pane, framed and named:\n%s", s)
+	}
+	if !strings.HasPrefix(inside(lines[2]), "Failed, 1 of the last 3") || !strings.HasPrefix(inside(lines[3]), "● failed    01RUNBBBBBBBBBBBBBBBBBBBBB") {
 		t.Errorf("the failed run is not lifted above the list:\n%s", s)
 	}
-	if !strings.HasPrefix(lines[4], "STATE       RUN") {
+	if !strings.HasPrefix(inside(lines[5]), "STATE       RUN") {
 		t.Errorf("the list has no header where it starts:\n%s", s)
 	}
-	for _, w := range []string{"● running   01RUNAAAAAAAAAAAAAAAAAAAAA finance/monthly-invoicing", "1m 52s", "● succeeded 01RUNCCCCCCCCCCCCCCCCCCCCC finance/nightly-export"} {
+	for _, w := range []string{"⠋ running   01RUNAAAAAAAAAAAAAAAAAAAAA finance/monthly-invoicing", "1m 52s", "● succeeded 01RUNCCCCCCCCCCCCCCCCCCCCC finance/nightly-export"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("the runs view does not show %q:\n%s", w, s)
 		}
@@ -257,7 +288,7 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 	if m.selected != "01RUNAAAAAAAAAAAAAAAAAAAAA" {
 		t.Errorf("the runs view opens with %q selected, not the newest run", m.selected)
 	}
-	if last := strings.TrimRight(lines[23], " "); last != "↑↓ Move   enter Open   / Filter   q Quit   ? Every key" {
+	if last := strings.TrimRight(lines[23], " "); last != "↑↓ Move   enter Open   g Graph   / Filter   q Quit   ? Every key" {
 		t.Errorf("the key line is %q", last)
 	}
 	// Every line is as wide as the window, so that the ground is painted under all of it.
@@ -298,10 +329,10 @@ func TestTheKeysMoveOpenAndGoBack(t *testing.T) {
 	if m.view != runView || !strings.Contains(screen(m), "Run 01RUNBBBBBBBBBBBBBBBBBBBBB  finance/monthly-invoicing@") {
 		t.Fatalf("enter does not open the run selected:\n%s", screen(m))
 	}
-	if in.asked[len(in.asked)-1] != "/api/v1/runs/01RUNBBBBBBBBBBBBBBBBBBBBB" {
-		t.Errorf("opening a run asked for %s", in.asked[len(in.asked)-1])
+	if !slices.Contains(in.asked, "/api/v1/runs/01RUNBBBBBBBBBBBBBBBBBBBBB") {
+		t.Errorf("opening a run asked for %v", in.asked)
 	}
-	if !strings.HasSuffix(strings.TrimRight(screen(m), " "), "↑↓ Step   [] Port   esc Runs   q Quit   ? Every key") {
+	if !strings.HasSuffix(strings.TrimRight(screen(m), " "), "↑↓ Step   [] Port   g Graph   esc Runs   q Quit   ? Every key") {
 		t.Errorf("the run view's key line is wrong:\n%s", screen(m))
 	}
 	m = press(t, m, esc)
@@ -326,7 +357,17 @@ func TestQuestionMarkListsEveryKey(t *testing.T) {
 	}
 }
 
-// Opened on a run, the console reads that run alone and starts on it.
+// inside is a line of a pane without its frame.
+func inside(line string) string {
+	line = strings.TrimPrefix(line, "│ ")
+	if i := strings.LastIndex(line, " │"); i >= 0 {
+		line = line[:i]
+	}
+	return line
+}
+
+// Opened on a run, the console starts on it, the runs folded above it in a window under 120 columns
+// and read for the line they are folded to.
 func TestAConsoleOpenedOnARunStartsOnIt(t *testing.T) {
 	in := &installation{run: db.RunDetail{RunSummary: db.RunSummary{Namespace: "finance", Workflow: "monthly-invoicing", Run: "01RUNBBBBBBBBBBBBBBBBBBBBB", State: agk.Failed}}}
 	m := opened(t, in, Options{Run: "01RUNBBBBBBBBBBBBBBBBBBBBB", Namespace: "finance"}, 100, 30)
@@ -336,10 +377,8 @@ func TestAConsoleOpenedOnARunStartsOnIt(t *testing.T) {
 	if !strings.Contains(strings.Split(screen(m), "\n")[0], "finance") {
 		t.Errorf("the top line does not name the namespace: %s", strings.Split(screen(m), "\n")[0])
 	}
-	for _, a := range in.asked {
-		if strings.HasPrefix(a, "/api/v1/runs?") {
-			t.Errorf("a console opened on a run read the runs too: %v", in.asked)
-		}
+	if !slices.Contains(in.asked, "/api/v1/runs?limit=100&namespace=finance") || !strings.HasPrefix(strings.Split(screen(m), "\n")[1], "▸ Runs  ") {
+		t.Errorf("a console opened on a run does not fold the runs above it, having read %v:\n%s", in.asked, screen(m))
 	}
 }
 
@@ -354,7 +393,7 @@ func TestAnInstallationThatStopsAnsweringIsSaidSo(t *testing.T) {
 	tm = send(t, tm, cmd())
 	m = tm.(Model)
 	top := strings.Split(screen(m), "\n")[0]
-	if !strings.Contains(top, "not answering, asked again: the installation could not be") {
+	if !strings.Contains(top, "not answering, asked again: the installation") {
 		t.Errorf("the top line says %q", top)
 	}
 	if !strings.Contains(screen(m), "01RUNAAAAAAAAAAAAAAAAAAAAA") {
@@ -372,7 +411,7 @@ func TestANarrowWindowCutsRatherThanWraps(t *testing.T) {
 	if !strings.Contains(s, "01RUNAAAAAA… ") || strings.Contains(s, "01RUNAAAAAAAAAAAAAAAAAAAAA") {
 		t.Errorf("a run's identifier at 80 columns is not cut to twelve:\n%s", s)
 	}
-	if !strings.Contains(s, "finance/a-workflow-whose-n… ") || strings.Contains(s, "past-any-column") {
+	if !strings.Contains(s, "finance/a-workflow-who… ") || strings.Contains(s, "past-any-column") {
 		t.Errorf("a long workflow is not cut:\n%s", s)
 	}
 	for i, l := range strings.Split(s, "\n") {
