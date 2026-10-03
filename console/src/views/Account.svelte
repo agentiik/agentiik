@@ -9,6 +9,7 @@
   import Dialog from "../components/Dialog.svelte";
   import ProfileForm from "../components/ProfileForm.svelte";
   import ServiceAccounts from "../components/ServiceAccounts.svelte";
+  import McpAccount from "../components/McpAccount.svelte";
   import {
     addPasskey,
     credentialsOf,
@@ -50,7 +51,7 @@
     changed,
   }: { api: API; place: Place; me: Me; tab: string | undefined; passkeys: Passkeys; changed: () => Promise<void> } = $props();
 
-  const shown = $derived(tab === "profile" || tab === "tokens" || tab === "service-accounts" ? tab : "credentials");
+  const shown = $derived(tab === "profile" || tab === "tokens" || tab === "service-accounts" || tab === "mcp" ? tab : "credentials");
   const now = Date.now();
 
   // What any act on the screen is doing, said, and what the API refused, said as it said it.
@@ -290,6 +291,7 @@
     credentials: { kind: "account" as const },
     tokens: { kind: "account" as const, tab: "tokens" },
     accounts: { kind: "account" as const, tab: "service-accounts" },
+    mcp: { kind: "account" as const, tab: "mcp" },
   };
 </script>
 
@@ -298,6 +300,7 @@
   { label: "Sign-in methods", icon: "control-passkey", to: routes.credentials, current: shown === "credentials" },
   { label: "API tokens", icon: "control-copy", to: routes.tokens, current: shown === "tokens" },
   { label: "Service accounts", icon: "control-groups", to: routes.accounts, current: shown === "service-accounts" },
+  { label: "MCP", icon: "trigger-mcp", to: routes.mcp, current: shown === "mcp" },
 ]}>
   {#snippet actions()}
     {#if shown === "credentials" && !passkeys.unavailable}
@@ -315,6 +318,8 @@
   <ProfileForm {api} {me} reread={changed} />
 {:else if shown === "service-accounts"}
   <ServiceAccounts {api} {me} />
+{:else if shown === "mcp"}
+  <McpAccount {api} {place} />
 {:else if shown === "credentials"}
   <Pane title="Sign-in methods" aside={credentials ? String(credentials.length) : ""}>
     {#if policy}<p class="muted lead">{policyLine(policy)}</p>{/if}

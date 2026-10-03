@@ -34700,5 +34700,43 @@
         }
       ]
     }
+  },
+  "GET /api/v1/me/collections": {
+    "status": 200,
+    "body": {
+      "collections": [
+        {
+          "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+          "name": "back-office",
+          "description": "Invoices and orders, for the finance assistant.",
+          "url": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+          "members": [
+            {
+              "workflow": "finance/monthly-invoicing",
+              "tool": "create_invoices"
+            },
+            {
+              "workflow": "finance/reconcile",
+              "ref": "v2",
+              "tool": null,
+              "reason": "no_mcp_block"
+            }
+          ]
+        },
+        {
+          "id": "01JR8T5Y7A9C1E3G5J7M9P1R3T",
+          "name": "support_desk",
+          "description": "",
+          "url": "https://agentiik.example.com/mcp/collections/01JR8T5Y7A9C1E3G5J7M9P1R3T",
+          "members": [
+            {
+              "workflow": "team-ops/nightly",
+              "tool": null,
+              "reason": "not_runnable"
+            }
+          ]
+        }
+      ]
+    }
   }
 }
