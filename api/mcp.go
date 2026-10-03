@@ -135,14 +135,23 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, error) {
 			tools = append(tools, m.tool(r, t))
 		}
 	}
+	// The resources, each listed to whoever holds its tool's permission somewhere, as the tool is,
+	// and read through its tool's route, which decides each read.
+	templates := []mcp.Template{
+		{URITemplate: "agentiik://language/{topic}", Name: "language", Title: "A page of the language reference", Description: "One topic of the workflow language, as workflow.language answers it, for a client that prefers attaching documents to calling a tool.", MimeType: "text/markdown"},
+		{URITemplate: "agentiik://schema/{part}", Name: "schema", Title: "A schema document", Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), as workflow.schema answers it.", MimeType: "application/schema+json"},
+	}
+	if use(holds(WorkflowRead)) {
+		templates = append(templates, treeTemplate)
+	}
+	if use(holds(RunRead)) {
+		templates = append(templates, runTemplate)
+	}
 	return mcp.Surface{
 		Tools:     tools,
 		Resources: languageResources(),
-		Templates: []mcp.Template{
-			{URITemplate: "agentiik://language/{topic}", Name: "language", Title: "A page of the language reference", Description: "One topic of the workflow language, as workflow.language answers it, for a client that prefers attaching documents to calling a tool.", MimeType: "text/markdown"},
-			{URITemplate: "agentiik://schema/{part}", Name: "schema", Title: "A schema document", Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), as workflow.schema answers it.", MimeType: "application/schema+json"},
-		},
-		Read: readLanguage,
+		Templates: templates,
+		Read:      m.reader(r),
 	}, nil
 }
 

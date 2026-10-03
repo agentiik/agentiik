@@ -16,7 +16,7 @@ import (
 // of their own: each call runs as the presenting principal, under the grants that govern the
 // console." So a tool does not reach a store or ask the authorizer itself: it makes the request the
 // route serves, through the router, with the credential the MCP request presented, and answers what
-// the route toolAnswer. Whatever the route checks, a scope, a grant, a deny, a protected branch, the
+// the route answered. Whatever the route checks, a scope, a grant, a deny, a protected branch, the
 // hook, the tool checks the same way, since it is the same code; and a refusal comes back in the
 // route's own words.
 
@@ -33,7 +33,7 @@ func throughOf(ctx context.Context) (string, bool) {
 	return t.tool, ok
 }
 
-// toolAnswer is what a route toolAnswer a request the MCP server made.
+// toolAnswer is what a route answered a request the MCP server made.
 type toolAnswer struct {
 	status int
 	header http.Header
@@ -54,7 +54,7 @@ func (a *toolAnswer) WriteHeader(status int) {
 }
 
 // dispatch makes one request of the API as the caller of the MCP request r, for the tool named, and
-// answers what the route toolAnswer. The body is sent as JSON where there is one. Only the caller's
+// answers what the route answered. The body is sent as JSON where there is one. Only the caller's
 // credential is carried, a bearer token, which is the one credential the MCP endpoint takes.
 func (m *MCP) dispatch(r *http.Request, tool, method, path string, query url.Values, body any) (*toolAnswer, error) {
 	var payload bytes.Buffer
@@ -92,10 +92,10 @@ func segment(name string) string { return url.PathEscape(name) }
 // result is a route's answer as a tool's result: a success as its JSON, both as text and as
 // structured content, a refusal the caller can act on as a result with isError, its sentence first,
 // and a failure of the installation as an error, which the client is told only that the call could
-// not be toolAnswer.
+// not be answered.
 func result(a *toolAnswer) (*mcp.CallResult, error) {
 	if a.status >= 500 {
-		return nil, fmt.Errorf("api: the route toolAnswer %d: %.300s", a.status, a.body.String())
+		return nil, fmt.Errorf("api: the route answered %d: %.300s", a.status, a.body.String())
 	}
 	var structured any
 	if a.body.Len() > 0 && strings.HasPrefix(a.header.Get("Content-Type"), "application/json") {
