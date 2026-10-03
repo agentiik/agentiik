@@ -171,6 +171,11 @@ var Cases = []Case{
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants", Permission: api.GrantManage, Scope: api.Workflow, OrAdministrator: true, Seeing: true}, Refused: true},
 	{Route: api.Route{Method: "DELETE", Pattern: "/api/v1/{namespace}/workflows/{workflow}/grants/{id}", Permission: api.GrantManage, Scope: api.Workflow}, Makes: "grant"},
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}", Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse}, Refused: true},
+	// Files published as a commit, a push made by the server, so under what a push asks: workflow:write,
+	// and grant:manage and secret:use where what the commit moves or names calls for them. A draft
+	// validated, which writes nothing, under workflow:read.
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/commits", Permission: api.WorkflowWrite, Scope: api.Workflow, Asks: access.SetOf(api.GrantManage, api.SecretUse)}, Refused: true},
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/{namespace}/workflows/{workflow}/validate", Permission: api.WorkflowRead, Scope: api.Workflow}, Refused: true},
 	// A repository created under what registering a version takes, at the namespace; read, and its
 	// branches, tags and tree read, under workflow:read; renamed under workflow:write, and its default branch and
 	// protection changed under grant:manage, besides, which only the handler asks, since which a

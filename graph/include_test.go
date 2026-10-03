@@ -570,7 +570,7 @@ steps:
 	if !errors.As(err, &r) || r.Rule != RuleIncludeCycle {
 		t.Fatalf("the library including its root again was refused by %v", err)
 	}
-	if want := (Position{File: "finance/common@v2.1.0:blocks/one.yaml", Line: 2, Column: 11}); r.At != want {
+	if want := (Position{File: "finance/common@v2.1.0:blocks/one.yaml", Line: 2, Column: 11, Pointer: "/include/0/path"}); r.At != want {
 		t.Errorf("the ring is refused at %s, and it is closed at %s", r.At, want)
 	}
 }

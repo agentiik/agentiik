@@ -182,6 +182,15 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		// it includes, which only the push can tell.
 		{"PUT", "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}",
 			Needs{Permission: WorkflowWrite, Scope: Workflow, Also: SecretUse, Includes: true}, s.push},
+		// "Publishes files": a commit the server writes and pushes through the path a git push
+		// takes, so it asks what a push asks of its pusher, grant:manage to move a protected
+		// default branch and secret:use where the version names a secret, beside workflow:write.
+		{"POST", "/api/v1/{namespace}/workflows/{workflow}/commits",
+			Needs{Permission: WorkflowWrite, Scope: Workflow, Asks: []Permission{GrantManage, SecretUse}, Includes: true}, s.commitFiles},
+		// A draft judged by the hook's own check, which writes nothing and reads what reading the
+		// workflow reads, and the libraries an include names under the caller's workflow:read there.
+		{"POST", "/api/v1/{namespace}/workflows/{workflow}/validate",
+			Needs{Permission: WorkflowRead, Scope: Workflow, Includes: true}, s.validateFiles},
 		// What a repository's pushes are judged against beyond their tree, written under what
 		// registering a version of it takes, and read under what reading it takes.
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/images",
@@ -643,7 +652,17 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		fail(w, http.StatusForbidden, fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use on %s, which a grant on the namespace %s gives and a deny on the workflow takes away, and you do not hold it there: whoever writes a secret's name into a workflow answers for its value going into a container, and running the version afterwards takes workflow:run alone", noun, strings.Join(unusable.Named, ", "), over.Workflow, over.Namespace))
 		return
 	case err != nil:
-		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("version: %s@%s: %s", over.Workflow, commit, err))
+		said := fmt.Sprintf("version: %s@%s: %s", over.Workflow, commit, err)
+		// A refusal is answered as the hook and POST .../commits answer one, its node, what was
+		// expected there and the topic beside the sentence.
+		if problem, ok := version.Explain(err); ok {
+			write(w, http.StatusUnprocessableEntity, struct {
+				Error string `json:"error"`
+				version.Problem
+			}{said, problem})
+			return
+		}
+		fail(w, http.StatusUnprocessableEntity, said)
 		return
 	}
 	// A digest for a tag no step names is a version whose file names one image while the push

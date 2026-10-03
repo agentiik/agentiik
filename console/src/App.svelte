@@ -22,9 +22,12 @@
   import Refused from "./views/Refused.svelte";
   import NewNamespace from "./components/NewNamespace.svelte";
   import SignIn, { type Passkeys } from "./views/SignIn.svelte";
+  import Elsewhere from "./components/Elsewhere.svelte";
 
-  // The console: who it is signed in as, the top bar, the screen the address names, and the key line.
-  let { api, session, place, version, passkeys }: { api: API; session: Session; place: Place; version: string; passkeys: Passkeys } = $props();
+  // The console: who it is signed in as, the top bar, the screen the address names, and the key line;
+  // above them, where the console was opened at an address other than the public URL, the same page
+  // at the public URL (lib/origin).
+  let { api, session, place, version, passkeys, elsewhere = null }: { api: API; session: Session; place: Place; version: string; passkeys: Passkeys; elsewhere?: string | null } = $props();
 
   onMount(() => {
     session.read();
@@ -230,6 +233,9 @@
   }}
 />
 
+{#if elsewhere}
+  <Elsewhere href={elsewhere} />
+{/if}
 {#if session.standing === "reading"}
   <!-- The frame is drawn while the session is read, empty, so that nothing moves when it fills. -->
   <div class="frame" class:folded class:narrow={viewport.narrow}>

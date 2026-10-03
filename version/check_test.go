@@ -107,7 +107,7 @@ func TestATagWithNoPinIsRefusedWhereItIsWritten(t *testing.T) {
 	c.Pin = func(context.Context, string, agk.Step) (string, error) { return "", version.ErrNotHeld }
 	_, err := version.Check(t.Context(), aRepository(), c)
 	r := refusedBy(t, err, version.RuleImageNotPinned)
-	if want := (graph.Position{File: "fragments/bricks.yaml", Line: 2, Column: 10}); r.At != want {
+	if want := (graph.Position{File: "fragments/bricks.yaml", Line: 2, Column: 10, Pointer: "/.invoicing/image"}); r.At != want {
 		t.Errorf("the tag is refused at %s, and it is written at %s", r.At, want)
 	}
 }
@@ -186,14 +186,14 @@ func TestAVersionIsMadeUnderTheNameItsFileWrites(t *testing.T) {
 	c := everything()
 	c.Repository = "payroll"
 	_, err := version.Check(t.Context(), aRepository(), c)
-	if r := refusedBy(t, err, version.RuleMetadataNameNotRepository); r.At != (graph.Position{File: "agentiik.yaml", Line: 3, Column: 19}) {
+	if r := refusedBy(t, err, version.RuleMetadataNameNotRepository); r.At != (graph.Position{File: "agentiik.yaml", Line: 3, Column: 19, Pointer: "/metadata/name"}) {
 		t.Errorf("the name is refused at %s", r.At)
 	}
 
 	c = everything()
 	c.Namespace = "team-ops"
 	_, err = version.Check(t.Context(), aRepository(), c)
-	if r := refusedBy(t, err, version.RuleMetadataNamespaceNotRepository); r.At != (graph.Position{File: "agentiik.yaml", Line: 3, Column: 49}) {
+	if r := refusedBy(t, err, version.RuleMetadataNamespaceNotRepository); r.At != (graph.Position{File: "agentiik.yaml", Line: 3, Column: 49, Pointer: "/metadata/namespace"}) {
 		t.Errorf("the namespace is refused at %s", r.At)
 	}
 
@@ -224,7 +224,7 @@ func TestASecretIsAskedOfThePusherBeforeTheNamespace(t *testing.T) {
 	c.Secrets = func(context.Context) ([]string, error) { return []string{"ledger"}, nil }
 	_, err = version.Check(t.Context(), aRepository(), c)
 	r := refusedBy(t, err, version.RuleSecretNotDeclaredByNamespace)
-	if r.At != (graph.Position{File: "agentiik.yaml", Line: 6, Column: 11}) || !strings.Contains(r.Detail, "step invoice names the secret billing") {
+	if r.At != (graph.Position{File: "agentiik.yaml", Line: 6, Column: 11, Pointer: "/secrets/0"}) || !strings.Contains(r.Detail, "step invoice names the secret billing") {
 		t.Errorf("the secret is refused at %s: %s", r.At, r.Detail)
 	}
 
@@ -235,7 +235,7 @@ func TestASecretIsAskedOfThePusherBeforeTheNamespace(t *testing.T) {
 	tree["fragments/secrets.yaml"] = &fstest.MapFile{Data: []byte("secrets: [billing]\n")}
 	tree["fragments/bricks.yaml"] = &fstest.MapFile{Data: []byte("include:\n  - path: ./secrets.yaml\nsecrets: [billing]\n" + string(tree["fragments/bricks.yaml"].Data))}
 	_, err = version.Check(t.Context(), tree, c)
-	if r := refusedBy(t, err, version.RuleSecretNotDeclaredByNamespace); r.At != (graph.Position{File: "fragments/secrets.yaml", Line: 1, Column: 11}) {
+	if r := refusedBy(t, err, version.RuleSecretNotDeclaredByNamespace); r.At != (graph.Position{File: "fragments/secrets.yaml", Line: 1, Column: 11, Pointer: "/secrets/0"}) {
 		t.Errorf("the secret named first in the file an included file includes is refused at %s", r.At)
 	}
 }
@@ -297,5 +297,41 @@ func TestATreeOfDeepPathsIsJudgedFromItsListing(t *testing.T) {
 	_, err := version.Check(t.Context(), files, everything())
 	if r := refusedBy(t, err, version.RuleDotGitInTree); r.At.File != "vendor/.git/hooks/post-checkout" {
 		t.Errorf("the .git directory is refused naming %s", r.At.File)
+	}
+}
+
+// A file the parser refuses for its shape is placed by the released schema: the node as a pointer,
+// its line and column, what was expected there and the topic that covers it, the parser's own
+// sentence kept as the detail; in whichever file of the tree it is written.
+func TestARefusalOfShapeIsPlacedByTheSchema(t *testing.T) {
+	for _, c := range []struct {
+		name, file, from, to string
+		want                 version.Problem
+	}{
+		{"a key the workflow does not have", "agentiik.yaml", "secrets: [billing]\n", "secrets: [billing]\nstepz: {}\n",
+			version.Problem{File: "agentiik.yaml", Line: 7, Column: 1, Pointer: "/stepz", Rule: "schema", Topic: "repository"}},
+		{"a value of the wrong type", "agentiik.yaml", "secrets: [billing]\n", "secrets: [billing]\nconcurrency: { group: g, cancel_in_progress: maybe }\n",
+			version.Problem{File: "agentiik.yaml", Line: 7, Column: 46, Pointer: "/concurrency/cancel_in_progress", Rule: "schema"}},
+		{"a key an included block does not have", "fragments/bricks.yaml", "  image:", "  imagez: x\n  image:",
+			version.Problem{File: "fragments/bricks.yaml", Line: 2, Column: 3, Pointer: "/.invoicing/imagez", Rule: "schema", Topic: "includes"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree := aRepository()
+			tree[c.file].Data = []byte(strings.Replace(string(tree[c.file].Data), c.from, c.to, 1))
+			_, err := version.Check(t.Context(), tree, everything())
+			p, ok := version.Explain(err)
+			if !ok {
+				t.Fatalf("the refusal %v is not explained", err)
+			}
+			if p.File != c.want.File || p.Line != c.want.Line || p.Column != c.want.Column || p.Pointer != c.want.Pointer || p.Rule != c.want.Rule {
+				t.Errorf("the refusal is placed at %+v, and it is written at %+v", p, c.want)
+			}
+			if c.want.Topic != "" && p.Topic != c.want.Topic {
+				t.Errorf("the refusal is covered by the topic %s, and it is %s", p.Topic, c.want.Topic)
+			}
+			if p.Expected == "" || p.Detail != err.Error() {
+				t.Errorf("the refusal says it expected %q, with the detail %q, of %v", p.Expected, p.Detail, err)
+			}
+		})
 	}
 }
