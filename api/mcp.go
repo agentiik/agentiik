@@ -79,24 +79,51 @@ func (m *MCP) serve(w http.ResponseWriter, r *http.Request, caller Caller) {
 		refuse(w, http.StatusUnauthorized, "the MCP endpoint takes a bearer token, an API token or one issued for this installation, and a session is the console's")
 		return
 	}
-	m.server.Serve(w, r, m.offered(r, caller))
+	surface, err := m.offered(r, caller)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, "what the caller holds could not be read, and the tools offered are what it holds")
+		return
+	}
+	m.server.Serve(w, r, surface)
 }
 
-// offered is what one caller is offered. The language and the schemas are any authenticated
-// principal's, since they are what every client needs before it can ask for anything else and they
-// say nothing about any namespace. workflow.validate and workflow.commit are offered to every caller
-// too until the tool list is filtered by what the caller holds (#660): each is its route made as the
-// caller, so a caller holding nothing is refused by the route as anybody is.
-func (m *MCP) offered(r *http.Request, _ Caller) mcp.Surface {
+// offered is what one caller is offered: "the tool list is filtered by the caller's permissions: a
+// tool the caller cannot use is absent rather than refused, as the protocol allows". The language
+// and the schemas are any authenticated principal's, since they are what every client needs before
+// it can ask for anything else and they say nothing about any namespace. Every other tool is listed
+// to a caller holding, somewhere, what its route needs, as GET /api/v1/me answers what they hold;
+// the route still decides each call, over the namespace and the workflow it names.
+//
+// An authorizer that does not say what a principal is granted, as a router built for a test may
+// carry, lists every tool, each refused by its route as anybody is.
+func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, error) {
+	tools := []mcp.Tool{workflowLanguage(), workflowSchema()}
+	effective, err := caller.Effective(r.Context())
+	known := err == nil
+	if err != nil && caller.standings != nil {
+		return mcp.Surface{}, err
+	}
+	use := func(offered func(Effective) bool) bool { return !known || offered(effective) }
+	if use(holds(WorkflowRead)) {
+		tools = append(tools, m.workflowValidate(r))
+	}
+	if use(holds(WorkflowWrite)) {
+		tools = append(tools, m.workflowCommit(r))
+	}
+	for _, t := range userTools() {
+		if use(t.offered) {
+			tools = append(tools, m.tool(r, t))
+		}
+	}
 	return mcp.Surface{
-		Tools:     []mcp.Tool{workflowLanguage(), workflowSchema(), m.workflowValidate(r), m.workflowCommit(r)},
+		Tools:     tools,
 		Resources: languageResources(),
 		Templates: []mcp.Template{
 			{URITemplate: "agentiik://language/{topic}", Name: "language", Title: "A page of the language reference", Description: "One topic of the workflow language, as workflow.language answers it, for a client that prefers attaching documents to calling a tool.", MimeType: "text/markdown"},
 			{URITemplate: "agentiik://schema/{part}", Name: "schema", Title: "A schema document", Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), as workflow.schema answers it.", MimeType: "application/schema+json"},
 		},
 		Read: readLanguage,
-	}
+	}, nil
 }
 
 // readOnly are the annotations of a tool that reads and changes nothing: "the read-only tools carry

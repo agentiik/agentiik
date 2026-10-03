@@ -253,3 +253,33 @@ func TestAClientValidatesAndCommitsThroughTheUsersServer(t *testing.T) {
 		t.Errorf("a reader's commit through MCP is answered %v", res)
 	}
 }
+
+// A tool of the user's server is its route made as the caller: what a reader of the workflow reads
+// through it is what the API answers them, and a workflow nobody let a caller see is answered as one
+// that does not exist, the same 404 the route answers.
+func TestTheUsersServersToolsAreTheirRoutes(t *testing.T) {
+	g := servingGit(t, owningGrants{granted: everyone().(granted)})
+	rt := g.h.(*api.Router)
+	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	_, first := g.committed("alice", map[string]any{"message": "first", "files": map[string]any{"agentiik.yaml": workflowDocument}})
+
+	_, res, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing"}})
+	if rpcErr != nil || res["isError"] == true {
+		t.Fatalf("a reader's workflow.get is answered %v, %v", res, rpcErr)
+	}
+	if head := res["structuredContent"].(map[string]any)["repository"].(map[string]any)["head"]; head != first["commit"] {
+		t.Errorf("workflow.get answers the head %v, and the commit was %v", head, first["commit"])
+	}
+	_, res, _ = called(t, rt, "stranger", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing"}})
+	_, absent, _ := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "no-such-workflow"}})
+	if res["isError"] != true || absent["isError"] != true || res["content"].([]any)[0].(map[string]any)["text"] != absent["content"].([]any)[0].(map[string]any)["text"] {
+		t.Errorf("an invisible workflow is answered %v, and an absent one %v", res, absent)
+	}
+
+	// An argument the tool's schema refuses is the protocol's error, before anything is asked.
+	if _, _, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance"}}); rpcErr == nil || rpcErr.Code != -32602 {
+		t.Errorf("a call naming no workflow is answered %v", rpcErr)
+	}
+}

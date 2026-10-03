@@ -64,7 +64,7 @@ func (c *commitRequest) field(b *body, name string) error {
 // filesOf reads the files a commit writes or a validation lays over a tree: each path mapped to its
 // text, or to null to remove it, at most TreeMaxFiles of them and TreeMaxBytes with their paths.
 func filesOf(b *body, files *[]committedFile, weight *int) error {
-	return b.object(TreeMaxFiles, fmt.Sprintf("a commit writes at most %d files, the most a version's tree holds", TreeMaxFiles), func(p string) error {
+	return b.object(TreeMaxFiles, fmt.Sprintf("files names at most %d paths, the most a version's tree holds", TreeMaxFiles), func(p string) error {
 		for _, f := range *files {
 			if f.path == p {
 				return twice("the file", p)
@@ -85,7 +85,7 @@ func filesOf(b *body, files *[]committedFile, weight *int) error {
 		}
 		*weight += len(p)
 		if *weight > TreeMaxBytes {
-			return &tooLarge{reason: fmt.Sprintf("the files a commit writes are at most %d bytes with their paths, as the tree a push carries is: a file this size belongs in an image or in an artifact", TreeMaxBytes)}
+			return &tooLarge{reason: fmt.Sprintf("files holds at most %d bytes with their paths, as the tree a push carries does: a file this size belongs in an image or in an artifact", TreeMaxBytes)}
 		}
 		*files = append(*files, f)
 		return nil

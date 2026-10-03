@@ -1,12 +1,16 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/language"
 	"github.com/agentiik/agentiik/mcp"
@@ -21,10 +25,23 @@ func cookieOrBearer(r *http.Request) (api.Identity, error) {
 	return bearer(r)
 }
 
-// platform is a router serving the platform's MCP server on the public URL.
+// standing is an authorizer that says what each principal is granted, as Principals does, and owns
+// nothing: what the user's server lists its tools by.
+type standing struct {
+	owning
+	grants map[api.Principal][]access.Grant
+}
+
+func (s standing) Standing(_ context.Context, who api.Principal) (api.Standing, error) {
+	return api.Standing{Grants: s.grants[who], At: time.Now()}, nil
+}
+
+// platform is a router serving the user's MCP server on the public URL, where alice is an editor of
+// finance and nobody else holds anything.
 func platform(t *testing.T) *api.Router {
 	t.Helper()
-	rt, err := api.NewRouter(owning{}, cookieOrBearer)
+	editor := access.Grant{Principal: "alice", Scope: access.Scope{Namespace: "finance"}, Role: access.Editor}
+	rt, err := api.NewRouter(standing{grants: map[api.Principal][]access.Grant{"alice": {editor}}}, cookieOrBearer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,21 +168,76 @@ func TestTheDiscoveryOrientsAClient(t *testing.T) {
 	}
 }
 
-// Any authenticated principal is offered the two tools that teach the language, each marked
-// read-only so that a client can tell without being told.
-func TestAnyPrincipalIsOfferedTheLanguage(t *testing.T) {
-	_, result, _ := called(t, platform(t), "nobody-granted-anything", "tools/list", nil)
+// offeredTo lists the tools offered to who, by name, and their hints.
+func offeredTo(t *testing.T, rt *api.Router, who string) ([]string, map[string]map[string]any) {
+	t.Helper()
+	_, result, _ := called(t, rt, who, "tools/list", nil)
 	tools, _ := result["tools"].([]any)
 	var names []string
+	hints := map[string]map[string]any{}
 	for _, tool := range tools {
 		tool := tool.(map[string]any)
 		names = append(names, tool["name"].(string))
-		if hints, _ := tool["annotations"].(map[string]any); hints["readOnlyHint"] != true || hints["destructiveHint"] != false {
-			t.Errorf("%s is not marked read-only: %v", tool["name"], hints)
+		hints[tool["name"].(string)], _ = tool["annotations"].(map[string]any)
+	}
+	return names, hints
+}
+
+// Any authenticated principal is offered what teaches the language and what every user may do,
+// list namespaces and create one; a tool the caller cannot use anywhere is absent rather than
+// refused, so that a principal who can write nowhere never sees workflow.commit.
+func TestAToolTheCallerCannotUseIsAbsent(t *testing.T) {
+	rt := platform(t)
+	names, _ := offeredTo(t, rt, "nobody-granted-anything")
+	if strings.Join(names, ",") != "workflow.language,workflow.schema,namespace.list,namespace.get,namespace.create" {
+		t.Errorf("the tools offered to a principal holding nothing are %v", names)
+	}
+	names, _ = offeredTo(t, rt, "alice")
+	for _, want := range []string{"workflow.validate", "workflow.commit", "workflow.create", "workflow.run", "run.get", "run.output", "secret.list"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("an editor is not offered %s: %v", want, names)
 		}
 	}
-	if strings.Join(names, ",") != "workflow.language,workflow.schema" {
-		t.Errorf("the tools offered are %v", names)
+	for _, absent := range []string{"workflow.delete", "grant.create", "namespace.quotas", "runner.list", "namespace.delete"} {
+		if slices.Contains(names, absent) {
+			t.Errorf("an editor is offered %s, which an editor holds nowhere", absent)
+		}
+	}
+}
+
+// "The read-only tools carry readOnlyHint, so a client can tell without being told", and the tools
+// that remove something carry destructiveHint.
+func TestEachToolSaysWhetherItReadsOrRemoves(t *testing.T) {
+	rt, err := api.NewRouter(owning{}, cookieOrBearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	// An authorizer that says nothing of what anybody holds lists every tool.
+	names, hints := offeredTo(t, rt, "anybody")
+	readOnly := []string{"workflow.language", "workflow.schema", "workflow.validate", "namespace.list", "namespace.get", "grant.list", "secret.list", "workflow.list", "workflow.get", "run.list", "run.get", "run.logs", "run.output", "runner.list"}
+	destructive := []string{"namespace.delete", "grant.revoke", "workflow.delete", "secret.remove"}
+	for _, name := range names {
+		h := hints[name]
+		switch {
+		case slices.Contains(readOnly, name):
+			if h["readOnlyHint"] != true || h["destructiveHint"] != false {
+				t.Errorf("%s reads and is not marked read-only: %v", name, h)
+			}
+		case slices.Contains(destructive, name):
+			if h["readOnlyHint"] != false || h["destructiveHint"] != true {
+				t.Errorf("%s removes something and is not marked destructive: %v", name, h)
+			}
+		default:
+			if h["readOnlyHint"] != false || h["destructiveHint"] != false {
+				t.Errorf("%s writes and is marked %v", name, h)
+			}
+		}
+	}
+	if len(names) < 29 {
+		t.Errorf("an authorizer that says nothing lists %d tools: %v", len(names), names)
 	}
 }
 
