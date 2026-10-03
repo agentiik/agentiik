@@ -1,0 +1,47 @@
+# valid: a workflow published as one tool, as the documentation writes it.
+# covers: mcp.name, mcp.title, mcp.description, mcp.output naming a declared
+#         output with a schema, a sync tool at the ceiling, and annotations;
+#         every input carries a schema, as a workflow publishing a tool must.
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+  customers:
+    schema: { $ref: "./schemas/customer.json" }
+    default: []
+
+outputs:
+  invoices:
+    from: { step: archive, port: out }
+    schema: { $ref: "./schemas/invoice.json" }
+    retain: 90d
+
+mcp:
+  name: create_invoices
+  title: Create invoices
+  description: >
+    Issue one invoice per order and return them, each with its number and
+    total. Rejects an order whose customer has no valid VAT number.
+  output: invoices                  # its envelope becomes structuredContent
+  mode: sync
+  timeout: 120s
+  annotations:
+    readOnlyHint: false
+    idempotentHint: false
+
+steps:
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+      customers: ${{ workflow.inputs.customers }}
+    outputs: [out]

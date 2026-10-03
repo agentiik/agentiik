@@ -1,0 +1,18 @@
+{
+  "id": "01JR8VC3E5G7J9M1P3R5T7V9X1",
+  "name": "month-end",
+  "description": "What closes the month.",
+  "url": "https://agentiik.example.com/mcp/collections/01JR8VC3E5G7J9M1P3R5T7V9X1",
+  "members": [
+    {
+      "workflow": "finance/reconcile",
+      "ref": "refs/heads/release/2026-10",
+      "tool": "reconcile"
+    },
+    {
+      "workflow": "payroll/close-month",
+      "tool": null,
+      "reason": "not_runnable"
+    }
+  ]
+}

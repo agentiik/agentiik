@@ -17635,31 +17635,16 @@
           }
         },
         "mcp": {
-          "name": "invoicing",
-          "description": "Invoices a batch of orders for the finance team, as the monthly run does.",
-          "tools": [
-            {
-              "name": "create_invoices",
-              "title": "Create invoices",
-              "description": "Invoices the orders given and returns the invoices it created. Refuses an order with no amount.",
-              "input": {
-                "from": {
-                  "input": "orders"
-                }
-              },
-              "output": {
-                "from": {
-                  "output": "invoices"
-                }
-              },
-              "mode": "sync",
-              "timeout": "2m",
-              "annotations": {
-                "idempotentHint": true,
-                "destructiveHint": false
-              }
-            }
-          ]
+          "name": "create_invoices",
+          "title": "Create invoices",
+          "description": "Invoices the orders given and returns the invoices it created. Refuses an order with no amount.",
+          "output": "invoices",
+          "mode": "sync",
+          "timeout": "2m",
+          "annotations": {
+            "idempotentHint": true,
+            "destructiveHint": false
+          }
         }
       },
       "history": [

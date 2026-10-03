@@ -16,6 +16,16 @@ func TestVersionMatchesTheVendoredTree(t *testing.T) {
 	}
 }
 
+func TestCommitMatchesTheVendoredTree(t *testing.T) {
+	b, err := fs.ReadFile(FS, "SCHEMAS_COMMIT")
+	if err != nil {
+		t.Fatalf("reading the commit: %v", err)
+	}
+	if got := strings.TrimSpace(string(b)); got != Commit {
+		t.Fatalf("the tree was taken from %q and the package says %q", got, Commit)
+	}
+}
+
 func TestEnvelopesCarriesTheWholeCorpus(t *testing.T) {
 	cases, err := Envelopes()
 	if err != nil {
@@ -198,12 +208,12 @@ func TestWorkflowsCarriesTheWholeCorpus(t *testing.T) {
 			}
 		}
 	}
-	// The corpus the release carries: twelve documents that must be accepted and
-	// seventy-five that must be refused, of which twenty are rules no JSON Schema can
+	// The corpus the release carries: thirteen documents that must be accepted and
+	// seventy-eight that must be refused, of which eighteen are rules no JSON Schema can
 	// express and the evaluator owns. The included file carrying mcp is the fragment
 	// group's now, since it is not an entry point.
-	if valid != 12 || invalid != 75 || byValidator != 20 {
-		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 12, 75 and 20", valid, invalid, byValidator)
+	if valid != 13 || invalid != 78 || byValidator != 18 {
+		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 13, 78 and 18", valid, invalid, byValidator)
 	}
 }
 

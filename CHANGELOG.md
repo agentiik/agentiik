@@ -4,6 +4,15 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ## Unreleased
 
+### Upgrading
+
+- A version stored before this release whose `mcp` block lists `tools`, as the language had it then, is read back as publishing no tool, and keeps building and running as it was: nothing ever served those tools. A new version writes the block as one tool, and a push listing tools is refused, saying that several tools are a collection of several workflows.
+
+### Workflow
+
+- The `mcp` block publishes the workflow as one tool, as agentiik/schemas writes it: `name`, the workflow's name where none is written, `title`, `description`, required, `output`, the name of one declared workflow output, `mode`, `timeout` and `annotations`. The tool's arguments are the workflow's inputs, so a workflow publishing a tool gives every input a schema, which the reader refuses otherwise, and an output the workflow does not declare is refused as `mcp-output-not-declared`. `mcp-tool-input-not-declared`, `mcp-tool-input-without-schema` and `mcp-duplicate-tool-name` are gone with the list they were about. `graph.MCP` is the tool, and `graph.Tool` and `graph.ToolIO` are gone.
+- The fixture corpus, the language reference and the schema parts are taken from agentiik/schemas `a4dae4a`, its main branch carrying v0.7.0's `mcp` block and collections, recorded in `internal/fixtures/testdata/SCHEMAS_COMMIT` beside the release the corpus names, and in `language.Source`.
+
 ### API
 
 - `POST /api/v1/{ns}/workflows/{name}/commits` publishes files: it commits them onto a branch as the caller, from the parent they were read at, and hands the commit to the path a git push takes, so that the pre-receive hook judges it, the grants it needs are a push's (`workflow:write`, `grant:manage` to move a protected default branch, `secret:use` where the version names a secret), the version is recorded and the audit log says `ref.update` and `push.refuse` as of any push. `files` maps each path to its new text, UTF-8, or to null to remove it; a branch that moved since the parent is `409`, a refusal by the hook `422` with its rule, file, line, column, pointer, what was expected and the topic of `workflow.language`. The author and committer are the caller, by their name and email address, or their login at the installation's host.
@@ -13,6 +22,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Console
 
+- A workflow's MCP tab draws the one tool its version publishes, as a client of a collection holding it is told of it: its name, title, description, mode, timeout and annotations, its `inputSchema` an object of the workflow's inputs, each with its schema as it stands and required where the input is required and has no default, and its `outputSchema` the schema of the output it returns. `vendor/openapi.json` and `vendor/workflow.schema.json` are taken from agentiik/schemas `a4dae4a`, and so is the round-trip corpus.
 - The editor commits with `POST /api/v1/{ns}/workflows/{name}/commits`, `agentiik.yaml` written from the version opened as its parent, rather than over git from the page: no API token minted for the commit, no history fetched, and no git objects, packs or inflater carried in the browser. A branch that moved since is refused as before, and a refusal by the hook marks the line it names from the answer's `file`, `line` and `column`. `vendor/openapi.json` and `vendor/wire.schema.json` are taken from the schemas commit that describes the route.
 - A workflow whose repository has no commit yet opens on its first file: `Write agentiik.yaml` opens the editor on a complete first workflow, one step on an image pinned by digest, and commits it as the repository's first commit, onto its default branch, where the console offered no way to write one.
 - A refusal by the hook is said in the commit dialog with its detail and what was expected there, where it gave the rule alone.

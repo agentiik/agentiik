@@ -41,7 +41,7 @@ steps:
 - `files`: Narrows what the step receives from the repository tree, which it otherwise gets whole under /agk/repo/.
 - `script`: Shell commands run inside image instead of treating it as a brick, under the same contract every brick honours: the same mounts, the same environment, the same isolation, the same meaning for the exit code.
 - `includes`: Files and repositories merged into this one before anything else is resolved, in declaration order, each read as an included file, $defs/fragment.
-- `mcp`: Publishes the workflow to model-driven clients as an MCP server at /mcp/{namespace}/{workflow}.
+- `mcp`: Publishes the workflow as one tool to model-driven clients: one block, one tool, whose arguments are the workflow's inputs and whose result is optionally one of its outputs.
 
 ## Schema parts
 

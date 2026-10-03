@@ -70,6 +70,11 @@ type Workflow struct {
 	// made says the workflow was read by Parse, to make a version of, rather than read back
 	// out of a stored one: the rules added since a version could be stored hold it.
 	made bool
+
+	// mcpRefused is why the mcp block was not read as one tool, which a version being made
+	// is refused for and a stored one, written to the language before v0.7.0, publishes no
+	// tool for.
+	mcpRefused error
 }
 
 // Included is one include as resolution applied it: a file of this tree by its path from the
@@ -216,39 +221,30 @@ type Concurrency struct {
 	CancelInProgress bool
 }
 
-// MCP is the published surface: which inputs and outputs a model-driven client may
-// reach, under what names.
+// MCP is the published surface: the one tool a workflow is, for a model-driven client.
+// "One block, one tool, whose arguments are the workflow's inputs": a workflow is one
+// boundary, its inputs and its outputs, and a tool is a view of that boundary, so the
+// block names no input and maps nothing. "A connector offering several tools is a
+// collection of several workflows."
 //
-// A workflow carries a pointer to one rather than a value, because "an empty list
-// publishes a server with nothing on it, which is not the same as declaring no mcp block
-// at all: the first serves an empty tool list, the second serves nothing and returns
-// 404".
+// A workflow carries a pointer to one rather than a value, because a workflow with no
+// block publishes no tool: a collection naming it offers nothing for it, and says so.
 type MCP struct {
-	Name        string
-	Description string
-	Tools       []Tool
-}
-
-// Tool is one published tool. Name, Description and Input are the three the language
-// requires: "a tool published without a description is exactly the tool a model has no
-// way to decide to call".
-type Tool struct {
-	Name        string
+	// Name is the tool's name, "the workflow's name where none is written". It is
+	// "stable across commits, because clients hold it: renaming it is withdrawing one
+	// tool and publishing another".
+	Name string
+	// Named says the file wrote Name rather than leaving it to the workflow's.
+	Named       bool
 	Title       string
 	Description string
-	Input       ToolIO
-	Output      *ToolIO
+	// Output is the workflow output whose envelope becomes the result, empty where
+	// the tool returns only that the run succeeded: "a tool may have an effect and
+	// return only that it succeeded".
+	Output      string
 	Mode        ToolMode
 	Timeout     Duration
 	Annotations Annotations
-}
-
-// ToolIO names the workflow input or output a tool is a view of. Exactly one of the two
-// is set, decided by the key it was written under: "the reference is to a workflow input
-// or output, never to a step or a port".
-type ToolIO struct {
-	Input  string
-	Output string
 }
 
 // ToolMode is how a call waits. "sync waits for the run and returns the output; async

@@ -1,0 +1,412 @@
+{
+  "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+  "name": "back-office",
+  "description": "Invoices and orders, for the finance assistant.",
+  "url": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+  "members": [
+    {
+      "workflow": "finance/report-001",
+      "tool": "report_001"
+    },
+    {
+      "workflow": "finance/report-002",
+      "tool": "report_002"
+    },
+    {
+      "workflow": "finance/report-003",
+      "tool": "report_003"
+    },
+    {
+      "workflow": "finance/report-004",
+      "tool": "report_004"
+    },
+    {
+      "workflow": "finance/report-005",
+      "tool": "report_005"
+    },
+    {
+      "workflow": "finance/report-006",
+      "tool": "report_006"
+    },
+    {
+      "workflow": "finance/report-007",
+      "tool": "report_007"
+    },
+    {
+      "workflow": "finance/report-008",
+      "tool": "report_008"
+    },
+    {
+      "workflow": "finance/report-009",
+      "tool": "report_009"
+    },
+    {
+      "workflow": "finance/report-010",
+      "tool": "report_010"
+    },
+    {
+      "workflow": "finance/report-011",
+      "tool": "report_011"
+    },
+    {
+      "workflow": "finance/report-012",
+      "tool": "report_012"
+    },
+    {
+      "workflow": "finance/report-013",
+      "tool": "report_013"
+    },
+    {
+      "workflow": "finance/report-014",
+      "tool": "report_014"
+    },
+    {
+      "workflow": "finance/report-015",
+      "tool": "report_015"
+    },
+    {
+      "workflow": "finance/report-016",
+      "tool": "report_016"
+    },
+    {
+      "workflow": "finance/report-017",
+      "tool": "report_017"
+    },
+    {
+      "workflow": "finance/report-018",
+      "tool": "report_018"
+    },
+    {
+      "workflow": "finance/report-019",
+      "tool": "report_019"
+    },
+    {
+      "workflow": "finance/report-020",
+      "tool": "report_020"
+    },
+    {
+      "workflow": "finance/report-021",
+      "tool": "report_021"
+    },
+    {
+      "workflow": "finance/report-022",
+      "tool": "report_022"
+    },
+    {
+      "workflow": "finance/report-023",
+      "tool": "report_023"
+    },
+    {
+      "workflow": "finance/report-024",
+      "tool": "report_024"
+    },
+    {
+      "workflow": "finance/report-025",
+      "tool": "report_025"
+    },
+    {
+      "workflow": "finance/report-026",
+      "tool": "report_026"
+    },
+    {
+      "workflow": "finance/report-027",
+      "tool": "report_027"
+    },
+    {
+      "workflow": "finance/report-028",
+      "tool": "report_028"
+    },
+    {
+      "workflow": "finance/report-029",
+      "tool": "report_029"
+    },
+    {
+      "workflow": "finance/report-030",
+      "tool": "report_030"
+    },
+    {
+      "workflow": "finance/report-031",
+      "tool": "report_031"
+    },
+    {
+      "workflow": "finance/report-032",
+      "tool": "report_032"
+    },
+    {
+      "workflow": "finance/report-033",
+      "tool": "report_033"
+    },
+    {
+      "workflow": "finance/report-034",
+      "tool": "report_034"
+    },
+    {
+      "workflow": "finance/report-035",
+      "tool": "report_035"
+    },
+    {
+      "workflow": "finance/report-036",
+      "tool": "report_036"
+    },
+    {
+      "workflow": "finance/report-037",
+      "tool": "report_037"
+    },
+    {
+      "workflow": "finance/report-038",
+      "tool": "report_038"
+    },
+    {
+      "workflow": "finance/report-039",
+      "tool": "report_039"
+    },
+    {
+      "workflow": "finance/report-040",
+      "tool": "report_040"
+    },
+    {
+      "workflow": "finance/report-041",
+      "tool": "report_041"
+    },
+    {
+      "workflow": "finance/report-042",
+      "tool": "report_042"
+    },
+    {
+      "workflow": "finance/report-043",
+      "tool": "report_043"
+    },
+    {
+      "workflow": "finance/report-044",
+      "tool": "report_044"
+    },
+    {
+      "workflow": "finance/report-045",
+      "tool": "report_045"
+    },
+    {
+      "workflow": "finance/report-046",
+      "tool": "report_046"
+    },
+    {
+      "workflow": "finance/report-047",
+      "tool": "report_047"
+    },
+    {
+      "workflow": "finance/report-048",
+      "tool": "report_048"
+    },
+    {
+      "workflow": "finance/report-049",
+      "tool": "report_049"
+    },
+    {
+      "workflow": "finance/report-050",
+      "tool": "report_050"
+    },
+    {
+      "workflow": "finance/report-051",
+      "tool": "report_051"
+    },
+    {
+      "workflow": "finance/report-052",
+      "tool": "report_052"
+    },
+    {
+      "workflow": "finance/report-053",
+      "tool": "report_053"
+    },
+    {
+      "workflow": "finance/report-054",
+      "tool": "report_054"
+    },
+    {
+      "workflow": "finance/report-055",
+      "tool": "report_055"
+    },
+    {
+      "workflow": "finance/report-056",
+      "tool": "report_056"
+    },
+    {
+      "workflow": "finance/report-057",
+      "tool": "report_057"
+    },
+    {
+      "workflow": "finance/report-058",
+      "tool": "report_058"
+    },
+    {
+      "workflow": "finance/report-059",
+      "tool": "report_059"
+    },
+    {
+      "workflow": "finance/report-060",
+      "tool": "report_060"
+    },
+    {
+      "workflow": "finance/report-061",
+      "tool": "report_061"
+    },
+    {
+      "workflow": "finance/report-062",
+      "tool": "report_062"
+    },
+    {
+      "workflow": "finance/report-063",
+      "tool": "report_063"
+    },
+    {
+      "workflow": "finance/report-064",
+      "tool": "report_064"
+    },
+    {
+      "workflow": "finance/report-065",
+      "tool": "report_065"
+    },
+    {
+      "workflow": "finance/report-066",
+      "tool": "report_066"
+    },
+    {
+      "workflow": "finance/report-067",
+      "tool": "report_067"
+    },
+    {
+      "workflow": "finance/report-068",
+      "tool": "report_068"
+    },
+    {
+      "workflow": "finance/report-069",
+      "tool": "report_069"
+    },
+    {
+      "workflow": "finance/report-070",
+      "tool": "report_070"
+    },
+    {
+      "workflow": "finance/report-071",
+      "tool": "report_071"
+    },
+    {
+      "workflow": "finance/report-072",
+      "tool": "report_072"
+    },
+    {
+      "workflow": "finance/report-073",
+      "tool": "report_073"
+    },
+    {
+      "workflow": "finance/report-074",
+      "tool": "report_074"
+    },
+    {
+      "workflow": "finance/report-075",
+      "tool": "report_075"
+    },
+    {
+      "workflow": "finance/report-076",
+      "tool": "report_076"
+    },
+    {
+      "workflow": "finance/report-077",
+      "tool": "report_077"
+    },
+    {
+      "workflow": "finance/report-078",
+      "tool": "report_078"
+    },
+    {
+      "workflow": "finance/report-079",
+      "tool": "report_079"
+    },
+    {
+      "workflow": "finance/report-080",
+      "tool": "report_080"
+    },
+    {
+      "workflow": "finance/report-081",
+      "tool": "report_081"
+    },
+    {
+      "workflow": "finance/report-082",
+      "tool": "report_082"
+    },
+    {
+      "workflow": "finance/report-083",
+      "tool": "report_083"
+    },
+    {
+      "workflow": "finance/report-084",
+      "tool": "report_084"
+    },
+    {
+      "workflow": "finance/report-085",
+      "tool": "report_085"
+    },
+    {
+      "workflow": "finance/report-086",
+      "tool": "report_086"
+    },
+    {
+      "workflow": "finance/report-087",
+      "tool": "report_087"
+    },
+    {
+      "workflow": "finance/report-088",
+      "tool": "report_088"
+    },
+    {
+      "workflow": "finance/report-089",
+      "tool": "report_089"
+    },
+    {
+      "workflow": "finance/report-090",
+      "tool": "report_090"
+    },
+    {
+      "workflow": "finance/report-091",
+      "tool": "report_091"
+    },
+    {
+      "workflow": "finance/report-092",
+      "tool": "report_092"
+    },
+    {
+      "workflow": "finance/report-093",
+      "tool": "report_093"
+    },
+    {
+      "workflow": "finance/report-094",
+      "tool": "report_094"
+    },
+    {
+      "workflow": "finance/report-095",
+      "tool": "report_095"
+    },
+    {
+      "workflow": "finance/report-096",
+      "tool": "report_096"
+    },
+    {
+      "workflow": "finance/report-097",
+      "tool": "report_097"
+    },
+    {
+      "workflow": "finance/report-098",
+      "tool": "report_098"
+    },
+    {
+      "workflow": "finance/report-099",
+      "tool": "report_099"
+    },
+    {
+      "workflow": "finance/report-100",
+      "tool": "report_100"
+    },
+    {
+      "workflow": "finance/report-101",
+      "tool": "report_101"
+    }
+  ]
+}

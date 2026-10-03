@@ -74,10 +74,8 @@ func portPlaces(name string) map[string]string {
 		"the port an edge takes":                   withStep("  report:\n    image: alpine:3.21\n    script: [\"true\"]\n    needs: [{ step: reconcile, port: " + name + " }]\n"),
 		"the port an edge feeds":                   withStep("  report:\n    image: alpine:3.21\n    script: [\"true\"]\n    needs: [{ step: reconcile, as: " + name + " }]\n"),
 		"a port a hidden block declares":           strings.Replace(minimal, "steps:", ".brick:\n  outputs: ["+name+"]\nsteps:", 1),
-		"a tool's output": published(`    - name: create_invoice
-      description: Issue one invoice.
-      input: { from: { input: orders } }
-      output: { from: { output: ` + name + ` } }`),
+		"the tool's output": published(`  description: Issue one invoice.
+  output: ` + name),
 	}
 }
 

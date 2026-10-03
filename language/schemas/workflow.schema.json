@@ -6,6 +6,12 @@
   "type": "object",
   "required": ["apiVersion", "kind", "metadata"],
   "additionalProperties": false,
+  "dependentSchemas": {
+    "mcp": {
+      "description": "A workflow that publishes a tool gives every input a schema, since every input is one of the tool's arguments and the tool publishes their schemas as its inputSchema: an input with none would be an argument a client is told nothing about.",
+      "properties": { "inputs": { "additionalProperties": { "required": ["schema"] } } }
+    }
+  },
   "examples": [
     {
       "apiVersion": "agentiik.dev/v1",
@@ -140,43 +146,92 @@
       }
     },
     "mcp": {
-      "title": "Published tools",
-      "description": "Publishes the workflow to model-driven clients as an MCP server at /mcp/{namespace}/{workflow}. The block is what makes the server exist: without it the endpoint answers 404, and with it but with an empty tool list it serves a server with nothing on it. Nothing is inferred from the graph, so exposing a workflow never leaks its internals, and publishing, renaming or withdrawing a tool is a commit like any other change.",
+      "title": "Published tool",
+      "description": "Publishes the workflow as one tool to model-driven clients: one block, one tool, whose arguments are the workflow's inputs and whose result is optionally one of its outputs. Whether a client is offered it is decided by whoever adds the workflow to a collection, so the block says what the tool is and never who may call it. Nothing is inferred from the graph, so publishing a workflow never leaks its internals, and publishing, renaming or withdrawing the tool is a commit like any other change.",
       "type": "object",
+      "required": ["description"],
       "additionalProperties": false,
+      "dependentSchemas": {
+        "mode": {
+          "if": { "properties": { "mode": { "const": "async" } }, "required": ["mode"] },
+          "then": {
+            "not": { "required": ["timeout"] },
+            "description": "A timeout on an async tool would mean nothing, because the call returns the run identifier at once."
+          }
+        }
+      },
       "examples": [
         {
-          "name": "invoicing",
-          "description": "Issue invoices and check their status.",
-          "tools": [
-            {
-              "name": "create_invoice",
-              "description": "Issue one invoice for a customer.",
-              "input": { "from": { "input": "orders" } },
-              "output": { "from": { "output": "invoices" } },
-              "mode": "sync"
-            }
-          ]
-        }
+          "name": "order_status",
+          "title": "Order status",
+          "description": "Return the state of one order and, once shipped, its tracking link. Takes an order number such as ORD-004211 and nothing else.",
+          "output": "status",
+          "mode": "sync",
+          "timeout": "30s",
+          "annotations": { "readOnlyHint": true, "idempotentHint": true }
+        },
+        { "description": "Reconcile a whole month against the bank statements. Long running: returns a run to follow with run.get.", "mode": "async" }
       ],
       "properties": {
         "name": {
-          "description": "Server name shown to a client. Defaults to the workflow name, and exists so that a published interface need not follow an internal rename.",
+          "description": "The tool's name, the workflow's name where none is written. It is stable across commits because clients hold it and send it back in every call: renaming it is withdrawing one tool and publishing another, in every collection that does not give the tool a name of its own.",
           "$ref": "#/$defs/identifier",
-          "examples": ["invoicing"]
+          "examples": ["order_status", "create_invoices"]
+        },
+        "title": {
+          "description": "Label a client shows to a person in a list of tools, where the name would read as machinery.",
+          "type": "string",
+          "examples": ["Order status"]
         },
         "description": {
-          "description": "What the server is for, in one or two sentences. A model reads it before it reads any tool, so it is the sentence that decides whether the rest is ever looked at.",
+          "description": "What the tool does, when to reach for it and what it refuses. This is the field a model actually acts on, and the one worth spending sentences on: a tool published without one is exactly the tool a model has no way to decide to call.",
           "type": "string",
-          "examples": ["Issue invoices and check their status."]
+          "minLength": 1,
+          "examples": ["Return the state of one order and, once shipped, its tracking link. Takes an order number such as ORD-004211 and nothing else."]
         },
-        "tools": {
-          "description": "The published tools. An empty list serves a server carrying nothing, which is not the same as declaring no mcp block at all.",
-          "type": "array",
-          "items": { "$ref": "#/$defs/mcpTool" },
-          "examples": [
-            [{ "name": "reconcile_month", "description": "Reconcile a whole month. Long running; returns a run to follow.", "input": { "from": { "input": "period" } }, "mode": "async" }]
-          ]
+        "output": {
+          "description": "The name of one workflow output declared in this file, optional. Its envelope becomes the result, carried as structuredContent with a text rendering beside it, and its schema, where it declares one, the tool's outputSchema. Leaving it out publishes a tool that has an effect and returns only that it succeeded. It names an output and never a step or a port, so that the graph stays free to change beneath a published tool.",
+          "$ref": "#/$defs/portName",
+          "examples": ["status", "invoices"]
+        },
+        "mode": {
+          "description": "Whether the call waits. sync holds the call until the run finishes and returns the output; async returns the run identifier at once, to be followed with run.get on the user's server.",
+          "enum": ["sync", "async"],
+          "default": "sync",
+          "examples": ["sync", "async"]
+        },
+        "timeout": {
+          "description": "How long a sync call waits. It is capped at 120 seconds because clients time out long before a workflow gives up, and a workflow that cannot finish inside that has to be async. The ceiling is carried by the grammar of the value, so a timeout above it is refused here and not left to the validator; the companion rule, that an async tool carries no timeout at all, is stated on mode.",
+          "$ref": "#/$defs/mcpTimeout",
+          "examples": ["30s", "120s"]
+        },
+        "annotations": {
+          "description": "The protocol's own hints, passed through to the client unchanged. They tell a client what to expect of a call, never what it is allowed to do: that is decided by the grants and not by a field in this file.",
+          "type": "object",
+          "additionalProperties": false,
+          "examples": [{ "readOnlyHint": false, "idempotentHint": false }],
+          "properties": {
+            "readOnlyHint": {
+              "description": "Says the tool only reads, so a client may call it without asking anyone first.",
+              "type": "boolean",
+              "examples": [true, false]
+            },
+            "idempotentHint": {
+              "description": "Says calling twice with the same arguments has the same effect as calling once, which is what lets a client retry a call it is unsure about.",
+              "type": "boolean",
+              "examples": [true, false]
+            },
+            "destructiveHint": {
+              "description": "Says the tool can remove or overwrite something, so a client may want a confirmation it would not otherwise ask for.",
+              "type": "boolean",
+              "examples": [true, false]
+            },
+            "openWorldHint": {
+              "description": "Says the tool reaches systems outside this installation, so its result depends on something nobody here controls.",
+              "type": "boolean",
+              "examples": [true, false]
+            }
+          }
         }
       }
     },
@@ -741,136 +796,6 @@
             "examples": ["${{ event.data.orders }}"]
           },
           "examples": [{ "orders": "${{ event.data.orders }}" }]
-        }
-      }
-    },
-    "mcpTool": {
-      "title": "Published tool",
-      "description": "One tool on the workflow's MCP server. It is a view of the workflow's own boundary: an input is published as the tool's schema and an output as its result, and a call is a run like any other, attributed to the caller and subject to the namespace quota.",
-      "type": "object",
-      "required": ["name", "description", "input"],
-      "additionalProperties": false,
-      "dependentSchemas": {
-        "mode": {
-          "if": { "properties": { "mode": { "const": "async" } }, "required": ["mode"] },
-          "then": {
-            "not": { "required": ["timeout"] },
-            "description": "A timeout on an async tool would mean nothing, because the call returns the run identifier at once."
-          }
-        }
-      },
-      "examples": [
-        {
-          "name": "create_invoice",
-          "title": "Create an invoice",
-          "description": "Create one invoice for a customer and return its number and total. Rejects a customer whose VAT number does not validate.",
-          "input": { "from": { "input": "orders" } },
-          "output": { "from": { "output": "invoices" } },
-          "mode": "sync",
-          "timeout": "60s"
-        }
-      ],
-      "properties": {
-        "name": {
-          "description": "Tool identifier, unique within the workflow and stable across commits because clients hold it. Renaming one is removing a tool and adding another.",
-          "$ref": "#/$defs/identifier",
-          "examples": ["create_invoice", "reconcile_month"]
-        },
-        "title": {
-          "description": "Label a client shows to a person in a list of tools, where the identifier would read as machinery.",
-          "type": "string",
-          "examples": ["Create an invoice"]
-        },
-        "description": {
-          "description": "What the tool does, when to reach for it and what it refuses. This is the field a model actually acts on, and the one worth spending sentences on.",
-          "type": "string",
-          "minLength": 1,
-          "examples": ["Create one invoice for a customer and return its number and total. Rejects a customer whose VAT number does not validate."]
-        },
-        "input": {
-          "description": "The workflow input whose JSON Schema becomes the tool's inputSchema, used as it stands. There is no second schema to write and therefore no way for the two to drift apart, which also means the input it names has to carry a schema.",
-          "type": "object",
-          "required": ["from"],
-          "additionalProperties": false,
-          "examples": [{ "from": { "input": "orders" } }],
-          "properties": {
-            "from": {
-              "description": "Names the workflow input, never a step or a port, so that the graph stays free to change beneath a published tool.",
-              "type": "object",
-              "required": ["input"],
-              "additionalProperties": false,
-              "examples": [{ "input": "orders" }],
-              "properties": {
-                "input": {
-                  "description": "A workflow input declared in this file.",
-                  "$ref": "#/$defs/identifier",
-                  "examples": ["orders", "period"]
-                }
-              }
-            }
-          }
-        },
-        "output": {
-          "description": "The workflow output whose envelope becomes the result, carried as structuredContent with a text rendering beside it, and whose schema, when the output declares one, becomes the tool's outputSchema. Optional, because a tool may have an effect and return only that it succeeded, and an output carrying no schema is published with no outputSchema beside it.",
-          "type": "object",
-          "required": ["from"],
-          "additionalProperties": false,
-          "examples": [{ "from": { "output": "invoices" } }],
-          "properties": {
-            "from": {
-              "description": "Names the workflow output, never a step or a port.",
-              "type": "object",
-              "required": ["output"],
-              "additionalProperties": false,
-              "examples": [{ "output": "invoices" }],
-              "properties": {
-                "output": {
-                  "description": "A workflow output declared in this file.",
-                  "$ref": "#/$defs/portName",
-                  "examples": ["invoices"]
-                }
-              }
-            }
-          }
-        },
-        "mode": {
-          "description": "Whether the call waits. sync holds the call until the run finishes and returns the output; async returns the run identifier at once, to be followed with the platform server's run.get.",
-          "enum": ["sync", "async"],
-          "default": "sync",
-          "examples": ["sync", "async"]
-        },
-        "timeout": {
-          "description": "How long a sync call waits. It is capped at 120 seconds because clients time out long before a workflow gives up, and a workflow that cannot finish inside that has to be async. The ceiling is carried by the grammar of the value, so a timeout above it is refused here and not left to the validator; the companion rule, that an async tool carries no timeout at all, is stated on mode.",
-          "$ref": "#/$defs/mcpTimeout",
-          "examples": ["60s", "120s"]
-        },
-        "annotations": {
-          "description": "The protocol's own hints, passed through to the client unchanged. They tell a client what to expect of a call, never what it is allowed to do: that is decided by the grants and not by a field in this file.",
-          "type": "object",
-          "additionalProperties": false,
-          "examples": [{ "readOnlyHint": false, "idempotentHint": false }],
-          "properties": {
-            "readOnlyHint": {
-              "description": "Says the tool only reads, so a client may call it without asking anyone first.",
-              "type": "boolean",
-              "examples": [true, false]
-            },
-            "idempotentHint": {
-              "description": "Says calling twice with the same arguments has the same effect as calling once, which is what lets a client retry a call it is unsure about.",
-              "type": "boolean",
-              "examples": [true, false]
-            },
-            "destructiveHint": {
-              "description": "Says the tool can remove or overwrite something, so a client may want a confirmation it would not otherwise ask for.",
-              "type": "boolean",
-              "examples": [true, false]
-            },
-            "openWorldHint": {
-              "description": "Says the tool reaches systems outside this installation, so its result depends on something nobody here controls.",
-              "type": "boolean",
-              "examples": [true, false]
-            }
-          }
         }
       }
     },

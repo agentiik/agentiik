@@ -1,0 +1,23 @@
+{
+  "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+  "name": "back-office",
+  "description": "Invoices and orders, for the finance assistant.",
+  "url": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+  "members": [
+    {
+      "workflow": "finance/monthly-invoicing",
+      "tool": "create_invoice"
+    },
+    {
+      "workflow": "support/order-status",
+      "ref": "v2",
+      "as": "order_lookup",
+      "tool": "order_lookup"
+    },
+    {
+      "workflow": "finance/reconcile",
+      "tool": null,
+      "reason": "deleted"
+    }
+  ]
+}

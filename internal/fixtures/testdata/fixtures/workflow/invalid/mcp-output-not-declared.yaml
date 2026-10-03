@@ -1,5 +1,6 @@
-# invalid: A tool whose input is a workflow input carrying no schema. A tool
-#   has to publish an inputSchema, so the input it maps has to have one.
+# invalid: A tool whose output names something the workflow does not declare.
+#   A tool is a view of the workflow's own boundary, so its result is one of
+#   the workflow's outputs.
 # refused by: the validator, beyond what JSON Schema can state
 # reference: https://agentiik.github.io/docs/#publishing-tools
 
@@ -12,16 +13,17 @@ metadata:
 
 inputs:
   orders:
+    schema: { $ref: "./schemas/order.json" }
     required: true
 
+outputs:
+  invoices:
+    from: { step: normalize, port: ok }
+
 mcp:
-  name: invoicing
-  tools:
-    - name: create_invoice
-      description: Issue one invoice for a customer.
-      input:
-        from: { input: orders }
-      mode: sync
+  name: create_invoice
+  description: Issue one invoice for a customer and return it.
+  output: invoice
 
 steps:
   normalize:

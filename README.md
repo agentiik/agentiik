@@ -2,7 +2,7 @@
 
 The core of Agentiik, as one Go module: the graph evaluator, the container driver, the controller, the task bus, the HTTP API, the state in PostgreSQL, and the `agk` command line.
 
-The specification is the documentation at <https://agentiik.github.io/docs>; where it and this code disagree, the documentation is right. The workflow file, the brick manifest, the envelope and the task message are shapes owned by [`agentiik/schemas`](https://github.com/agentiik/schemas) and vendored under `internal/fixtures` at the version in `internal/fixtures/testdata/SCHEMAS_VERSION`.
+The specification is the documentation at <https://agentiik.github.io/docs>; where it and this code disagree, the documentation is right. The workflow file, the brick manifest, the envelope and the task message are shapes owned by [`agentiik/schemas`](https://github.com/agentiik/schemas) and vendored under `internal/fixtures` at the version in `internal/fixtures/testdata/SCHEMAS_VERSION`, taken from the commit in `SCHEMAS_COMMIT` beside it.
 
 ## Packages
 

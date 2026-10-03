@@ -12,18 +12,14 @@ metadata:
 
 inputs:
   period:
-    schema: { type: string }
+    schema: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" }
     required: true
 
 mcp:
-  name: invoicing
-  tools:
-    - name: reconcile_month
-      description: Reconcile a whole month. Long running; returns a run to follow.
-      input:
-        from: { input: period }
-      mode: async
-      timeout: 60s
+  name: reconcile_month
+  description: Reconcile a whole month. Long running; returns a run to follow.
+  mode: async
+  timeout: 60s
 
 steps:
   reconcile:

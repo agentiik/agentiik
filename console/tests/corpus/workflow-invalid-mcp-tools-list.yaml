@@ -1,6 +1,7 @@
-# invalid: Two published tools carrying the same name. A tool identifier is
-#   unique within the workflow, because clients hold it.
-# refused by: the validator, beyond what JSON Schema can state
+# invalid: An mcp block listing several tools. One block publishes one tool,
+#   whose arguments are the workflow's inputs: a workflow is one boundary, and
+#   a connector offering several tools is a collection of several workflows.
+# refused by: the schema
 # reference: https://agentiik.github.io/docs/#publishing-tools
 
 apiVersion: agentiik.dev/v1
@@ -14,24 +15,13 @@ inputs:
   orders:
     schema: { $ref: "./schemas/order.json" }
     required: true
-  period:
-    schema: { type: string }
-    required: true
 
 mcp:
   name: invoicing
+  description: Issue invoices and check their status.
   tools:
     - name: create_invoice
       description: Issue one invoice for a customer.
-      input:
-        from: { input: orders }
-      mode: sync
-
-    - name: create_invoice
-      description: Issue every invoice of a period.
-      input:
-        from: { input: period }
-      mode: async
 
 steps:
   normalize:

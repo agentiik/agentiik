@@ -30,6 +30,7 @@
     "repository": "../wire.schema.json",
     "ref": "../wire.schema.json",
     "version": "../wire.schema.json",
+    "collection": "../wire.schema.json",
     "run": "../wire.schema.json",
     "resolved-graph": "../wire.schema.json"
   },
@@ -64,9 +65,14 @@
           "source": "https://agentiik.github.io/docs/#step-keywords"
         },
         {
-          "file": "workflow/valid/mcp-server.yaml",
+          "file": "workflow/valid/mcp-tool.yaml",
           "covers": "mcp block",
-          "source": "https://agentiik.github.io/docs/#a-workflow-as-an-mcp-server"
+          "source": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/valid/mcp-async-tool.yaml",
+          "covers": "mcp block, its name defaulted and an async mode",
+          "source": "https://agentiik.github.io/docs/#publishing-tools"
         },
         {
           "file": "workflow/valid/retention.yaml",
@@ -297,14 +303,44 @@
           "reference": "https://agentiik.github.io/docs/#publishing-tools"
         },
         {
-          "file": "workflow/invalid/mcp-tool-input-from-step.yaml",
-          "rule": "A tool input taken from a step port. A tool is a view of the workflow's own boundary, never of the graph, which is what keeps the graph free to change beneath a published tool.",
+          "file": "workflow/invalid/mcp-output-from-step.yaml",
+          "rule": "A tool result taken from a step port. A tool is a view of the workflow's own boundary, never of the graph, which is what keeps the graph free to change beneath a published tool, so output names a workflow output.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-tools-list.yaml",
+          "rule": "An mcp block listing several tools. One block publishes one tool, whose arguments are the workflow's inputs: a workflow is one boundary, and a connector offering several tools is a collection of several workflows.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-input-without-schema.yaml",
+          "rule": "A workflow publishing a tool with an input that carries no schema. Every input is one of the tool's arguments and the tool publishes their schemas as its inputSchema, so an input with none would be an argument a client is told nothing about.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#publishing-tools"
         },
         {
           "file": "workflow/invalid/mcp-tool-without-description.yaml",
-          "rule": "A published tool with no description. The description is the field a model acts on, so a tool without one is published to nobody's benefit.",
+          "rule": "A published tool with no description. The description is the field a model acts on, so a tool without one is exactly the tool a model has no way to decide to call.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-annotation-not-a-hint.yaml",
+          "rule": "An annotation other than the four hints the protocol defines. They are passed through to a client unchanged, so a key the protocol does not define is one no client reads, and a grant is never written here.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-mode-unknown.yaml",
+          "rule": "A tool mode other than sync and async. A call either waits for the run or returns its identifier at once, and there is no third way for a call to end.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-tool-name-not-an-identifier.yaml",
+          "rule": "A tool name that is not an identifier. Clients hold the name and send it back in every call, so it is kept to letters, digits, hyphens and underscores.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#publishing-tools"
         },
@@ -413,20 +449,8 @@
           "reference": "https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick"
         },
         {
-          "file": "workflow/invalid/mcp-tool-input-not-declared.yaml",
-          "rule": "A tool input naming something the workflow does not declare.",
-          "refused_by": "validator",
-          "reference": "https://agentiik.github.io/docs/#publishing-tools"
-        },
-        {
-          "file": "workflow/invalid/mcp-tool-input-without-schema.yaml",
-          "rule": "A tool whose input is a workflow input carrying no schema. A tool has to publish an inputSchema, so the input it maps has to have one.",
-          "refused_by": "validator",
-          "reference": "https://agentiik.github.io/docs/#publishing-tools"
-        },
-        {
-          "file": "workflow/invalid/mcp-duplicate-tool-name.yaml",
-          "rule": "Two published tools carrying the same name. A tool identifier is unique within the workflow, because clients hold it.",
+          "file": "workflow/invalid/mcp-output-not-declared.yaml",
+          "rule": "A tool whose output names something the workflow does not declare. A tool is a view of the workflow's own boundary, so its result is one of the workflow's outputs.",
           "refused_by": "validator",
           "reference": "https://agentiik.github.io/docs/#publishing-tools"
         },
@@ -1821,6 +1845,61 @@
         }
       ]
     },
+    "collection": {
+      "valid": [
+        {
+          "file": "wire/valid/collection-back-office.json",
+          "covers": "the documentation's collection: a member at its default branch under the name its mcp block gives, one at a tag under a name of its own, and one offering nothing for want of an mcp block",
+          "source": "https://agentiik.github.io/docs#collections"
+        },
+        {
+          "file": "wire/valid/collection-just-made.json",
+          "covers": "a collection just made, holding no member, its description the empty string where none was written"
+        },
+        {
+          "file": "wire/valid/collection-member-not-runnable.json",
+          "covers": "a member read at a branch written in full, and one whose workflow its owner may no longer run, offering nothing"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/collection-member-null-tool-without-reason.json",
+          "rule": "A member offering nothing that does not say why. A member missing from a client's tool list is one its owner has to be able to account for, so a null tool always carries its reason.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#collections"
+        },
+        {
+          "file": "wire/invalid/collection-member-reason-beside-tool.json",
+          "rule": "A reason beside a tool the member offers. reason says why a member offers nothing, and one that offers a tool has nothing to explain.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#collections"
+        },
+        {
+          "file": "wire/invalid/collection-member-reason-deleted.json",
+          "rule": "A reason the record never gives. A deleted workflow is not_runnable, one reason for it and for a workflow its owner may no longer run, since a workflow one may not run is one whose fate a collection does not tell.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#collections"
+        },
+        {
+          "file": "wire/invalid/collection-member-workflow-without-namespace.json",
+          "rule": "A member naming its workflow without its namespace. A collection holds workflows of several namespaces, and two of them may each hold a workflow of one name.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#collections"
+        },
+        {
+          "file": "wire/invalid/collection-101-members.json",
+          "rule": "A collection of 101 members, past the 100 a collection holds: a client reads the whole tool list into a model's context at every list, and a hundred tools is past what a model chooses among well.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#collections"
+        },
+        {
+          "file": "wire/invalid/collection-without-url.json",
+          "rule": "A collection that does not say its address. The url is what a client is given, and the API writes it so that no client puts it together.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#collections"
+        }
+      ]
+    },
     "run": {
       "valid": [
         {
@@ -1834,6 +1913,10 @@
         {
           "file": "wire/valid/run-called.json",
           "covers": "a run another workflow called, naming the calling run and step, and attributed to the principal its caller is"
+        },
+        {
+          "file": "wire/valid/run-called-through-a-collection.json",
+          "covers": "a run a tool call started through a collection, attributed to the calling principal, naming the collection and the tool it was called as"
         }
       ],
       "invalid": [
@@ -1866,6 +1949,18 @@
           "rule": "A run carrying its trigger kind as trigger. An expression reads run.trigger_kind, and an identifier is the same string in the YAML, the API and the schema.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs#exposed-context"
+        },
+        {
+          "file": "wire/invalid/run-mcp-without-collection.json",
+          "rule": "A run of trigger_kind mcp that names no collection. Every such run is a tool called through one, and its reader is owed which, and as what, after the collection is gone.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#collections"
+        },
+        {
+          "file": "wire/invalid/run-manual-naming-a-collection.json",
+          "rule": "A run a person asked for naming a collection. workflow.run on the user's server starts a manual run, so only a call through a collection names one.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs#collections"
         }
       ]
     },

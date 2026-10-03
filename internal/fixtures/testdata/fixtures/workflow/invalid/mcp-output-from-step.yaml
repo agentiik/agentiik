@@ -1,0 +1,29 @@
+# invalid: A tool result taken from a step port. A tool is a view of the
+#   workflow's own boundary, never of the graph, which is what keeps the graph
+#   free to change beneath a published tool: output names a workflow output.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+
+mcp:
+  name: create_invoice
+  description: Issue one invoice for a customer.
+  output: { step: normalize, port: ok }
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]

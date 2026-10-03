@@ -345,23 +345,6 @@ steps:
 	}
 }
 
-// TestAnEmptyToolListIsNotNoBlockAtAll holds the distinction the documentation draws:
-// "an empty list publishes a server with nothing on it, which is not the same as
-// declaring no mcp block at all: the first serves an empty tool list, the second serves
-// nothing and returns 404".
-func TestAnEmptyToolListIsNotNoBlockAtAll(t *testing.T) {
-	if parsed(t, minimal).MCP != nil {
-		t.Fatal("a workflow declaring no mcp block was read as publishing one")
-	}
-	wf := parsed(t, strings.Replace(minimal, "steps:", "mcp:\n  name: nothing\n  tools: []\nsteps:", 1))
-	if wf.MCP == nil {
-		t.Fatal("a workflow declaring an mcp block was read as publishing nothing")
-	}
-	if wf.MCP.Tools == nil || len(wf.MCP.Tools) != 0 {
-		t.Fatalf("the empty tool list was read as %v", wf.MCP.Tools)
-	}
-}
-
 // TestAWorkflowNamesItsSecretsAndNothingMore holds the line the namespace draws: the file
 // names the secrets it uses, and where each value lives, its provider and its path, is
 // declared on the namespace by a principal holding secret:write. A path in the file would let

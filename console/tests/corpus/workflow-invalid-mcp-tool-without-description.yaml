@@ -1,5 +1,6 @@
 # invalid: A published tool with no description. The description is the field
-#   a model acts on, so a tool without one is published to nobody's benefit.
+#   a model acts on, so a tool without one is exactly the tool a model has no
+#   way to decide to call.
 # refused by: the schema
 # reference: https://agentiik.github.io/docs/#publishing-tools
 
@@ -16,13 +17,9 @@ inputs:
     required: true
 
 mcp:
-  name: invoicing
-  tools:
-    - name: create_invoice
-      title: Create an invoice
-      input:
-        from: { input: orders }
-      mode: sync
+  name: create_invoice
+  title: Create an invoice
+  mode: sync
 
 steps:
   normalize:
