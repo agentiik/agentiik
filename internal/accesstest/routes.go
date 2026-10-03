@@ -86,6 +86,16 @@ var Cases = []Case{
 	own("GET", "/api/v1/me/avatar"),
 	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/me/avatar", Own: true}, Refused: true},
 	own("DELETE", "/api/v1/me/avatar"),
+	// The caller's collections, "the principal that made it alone lists it, changes it and calls
+	// through it": answered about the caller alone, another's collection being one that does not
+	// exist, and a body the route reads refused with 400 before anything changes.
+	own("GET", "/api/v1/me/collections"),
+	{Route: api.Route{Method: "POST", Pattern: "/api/v1/me/collections", Own: true}, Refused: true},
+	own("GET", "/api/v1/me/collections/{id}"),
+	{Route: api.Route{Method: "PATCH", Pattern: "/api/v1/me/collections/{id}", Own: true}, Refused: true},
+	own("DELETE", "/api/v1/me/collections/{id}"),
+	{Route: api.Route{Method: "PUT", Pattern: "/api/v1/me/collections/{id}/members/{ns}/{name}", Own: true}, Refused: true},
+	own("DELETE", "/api/v1/me/collections/{id}/members/{ns}/{name}"),
 	own("GET", "/api/v1/me/credentials"),
 	own("DELETE", "/api/v1/me/credentials/{id}"),
 	own("DELETE", "/api/v1/me/password"),

@@ -60,6 +60,10 @@ type tenants struct {
 	// the identifiers of one of alice's notifications and of her password.
 	token, notification, credential string
 
+	// collection is alice's collection, which a path naming it reads as one that does not exist to
+	// anybody else.
+	collection string
+
 	// runner is a runner of the pool dmz, credential its credential, and object the key of an object
 	// finance holds.
 	runner, runnerCredential, object string
@@ -184,6 +188,9 @@ func someTenants(t *testing.T) *tenants {
 	x.values = []string{billing, ledger}
 	// And a variable, which a path names as it names a secret.
 	x.must("PUT", "/api/v1/finance/variables/currency", x.as["alice"], api.VariableWrite{Value: []byte(`"EUR"`), Visibility: "all"}, http.StatusCreated)
+	// And alice's collection, holding monthly-invoicing, which nobody else reads.
+	x.collection, _ = x.answer(x.must("POST", "/api/v1/me/collections", x.as["alice"], map[string]any{"name": "back-office"}, http.StatusCreated))["id"].(string)
+	x.must("PUT", "/api/v1/me/collections/"+x.collection+"/members/finance/monthly-invoicing", x.as["alice"], map[string]any{}, http.StatusOK)
 
 	// oscar operates payroll, victor views finance and walter edits monthly-invoicing; the auditors
 	// view finance, by carol's power, which alice is told of, and edit monthly-invoicing.
@@ -317,6 +324,8 @@ func (x *tenants) present(route string) map[string]string {
 		named["name"] = "invoices"
 	case strings.Contains(route, "/service-accounts/"):
 		named["name"] = "nightly"
+	case strings.Contains(route, "/me/collections/"):
+		named["name"] = "monthly-invoicing"
 	}
 	switch {
 	case strings.Contains(route, "/workflows/{workflow}/grants/"):
@@ -329,6 +338,8 @@ func (x *tenants) present(route string) map[string]string {
 		named["id"] = x.notification
 	case strings.Contains(route, "/me/credentials/"):
 		named["id"] = x.credential
+	case strings.Contains(route, "/me/collections/"):
+		named["id"] = x.collection
 	}
 	return named
 }

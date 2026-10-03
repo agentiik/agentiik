@@ -74,6 +74,10 @@ type RunSummary struct {
 	// no other.
 	From *Caller `json:"from,omitempty"`
 
+	// Collection is the collection the tool this run is was called through, and the name it was
+	// called as, for trigger_kind mcp and no other: kept once the collection is gone.
+	Collection *CollectionCall `json:"collection,omitempty"`
+
 	CreatedAt  time.Time `json:"created_at"`
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
@@ -241,16 +245,19 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	var by *string
 	var started, finished *time.Time
 	var from Caller
+	var through CollectionCall
 
 	err := n.tx.QueryRow(ctx, `
 		select namespace, id, workflow, commit, state, trigger, triggered_by,
 		       created_at, started_at, finished_at, inputs, outputs, replay_from_start_only,
 		       coalesce(reason, ''), coalesce(replay_of, ''), coalesce(replay_from, ''),
-		       envelopes_purged_at is not null, coalesce(caller_run, ''), coalesce(caller_step, '')
+		       envelopes_purged_at is not null, coalesce(caller_run, ''), coalesce(caller_step, ''),
+		       coalesce(collection, ''), coalesce(collection_tool, '')
 		from runs where namespace = $1 and id = $2`, n.namespace, string(run)).
 		Scan(&d.Namespace, &d.Run, &d.Workflow, &d.Commit, &state, &trigger, &by,
 			&d.CreatedAt, &started, &finished, &inputs, &outputs, &d.ReplayFromStartOnly,
-			&d.Reason, &d.ReplayOf, &d.ReplayFrom, &d.EnvelopesPurged, &from.Run, &from.Step)
+			&d.Reason, &d.ReplayOf, &d.ReplayFrom, &d.EnvelopesPurged, &from.Run, &from.Step,
+			&through.ID, &through.Tool)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunDetail{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -268,6 +275,9 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	}
 	if from.Run != "" {
 		d.From = &from
+	}
+	if through.ID != "" {
+		d.Collection = &through
 	}
 	if started != nil {
 		d.StartedAt = *started
@@ -489,12 +499,16 @@ func scanRun(rows pgx.Rows) (RunSummary, error) {
 	var by *string
 	var started, finished *time.Time
 	var from Caller
+	var through CollectionCall
 	if err := rows.Scan(&r.Namespace, &r.Run, &r.Workflow, &r.Commit, &state, &trigger, &by,
-		&r.CreatedAt, &started, &finished, &from.Run, &from.Step); err != nil {
+		&r.CreatedAt, &started, &finished, &from.Run, &from.Step, &through.ID, &through.Tool); err != nil {
 		return RunSummary{}, err
 	}
 	if from.Run != "" {
 		r.From = &from
+	}
+	if through.ID != "" {
+		r.Collection = &through
 	}
 	if err := r.State.UnmarshalText([]byte(state)); err != nil {
 		return RunSummary{}, err
@@ -573,7 +587,8 @@ func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]Listed
 	}
 	rows, err := w.tx.Query(ctx, `
 		select namespace, id, workflow, commit, state, trigger, triggered_by,
-		       created_at, started_at, finished_at, coalesce(caller_run, ''), coalesce(caller_step, '')
+		       created_at, started_at, finished_at, coalesce(caller_run, ''), coalesce(caller_step, ''),
+		       coalesce(collection, ''), coalesce(collection_tool, '')
 		from runs
 		where (namespace, workflow::text) in (select * from unnest($1::text[], $2::text[]))
 		  and ($3 = '' or state = $3)

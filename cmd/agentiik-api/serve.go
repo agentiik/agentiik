@@ -438,10 +438,16 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 			return nil, err
 		}
 	}
-	// The platform's MCP server at /mcp, unless AGK_MCP is off, from this process: "MCP deploys no
-	// new component and opens no new port."
+	// Each principal's collections, kept and changed whether or not the installation serves MCP,
+	// "to be served once the installation does".
+	collections, err := api.NewCollections(rt, api.CollectionOptions{Pool: pool, Versions: versions, Objects: objects, PublicURL: s.PublicURL})
+	if err != nil {
+		return nil, err
+	}
+	// The user's server at /mcp and every collection at /mcp/collections/{id}, unless AGK_MCP is
+	// off, from this process: "MCP deploys no new component and opens no new port."
 	if s.MCP {
-		if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: s.PublicURL, Version: moduleVersion()}); err != nil {
+		if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: s.PublicURL, Version: moduleVersion(), Collections: collections}); err != nil {
 			return nil, err
 		}
 	}

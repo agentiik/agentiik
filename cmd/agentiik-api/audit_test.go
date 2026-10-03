@@ -59,6 +59,7 @@ var reads = []string{
 	"GET /{namespace}/{repository}/info/refs",
 	"GET /api/v1/{namespace}/workflows/{workflow}", "GET /api/v1/{namespace}/workflows/{workflow}/refs", "GET /api/v1/{namespace}/workflows/{workflow}/tree/{ref...}",
 	"GET /api/v1/me", "GET /api/v1/me/credentials", "GET /api/v1/me/avatar", "GET /api/v1/users/{login}/avatar",
+	"GET /api/v1/me/collections", "GET /api/v1/me/collections/{id}",
 	"GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
 	"GET /auth/sign-in", "GET /auth/enrol", "GET /auth/assets/{name}", "GET /objects/{key...}",
 }
@@ -68,13 +69,20 @@ var recordsNothing = map[string]string{
 	"POST /api/v1/me/totp":                 "a TOTP generator started counts for nothing until POST /api/v1/me/totp/confirm enrols it, which is recorded",
 	"POST /api/v1/auth/sign-out":           "a session is no credential: a sign-out ends one and gives nobody anything",
 	"DELETE /api/v1/me/notifications/{id}": "a notification is its reader's copy of an act the log recorded, and dismissing it changes no access",
-	"POST /api/v1/runners/heartbeat":       "a runner's own traffic under its credential, which no principal does",
-	"POST /api/v1/runners/rotate":          "a runner's own traffic under its credential, which no principal does",
-	"POST /api/v1/tasks/redeem":            "a runner's own traffic under its credential, which no principal does",
-	"POST /api/v1/tasks/logs":              "a runner's own traffic under its credential, which no principal does",
-	"POST /api/v1/bus/token":               "a runner's own traffic under its credential, which no principal does",
-	"PUT /objects/{key...}":                "a task's output, stored under a URL its redemption signed, and the page's audit log names no upload",
-	"POST /objects/{namespace}":            "a task's output, stored under a policy its redemption signed, and the page's audit log names no upload",
+
+	// "A collection grants nothing, and every call through it is a run, which is" recorded.
+	"POST /api/v1/me/collections":                            "a collection grants nothing: every call through it is a run, which is recorded",
+	"PATCH /api/v1/me/collections/{id}":                      "a collection grants nothing: every call through it is a run, which is recorded",
+	"DELETE /api/v1/me/collections/{id}":                     "a collection grants nothing: every call through it is a run, which is recorded",
+	"PUT /api/v1/me/collections/{id}/members/{ns}/{name}":    "a member grants nothing: calling its tool asks for workflow:run at every call, and the run is recorded",
+	"DELETE /api/v1/me/collections/{id}/members/{ns}/{name}": "a member grants nothing: calling its tool asks for workflow:run at every call, and the run is recorded",
+	"POST /api/v1/runners/heartbeat":                         "a runner's own traffic under its credential, which no principal does",
+	"POST /api/v1/runners/rotate":                            "a runner's own traffic under its credential, which no principal does",
+	"POST /api/v1/tasks/redeem":                              "a runner's own traffic under its credential, which no principal does",
+	"POST /api/v1/tasks/logs":                                "a runner's own traffic under its credential, which no principal does",
+	"POST /api/v1/bus/token":                                 "a runner's own traffic under its credential, which no principal does",
+	"PUT /objects/{key...}":                                  "a task's output, stored under a URL its redemption signed, and the page's audit log names no upload",
+	"POST /objects/{namespace}":                              "a task's output, stored under a policy its redemption signed, and the page's audit log names no upload",
 
 	// Git's fetch is a POST only because the protocol sends what the client has in a body.
 	"POST /{namespace}/{repository}/git-upload-pack":         "a fetch reads a repository and changes nothing",

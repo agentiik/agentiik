@@ -266,6 +266,13 @@ const (
 	// Within, in the namespace each belongs to.
 	EventDelivery Reason = "an event published into one namespace, heard in those that name it"
 
+	// Collections is a principal's collections, which are no namespace's: a collection is one
+	// principal's arrangement of workflows of whichever namespaces they may run in, read and written
+	// for that principal alone, by the routes under /api/v1/me/collections and by the endpoint a
+	// collection is served at. Whether the principal may run a member's workflow is asked of the
+	// authorizer about that workflow, as every route asks it, and never read here.
+	Collections Reason = "a principal's collections, which span the namespaces of their members"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"

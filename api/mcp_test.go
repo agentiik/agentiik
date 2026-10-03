@@ -55,6 +55,12 @@ func platform(t *testing.T) *api.Router {
 // the answer back.
 func called(t *testing.T, rt *api.Router, as, method string, params map[string]any) (int, map[string]any, *mcp.Error) {
 	t.Helper()
+	return calledAt(t, rt, "/mcp", as, method, params)
+}
+
+// calledAt is called at another MCP endpoint than the user's server, a collection's.
+func calledAt(t *testing.T, rt *api.Router, path, as, method string, params map[string]any) (int, map[string]any, *mcp.Error) {
+	t.Helper()
 	if params == nil {
 		params = map[string]any{}
 	}
@@ -63,7 +69,7 @@ func called(t *testing.T, rt *api.Router, as, method string, params map[string]a
 		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
 	}
 	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-	r := httptest.NewRequest("POST", "/mcp", strings.NewReader(string(b)))
+	r := httptest.NewRequest("POST", path, strings.NewReader(string(b)))
 	r.Header.Set("MCP-Protocol-Version", mcp.Revision)
 	r.Header.Set("Mcp-Method", method)
 	for _, field := range []string{"name", "uri"} {
@@ -183,13 +189,14 @@ func offeredTo(t *testing.T, rt *api.Router, who string) ([]string, map[string]m
 	return names, hints
 }
 
-// Any authenticated principal is offered what teaches the language and what every user may do,
-// list namespaces and create one; a tool the caller cannot use anywhere is absent rather than
-// refused, so that a principal who can write nowhere never sees workflow.commit.
+// Any authenticated principal is offered what teaches the language and what every user may do:
+// list namespaces and create one, and keep collections of their own; a tool the caller cannot use
+// anywhere is absent rather than refused, so that a principal who can write nowhere never sees
+// workflow.commit.
 func TestAToolTheCallerCannotUseIsAbsent(t *testing.T) {
 	rt := platform(t)
 	names, _ := offeredTo(t, rt, "nobody-granted-anything")
-	if strings.Join(names, ",") != "workflow.language,workflow.schema,namespace.list,namespace.get,namespace.create" {
+	if strings.Join(names, ",") != "workflow.language,workflow.schema,namespace.list,namespace.get,namespace.create,collection.list,collection.get,collection.create,collection.update,collection.delete,collection.add,collection.remove" {
 		t.Errorf("the tools offered to a principal holding nothing are %v", names)
 	}
 	names, _ = offeredTo(t, rt, "alice")
@@ -217,8 +224,8 @@ func TestEachToolSaysWhetherItReadsOrRemoves(t *testing.T) {
 	}
 	// An authorizer that says nothing of what anybody holds lists every tool.
 	names, hints := offeredTo(t, rt, "anybody")
-	readOnly := []string{"workflow.language", "workflow.schema", "workflow.validate", "namespace.list", "namespace.get", "grant.list", "secret.list", "workflow.list", "workflow.get", "run.list", "run.get", "run.logs", "run.output", "runner.list"}
-	destructive := []string{"namespace.delete", "grant.revoke", "workflow.delete", "secret.remove"}
+	readOnly := []string{"workflow.language", "workflow.schema", "workflow.validate", "namespace.list", "namespace.get", "grant.list", "secret.list", "workflow.list", "workflow.get", "run.list", "run.get", "run.logs", "run.output", "runner.list", "collection.list", "collection.get"}
+	destructive := []string{"namespace.delete", "grant.revoke", "workflow.delete", "secret.remove", "collection.delete"}
 	for _, name := range names {
 		h := hints[name]
 		switch {

@@ -301,6 +301,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// A runner's silences and what it offered over time are the installation's, as the
 		// runner is, and read by administrators alone.
 		"runner_silences": true, "runner_capacity": true,
+		// A collection is one principal's arrangement of workflows of whichever namespaces they
+		// may run in, read and written for that principal alone, and its members name those
+		// namespaces.
+		"collections": true, "collection_members": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)
@@ -349,10 +353,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 // declared: a new escape is a line somebody adds here, not a habit that spreads.
 func TestEveryEscapeIsNamed(t *testing.T) {
 	declared := map[string]bool{}
-	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, InstallationActivity, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, EventDelivery, SchemaUpgrade} {
+	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, InstallationActivity, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, NamespaceAdministration, Identity, Authorisation, WorkflowMove, EventDelivery, Collections, SchemaUpgrade} {
 		declared[string(r)] = true
 	}
-	if len(declared) != 17 {
+	if len(declared) != 18 {
 		t.Fatalf("two reasons share a string: %v", declared)
 	}
 
@@ -375,7 +379,7 @@ func TestEveryEscapeIsNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := map[string]bool{"ControllerSweep": true, "Purge": true, "Collect": true,
-		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "LogShipment": true, "RunRoute": true, "RunListing": true, "AuditLog": true, "NamespaceAdministration": true, "Identity": true, "Authorisation": true, "WorkflowMove": true, "EventDelivery": true, "SchemaUpgrade": true}
+		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "LogShipment": true, "RunRoute": true, "RunListing": true, "AuditLog": true, "NamespaceAdministration": true, "Identity": true, "Authorisation": true, "WorkflowMove": true, "EventDelivery": true, "Collections": true, "SchemaUpgrade": true}
 	for u := range used {
 		if !names[u] {
 			t.Errorf("Installation is called with %s, which is not a declared Reason: an escape from the namespace has to be one of the named few", u)
@@ -470,6 +474,7 @@ func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
 		"artifacts":         "an artifact is named after the file it is, dot and all, and held to one segment of its URI",
 		"git_packs":         "a pack is named after its checksum, as git names one",
 		"schema_migrations": "a migration is named after its file, dot and all",
+		"collections":       "a collection is named by its owner, on the identifier grammar, and no workflow file writes it",
 	}
 
 	identifiers := map[string]bool{}
@@ -532,6 +537,8 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 	port := "rejected-" + strings.Repeat("p", agk.IdentifierMaxBytes-len("rejected-"))
 	secret := "billing-" + strings.Repeat("k", 60)
 	variable := "ledger_url-" + strings.Repeat("v", 60)
+	collection := "back-office-" + strings.Repeat("c", 60)
+	tool := "create_invoices-" + strings.Repeat("t", 60)
 	const run = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
 
 	for _, s := range []struct {
@@ -574,6 +581,9 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		  values ('finance', $1, '/invoicing', 'POST', 'alice')`, []any{workflow}},
 		{`insert into namespace_variables (namespace, name, value, value_bytes, value_count, visibility, updated_by)
 		  values ('finance', $1, '"EUR"', 5, 1, 'all', 'alice')`, []any{variable}},
+		{`insert into collections (id, principal, principal_kind, name) values ('01JR8Q2W6H3V0X9K4M7N5P1T2C', 'alice', 'user', $1)`, []any{collection}},
+		{`insert into collection_members (collection, namespace, workflow, as_name, position)
+		  values ('01JR8Q2W6H3V0X9K4M7N5P1T2C', 'finance', $1, $2, 0)`, []any{workflow, tool}},
 	} {
 		if _, err := conn.Exec(ctx, s.sql, s.args...); err != nil {
 			t.Fatalf("%s: %s", s.sql, err)
@@ -600,6 +610,9 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		"triggers.workflow":            {workflow},
 		"webhook_credentials.workflow": {workflow},
 		"namespace_variables.name":     {variable},
+		"collections.name":             {collection},
+		"collection_members.workflow":  {workflow},
+		"collection_members.as_name":   {tool},
 	}
 	for _, c := range schemaColumns(t, conn) {
 		if c.typeName == "identifier" && written[c.table+"."+c.column] == nil {

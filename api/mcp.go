@@ -39,6 +39,10 @@ type MCPOptions struct {
 
 	// Version is the program's, which the server names itself with.
 	Version string
+
+	// Collections are the principals' collections, each served at /mcp/collections/{id} beside the
+	// user's server, and none where nil.
+	Collections *Collections
 }
 
 // MCP is the platform's server.
@@ -47,6 +51,11 @@ type MCP struct {
 
 	// rt is the router the tools make their requests through, as the caller.
 	rt *Router
+
+	// collections are what a collection's endpoint offers, and collectionServer the protocol it
+	// speaks it in: the user's server's, offering no resources.
+	collections      *Collections
+	collectionServer mcp.Server
 }
 
 // NewMCP builds the platform's server and registers it at /mcp, on POST. The router answers any
@@ -68,6 +77,17 @@ func NewMCP(rt *Router, o MCPOptions) (*MCP, error) {
 	}}
 	if err := rt.HandleOwn("POST", "/mcp", Own{}, m.serve); err != nil {
 		return nil, err
+	}
+	if o.Collections != nil {
+		m.collections = o.Collections
+		m.collectionServer = mcp.Server{
+			Info:         mcp.Implementation{Name: "agentiik", Version: version},
+			Instructions: collectionInstructions,
+			Origin:       origin,
+		}
+		if err := rt.HandleOwn("POST", "/mcp/collections/{id}", Own{}, m.serveCollection); err != nil {
+			return nil, err
+		}
 	}
 	return m, nil
 }

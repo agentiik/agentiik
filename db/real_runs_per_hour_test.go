@@ -30,6 +30,10 @@ func runOf(kind agk.TriggerKind) NewRun {
 		r.Caller = &Caller{Run: caller, Step: "invoice", Task: agk.NewTaskID(caller, "invoice", 1, agk.Shard{})}
 		r.Depth = 1
 	}
+	if kind == agk.TriggerMCP {
+		// A tool call came through a collection, which the table holds it to name.
+		r.Collection = &CollectionCall{ID: "01JR8Q2W6H3V0X9K4M7N5P1T2C", Tool: "create_invoices"}
+	}
 	return r
 }
 

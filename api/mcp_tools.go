@@ -98,6 +98,8 @@ const (
 	argNamespace = `"namespace":{"type":"string","description":"The namespace, as namespace.list names it."}`
 	argWorkflow  = `"workflow":{"type":"string","description":"The workflow's name in the namespace."}`
 	argRun       = `"run":{"type":"string","description":"The run's identifier, as run.list or workflow.run answers it."}`
+
+	argCollection = `"collection":{"type":"string","description":"The collection's identifier, as collection.list answers it."}`
 )
 
 func object(required []string, props ...string) string {
@@ -342,6 +344,73 @@ func userTools() []routed {
 			annotations: writes(), offered: holds(WorkflowRun),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "POST", "/api/v1/runs/" + segment(str(a, "run")) + "/replay", nil, map[string]any{"step": a["step"]}
+			},
+		},
+		{
+			name: "collection.list", title: "List your collections",
+			description: "Your collections, the connectors you assemble from workflows you may run, each one a tool: each with the URL a client is given, its members, and the tool each offers or why it offers none, no_mcp_block or not_runnable.",
+			input:       object(nil), annotations: reads(), offered: anybody,
+			request: func(map[string]any) (string, string, url.Values, any) {
+				return "GET", "/api/v1/me/collections", nil, nil
+			},
+		},
+		{
+			name: "collection.get", title: "Get a collection",
+			description: "One of your collections: its URL, its members and what each offers.",
+			input:       object([]string{"collection"}, argCollection), annotations: reads(), offered: anybody,
+			request: func(a map[string]any) (string, string, url.Values, any) {
+				return "GET", "/api/v1/me/collections/" + segment(str(a, "collection")), nil, nil
+			},
+		},
+		{
+			name: "collection.create", title: "Create a collection",
+			description: "Makes a collection of yours, holding no workflow yet, and answers it with the URL to give a client. Add workflows to it with collection.add. A principal holds 50 collections at most.",
+			input: object([]string{"name"},
+				`"name":{"type":"string","description":"The collection's name, unique among yours: letters, digits, hyphens and underscores."}`,
+				`"description":{"type":"string","maxLength":280,"description":"What the collection is for, one line."}`),
+			annotations: writes(), offered: anybody,
+			request: func(a map[string]any) (string, string, url.Values, any) {
+				return "POST", "/api/v1/me/collections", nil, pick(a, "name", "description")
+			},
+		},
+		{
+			name: "collection.update", title: "Rename or describe a collection",
+			description: "Changes one of your collections' name, description or both. Its URL never changes, so every client configured with it keeps reaching it.",
+			input: object([]string{"collection"}, argCollection,
+				`"name":{"type":"string","description":"The new name."}`,
+				`"description":{"type":"string","maxLength":280,"description":"The new description, the empty string clearing it."}`),
+			annotations: writes(), offered: anybody,
+			request: func(a map[string]any) (string, string, url.Values, any) {
+				return "PATCH", "/api/v1/me/collections/" + segment(str(a, "collection")), nil, pick(a, "name", "description")
+			},
+		},
+		{
+			name: "collection.delete", title: "Delete a collection",
+			description: "Removes one of your collections: its URL answers 404 from the next request, and every client configured with it lists nothing. No workflow and no run changes.",
+			input:       object([]string{"collection"}, argCollection), annotations: removes(), offered: anybody,
+			request: func(a map[string]any) (string, string, url.Values, any) {
+				return "DELETE", "/api/v1/me/collections/" + segment(str(a, "collection")), nil, nil
+			},
+		},
+		{
+			name: "collection.add", title: "Add a workflow to a collection",
+			description: "Adds a workflow you may run to one of your collections, or changes how a member is read, written whole: ref, the branch or the tag it is read at, its default branch where left out, and as, the name its tool goes by, the one its mcp block gives where left out. A workflow whose entry point declares no mcp block is added and offers nothing until one does. A tool name another member gives is refused; as resolves it.",
+			input: object([]string{"collection", "namespace", "workflow"}, argCollection, argNamespace, argWorkflow,
+				`"ref":{"type":"string","description":"The branch or the tag the member is read at, never a commit."}`,
+				`"as":{"type":"string","description":"The name its tool goes by in this collection."}`),
+			annotations: writes(), offered: anybody,
+			request: func(a map[string]any) (string, string, url.Values, any) {
+				return "PUT", "/api/v1/me/collections/" + segment(str(a, "collection")) + "/members/" + segment(str(a, "namespace")) + "/" + segment(str(a, "workflow")), nil, pick(a, "ref", "as")
+			},
+		},
+		{
+			name: "collection.remove", title: "Take a workflow out of a collection",
+			description: "Takes a workflow out of one of your collections: its tool leaves the next tools/list, and the workflow and its runs are untouched.",
+			input:       object([]string{"collection", "namespace", "workflow"}, argCollection, argNamespace, argWorkflow),
+			annotations: &mcp.Annotations{ReadOnlyHint: mcp.Hint(false), DestructiveHint: mcp.Hint(false), IdempotentHint: mcp.Hint(true), OpenWorldHint: mcp.Hint(false)},
+			offered:     anybody,
+			request: func(a map[string]any) (string, string, url.Values, any) {
+				return "DELETE", "/api/v1/me/collections/" + segment(str(a, "collection")) + "/members/" + segment(str(a, "namespace")) + "/" + segment(str(a, "workflow")), nil, nil
 			},
 		},
 		{
