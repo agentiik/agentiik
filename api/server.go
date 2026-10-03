@@ -648,7 +648,17 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		fail(w, http.StatusForbidden, fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use on %s, which a grant on the namespace %s gives and a deny on the workflow takes away, and you do not hold it there: whoever writes a secret's name into a workflow answers for its value going into a container, and running the version afterwards takes workflow:run alone", noun, strings.Join(unusable.Named, ", "), over.Workflow, over.Namespace))
 		return
 	case err != nil:
-		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("version: %s@%s: %s", over.Workflow, commit, err))
+		said := fmt.Sprintf("version: %s@%s: %s", over.Workflow, commit, err)
+		// A refusal is answered as the hook and POST .../commits answer one, its node, what was
+		// expected there and the topic beside the sentence.
+		if problem, ok := version.Explain(err); ok {
+			write(w, http.StatusUnprocessableEntity, struct {
+				Error string `json:"error"`
+				version.Problem
+			}{said, problem})
+			return
+		}
+		fail(w, http.StatusUnprocessableEntity, said)
 		return
 	}
 	// A digest for a tag no step names is a version whose file names one image while the push
