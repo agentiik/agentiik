@@ -301,7 +301,6 @@
     <Pane title="Files">
       <p class="muted">Empty repository</p>
       {#if mayEdit}
-        <p>Write its first <span class="term">agentiik.yaml</span> here, or push one with git.</p>
         <p><button class="control primary" onclick={() => narrow({ edit: "1" })}><Icon name="control-edit" size={14} />Write agentiik.yaml</button></p>
       {/if}
       <pre class="clone term">git clone {detail.repository.clone_url}</pre>

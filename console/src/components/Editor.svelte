@@ -111,8 +111,9 @@
   const problems = $derived<FileProblem[]>(check(tree));
   const marked = $derived([...problems.map((p) => ({ line: p.line, message: p.message })), ...refusedAt]);
   // What the edits come to, as a review counts it: the lines added and the lines removed, a line
-  // changed being one of each.
-  const diff = $derived(lineDiff(entry, tree.text));
+  // changed being one of each. They are counted against what the repository holds, which for an
+  // empty one is nothing, so that its first file is a change to commit as it opens.
+  const diff = $derived(lineDiff(commit === null ? "" : entry, tree.text));
   const added = $derived(diff.filter((l) => l.kind === "added").length);
   const removed = $derived(diff.filter((l) => l.kind === "removed").length);
   const changes = $derived(added + removed);

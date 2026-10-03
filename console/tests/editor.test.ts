@@ -237,4 +237,29 @@ describe("committing from the editor", () => {
     expect(screen.getByRole("button", { name: "line 20" })).toBeTruthy();
     expect(screen.getByRole("form", { name: "Commit" })).toBeTruthy();
   });
+
+  it("writes an empty repository's first agentiik.yaml, committed with no parent onto the default branch", async () => {
+    const s = committing(managing(), 201, { commit: "d".repeat(40), branch: "main" });
+    const shown = s["GET /api/v1/finance/workflows/monthly-invoicing"]!.body as { repository: Record<string, unknown> };
+    s["GET /api/v1/finance/workflows/monthly-invoicing"] = { status: 200, body: { repository: { ...shown.repository, head: null }, history: [] } };
+    const place = open("", s);
+    expect(await screen.findByText("Empty repository")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Write agentiik.yaml" }));
+    expect(place.query.get("edit")).toBe("1");
+    const first = await text();
+    expect(first).toContain("metadata:\n  name: monthly-invoicing\n  namespace: finance\n");
+    expect(first).toMatch(/image: alpine:3\.21@sha256:[0-9a-f]{64}\n/);
+    // The file is what the commit adds to a repository holding nothing, so it is a change as it opens.
+    const commit = (await screen.findByRole("button", { name: "Commit" })) as HTMLButtonElement;
+    expect(commit.disabled).toBe(false);
+    expect(screen.queryByText("No change")).toBeNull();
+    await fireEvent.click(commit);
+    const form = screen.getByRole("form", { name: "Commit" });
+    expect(within(form).getByText(/The repository's first commit, onto/)).toBeTruthy();
+    expect(within(form).queryByRole("radio")).toBeNull();
+    await fireEvent.submit(form);
+    expect(await screen.findByText("Committed to main.")).toBeTruthy();
+    expect(sent()).toEqual({ branch: "main", message: "Write agentiik.yaml", files: { "agentiik.yaml": first } });
+    expect(asked.filter((a) => a.key.includes("/tree/"))).toEqual([]);
+  });
 });
