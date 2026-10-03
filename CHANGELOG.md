@@ -2,6 +2,15 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### MCP
+
+- `agentiik-api` serves the platform's MCP server at `/mcp` (`api.NewMCP`), speaking revision `2026-07-28` over Streamable HTTP (package `mcp`, the standard library alone). The revision is stateless: every request is a `POST` carrying its version in `MCP-Protocol-Version` and in its `_meta`, and the client's capabilities; there is no `initialize`, no session and no `GET` stream, and a `GET` or a `DELETE` is answered `405`. A request is refused `400` where a header disagrees with its body (`-32020`), for a revision other than `2026-07-28` with the supported one (`-32022`), or as no JSON-RPC request; a method the server does not have is `404` (`-32601`); a browser calling from any origin but the installation's is `403`.
+- The endpoint takes a bearer token, an API token for now, and answers `401` with `WWW-Authenticate: Bearer` to a request carrying none, a session cookie alone included. `server/discover` names the server `agentiik` at the module's version and says what a workflow is, where its entry point is, and that `workflow.language` comes before drafting and `workflow.validate` before committing.
+- `workflow.language` answers a topic's page, or with no topic the orientation, a complete minimal workflow and the sixteen topics; `workflow.schema` answers the JSON Schema 2020-12 document of the entry point, a brick manifest or an envelope. Both are offered to any authenticated principal and marked `readOnlyHint`, and the pages and parts are also the resources `agentiik://language/{topic}` and `agentiik://schema/{part}`. Package `language` carries the reference and the parts agentiik/schemas generates, vendored at `05b1a9e`, and `language.TopicOf` names the topic that explains a place in `agentiik.yaml`.
+- `AGK_MCP` is `on` or `off` and nothing else, `on` where unset: `off` leaves `/mcp` answering `404`, as a route the installation does not serve, and the line the start logs says which.
+
 ## v0.6.0, 2026-10-02
 
 A console to watch it: `agentiik-api` serves the web console at the installation's address from its own binary, with no proxy or server of its own, and `agk console` draws the same views in a terminal over the same routes. A person signs in, reads every namespace they work in on their home, follows a run as it happens over one live connection, inspects a step's envelopes, logs and files, edits a workflow in a graph or as YAML that keeps its format and commits the change, shares a namespace or a workflow, keeps a namespace's variables, and reads the statistics of runs, steps, ports and quotas; an administrator manages users, groups, namespaces, runners and their pools, and reads the audit log. Nothing the console does is decided by it: each screen calls a route the OpenAPI document describes, under the caller's own permissions. The API and the controller become one image, `ghcr.io/agentiik/agentiik`. A v0.5.0 installation upgrades with v0.6.0's `compose.yaml` and its own `.env`, and nothing else.
@@ -198,13 +207,6 @@ A console to watch it: `agentiik-api` serves the web console at the installation
 
 - The schemas of agentiik/schemas `0.6.0` are vendored in `internal/fixtures`, and `console/vendor` copies its OpenAPI document and schemas and agentiik/design's tokens, faces and icons at v0.6.0. The corpus holds 12 valid workflow documents and 75 invalid ones, 20 of them the validator's, each refused by the rule it is named after.
 - The test that nothing in the module sends mail no longer refuses the word email in what it ships, since the word names a user's address; it still refuses a mail transport, the program that sends mail, a package or a module for mail, a provider's name and a `mailto:` link.
-
-### MCP
-
-- `agentiik-api` serves the platform's MCP server at `/mcp` (`api.NewMCP`), speaking revision `2026-07-28` over Streamable HTTP (package `mcp`, the standard library alone). The revision is stateless: every request is a `POST` carrying its version in `MCP-Protocol-Version` and in its `_meta`, and the client's capabilities; there is no `initialize`, no session and no `GET` stream, and a `GET` or a `DELETE` is answered `405`. A request is refused `400` where a header disagrees with its body (`-32020`), for a revision other than `2026-07-28` with the supported one (`-32022`), or as no JSON-RPC request; a method the server does not have is `404` (`-32601`); a browser calling from any origin but the installation's is `403`.
-- The endpoint takes a bearer token, an API token for now, and answers `401` with `WWW-Authenticate: Bearer` to a request carrying none, a session cookie alone included. `server/discover` names the server `agentiik` at the module's version and says what a workflow is, where its entry point is, and that `workflow.language` comes before drafting and `workflow.validate` before committing.
-- `workflow.language` answers a topic's page, or with no topic the orientation, a complete minimal workflow and the sixteen topics; `workflow.schema` answers the JSON Schema 2020-12 document of the entry point, a brick manifest or an envelope. Both are offered to any authenticated principal and marked `readOnlyHint`, and the pages and parts are also the resources `agentiik://language/{topic}` and `agentiik://schema/{part}`. Package `language` carries the reference and the parts agentiik/schemas generates, vendored at `05b1a9e`, and `language.TopicOf` names the topic that explains a place in `agentiik.yaml`.
-- `AGK_MCP` is `on` or `off` and nothing else, `on` where unset: `off` leaves `/mcp` answering `404`, as a route the installation does not serve, and the line the start logs says which.
 
 ## v0.5.0, 2026-09-30
 
