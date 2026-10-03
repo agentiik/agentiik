@@ -290,6 +290,18 @@ type watcher struct {
 
 	mu   sync.Mutex
 	read map[string][]byte
+
+	// order is the files read, in the order they were first read: the entry point first, then
+	// what resolution reached, which a refusal of shape is placed in.
+	order []string
+}
+
+// record keeps what a file was read as, and when it was first read. The caller holds mu.
+func (w *watcher) record(name string, b []byte) {
+	if _, held := w.read[name]; !held {
+		w.order = append(w.order, name)
+	}
+	w.read[name] = b
 }
 
 func (w *watcher) Open(name string) (fs.File, error) {
@@ -317,7 +329,7 @@ func (w *watcher) ReadFile(name string) ([]byte, error) {
 		return nil, err
 	}
 	w.mu.Lock()
-	w.read[name] = b
+	w.record(name, b)
 	w.mu.Unlock()
 	return b, nil
 }
@@ -422,7 +434,7 @@ func (f *watched) Read(p []byte) (int, error) {
 	}
 	if err == io.EOF {
 		f.of.mu.Lock()
-		f.of.read[f.name] = f.seen
+		f.of.record(f.name, f.seen)
 		f.of.mu.Unlock()
 	}
 	return n, err
@@ -434,7 +446,7 @@ func (f *watched) Close() error {
 	if len(f.seen) > 0 {
 		f.of.mu.Lock()
 		if _, held := f.of.read[f.name]; !held {
-			f.of.read[f.name] = f.seen
+			f.of.record(f.name, f.seen)
 		}
 		f.of.mu.Unlock()
 	}

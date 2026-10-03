@@ -63,7 +63,16 @@ func validate(ctx context.Context, e Env, args []string) int {
 	}
 	checked, err := versions.Check(ctx, tree, c)
 	if err != nil {
-		refusal(e.Err, inTree(err, dir))
+		// A refusal of the workflow is told as the hook and POST .../commits tell it, where and the
+		// rule, the detail, the node with what was expected there, and the topic to read; trouble on
+		// this side, a daemon that cannot be reached, is told as it is.
+		if p, ok := versions.Explain(inTree(err, dir)); ok {
+			for _, line := range p.Lines() {
+				fmt.Fprintln(e.Err, line)
+			}
+			return leaving(err)
+		}
+		refusal(e.Err, err)
 		return leaving(err)
 	}
 	if checked.Library {

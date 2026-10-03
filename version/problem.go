@@ -43,6 +43,10 @@ type Problem struct {
 // Explain is the problem a refusal of Check is, and false for an error that is no refusal, a store
 // that could not be reached among them, which is the caller's to answer as the failure it is.
 func Explain(err error) (Problem, bool) {
+	var sh *shaped
+	if errors.As(err, &sh) {
+		return sh.problem, true
+	}
 	var r *graph.Refusal
 	if !errors.As(err, &r) {
 		return Problem{}, false

@@ -299,3 +299,39 @@ func TestATreeOfDeepPathsIsJudgedFromItsListing(t *testing.T) {
 		t.Errorf("the .git directory is refused naming %s", r.At.File)
 	}
 }
+
+// A file the parser refuses for its shape is placed by the released schema: the node as a pointer,
+// its line and column, what was expected there and the topic that covers it, the parser's own
+// sentence kept as the detail; in whichever file of the tree it is written.
+func TestARefusalOfShapeIsPlacedByTheSchema(t *testing.T) {
+	for _, c := range []struct {
+		name, file, from, to string
+		want                 version.Problem
+	}{
+		{"a key the workflow does not have", "agentiik.yaml", "secrets: [billing]\n", "secrets: [billing]\nstepz: {}\n",
+			version.Problem{File: "agentiik.yaml", Line: 7, Column: 1, Pointer: "/stepz", Rule: "schema", Topic: "repository"}},
+		{"a value of the wrong type", "agentiik.yaml", "secrets: [billing]\n", "secrets: [billing]\nconcurrency: { group: g, cancel_in_progress: maybe }\n",
+			version.Problem{File: "agentiik.yaml", Line: 7, Column: 46, Pointer: "/concurrency/cancel_in_progress", Rule: "schema"}},
+		{"a key an included block does not have", "fragments/bricks.yaml", "  image:", "  imagez: x\n  image:",
+			version.Problem{File: "fragments/bricks.yaml", Line: 2, Column: 3, Pointer: "/.invoicing/imagez", Rule: "schema", Topic: "includes"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree := aRepository()
+			tree[c.file].Data = []byte(strings.Replace(string(tree[c.file].Data), c.from, c.to, 1))
+			_, err := version.Check(t.Context(), tree, everything())
+			p, ok := version.Explain(err)
+			if !ok {
+				t.Fatalf("the refusal %v is not explained", err)
+			}
+			if p.File != c.want.File || p.Line != c.want.Line || p.Column != c.want.Column || p.Pointer != c.want.Pointer || p.Rule != c.want.Rule {
+				t.Errorf("the refusal is placed at %+v, and it is written at %+v", p, c.want)
+			}
+			if c.want.Topic != "" && p.Topic != c.want.Topic {
+				t.Errorf("the refusal is covered by the topic %s, and it is %s", p.Topic, c.want.Topic)
+			}
+			if p.Expected == "" || p.Detail != err.Error() {
+				t.Errorf("the refusal says it expected %q, with the detail %q, of %v", p.Expected, p.Detail, err)
+			}
+		})
+	}
+}

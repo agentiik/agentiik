@@ -350,15 +350,15 @@ func (s *Server) recordRefusal(ctx context.Context, who Principal, over Target, 
 	if !why.commit.IsZero() {
 		detail["commit"] = why.commit.String()
 	}
-	if why.rule != nil {
-		detail["rule"] = string(why.rule.Rule)
-		if why.rule.At.File != "" {
-			detail["file"] = why.rule.At.File
-			detail["line"] = why.rule.At.Line
-			detail["column"] = why.rule.At.Column
+	if p := why.problem; p != nil {
+		detail["rule"] = p.Rule
+		if p.File != "" {
+			detail["file"] = p.File
+			detail["line"] = p.Line
+			detail["column"] = p.Column
 		}
-		if why.rule.At.Pointer != "" {
-			detail["pointer"] = why.rule.At.Pointer
+		if p.Pointer != "" {
+			detail["pointer"] = p.Pointer
 		}
 	}
 	// In a transaction of its own, since the push's was never committed: an act refused is still
@@ -746,17 +746,18 @@ func (s *Server) hook(ctx context.Context, r *http.Request, over Target, rc *rec
 	})
 	var rule *graph.Refusal
 	var unusable *version.SecretsNotUsable
+	problem, explained := version.Explain(err)
 	switch {
-	case errors.As(err, &rule):
-		at := rule.At.String()
-		short := string(rule.Rule)
-		if at != "" {
+	case explained:
+		// What the hook tells is the problem as agk validate and POST .../commits tell it: where,
+		// the rule, the detail, what was expected at the node and the topic to read. A refusal of a
+		// file's shape is one too, placed by the schema, and names no rule of the engine's.
+		short := problem.Rule
+		if at := (graph.Position{File: problem.File, Line: problem.Line, Column: problem.Column}).String(); at != "" {
 			short += " at " + at
 		}
-		// What the hook tells is the problem as agk validate and POST .../commits tell it: where,
-		// the rule, the detail, what was expected at the node and the topic to read.
-		problem, _ := version.Explain(err)
 		told := append([]string{fmt.Sprintf("%s refused %s:", over.Workflow, commit)}, problem.Lines()...)
+		errors.As(err, &rule)
 		return judged{}, &pushRefusal{short: "refused: " + short, told: told, rule: rule, commit: commit, problem: &problem}
 	case errors.As(err, &unusable):
 		return judged{}, &pushRefusal{short: "refused: this commit names a secret and you do not hold secret:use", told: []string{unusable.Error()}, commit: commit, code: http.StatusForbidden}

@@ -90,7 +90,7 @@ func Check(ctx context.Context, tree fs.FS, c Checking) (*Checked, error) {
 	}
 	wf, err := load(watched, entry, remote)
 	if err != nil {
-		return nil, err
+		return nil, placeShape(err, watched.sorted(), entry)
 	}
 	if made {
 		if err := underItsName(wf, c); err != nil {
@@ -163,7 +163,7 @@ func checkLibrary(watched *watcher, remote graph.Remote, reached *reaching, c Ch
 	}
 	included, err := load(watched, remote)
 	if err != nil {
-		return nil, err
+		return nil, placeShape(err, watched.sorted(), "")
 	}
 	checked := &Checked{Library: true, Included: included, Commit: c.Commit, Version: db.Version{Entry: EntryPoint, Library: true, Includes: map[string][]byte{}}}
 	if err := checked.recordRead(watched, reached); err != nil {
