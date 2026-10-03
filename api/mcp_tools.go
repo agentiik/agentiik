@@ -115,9 +115,16 @@ const (
 	argCollection = `"collection":{"type":"string","description":"The collection's identifier, as collection.list answers it."}`
 )
 
+// object is an arguments schema: the properties given, the ones required, and no other. A schema
+// requiring nothing names no required, since JSON Schema 2020-12 holds required to an array and a
+// client compiling the tool's inputSchema refuses a null there.
 func object(required []string, props ...string) string {
-	req, _ := json.Marshal(required)
-	return `{"type":"object","properties":{` + strings.Join(props, ",") + `},"required":` + string(req) + `,"additionalProperties":false}`
+	req := ""
+	if len(required) > 0 {
+		b, _ := json.Marshal(required)
+		req = `,"required":` + string(b)
+	}
+	return `{"type":"object","properties":{` + strings.Join(props, ",") + `}` + req + `,"additionalProperties":false}`
 }
 
 // str and opt read an argument the schema already held to its type.

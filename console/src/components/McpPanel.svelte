@@ -66,7 +66,7 @@
     <pre class="json"><code>{#each tokens(tool.inputSchema) as tok, i (i)}<span class="t-{tok.kind}">{tok.text}</span>{/each}</code></pre>
     {#if tool.output}
       <p class="label">
-        {#if tool.outputSchema !== undefined}outputSchema, the schema of the output <span class="term">{tool.output}</span>{:else}The output <span class="term">{tool.output}</span>, no schema{/if}
+        {#if tool.outputSchema !== undefined}outputSchema, the schema of the output <span class="term">{tool.output}</span>{:else if tool.mode === "async"}The output <span class="term">{tool.output}</span>, read with run.get, since an async call answers its run{:else}The output <span class="term">{tool.output}</span>, no schema{/if}
       </p>
       {#if tool.outputSchema !== undefined}<pre class="json"><code>{#each tokens(tool.outputSchema) as tok, i (i)}<span class="t-{tok.kind}">{tok.text}</span>{/each}</code></pre>{/if}
     {/if}

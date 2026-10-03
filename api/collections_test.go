@@ -322,6 +322,34 @@ func TestACollectionOffersEachMembersTool(t *testing.T) {
 	if _, _, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "resources/list", nil); refusal == nil {
 		t.Error("a collection answered resources/list")
 	}
+
+	// An async tool answers the run it started and never the output, so it publishes no
+	// outputSchema, which a structured result would have to conform to.
+	async := strings.Replace(strings.Replace(toolDocument, "  timeout: 2s\n", "  mode: async\n", 1), "name: monthly-invoicing,", "name: payroll,", 1)
+	status, answer := c.ask("POST", "/api/v1/finance/workflows/payroll/commits", "alice", map[string]any{
+		"parent": c.head("payroll"), "message": "publish payroll", "files": map[string]any{"agentiik.yaml": strings.Replace(async, "name: create_invoices", "name: run_payroll", 1)},
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("payroll's mcp block could not be committed: %d %v", status, answer)
+	}
+	_, result, _ = calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/list", nil)
+	for _, tool := range result["tools"].([]any) {
+		tool := tool.(map[string]any)
+		if published := tool["outputSchema"] != nil; published != (tool["name"] == "create_invoices") {
+			t.Errorf("%s publishes an outputSchema %v", tool["name"], published)
+		}
+	}
+	if n := len(result["tools"].([]any)); n != 2 {
+		t.Errorf("the collection offers %d tools", n)
+	}
+}
+
+// head is the commit a workflow's default branch names.
+func (c *collected) head(workflow string) string {
+	c.t.Helper()
+	_, answer := c.ask("GET", "/api/v1/finance/workflows/"+workflow, "alice", nil)
+	head, _ := answer["repository"].(map[string]any)["head"].(string)
+	return head
 }
 
 // A call is a run of the caller's, of trigger kind mcp, recording the collection and the tool, at

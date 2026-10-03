@@ -132,10 +132,12 @@ func (c *Collections) tool(ctx context.Context, caller Caller, collection string
 		Name: o.tool, Title: block.Title, Description: block.Description,
 		InputSchema: bundled(input, p.Files),
 	}
-	if len(p.Output) > 0 {
+	if len(p.Output) > 0 && block.Mode != graph.ToolAsync {
 		// What the result is: the output's envelope, whose items carry what the output's schema
 		// says, since "a client is told the shape of a result and not only its text" and the
-		// protocol holds a structured result to its outputSchema.
+		// protocol holds a structured result to its outputSchema. An async tool answers the run it
+		// started and never the output, so it publishes none: a structured result has to conform
+		// to the outputSchema a tool publishes, and the run's identifier is no envelope.
 		t.OutputSchema = bundled(map[string]any{
 			"type": "object", "required": []string{"meta", "items"},
 			"properties": map[string]any{
