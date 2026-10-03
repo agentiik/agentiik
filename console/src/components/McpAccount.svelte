@@ -2,7 +2,7 @@
   import { explain, type Explained } from "../lib/problem";
   import Problem from "./Problem.svelte";
   import type { API } from "../api/client";
-  import { changeCollection, collectionsOf, makeCollection, offered, removeCollection, removeMember, serverAddress, type Collection } from "../lib/collections";
+  import { changeCollection, collectionsOf, makeCollection, mcpServed, offered, removeCollection, removeMember, serverAddress, type Collection } from "../lib/collections";
   import type { Place } from "../lib/place.svelte";
   import Icon from "./Icon.svelte";
   import Pane from "./Pane.svelte";
@@ -17,6 +17,7 @@
   let { api, place }: { api: API; place: Place } = $props();
 
   const server = $derived(serverAddress(place.baseURI));
+  const served = mcpServed(document);
 
   let collections = $state<Collection[] | null>(null);
   let unread = $state<Explained | null>(null);
@@ -130,6 +131,7 @@
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <Pane title="Your server">
+  {#if !served}<p class="muted off">This installation serves no MCP, as AGK_MCP is off: these addresses answer 404 until it does. Collections are kept and changed all the same.</p>{/if}
   <dl class="server">
     <dt>Address</dt>
     <dd>
@@ -237,6 +239,11 @@
     gap: calc(var(--unit) * 4);
     margin: 0;
     overflow-wrap: anywhere;
+  }
+
+  .off {
+    margin: 0 0 calc(var(--unit) * 5);
+    font-size: var(--type-control-size);
   }
 
   .collection {

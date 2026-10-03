@@ -434,7 +434,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 	// The web console, at every address outside the API's roots, where there is one to serve.
 	if s.console != nil {
-		if _, err := api.NewConsole(rt, api.ConsoleOptions{Files: s.console, PublicURL: s.PublicURL}); err != nil {
+		if _, err := api.NewConsole(rt, api.ConsoleOptions{Files: s.console, PublicURL: s.PublicURL, MCPOff: !s.MCP}); err != nil {
 			return nil, err
 		}
 	}

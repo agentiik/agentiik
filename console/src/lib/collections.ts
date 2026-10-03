@@ -69,3 +69,10 @@ export function offered(m: Member): string {
 export function serverAddress(baseURI: string): string {
   return new URL("mcp", baseURI).href;
 }
+
+// mcpServed says whether the installation serves MCP, which the API writes into the page where it
+// does not: "the web console's MCP panel says that this one serves none, and collections are kept,
+// made and changed as before, to be served once the installation does".
+export function mcpServed(doc: Document): boolean {
+  return doc.querySelector('meta[name="agentiik-mcp"]')?.getAttribute("content") !== "off";
+}

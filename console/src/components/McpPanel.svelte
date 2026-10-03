@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { API } from "../api/client";
-  import { addMember, collectionsOf, offered, type Collection } from "../lib/collections";
+  import { addMember, collectionsOf, mcpServed, offered, type Collection } from "../lib/collections";
   import { tokens } from "../lib/envelope";
   import type { Graph } from "../lib/graph";
   import { explain, type Explained } from "../lib/problem";
@@ -17,6 +17,7 @@
 
   const tool = $derived(toolOf(graph, workflow));
   const named = $derived(`${namespace}/${workflow}`);
+  const served = mcpServed(document);
 
   let collections = $state<Collection[] | null>(null);
   let problem = $state<Explained | null>(null);
@@ -49,6 +50,7 @@
   }
 </script>
 
+{#if !served}<p class="muted off">This installation serves no MCP, as AGK_MCP is off: the mcp block is checked at every push and no client is offered the tool.</p>{/if}
 {#if tool}
   <section class="tool" aria-label="Tool {tool.name}">
     <header>
@@ -122,6 +124,11 @@
 
   .label {
     color: var(--muted);
+  }
+
+  .off {
+    margin: 0 0 calc(var(--unit) * 5);
+    font-size: var(--type-control-size);
   }
 
   .collections {

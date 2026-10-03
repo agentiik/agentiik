@@ -47,6 +47,26 @@ describe("the account's MCP tab", () => {
     expect(screen.getByRole("link", { name: "An API token" })).toBeTruthy();
   });
 
+  it("says where the installation serves no MCP, and keeps the collections", async () => {
+    const meta = document.createElement("meta");
+    meta.name = "agentiik-mcp";
+    meta.content = "off";
+    document.head.append(meta);
+    try {
+      open("/me/mcp");
+      expect(await screen.findByText(/This installation serves no MCP, as AGK_MCP is off/)).toBeTruthy();
+      expect(await screen.findByRole("region", { name: "Collection back-office" })).toBeTruthy();
+    } finally {
+      meta.remove();
+    }
+  });
+
+  it("says nothing of AGK_MCP where the installation serves MCP", async () => {
+    open("/me/mcp");
+    await screen.findByRole("region", { name: "Collection back-office" });
+    expect(screen.queryByText(/serves no MCP/)).toBeNull();
+  });
+
   it("makes a collection with its name and description", async () => {
     const made = { id: "01JR8V0000000000000000000A", name: "nightly", description: "The nightly reports.", url: "https://agentiik.example.com/mcp/collections/01JR8V0000000000000000000A", members: [] };
     const { asked } = open("/me/mcp", {
