@@ -109,6 +109,9 @@ func someTenants(t *testing.T) *tenants {
 		t.Fatal("bus-init failed")
 	}
 	s := servingSettings(t, database.Application, dir, natsFrom(t, dir))
+	// Serving MCP, as an installation does unless AGK_MCP is off, so that the user's server and
+	// every collection are asked about with the rest.
+	s.MCP = true
 	s.EnvPrefixes = map[string]string{"finance": "AGK_DEV_FINANCE_"}
 	ledger := "ledger-" + randomHex(t)
 	t.Setenv(ledgerVariable, ledger)
@@ -324,7 +327,7 @@ func (x *tenants) present(route string) map[string]string {
 		named["name"] = "invoices"
 	case strings.Contains(route, "/service-accounts/"):
 		named["name"] = "nightly"
-	case strings.Contains(route, "/me/collections/"):
+	case strings.Contains(route, "/collections/"):
 		named["name"] = "monthly-invoicing"
 	}
 	switch {
@@ -338,7 +341,9 @@ func (x *tenants) present(route string) map[string]string {
 		named["id"] = x.notification
 	case strings.Contains(route, "/me/credentials/"):
 		named["id"] = x.credential
-	case strings.Contains(route, "/me/collections/"):
+	case strings.Contains(route, "/collections/"):
+		// Under /api/v1/me and at /mcp alike: the collection's routes and the endpoint a client is
+		// given.
 		named["id"] = x.collection
 	}
 	return named
