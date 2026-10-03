@@ -55,6 +55,19 @@ func holds(p Permission) func(Effective) bool {
 	}
 }
 
+// holdsInNamespace says whether a caller holds a permission at a namespace's scope, which a route
+// guarded at that scope asks for and a grant on one workflow never gives.
+func holdsInNamespace(p Permission) func(Effective) bool {
+	return func(e Effective) bool {
+		for at, set := range e.Permissions {
+			if at.Workflow == "" && set.Has(p) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // either is a caller who may use a tool by any of several.
 func either(ways ...func(Effective) bool) func(Effective) bool {
 	return func(e Effective) bool {
@@ -197,7 +210,7 @@ func userTools() []routed {
 		{
 			name: "secret.list", title: "List secret declarations",
 			description: "A namespace's secret declarations: each secret's name, provider, path and the file a step is given it at. Never a value.",
-			input:       object([]string{"namespace"}, argNamespace), annotations: reads(), offered: holds(WorkflowRead),
+			input:       object([]string{"namespace"}, argNamespace), annotations: reads(), offered: holdsInNamespace(WorkflowRead),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "GET", "/api/v1/" + segment(str(a, "namespace")) + "/secrets", nil, nil
 			},
@@ -209,7 +222,7 @@ func userTools() []routed {
 				`"name":{"type":"string","description":"The secret's name, as a workflow's secrets block names it."}`,
 				`"provider":{"type":"string","description":"The store the value is kept in, such as env, vault or aws-secrets-manager."}`,
 				`"path":{"type":"string","description":"Where the provider keeps the value."}`),
-			annotations: writes(), offered: holds(SecretWrite),
+			annotations: writes(), offered: holdsInNamespace(SecretWrite),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "PUT", "/api/v1/" + segment(str(a, "namespace")) + "/secrets/" + segment(str(a, "name")), nil, pick(a, "provider", "path")
 			},
@@ -218,7 +231,7 @@ func userTools() []routed {
 			name: "secret.remove", title: "Remove a secret declaration",
 			description: "Removes one secret's declaration, and a builtin secret's value with it. A workflow naming it is refused at its next push, and a run of it at its first redemption.",
 			input:       object([]string{"namespace", "name"}, argNamespace, `"name":{"type":"string","description":"The secret's name."}`),
-			annotations: removes(), offered: holds(SecretWrite),
+			annotations: removes(), offered: holdsInNamespace(SecretWrite),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "DELETE", "/api/v1/" + segment(str(a, "namespace")) + "/secrets/" + segment(str(a, "name")), nil, nil
 			},
@@ -246,7 +259,7 @@ func userTools() []routed {
 				`"name":{"type":"string","description":"The workflow's name, which its repository and metadata.name carry."}`,
 				`"default_branch":{"type":"string","description":"Its default branch, main where left out."}`,
 				`"protected":{"type":"boolean","description":"Whether moving the default branch takes grant:manage."}`),
-			annotations: writes(), offered: holds(WorkflowWrite),
+			annotations: writes(), offered: holdsInNamespace(WorkflowWrite),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "POST", "/api/v1/" + segment(str(a, "namespace")) + "/workflows", nil, pick(a, "name", "default_branch", "protected")
 			},
@@ -398,7 +411,7 @@ func userTools() []routed {
 			input: object([]string{"collection", "namespace", "workflow"}, argCollection, argNamespace, argWorkflow,
 				`"ref":{"type":"string","description":"The branch or the tag the member is read at, never a commit."}`,
 				`"as":{"type":"string","description":"The name its tool goes by in this collection."}`),
-			annotations: writes(), offered: anybody,
+			annotations: writes(), offered: holds(WorkflowRun),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "PUT", "/api/v1/me/collections/" + segment(str(a, "collection")) + "/members/" + segment(str(a, "namespace")) + "/" + segment(str(a, "workflow")), nil, pick(a, "ref", "as")
 			},

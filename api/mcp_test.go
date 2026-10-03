@@ -190,13 +190,13 @@ func offeredTo(t *testing.T, rt *api.Router, who string) ([]string, map[string]m
 }
 
 // Any authenticated principal is offered what teaches the language and what every user may do:
-// list namespaces and create one, and keep collections of their own; a tool the caller cannot use
-// anywhere is absent rather than refused, so that a principal who can write nowhere never sees
-// workflow.commit.
+// list namespaces and create one, and keep collections of their own, adding to one only a workflow
+// they may run; a tool the caller cannot use anywhere is absent rather than refused, so that a
+// principal who can write nowhere never sees workflow.commit.
 func TestAToolTheCallerCannotUseIsAbsent(t *testing.T) {
 	rt := platform(t)
 	names, _ := offeredTo(t, rt, "nobody-granted-anything")
-	if strings.Join(names, ",") != "workflow.language,workflow.schema,namespace.list,namespace.get,namespace.create,collection.list,collection.get,collection.create,collection.update,collection.delete,collection.add,collection.remove" {
+	if strings.Join(names, ",") != "workflow.language,workflow.schema,namespace.list,namespace.get,namespace.create,collection.list,collection.get,collection.create,collection.update,collection.delete,collection.remove" {
 		t.Errorf("the tools offered to a principal holding nothing are %v", names)
 	}
 	names, _ = offeredTo(t, rt, "alice")
