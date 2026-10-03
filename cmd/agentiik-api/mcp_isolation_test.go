@@ -20,6 +20,12 @@ import (
 // error back.
 func (x *tenants) mcpAsked(as asker, method string, params map[string]any) (map[string]any, *mcp.Error) {
 	x.t.Helper()
+	return x.mcpAskedAt("/mcp", as, method, params)
+}
+
+// mcpAskedAt is mcpAsked at another endpoint than the user's server, a collection's.
+func (x *tenants) mcpAskedAt(path string, as asker, method string, params map[string]any) (map[string]any, *mcp.Error) {
+	x.t.Helper()
 	if params == nil {
 		params = map[string]any{}
 	}
@@ -31,7 +37,7 @@ func (x *tenants) mcpAsked(as asker, method string, params map[string]any) (map[
 	if err != nil {
 		x.t.Fatal(err)
 	}
-	r := httptest.NewRequestWithContext(x.t.Context(), "POST", "/mcp", strings.NewReader(string(b)))
+	r := httptest.NewRequestWithContext(x.t.Context(), "POST", path, strings.NewReader(string(b)))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("MCP-Protocol-Version", mcp.Revision)
 	r.Header.Set("Mcp-Method", method)
