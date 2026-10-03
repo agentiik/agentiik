@@ -14,6 +14,10 @@ import (
 // a chunk loaded relative to it.
 const page = `<!doctype html><html><head><base href="/"><script type="module" src="assets/app.js"></script></head><body></body></html>`
 
+// served is the page as the console's addresses answer it on https://agentiik.example.com: its base
+// and the public URL's origin written in.
+var served = strings.Replace(page, `<base href="/">`, `<base href="/"><meta name="agentiik-origin" content="https://agentiik.example.com">`, 1)
+
 // build is a console's build: its page, its script, a chunk named as a bundler names one after the
 // module it split off, and the .gitignore the directory is committed with.
 func build() fstest.MapFS {
@@ -59,7 +63,7 @@ func TestTheConsoleAnswersEveryAddressOfItsOwn(t *testing.T) {
 	rt := consoled(t, "https://agentiik.example.com", build())
 	for _, path := range []string{"/", "/finance", "/finance/monthly-invoicing/runs/7", "/finance/monthly-invoicing.git", "/index.html", "/assets/", "/assets/missing.js"} {
 		w := browsed(rt, "GET", path, nil)
-		if w.Code != http.StatusOK || w.Body.String() != page || w.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+		if w.Code != http.StatusOK || w.Body.String() != served || w.Header().Get("Content-Type") != "text/html; charset=utf-8" {
 			t.Errorf("%s answered %d %s %q, and not the console's page", path, w.Code, w.Header().Get("Content-Type"), w.Body)
 		}
 	}
@@ -69,7 +73,7 @@ func TestTheConsoleAnswersEveryAddressOfItsOwn(t *testing.T) {
 		"/assets/archivo-700.woff2": "font/woff2",
 	} {
 		w := browsed(rt, "GET", path, nil)
-		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != kind || w.Body.String() == page {
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != kind || w.Body.String() == served {
 			t.Errorf("%s answered %d %s %q", path, w.Code, w.Header().Get("Content-Type"), w.Body)
 		}
 	}
@@ -85,7 +89,7 @@ func TestTheConsoleAnswersEveryAddressOfItsOwn(t *testing.T) {
 func TestTheConsoleServesNoFileNamedWithADot(t *testing.T) {
 	rt := consoled(t, "https://agentiik.example.com", build())
 	for _, path := range []string{"/.gitignore", "/assets/.cache/ignored.json"} {
-		if w := browsed(rt, "GET", path, nil); w.Body.String() != page {
+		if w := browsed(rt, "GET", path, nil); w.Body.String() != served {
 			t.Errorf("%s answered %d %q, and not the console's page", path, w.Code, w.Body)
 		}
 	}
@@ -179,14 +183,15 @@ func TestEveryAnswerOfTheConsoleIsHeldToItsOrigin(t *testing.T) {
 }
 
 // The page's base is the public URL's path, so that its relative addresses resolve from the
-// console's root at any depth, and under the path a proxy serves the installation at.
+// console's root at any depth, and under the path a proxy serves the installation at; and the page
+// carries the public URL's origin, which it tells a person they opened it away from.
 func TestThePagesBaseIsThePublicURLsPath(t *testing.T) {
 	for publicURL, base := range map[string]string{
-		"https://agentiik.example.com":              `<base href="/">`,
-		"https://example.com/agentiik":              `<base href="/agentiik/">`,
-		"https://example.com/tools/agentiik":        `<base href="/tools/agentiik/">`,
-		"https://example.com/work%20flows":          `<base href="/work%20flows/">`,
-		"https://agentiik.example.com:8443/console": `<base href="/console/">`,
+		"https://agentiik.example.com":              `<base href="/"><meta name="agentiik-origin" content="https://agentiik.example.com">`,
+		"https://example.com/agentiik":              `<base href="/agentiik/"><meta name="agentiik-origin" content="https://example.com">`,
+		"https://example.com/tools/agentiik":        `<base href="/tools/agentiik/"><meta name="agentiik-origin" content="https://example.com">`,
+		"https://example.com/work%20flows":          `<base href="/work%20flows/"><meta name="agentiik-origin" content="https://example.com">`,
+		"https://agentiik.example.com:8443/console": `<base href="/console/"><meta name="agentiik-origin" content="https://agentiik.example.com:8443">`,
 	} {
 		rt := consoled(t, publicURL, build())
 		body := browsed(rt, "GET", "/finance/monthly-invoicing/runs/7", nil).Body.String()

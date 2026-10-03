@@ -21,7 +21,11 @@ describe("a failure told for a person", () => {
 
   it("tells each kind of refusal by its status, and the server's own sentence where it is the reason", () => {
     expect(explain("load the runs", new TypeError("Failed to fetch"))).toMatchObject({ why: "Agentiik is not reachable.", detail: "Failed to fetch", transient: true });
-    expect(explain("revoke the grant", new Refusal(403, "you do not hold what this needs"))).toMatchObject({ why: "You do not have permission.", next: "", transient: false });
+    expect(explain("revoke the grant", new Refusal(403, "you do not hold what this needs"))).toMatchObject({ why: "You do not hold what this needs.", next: "", transient: false });
+    expect(explain("revoke the grant", new Refusal(403, ""))).toMatchObject({ why: "You do not have permission.", next: "", transient: false });
+    // A request from another address than the installation's is no missing permission, and says so.
+    const origin = "a session changes something only from the pages of this installation's public URL, and this request's Origin header names another or none";
+    expect(explain("save the variable", new Refusal(403, origin)).why).toMatch(/^A session changes something only from the pages of this installation's public URL/);
     expect(explain("load the run", new Refusal(404, "no such thing, or not yours"))).toMatchObject({ why: "Not found, or not shared with you." });
     expect(explain("add the user", new Refusal(409, "a user of that login exists"))).toMatchObject({ why: "A user of that login exists.", next: "", detail: "409" });
     expect(explain("save the secret", new Refusal(400, "env is not a store this installation reads"))).toMatchObject({ why: "Env is not a store this installation reads.", next: "" });

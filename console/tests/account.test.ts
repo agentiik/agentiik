@@ -277,7 +277,7 @@ describe("API tokens", () => {
     const dialog = await screen.findByRole("dialog", { name: "Mint a token" });
     await fireEvent.click(within(dialog).getByRole("button", { name: "Mint the token" }));
     expect(await within(dialog).findByText("Could not create the token.")).toBeTruthy();
-    expect(within(dialog).getByText(/a token narrows its principal's rights and never widens them/)).toBeTruthy();
+    expect(within(dialog).getByText(/^A token narrows its principal's rights and never widens them\./)).toBeTruthy();
     expect(screen.getByRole("dialog", { name: "Mint a token" })).toBe(dialog);
   });
 

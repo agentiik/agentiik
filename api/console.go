@@ -155,6 +155,12 @@ func NewConsole(rt *Router, o ConsoleOptions) (*Console, error) {
 	// The path alone, since the page is served on the public URL's origin whichever host a
 	// browser named, and ending in a slash, since a base without one resolves against its parent.
 	base := `<base href="` + html.EscapeString(strings.TrimRight(u.EscapedPath(), "/")+"/") + `">`
+	// Beside it, the public URL's origin, which the page compares with the one it was opened at: a
+	// passkey ceremony and every change a session makes are taken from the pages of the public URL
+	// alone, so a console opened at another address, by an IP address where the public URL names a
+	// host, draws every screen and can sign nobody in. It says so, naming the address that works,
+	// rather than leave a person reading "You do not have permission" at every click.
+	base += `<meta name="agentiik-origin" content="` + html.EscapeString(u.Scheme+"://"+u.Host) + `">`
 	body := bytes.Replace(page.body, []byte(consoleBase), []byte(base), 1)
 	c.index = asset{body: body, contentType: page.contentType, etag: etagOf(body)}
 	delete(c.files, "index.html")
