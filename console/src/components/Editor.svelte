@@ -4,7 +4,7 @@
   import { addStep, connect, disconnect, edgesWritten, removeStep, setFanOut, setMaxParallel, setMerge, type Merge } from "../lib/editor/edits";
   import { includedPaths, resolve } from "../lib/editor/resolve";
   import { layout, type Graph } from "../lib/graph";
-  import { explain, refused, type Explained } from "../lib/problem";
+  import { explain, refused, Told, type Explained } from "../lib/problem";
   import { lineDiff } from "../lib/tree";
   import { check, type Problem as FileProblem } from "../lib/workflow-check";
   import { Refused, YamlTree } from "../lib/yaml-tree";
@@ -43,7 +43,9 @@
     api: API;
     namespace: string;
     workflow: string;
-    commit: string;
+    // the version the file was opened at, which the commit follows, and null for an empty
+    // repository, whose first commit follows nothing.
+    commit: string | null;
     entry: string;
     base: Graph;
     branch: string;
@@ -80,8 +82,14 @@
   $effect(() => {
     untrack(async () => {
       const read = new Map<string, string>();
+      // An empty repository has no tree to read an include out of.
+      if (commit === null) {
+        files = read;
+        reading = false;
+        return;
+      }
       const fetchOne = async (path: string) => {
-        const { data } = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: commit }, query: { path } }, parseAs: "text" });
+        const { data } = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: commit! }, query: { path } }, parseAs: "text" });
         if (typeof data === "string") read.set(path, data);
       };
       // Each round reads what the files read so far include, until nothing new is named.
@@ -196,8 +204,10 @@
   // opened as its parent, which the server commits as the person signed in and pushes through the
   // repository's hook, so that a branch that moved since is refused rather than overwritten.
   let committing = $state(false);
-  let message = $state("Update agentiik.yaml");
-  let target = $state<"default" | "new">(untrack(() => (ontoDefault ? "default" : "new")));
+  let message = $state(untrack(() => (commit === null ? "Write agentiik.yaml" : "Update agentiik.yaml")));
+  // A first commit goes onto the default branch, since a new branch starts at a commit and an empty
+  // repository has none.
+  let target = $state<"default" | "new">(untrack(() => (ontoDefault || commit === null ? "default" : "new")));
   let newBranch = $state("");
   let pushing = $state(false);
   let commitProblem = $state<Explained | null>(null);
@@ -211,12 +221,15 @@
     try {
       const answer = await api.POST("/api/v1/{ns}/workflows/{name}/commits", {
         params: { path: { ns: namespace, name: workflow } },
-        body: { branch: onto, parent: commit, message: message.trim(), files: { "agentiik.yaml": text } },
+        body: { branch: onto, ...(commit === null ? {} : { parent: commit }), message: message.trim(), files: { "agentiik.yaml": text } },
       });
       if (!answer.data) {
         // What the hook refused is placed where it was written, the line it names marked in the file.
-        const at = answer.error as { file?: string; line?: number; column?: number; detail?: string; error?: string } | undefined;
+        const at = answer.error as { file?: string; line?: number; column?: number; detail?: string; error?: string; expected?: string } | undefined;
         if (at?.file === "agentiik.yaml" && at.line) refusedAt = [{ line: at.line, column: at.column, message: at.detail || at.error || "" }];
+        // The hook's problem is said whole in the dialog, what it refused and what it expected at the
+        // line it names, rather than its rule alone.
+        if (at?.detail && at.error) throw new Told(`${at.error}: ${at.detail}${at.expected ? `. Expected here: ${at.expected}` : ""}.`);
         throw refusal(answer.response, answer.error);
       }
       committing = false;
@@ -343,7 +356,9 @@
   {#if commitProblem}<Problem explained={commitProblem} />{/if}
   <form class="form" onsubmit={send} aria-label="Commit">
     <label><span>Message</span><textarea bind:value={message} class="message" rows="3" required></textarea></label>
-    {#if ontoDefault}
+    {#if commit === null}
+      <p class="muted">The repository's first commit, onto <span class="term">{branch}</span>.</p>
+    {:else if ontoDefault}
       <fieldset>
         <legend>Branch</legend>
         <label class="check"><input type="radio" name="target" value="default" bind:group={target} /><span class="term">{branch}</span></label>
