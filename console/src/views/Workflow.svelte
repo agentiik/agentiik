@@ -301,7 +301,7 @@
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
     {#await import("../components/Editor.svelte") then { default: Editor }}
-      <Editor {api} {me} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
+      <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
     {/await}
   {:else if graph && laid}
     <div class="columns fills">

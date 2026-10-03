@@ -10,6 +10,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A refusal of a file's shape, a key the language does not have or a value off its grammar, is placed by the released schema the language reference carries: the parser's sentence kept, the node as a JSON Pointer with its line and column, what the schema expected there and the topic, told under the rule `schema`, in whichever file of the tree it is written.
 - A refusal by the hook is told on git's error stream as `agk validate` and the route tell it: where and the rule, the detail, the node as a JSON Pointer with what was expected there, and the topic of `workflow.language` that covers it (`version.Problem`). A refusal's position carries the pointer (`graph.Position.Pointer`), and the audit log records it beside the file, the line and the column.
 
+### Console
+
+- The editor commits with `POST /api/v1/{ns}/workflows/{name}/commits`, `agentiik.yaml` written from the version opened as its parent, rather than over git from the page: no API token minted for the commit, no history fetched, and no git objects, packs or inflater carried in the browser. A branch that moved since is refused as before, and a refusal by the hook marks the line it names from the answer's `file`, `line` and `column`. `vendor/openapi.json` and `vendor/wire.schema.json` are taken from the schemas commit that describes the route.
+
 ### MCP
 
 - `agentiik-api` serves the platform's MCP server at `/mcp` (`api.NewMCP`), speaking revision `2026-07-28` over Streamable HTTP (package `mcp`, the standard library alone). The revision is stateless: every request is a `POST` carrying its version in `MCP-Protocol-Version` and in its `_meta`, and the client's capabilities; there is no `initialize`, no session and no `GET` stream, and a `GET` or a `DELETE` is answered `405`. A request is refused `400` where a header disagrees with its body (`-32020`), for a revision other than `2026-07-28` with the supported one (`-32022`), or as no JSON-RPC request; a method the server does not have is `404` (`-32601`); a browser calling from any origin but the installation's is `403`.

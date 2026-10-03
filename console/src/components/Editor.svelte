@@ -1,8 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { API, Me } from "../api/client";
-  import { commitFile } from "../lib/git/commit";
-  import { withPushToken } from "../lib/git/token";
+  import { refusal, type API } from "../api/client";
   import { addStep, connect, disconnect, edgesWritten, removeStep, setFanOut, setMaxParallel, setMerge, type Merge } from "../lib/editor/edits";
   import { includedPaths, resolve } from "../lib/editor/resolve";
   import { layout, type Graph } from "../lib/graph";
@@ -25,16 +23,15 @@
   // edited; what the browser cannot read is drawn as that version resolved it. Nothing is written
   // back that resolution found: what an included file or a hidden block gives a step stays there.
   // The text is a YAML editor of its own, beside the graph or alone across the page, and what the
-  // edits come to is committed from here, over git, as a clone would push it.
+  // edits come to is committed from here, with POST .../commits, which the server pushes as a clone
+  // would push it.
   let {
     api,
-    me,
     namespace,
     workflow,
     commit,
     entry,
     base,
-    cloneURL,
     branch,
     ontoDefault = true,
     layout: shown = "graph",
@@ -44,13 +41,11 @@
     oncommitted,
   }: {
     api: API;
-    me: Me;
     namespace: string;
     workflow: string;
     commit: string;
     entry: string;
     base: Graph;
-    cloneURL: string;
     branch: string;
     // whether the caller moves the default branch, which a protected one takes grant:manage for:
     // where they do not, a commit goes onto a new branch, as the repository would refuse it there.
@@ -197,8 +192,9 @@
   }
 
   // The commit: a message and the branch it lands on, the default branch the file was opened at or
-  // a new one starting there, sent over git as the person signed in, with a token minted for the
-  // push alone (lib/git/token), since the repository takes no session.
+  // a new one starting there, sent with POST /api/v1/{ns}/workflows/{name}/commits from the version
+  // opened as its parent, which the server commits as the person signed in and pushes through the
+  // repository's hook, so that a branch that moved since is refused rather than overwritten.
   let committing = $state(false);
   let message = $state("Update agentiik.yaml");
   let target = $state<"default" | "new">(untrack(() => (ontoDefault ? "default" : "new")));
@@ -213,27 +209,20 @@
     pushing = true;
     commitProblem = null;
     try {
-      const login = me.user?.login ?? me.principal;
-      const id = await withPushToken(api, cloneURL, (remote) =>
-        commitFile({
-          remote,
-          parent: commit,
-          branch: onto,
-          create: target === "new",
-          path: "agentiik.yaml",
-          text,
-          message: message.trim(),
-          author: { name: me.user?.display_name ?? login, email: me.user?.email || `${login}@${new URL(cloneURL).hostname}`, when: new Date() },
-        }),
-      );
+      const answer = await api.POST("/api/v1/{ns}/workflows/{name}/commits", {
+        params: { path: { ns: namespace, name: workflow } },
+        body: { branch: onto, parent: commit, message: message.trim(), files: { "agentiik.yaml": text } },
+      });
+      if (!answer.data) {
+        // What the hook refused is placed where it was written, the line it names marked in the file.
+        const at = answer.error as { file?: string; line?: number; column?: number; detail?: string; error?: string } | undefined;
+        if (at?.file === "agentiik.yaml" && at.line) refusedAt = [{ line: at.line, column: at.column, message: at.detail || at.error || "" }];
+        throw refusal(answer.response, answer.error);
+      }
       committing = false;
-      oncommitted(onto, id);
+      oncommitted(onto, answer.data.commit);
     } catch (err) {
       commitProblem = explain(`commit to ${onto}`, err);
-      const at = /agentiik\.yaml:(\d+)(?::(\d+))?/.exec(err instanceof Error ? err.message : "");
-      if (at) {
-        refusedAt = [{ line: Number(at[1]), column: at[2] ? Number(at[2]) : undefined, message: err instanceof Error ? err.message : String(err) }];
-      }
     } finally {
       pushing = false;
     }
