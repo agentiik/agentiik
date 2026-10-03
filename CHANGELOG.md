@@ -14,6 +14,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Console
 
 - The editor commits with `POST /api/v1/{ns}/workflows/{name}/commits`, `agentiik.yaml` written from the version opened as its parent, rather than over git from the page: no API token minted for the commit, no history fetched, and no git objects, packs or inflater carried in the browser. A branch that moved since is refused as before, and a refusal by the hook marks the line it names from the answer's `file`, `line` and `column`. `vendor/openapi.json` and `vendor/wire.schema.json` are taken from the schemas commit that describes the route.
+- A workflow whose repository has no commit yet opens on its first file: `Write agentiik.yaml` opens the editor on a complete first workflow, one step on an image pinned by digest, and commits it as the repository's first commit, onto its default branch, where the console offered no way to write one.
+- A refusal by the hook is said in the commit dialog with its detail and what was expected there, where it gave the rule alone.
+- A `403` that carries the server's sentence is told by it, where every one read "You do not have permission": a request from another address than the installation's public URL is refused for that, which no permission changes.
+- A console opened at an address other than the public URL, an IP address where the URL names a host or a second host the proxy in front answers, says so above everything it draws, the sign-in page included, and links the same page at the public URL, since no sign-in or change works from anywhere else. The API writes the public URL's origin into the page as `<meta name="agentiik-origin">` beside its `<base>`, which the console compares with the one it was opened at.
+- The development server, `AGK_CONSOLE_API=… npm run dev`, forwards the live connection's WebSocket and names the installation's origin on what it forwards, which the installation takes a sign-in, a change and the handshake from: a password signs in through it, where it was refused as from another origin. A passkey cannot, since the browser binds its ceremony to the installation's host.
 
 ### MCP
 
