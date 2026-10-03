@@ -32,7 +32,7 @@ const Version = "0.6.0"
 // corpus still names the release it was last cut at, while its main branch already carries what
 // the next one decides, which the engine adopts before that release is tagged: the commit says
 // which tree it is. It is written in testdata/SCHEMAS_COMMIT, and a test holds the two together.
-const Commit = "a4dae4acd2d9ecf776c44e133e3385d125790ef6"
+const Commit = "9d2b62eb2fc141269bd1955a67e47b0ef3c1821b"
 
 //go:embed testdata
 var vendored embed.FS

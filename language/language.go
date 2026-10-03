@@ -26,7 +26,7 @@ import (
 // from, since the release they will be taken from at v0.7.0 is not tagged yet: the one sentence a
 // person updating them reads to know what they are, and the test holds the files to it no further
 // than that. At the release they are taken from the tag, as the fixtures are.
-const Source = "agentiik/schemas@a4dae4acd2d9ecf776c44e133e3385d125790ef6"
+const Source = "agentiik/schemas@9d2b62eb2fc141269bd1955a67e47b0ef3c1821b"
 
 //go:embed reference schemas
 var files embed.FS
