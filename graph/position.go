@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,10 +18,16 @@ import (
 //
 // "The refusal is written on git's error stream as file:line:column: message (rule)", so that a
 // person holding the file is sent to the line rather than to the key somewhere above it.
+//
+// Pointer is the same node as a JSON Pointer into the file, RFC 6901's, which a client holding the
+// document as data rather than as text is sent to: "an invalid draft returns an error carrying a
+// JSON Pointer and what was expected", and a model correcting a draft edits a value, not a column.
+// It is set where Line is, and empty, the whole document, where the refusal is about the file.
 type Position struct {
-	File   string
-	Line   int
-	Column int
+	File    string
+	Line    int
+	Column  int
+	Pointer string
 }
 
 // String is the position as a compiler writes one: file:line:column, file alone where no line is
@@ -91,8 +98,28 @@ func (o origin) position(key bool) Position {
 	}
 	if t := at.GetToken(); t != nil && t.Position != nil {
 		p.Line, p.Column = t.Position.Line, t.Position.Column
+		p.Pointer = Pointer(o.path...)
 	}
 	return p
+}
+
+// Pointer is a path through a document, each step a key of a mapping or an index of a list, as a
+// JSON Pointer: "/" before every step, and in a key ~ written ~0 and / written ~1, RFC 6901's
+// escapes in that order. No step at all is the empty pointer, the whole document.
+func Pointer(path ...any) string {
+	var b strings.Builder
+	for _, step := range path {
+		b.WriteByte('/')
+		switch step := step.(type) {
+		case int:
+			b.WriteString(strconv.Itoa(step))
+		case string:
+			b.WriteString(strings.ReplaceAll(strings.ReplaceAll(step, "~", "~0"), "/", "~1"))
+		default:
+			b.WriteString(fmt.Sprint(step))
+		}
+	}
+	return b.String()
 }
 
 // child is one step down the document: the key and the value of a mapping entry, or the value at

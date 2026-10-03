@@ -107,7 +107,7 @@ func TestATagWithNoPinIsRefusedWhereItIsWritten(t *testing.T) {
 	c.Pin = func(context.Context, string, agk.Step) (string, error) { return "", version.ErrNotHeld }
 	_, err := version.Check(t.Context(), aRepository(), c)
 	r := refusedBy(t, err, version.RuleImageNotPinned)
-	if want := (graph.Position{File: "fragments/bricks.yaml", Line: 2, Column: 10}); r.At != want {
+	if want := (graph.Position{File: "fragments/bricks.yaml", Line: 2, Column: 10, Pointer: "/.invoicing/image"}); r.At != want {
 		t.Errorf("the tag is refused at %s, and it is written at %s", r.At, want)
 	}
 }
@@ -186,14 +186,14 @@ func TestAVersionIsMadeUnderTheNameItsFileWrites(t *testing.T) {
 	c := everything()
 	c.Repository = "payroll"
 	_, err := version.Check(t.Context(), aRepository(), c)
-	if r := refusedBy(t, err, version.RuleMetadataNameNotRepository); r.At != (graph.Position{File: "agentiik.yaml", Line: 3, Column: 19}) {
+	if r := refusedBy(t, err, version.RuleMetadataNameNotRepository); r.At != (graph.Position{File: "agentiik.yaml", Line: 3, Column: 19, Pointer: "/metadata/name"}) {
 		t.Errorf("the name is refused at %s", r.At)
 	}
 
 	c = everything()
 	c.Namespace = "team-ops"
 	_, err = version.Check(t.Context(), aRepository(), c)
-	if r := refusedBy(t, err, version.RuleMetadataNamespaceNotRepository); r.At != (graph.Position{File: "agentiik.yaml", Line: 3, Column: 49}) {
+	if r := refusedBy(t, err, version.RuleMetadataNamespaceNotRepository); r.At != (graph.Position{File: "agentiik.yaml", Line: 3, Column: 49, Pointer: "/metadata/namespace"}) {
 		t.Errorf("the namespace is refused at %s", r.At)
 	}
 
@@ -224,7 +224,7 @@ func TestASecretIsAskedOfThePusherBeforeTheNamespace(t *testing.T) {
 	c.Secrets = func(context.Context) ([]string, error) { return []string{"ledger"}, nil }
 	_, err = version.Check(t.Context(), aRepository(), c)
 	r := refusedBy(t, err, version.RuleSecretNotDeclaredByNamespace)
-	if r.At != (graph.Position{File: "agentiik.yaml", Line: 6, Column: 11}) || !strings.Contains(r.Detail, "step invoice names the secret billing") {
+	if r.At != (graph.Position{File: "agentiik.yaml", Line: 6, Column: 11, Pointer: "/secrets/0"}) || !strings.Contains(r.Detail, "step invoice names the secret billing") {
 		t.Errorf("the secret is refused at %s: %s", r.At, r.Detail)
 	}
 
@@ -235,7 +235,7 @@ func TestASecretIsAskedOfThePusherBeforeTheNamespace(t *testing.T) {
 	tree["fragments/secrets.yaml"] = &fstest.MapFile{Data: []byte("secrets: [billing]\n")}
 	tree["fragments/bricks.yaml"] = &fstest.MapFile{Data: []byte("include:\n  - path: ./secrets.yaml\nsecrets: [billing]\n" + string(tree["fragments/bricks.yaml"].Data))}
 	_, err = version.Check(t.Context(), tree, c)
-	if r := refusedBy(t, err, version.RuleSecretNotDeclaredByNamespace); r.At != (graph.Position{File: "fragments/secrets.yaml", Line: 1, Column: 11}) {
+	if r := refusedBy(t, err, version.RuleSecretNotDeclaredByNamespace); r.At != (graph.Position{File: "fragments/secrets.yaml", Line: 1, Column: 11, Pointer: "/secrets/0"}) {
 		t.Errorf("the secret named first in the file an included file includes is refused at %s", r.At)
 	}
 }
