@@ -4,6 +4,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ## Unreleased
 
+### API
+
+- `POST /api/v1/{ns}/workflows/{name}/commits` publishes files: it commits them onto a branch as the caller, from the parent they were read at, and hands the commit to the path a git push takes, so that the pre-receive hook judges it, the grants it needs are a push's (`workflow:write`, `grant:manage` to move a protected default branch, `secret:use` where the version names a secret), the version is recorded and the audit log says `ref.update` and `push.refuse` as of any push. `files` maps each path to its new text, UTF-8, or to null to remove it; a branch that moved since the parent is `409`, a refusal by the hook `422` with its rule, file, line, column, pointer, what was expected and the topic of `workflow.language`. The author and committer are the caller, by their name and email address, or their login at the installation's host.
+- A refusal by the hook is told on git's error stream as `agk validate` and the route tell it: where and the rule, the detail, the node as a JSON Pointer with what was expected there, and the topic of `workflow.language` that covers it (`version.Problem`). A refusal's position carries the pointer (`graph.Position.Pointer`), and the audit log records it beside the file, the line and the column.
+
 ### MCP
 
 - `agentiik-api` serves the platform's MCP server at `/mcp` (`api.NewMCP`), speaking revision `2026-07-28` over Streamable HTTP (package `mcp`, the standard library alone). The revision is stateless: every request is a `POST` carrying its version in `MCP-Protocol-Version` and in its `_meta`, and the client's capabilities; there is no `initialize`, no session and no `GET` stream, and a `GET` or a `DELETE` is answered `405`. A request is refused `400` where a header disagrees with its body (`-32020`), for a revision other than `2026-07-28` with the supported one (`-32022`), or as no JSON-RPC request; a method the server does not have is `404` (`-32601`); a browser calling from any origin but the installation's is `403`.

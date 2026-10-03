@@ -182,6 +182,11 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		// it includes, which only the push can tell.
 		{"PUT", "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}",
 			Needs{Permission: WorkflowWrite, Scope: Workflow, Also: SecretUse, Includes: true}, s.push},
+		// "Publishes files": a commit the server writes and pushes through the path a git push
+		// takes, so it asks what a push asks of its pusher, grant:manage to move a protected
+		// default branch and secret:use where the version names a secret, beside workflow:write.
+		{"POST", "/api/v1/{namespace}/workflows/{workflow}/commits",
+			Needs{Permission: WorkflowWrite, Scope: Workflow, Asks: []Permission{GrantManage, SecretUse}, Includes: true}, s.commitFiles},
 		// What a repository's pushes are judged against beyond their tree, written under what
 		// registering a version of it takes, and read under what reading it takes.
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/images",

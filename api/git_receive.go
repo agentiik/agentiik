@@ -70,6 +70,10 @@ func (c command) branch() bool  { return strings.HasPrefix(c.ref, "refs/heads/")
 type pushed struct {
 	commands                         []command
 	reportStatus, quiet, sideband64k bool
+
+	// through is what made the push where it was not git: "mcp" for workflow.commit's, which the
+	// audit log says of the refs it moves and of a refusal.
+	through string
 }
 
 // readCommands reads a push's commands, up to the flush that ends them.
@@ -144,9 +148,25 @@ type pushRefusal struct {
 	told   []string
 	rule   *graph.Refusal
 	commit repo.ID
+
+	// problem is the hook's refusal as every reader of one is told it, where a rule refused the
+	// commit: what POST .../commits answers and git's error stream says alike.
+	problem *version.Problem
+
+	// code is the status a route answering the refusal over HTTP answers it with, where it is not
+	// 422: a ref that moved is 409, a permission the pusher lacks 403, a push too large 413.
+	code int
 }
 
 func (r *pushRefusal) Error() string { return r.short }
+
+// status is what a route answering the refusal over HTTP answers it with.
+func (r *pushRefusal) status() int {
+	if r.code != 0 {
+		return r.code
+	}
+	return http.StatusUnprocessableEntity
+}
 
 func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	ctx := r.Context()
@@ -302,7 +322,26 @@ func (rp *report) fail(p pushed, unpack, why string) {
 
 // refuse answers a push refused, and records it: what it asked to move and why.
 func (s *Server) refuse(ctx context.Context, rep *report, who Principal, over Target, p pushed, why *pushRefusal, unpack string) {
+	s.recordRefusal(ctx, who, over, p, why)
+	told := why.told
+	if len(told) == 0 {
+		told = []string{why.short}
+	}
+	rep.tell(told...)
+	lines := []string{unpack}
+	for _, c := range p.commands {
+		lines = append(lines, "ng "+c.ref+" "+oneLine(why.short))
+	}
+	rep.done(lines...)
+}
+
+// recordRefusal records a push refused: what it asked to move and why, the rule and where it was
+// written where the hook refused it.
+func (s *Server) recordRefusal(ctx context.Context, who Principal, over Target, p pushed, why *pushRefusal) {
 	detail := map[string]any{"reason": why.short}
+	if p.through != "" {
+		detail["through"] = p.through
+	}
 	var refs []any
 	for _, c := range p.commands {
 		refs = append(refs, map[string]any{"ref": c.ref, "old": idOrEmpty(c.old), "new": idOrEmpty(c.new)})
@@ -318,6 +357,9 @@ func (s *Server) refuse(ctx context.Context, rep *report, who Principal, over Ta
 			detail["line"] = why.rule.At.Line
 			detail["column"] = why.rule.At.Column
 		}
+		if why.rule.At.Pointer != "" {
+			detail["pointer"] = why.rule.At.Pointer
+		}
 	}
 	// In a transaction of its own, since the push's was never committed: an act refused is still
 	// an act somebody asked for, and the log is where it is kept.
@@ -327,16 +369,6 @@ func (s *Server) refuse(ctx context.Context, rep *report, who Principal, over Ta
 	if err != nil {
 		s.report(fmt.Errorf("api: a refused push to %s/%s could not be recorded: %w", over.Namespace, over.Workflow, err))
 	}
-	told := why.told
-	if len(told) == 0 {
-		told = []string{why.short}
-	}
-	rep.tell(told...)
-	lines := []string{unpack}
-	for _, c := range p.commands {
-		lines = append(lines, "ng "+c.ref+" "+oneLine(why.short))
-	}
-	rep.done(lines...)
 }
 
 func idOrEmpty(id repo.ID) string {
@@ -398,7 +430,7 @@ func (s *Server) receive(ctx context.Context, body io.Reader, repository repo.Lo
 	sent, err := io.Copy(spool, body)
 	if errors.Is(err, errTooLarge) {
 		rc.close()
-		return nil, &pushRefusal{short: fmt.Sprintf("the pack is larger than the %d bytes a push may send", repo.MaxPackBytes)}
+		return nil, &pushRefusal{short: fmt.Sprintf("the pack is larger than the %d bytes a push may send", repo.MaxPackBytes), code: http.StatusRequestEntityTooLarge}
 	}
 	if err != nil {
 		rc.close()
@@ -575,7 +607,7 @@ func (s *Server) judge(ctx context.Context, r *http.Request, who Principal, over
 			now = ref.Target()
 		}
 		if now != idOrEmpty(c.old) {
-			return nil, &pushRefusal{short: fmt.Sprintf("%s is no longer where the push found it: fetch, and push again", c.ref)}
+			return nil, &pushRefusal{short: fmt.Sprintf("%s is no longer where the push found it: fetch, and push again", c.ref), code: http.StatusConflict}
 		}
 		if c.deletes() {
 			if c.ref == "refs/heads/"+repository.DefaultBranch {
@@ -623,7 +655,7 @@ func (s *Server) judge(ctx context.Context, r *http.Request, who Principal, over
 				case c.forced:
 					why = fmt.Sprintf("moving the tag %s takes grant:manage on the workflow, which you do not hold: a tag others fetched names one commit", c.ref)
 				}
-				return nil, &pushRefusal{short: why}
+				return nil, &pushRefusal{short: why, code: http.StatusForbidden}
 			}
 		}
 	}
@@ -721,13 +753,13 @@ func (s *Server) hook(ctx context.Context, r *http.Request, over Target, rc *rec
 		if at != "" {
 			short += " at " + at
 		}
-		told := []string{fmt.Sprintf("%s refused %s: %s", over.Workflow, commit, short)}
-		if rule.Detail != "" {
-			told = append(told, rule.Detail)
-		}
-		return judged{}, &pushRefusal{short: "refused: " + short, told: told, rule: rule, commit: commit}
+		// What the hook tells is the problem as agk validate and POST .../commits tell it: where,
+		// the rule, the detail, what was expected at the node and the topic to read.
+		problem, _ := version.Explain(err)
+		told := append([]string{fmt.Sprintf("%s refused %s:", over.Workflow, commit)}, problem.Lines()...)
+		return judged{}, &pushRefusal{short: "refused: " + short, told: told, rule: rule, commit: commit, problem: &problem}
 	case errors.As(err, &unusable):
-		return judged{}, &pushRefusal{short: "refused: this commit names a secret and you do not hold secret:use", told: []string{unusable.Error()}, commit: commit}
+		return judged{}, &pushRefusal{short: "refused: this commit names a secret and you do not hold secret:use", told: []string{unusable.Error()}, commit: commit, code: http.StatusForbidden}
 	case err != nil:
 		var fault *pushFault
 		if errors.As(err, &fault) {
@@ -962,6 +994,9 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 		}
 		for _, c := range p.commands {
 			detail := map[string]any{"ref": c.ref, "old": idOrEmpty(c.old), "new": idOrEmpty(c.new), "forced": c.forced}
+			if p.through != "" {
+				detail["through"] = p.through
+			}
 			if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefUpdate, Target: over.Workflow, Result: audit.Done, Detail: detail}); err != nil {
 				return err
 			}
