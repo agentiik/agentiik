@@ -44,6 +44,9 @@
 // leaves every other route served; a build that skipped the console's stage carries none and serves
 // none, and the line the start logs says which of the three it is.
 //
+// It serves the Model Context Protocol at /mcp, unless AGK_MCP is off, which answers 404 there as at
+// any route the installation does not serve; the line the start logs says which.
+//
 // It serves plain HTTP, to the TLS terminator in front on a network only the terminator reaches,
 // unless AGK_TLS_CERT_FILE and AGK_TLS_KEY_FILE name a certificate and its key: then it serves TLS
 // itself, 1.3 where the client speaks it and 1.2 at the least. The certificate is read once, at

@@ -4,6 +4,7 @@ import "./styles/base.css";
 import { mount } from "svelte";
 import { connect } from "./api/client";
 import App from "./App.svelte";
+import { elsewhere, openedIn } from "./lib/origin";
 import { Place } from "./lib/place.svelte";
 import { Session } from "./lib/session.svelte";
 import { passkeysUnavailable } from "./lib/signin";
@@ -20,5 +21,5 @@ if (target) {
   const api = connect(document.baseURI);
   const unavailable = passkeysUnavailable(window);
   const passkeys = { unavailable, credentials: unavailable ? undefined : navigator.credentials };
-  mount(App, { target, props: { api, session: new Session(api), place, version: __AGENTIIK_VERSION__, passkeys } });
+  mount(App, { target, props: { api, session: new Session(api), place, version: __AGENTIIK_VERSION__, passkeys, elsewhere: elsewhere(openedIn(document, window.location)) } });
 }

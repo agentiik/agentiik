@@ -77,7 +77,8 @@ var recordsNothing = map[string]string{
 	"POST /objects/{namespace}":            "a task's output, stored under a policy its redemption signed, and the page's audit log names no upload",
 
 	// Git's fetch is a POST only because the protocol sends what the client has in a body.
-	"POST /{namespace}/{repository}/git-upload-pack": "a fetch reads a repository and changes nothing",
+	"POST /{namespace}/{repository}/git-upload-pack":         "a fetch reads a repository and changes nothing",
+	"POST /api/v1/{namespace}/workflows/{workflow}/validate": "a draft is judged and committed nowhere, so nothing changes, and a judgement is no act",
 }
 
 // actor is how a step asks: bearing a token, carrying a session from the public URL's origin, or
@@ -537,6 +538,18 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.act("POST /{namespace}/{repository}/git-receive-pack", "/finance/monthly-invoicing.git/git-receive-pack", carolsGit,
 		aGitPush(t, "refused", strings.ReplaceAll(theWorkflow, theImage, "ghcr.io/acme/agk-invoice:9.9.9")), http.StatusOK,
 		"push.refuse carol monthly-invoicing finance done")
+	// Files published as a commit are a push, recorded as one: the branch the commit made, from the
+	// head the git push left, as ref.update, and a commit the hook refuses as push.refuse.
+	w = s.ask("GET /api/v1/{namespace}/workflows/{workflow}", "/api/v1/finance/workflows/monthly-invoicing", carol, nil, http.StatusOK)
+	head := s.answer(w)["repository"].(map[string]any)["head"].(string)
+	s.act("POST /api/v1/{namespace}/workflows/{workflow}/commits", "/api/v1/finance/workflows/monthly-invoicing/commits", carol,
+		map[string]any{"branch": "published", "parent": head, "message": "a file published", "files": map[string]any{"notes.txt": "kept\n"}}, http.StatusCreated,
+		"ref.update carol monthly-invoicing finance done")
+	s.act("POST /api/v1/{namespace}/workflows/{workflow}/commits", "/api/v1/finance/workflows/monthly-invoicing/commits", carol,
+		map[string]any{"branch": "refused-too", "parent": head, "message": "an image nobody pinned", "files": map[string]any{"agentiik.yaml": strings.ReplaceAll(theWorkflow, theImage, "ghcr.io/acme/agk-invoice:9.9.9")}}, http.StatusUnprocessableEntity,
+		"push.refuse carol monthly-invoicing finance done")
+	s.ask("POST /api/v1/{namespace}/workflows/{workflow}/validate", "/api/v1/finance/workflows/monthly-invoicing/validate", carol,
+		map[string]any{"files": map[string]any{"notes.txt": "a draft\n"}}, http.StatusOK)
 	// A repository created empty is recorded as workflow.create; its default branch protected, as
 	// ref.protect, and named another, as workflow.update.
 	s.act("POST /api/v1/{namespace}/workflows", "/api/v1/finance/workflows", carol, `{"name":"vat-reconciliation"}`, http.StatusCreated,

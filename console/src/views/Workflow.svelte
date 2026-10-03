@@ -18,7 +18,8 @@
   import WorkflowSettings from "../components/WorkflowSettings.svelte";
   import Refused from "./Refused.svelte";
   import { clock, took } from "../lib/format";
-  import { authOf, layout, triggers } from "../lib/graph";
+  import { authOf, layout, triggers, type Graph } from "../lib/graph";
+  import { starting } from "../lib/editor/starting";
   import { moved, useKeys } from "../lib/keys.svelte";
   import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
@@ -162,7 +163,15 @@
   // The visual editor, under workflow:write, over the file at the head of the default branch: the
   // address says it is open, so that Back leaves it.
   const mayEdit = $derived(holds(me, "workflow:write", namespace, workflow));
-  const editing = $derived(place.query.get("edit") === "1" && mayEdit && (tab === undefined || tab === "graph"));
+  const editing = $derived(place.query.get("edit") === "1" && mayEdit && (tab === undefined || tab === "graph" || tab === "files"));
+
+  // An empty repository is written from here too: the editor opens on a first agentiik.yaml naming
+  // the workflow, and its commit is the repository's first, which POST .../commits makes with no
+  // parent. Its image is pinned by digest, since the hook refuses a tag nobody pinned and pinning one
+  // takes agk push, where the image is.
+  const first = $derived(starting(namespace, workflow));
+  const empty = $derived(detail?.repository.head === null && !detail?.version);
+  const nothing: Graph = { workflow: "", commit: "", includes: [], order: [], steps: {} } as unknown as Graph;
   let editSelected = $state<string | undefined>(untrack(() => place.query.get("step") ?? undefined));
 
   // The steps in the order the graph draws them, row by row and left to right, which the keys move
@@ -284,9 +293,16 @@
     </div>
   {/if}
 
-  {#if tab === "files" && detail.repository.head === null}
+  {#if editing && empty}
+    {#await import("../components/Editor.svelte") then { default: Editor }}
+      <Editor {api} {namespace} {workflow} commit={null} entry={first} base={nothing} branch={detail.repository.default_branch} ontoDefault={true} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
+    {/await}
+  {:else if (tab === "files" || tab === undefined || tab === "graph") && empty}
     <Pane title="Files">
       <p class="muted">Empty repository</p>
+      {#if mayEdit}
+        <p><button class="control primary" onclick={() => narrow({ edit: "1" })}><Icon name="control-edit" size={14} />Write agentiik.yaml</button></p>
+      {/if}
       <pre class="clone term">git clone {detail.repository.clone_url}</pre>
     </Pane>
   {:else if tab === "files"}
@@ -301,7 +317,7 @@
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
     {#await import("../components/Editor.svelte") then { default: Editor }}
-      <Editor {api} {me} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} cloneURL={detail.repository.clone_url} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
+      <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
     {/await}
   {:else if graph && laid}
     <div class="columns fills">

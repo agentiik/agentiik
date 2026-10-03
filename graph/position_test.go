@@ -47,7 +47,7 @@ steps:
 	if !errors.As(err, &r) || r.Rule != RuleEdgePortNotDeclared {
 		t.Fatalf("the edge was refused by %v", err)
 	}
-	if want := (Position{File: "agentiik.yaml", Line: 13, Column: 30}); r.At != want {
+	if want := (Position{File: "agentiik.yaml", Line: 13, Column: 30, Pointer: "/steps/load/needs/0/port"}); r.At != want {
 		t.Errorf("the edge's port is refused at %s, and it is written at %s", r.At, want)
 	}
 
@@ -58,13 +58,13 @@ steps:
 	if !errors.As(err, &r) || r.Rule != RuleManifestMissing || r.Step != "fetch" {
 		t.Fatalf("the brick with no manifest was refused by %v", err)
 	}
-	if want := (Position{File: "fragments/bricks.yaml", Line: 2, Column: 10}); r.At != want {
+	if want := (Position{File: "fragments/bricks.yaml", Line: 2, Column: 10, Pointer: "/.fetcher/image"}); r.At != want {
 		t.Errorf("the image is refused at %s, and it is written at %s", r.At, want)
 	}
-	if got := wf.StepAt("load", "image"); got != (Position{File: "fragments/bricks.yaml", Line: 6, Column: 10}) {
+	if got := wf.StepAt("load", "image"); got != (Position{File: "fragments/bricks.yaml", Line: 6, Column: 10, Pointer: "/.base/image"}) {
 		t.Errorf("the image of load is placed at %s, which is not where .base writes it", got)
 	}
-	if got := wf.StepAt("load", "needs", 0, "port"); got != (Position{File: "agentiik.yaml", Line: 13, Column: 30}) {
+	if got := wf.StepAt("load", "needs", 0, "port"); got != (Position{File: "agentiik.yaml", Line: 13, Column: 30, Pointer: "/steps/load/needs/0/port"}) {
 		t.Errorf("the edge of load is placed at %s", got)
 	}
 }
@@ -90,12 +90,12 @@ steps:
 		rule    Rule
 		at      Position
 	}{
-		{"../elsewhere.yaml", nil, RuleIncludeLeavesTree, Position{"agentiik.yaml", 5, 11}},
-		{"./common.yaml", map[string]string{"fragments/common.yaml": ".x:\n  timeout: 1m\n"}, RuleIncludeMissing, Position{"agentiik.yaml", 5, 11}},
+		{"../elsewhere.yaml", nil, RuleIncludeLeavesTree, Position{"agentiik.yaml", 5, 11, "/include/0/path"}},
+		{"./common.yaml", map[string]string{"fragments/common.yaml": ".x:\n  timeout: 1m\n"}, RuleIncludeMissing, Position{"agentiik.yaml", 5, 11, "/include/0/path"}},
 		{"fragments/a.yaml", map[string]string{
 			"fragments/a.yaml": "include:\n  - path: ./b.yaml\n",
 			"fragments/b.yaml": "vars: { v: 1 }\ninclude:\n  - path: /fragments/a.yaml\n",
-		}, RuleIncludeCycle, Position{"fragments/b.yaml", 3, 11}},
+		}, RuleIncludeCycle, Position{"fragments/b.yaml", 3, 11, "/include/0/path"}},
 	} {
 		files := map[string]string{"agentiik.yaml": strings.Replace(entry, "%s", c.include, 1)}
 		for k, v := range c.files {
@@ -314,7 +314,7 @@ steps:
 	if !errors.As(err, &r) || r.Rule != RuleExpressionItemOutsideFanOutItem {
 		t.Fatalf("the parameter reading item was refused by %v", err)
 	}
-	if want := (Position{File: "fragments/base.yaml", Line: 4, Column: 10}); r.At != want {
+	if want := (Position{File: "fragments/base.yaml", Line: 4, Column: 10, Pointer: "/.base/params/who"}); r.At != want {
 		t.Errorf("the parameter reading item is refused at %s, and it is written at %s", r.At, want)
 	}
 
@@ -339,7 +339,7 @@ spec:
 	if !errors.As(err, &r) || r.Rule != RuleStepInputPortNotInManifest {
 		t.Fatalf("the edge's input port was refused by %v", err)
 	}
-	if want := (Position{File: "agentiik.yaml", Line: 14, Column: 39}); r.At != want {
+	if want := (Position{File: "agentiik.yaml", Line: 14, Column: 39, Pointer: "/steps/load/needs/0/as"}); r.At != want {
 		t.Errorf("the edge's input port is refused at %s, and it is written at %s", r.At, want)
 	}
 
@@ -349,7 +349,7 @@ spec:
 	if !errors.As(err, &r) || r.Rule != RuleParamsAgainstManifest {
 		t.Fatalf("the parameter was refused by %v", err)
 	}
-	if want := (Position{File: "fragments/base.yaml", Line: 4, Column: 10}); r.At != want {
+	if want := (Position{File: "fragments/base.yaml", Line: 4, Column: 10, Pointer: "/.base/params/who"}); r.At != want {
 		t.Errorf("the parameter is refused at %s, and it is written at %s", r.At, want)
 	}
 
@@ -359,7 +359,7 @@ spec:
 	if !errors.As(err, &r) || r.Rule != RuleSecretNotDeclared || r.Step != "fetch" {
 		t.Fatalf("the secret defaults mount was refused by %v", err)
 	}
-	if want := (Position{File: "fragments/base.yaml", Line: 2, Column: 13}); r.At != want {
+	if want := (Position{File: "fragments/base.yaml", Line: 2, Column: 13, Pointer: "/defaults/secrets/0"}); r.At != want {
 		t.Errorf("the secret defaults mount is refused at %s, and it is written at %s", r.At, want)
 	}
 }

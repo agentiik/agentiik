@@ -48,6 +48,11 @@ export function explain(failed: string, cause: unknown): Explained {
   switch (true) {
     case cause.status === 401:
       return told("Your session has ended.", "Sign in again.");
+    // The server's own sentence where it gives one: a 403 is a missing permission, but also a
+    // request from another address than the installation's public URL, which no permission
+    // changes and which "You do not have permission" would send a person looking for one.
+    case cause.status === 403 && cause.message.trim() !== "":
+      return toldBy(sentence(cause.message), "");
     case cause.status === 403:
       return told("You do not have permission.", "");
     case cause.status === 404:

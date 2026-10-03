@@ -92,6 +92,7 @@ const (
 	TLSKeyFile                  = "AGK_TLS_KEY_FILE"
 	ProxyURL                    = "AGK_PROXY_URL"
 	Console                     = "AGK_CONSOLE"
+	MCP                         = "AGK_MCP"
 	InitDir                     = "AGK_INIT_DIR"
 	InitHost                    = "AGK_INIT_HOST"
 	InitNamespace               = "AGK_INIT_NAMESPACE"
@@ -318,6 +319,12 @@ type API struct {
 	// under /auth among them, for an installation serving the console's files elsewhere on the
 	// same origin, or none.
 	Console bool
+
+	// MCP is whether the API serves the Model Context Protocol at /mcp and /mcp/{namespace}/{workflow},
+	// as it does unless AGK_MCP is off: then both answer 404, as a route the installation does not
+	// serve does, and a workflow's mcp block is still accepted and checked at the push, since a file
+	// means the same on every installation and the next one it is pushed to may serve MCP.
+	MCP bool
 }
 
 // Controller is what agentiik-controller reads.
@@ -431,6 +438,7 @@ func ReadAPI(lookup Lookup) (API, error) {
 	c.RevocationGrace = r.duration(RevocationGrace, r.taskCeiling(), "how long a revoked runner's results are still taken",
 		"revoking a runner never destroys work already done: a grace of no time refuses the results of what it is finishing")
 	c.Console = r.onOff(Console, "whether the API serves the web console at the root of the public URL")
+	c.MCP = r.onOff(MCP, "whether the API serves the Model Context Protocol at /mcp")
 	return c, r.err()
 }
 

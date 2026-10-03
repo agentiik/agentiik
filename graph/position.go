@@ -1,11 +1,13 @@
 package graph
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/parser"
 
 	"github.com/agentiik/agentiik/agk"
 )
@@ -17,10 +19,16 @@ import (
 //
 // "The refusal is written on git's error stream as file:line:column: message (rule)", so that a
 // person holding the file is sent to the line rather than to the key somewhere above it.
+//
+// Pointer is the same node as a JSON Pointer into the file, RFC 6901's, which a client holding the
+// document as data rather than as text is sent to: "an invalid draft returns an error carrying a
+// JSON Pointer and what was expected", and a model correcting a draft edits a value, not a column.
+// It is set where Line is, and empty, the whole document, where the refusal is about the file.
 type Position struct {
-	File   string
-	Line   int
-	Column int
+	File    string
+	Line    int
+	Column  int
+	Pointer string
 }
 
 // String is the position as a compiler writes one: file:line:column, file alone where no line is
@@ -91,8 +99,79 @@ func (o origin) position(key bool) Position {
 	}
 	if t := at.GetToken(); t != nil && t.Position != nil {
 		p.Line, p.Column = t.Position.Line, t.Position.Column
+		p.Pointer = Pointer(o.path...)
 	}
 	return p
+}
+
+// Locate is where the node a JSON Pointer names begins in a document: its line and column, and the
+// pointer of the node found, which is the deepest the document holds of the path where it holds not
+// all of it. key places a pointer whose last step is a key at the key rather than at its value, for
+// a key that should not be written at all. A document that does not parse is placed nowhere.
+func Locate(doc []byte, pointer string, key bool) Position {
+	file, err := parser.ParseBytes(doc, 0)
+	if err != nil || len(file.Docs) == 0 || file.Docs[0].Body == nil {
+		return Position{}
+	}
+	node := file.Docs[0].Body
+	var keyNode ast.Node
+	var walked []any
+	for _, token := range splitPointer(pointer) {
+		var step any = token
+		if _, list := unwrap(node).(*ast.SequenceNode); list {
+			if i, err := strconv.Atoi(token); err == nil {
+				step = i
+			}
+		}
+		k, next := child(node, step)
+		if next == nil {
+			keyNode = nil
+			break
+		}
+		keyNode, node = k, next
+		walked = append(walked, step)
+	}
+	at := node
+	if key && keyNode != nil {
+		at = keyNode
+	}
+	p := Position{Pointer: Pointer(walked...)}
+	if t := at.GetToken(); t != nil && t.Position != nil {
+		p.Line, p.Column = t.Position.Line, t.Position.Column
+	}
+	return p
+}
+
+// splitPointer reads a JSON Pointer into its steps, unescaped as RFC 6901 says: ~1 is a slash and ~0
+// a tilde, in that order. The empty pointer is the document, no step.
+func splitPointer(pointer string) []string {
+	if pointer == "" {
+		return nil
+	}
+	tokens := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+	for i, t := range tokens {
+		tokens[i] = strings.ReplaceAll(strings.ReplaceAll(t, "~1", "/"), "~0", "~")
+	}
+	return tokens
+}
+
+// Pointer is a path through a document, each step a key of a mapping or an index of a list, as a
+// JSON Pointer: "/" before every step, and in a key ~ written ~0 and / written ~1, RFC 6901's
+// escapes in that order. No step at all is the empty pointer, the whole document.
+func Pointer(path ...any) string {
+	var b strings.Builder
+	for _, step := range path {
+		b.WriteByte('/')
+		switch step := step.(type) {
+		case int:
+			b.WriteString(strconv.Itoa(step))
+		case string:
+			b.WriteString(strings.ReplaceAll(strings.ReplaceAll(step, "~", "~0"), "/", "~1"))
+		default:
+			b.WriteString(fmt.Sprint(step))
+		}
+	}
+	return b.String()
 }
 
 // child is one step down the document: the key and the value of a mapping entry, or the value at

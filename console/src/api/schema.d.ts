@@ -557,6 +557,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's collections
+         * @description The caller's collections, by name, whole and not paged, each with its id, its name, its description, the url a client is given and its members, each member with its workflow, its ref and its as where written, and the tool it offers or why it offers none, read at the head of each member's ref as the next tools/list reads it. Any authenticated principal, about its own: nobody reads another principal's, an administrator included, since a collection grants nothing and is one principal's arrangement of what they may already run. The bootstrap token, which is nobody, holds none and lists none.
+         */
+        get: operations["listCollections"];
+        put?: never;
+        /**
+         * Make a collection
+         * @description Makes a collection of the caller's, holding no workflow yet, with the name the body gives and its description, the empty string where none is written, and answers it with the url a client is given, <public URL>/mcp/collections/{id}, under an identifier that never changes, so that a rename later changes nothing a client is configured with. A workflow is added at PUT /api/v1/me/collections/{id}/members/{ns}/{name}, one at a time, each judged as it is added. A name another of the caller's collections holds is refused, since it is how their owner tells them apart, and so is a 51st collection, past the 50 a principal holds. Any authenticated principal, a user or a service account, makes its own; the bootstrap token, which is nobody, owns nothing and is refused saying so. Not audited: a collection grants nothing, and every call through it is a run, which is.
+         */
+        post: operations["createCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/collections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection, by the identifier its url carries and GET /api/v1/me/collections lists. Another principal's is answered as one that does not exist, to an administrator as to anybody, since a collection is its owner's alone. */
+                id: components["parameters"]["collection"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read one of the caller's collections
+         * @description One of the caller's collections, as the list gives it: each member with its workflow, its ref and its as where written, and tool, the name it is offered under, or null beside reason, no_mcp_block where the entry point at the head of its ref declares no mcp block and not_runnable where the caller may no longer run the workflow, deleted ones included. What the web console shows of it, so that a member missing from a client's tool list is one its owner can account for. Another principal's collection is answered 404, to an administrator as to anybody.
+         */
+        get: operations["getCollection"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove one of the caller's collections
+         * @description Removes the collection with its members, and its url answers 404 from the next request, as for a collection that never was: a client configured with it lists nothing and calls nothing through it. No workflow changes, and no run: a run called through it keeps the collection's identifier and the tool as its collection. A collection goes with its owner too, since it is nobody else's. Not audited: a collection grants nothing. No body is read, and one sent is refused.
+         */
+        delete: operations["deleteCollection"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename or describe one of the caller's collections
+         * @description Changes the collection's name, its description or both, as a partial object: each field the body names is set and each it leaves out kept. Its identifier, and so its url, never changes, so that every client configured with it reaches it under its new name. A name another of the caller's collections holds is refused. Answers the collection as it now stands. Not audited: a collection grants nothing.
+         */
+        patch: operations["updateCollection"];
+        trace?: never;
+    };
+    "/api/v1/me/collections/{id}/members/{ns}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection, by the identifier its url carries and GET /api/v1/me/collections lists. Another principal's is answered as one that does not exist, to an administrator as to anybody, since a collection is its owner's alone. */
+                id: components["parameters"]["collection"];
+                /** @description The namespace of the member's workflow, the half of NS/NAME before the slash, by its name or by a name it held before it was renamed, which reaches it as its name does. */
+                ns: components["parameters"]["memberNamespace"];
+                /** @description The member's workflow, the half of NS/NAME after the slash, by the name its metadata.name writes. */
+                name: components["parameters"]["memberWorkflow"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Add a workflow to one of the caller's collections, or change how it is read
+         * @description Adds the workflow to the collection, or changes how a member is read, written whole: ref, the branch or the tag it is read at, its default branch where left out, and as, the name its tool goes by, the one its mcp block gives where left out, so that what a PUT sends is what the member is, whatever it was before. A workflow already a member keeps its place, and one added goes last. A workflow the caller cannot run is answered as one that does not exist, since a collection holds only what its owner may already run and asking must teach nothing of what they may not. A workflow whose entry point at the ref declares no mcp block is added all the same, offering nothing beside no_mcp_block, and offers its tool from the first list after a commit declaring one reaches the ref. A ref the repository does not hold is refused, and so is a short name a branch and a tag of it both hold, as when a run is asked for by one. A tool name another member already gives is refused, naming that member, since clients hold the name and a model told of two tools of one name cannot choose between them; as resolves it. A 101st member is refused: a client reads the whole tool list into a model's context at every list, and a hundred tools is past what a model chooses among well. Answers the collection as it now stands. Not audited: a member grants nothing, and calling its tool asks for workflow:run on the workflow at every call.
+         */
+        put: operations["writeCollectionMember"];
+        post?: never;
+        /**
+         * Take a workflow out of one of the caller's collections
+         * @description Takes the workflow out of the collection: its tool leaves the next tools/list, and the workflow and its runs are untouched. A member offering nothing is taken out as any is, its workflow deleted or no longer the caller's to run among them, which is why the workflow is not asked about. Taking out a workflow that is not a member changes nothing and answers the same, so that a client that lost the first answer asks again with nothing to sort out. Answers the collection as it now stands. Not audited. No body is read, and one sent is refused.
+         */
+        delete: operations["removeCollectionMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/namespaces": {
         parameters: {
             query?: never;
@@ -1145,6 +1231,31 @@ export interface paths {
         get: operations["getWorkflowTree"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/workflows/{name}/commits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit files onto a branch, as a push
+         * @description Publishes files: commits them onto a branch as the caller, and moves the branch as a git push of that commit would, so that whoever writes a file without git, the web console's editor and an MCP client's workflow.commit among them, makes a version exactly as a clone's push makes one. The files are written over the parent's tree, every other file of it kept as it is, a file it holds keeping its mode and a new one a plain file. The commit's author and committer are the caller: a user's name and email address, or their login at the installation's host where they have none, and a service account's name at the host. It is then received by the path a git push takes, git-receive-pack's, on the server's side: the pre-receive hook judges it, the grants it needs are a push's, workflow:write, grant:manage to move a protected default branch and secret:use where the version names a secret, the version is recorded, and the audit log records the ref it moved as ref.update, as it records any push's, and a refusal as push.refuse. A route with checks of its own would be a second way into a repository, to keep in step with the hook's; one that is a push has nothing of its own to keep in step. A file travels here as JSON text, so a binary file is pushed with git. Requires workflow:write.
+         */
+        post: operations["commitFiles"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1757,6 +1868,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        1: string;
         /**
          * Error
          * @description A refusal: one sentence saying what was refused, and, where a setting of the authentication policy is the reason, that setting's name. It says nothing a caller could not already know, which is why a namespace or a workflow the caller cannot see is refused with the same sentence as one that does not exist. The same shape as every refusal the API already answers.
@@ -4888,6 +5000,172 @@ export interface components {
              *     ]
              */
             entries: components["schemas"]["treeEntry"][];
+        };
+        /**
+         * Commit request
+         * @description What POST /api/v1/{ns}/workflows/{name}/commits commits: files written over the tree of the parent they were read at, onto a branch, with a message. Every other file of the parent's tree is kept as it is, so that a client sends what it changed and never the whole tree, and the commit is still judged whole, as the push it becomes.
+         * @example {
+         *       "parent": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "message": "Normalize with the pinned image",
+         *       "files": {
+         *         "agentiik.yaml": "apiVersion: agentiik.dev/v1\nkind: Workflow\nmetadata:\n  name: monthly-invoicing\nsteps:\n  normalize:\n    image: ghcr.io/acme/agk-normalize@sha256:4b1d0c7e9a2f3b5c8d6e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c\n    outputs: [ok]\n"
+         *       }
+         *     }
+         * @example {
+         *       "branch": "feature/reminders",
+         *       "parent": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+         *       "message": "Add the reminder script",
+         *       "files": {
+         *         "scripts/remind.sh": "#!/bin/sh\nset -eu\nexec agk-remind --days \"$1\"\n"
+         *       }
+         *     }
+         * @example {
+         *       "message": "The first version",
+         *       "files": {
+         *         "agentiik.yaml": "apiVersion: agentiik.dev/v1\nkind: Workflow\nmetadata:\n  name: monthly-invoicing\nsteps:\n  normalize:\n    image: ghcr.io/acme/agk-normalize@sha256:4b1d0c7e9a2f3b5c8d6e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c\n    outputs: [ok]\n"
+         *       }
+         *     }
+         */
+        commitRequest: {
+            /**
+             * @description The branch the commit goes onto, by its short name, as HEAD names it; the repository's default branch where left out. A branch the repository does not have is created at parent, which is where a commit that may not go onto a protected default branch goes instead, to be merged by whoever may.
+             * @example main
+             * @example feature/reminders
+             */
+            branch?: components["schemas"]["branch"];
+            /**
+             * @description The commit the files were read at, written whole, which the branch has to point at still: a branch that moved since is refused with 409, as git refuses a push that is no fast-forward, so that a commit made from a tree nobody read again undoes nothing that landed meanwhile. For a new branch, the commit it starts at. Left out for the first commit of a repository that holds none, and only then.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             */
+            parent?: components["schemas"]["commit"];
+            /**
+             * @description The commit's message, which git log shows beside it: one character at least that is not a blank. Written with one line feed ending it; the commit workflow.commit makes carries a Via: mcp trailer besides, so that git log says what arrived through MCP.
+             * @example Normalize with the pinned image
+             * @example Add the reminder script
+             */
+            message: string;
+            /**
+             * @description Each path the commit writes, from the root of the tree, mapped to the file's new text, UTF-8, or to null to remove the file; one at least, and at most 4096, the most files a version's tree holds. A path is relative, written in its cleaned form, with no . or .. segment, no empty one and no backslash, which Windows reads as a separator, and none of its segments .git, which is git's own: what the schema refuses of it is a part of what the API refuses, which also bounds a path and each of its names, and answers 422. The texts and the paths weigh 4 MiB at most together, as the tree a push carries does, since every task of the version is handed every file: a file larger belongs in an image or in an artifact. A file travels here as JSON text, so a binary file is pushed with git.
+             * @example {
+             *       "agentiik.yaml": "apiVersion: agentiik.dev/v1\nkind: Workflow\nmetadata:\n  name: monthly-invoicing\nsteps:\n  normalize:\n    image: ghcr.io/acme/agk-normalize@sha256:4b1d0c7e9a2f3b5c8d6e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c\n    outputs: [ok]\n"
+             *     }
+             * @example {
+             *       "scripts/remind.sh": "#!/bin/sh\nset -eu\nexec agk-remind --days \"$1\"\n",
+             *       "scripts/export.sh": null
+             *     }
+             */
+            files: {
+                [key: string]: string | null;
+            };
+        };
+        /**
+         * Commit made
+         * @description The commit the route made and pushed, which the hook accepted and the installation recorded as a version: what the branch points at from this answer on.
+         * @example {
+         *       "commit": "7d3e9a1c5b2f4e6d8c0a1b3d5f7e9c2a4b6d8f0e",
+         *       "branch": "main",
+         *       "parent": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f"
+         *     }
+         * @example {
+         *       "commit": "c41d9e2a7b3f5e8d1c0a9b6e4f2d8c7a5b3e1f09",
+         *       "branch": "main",
+         *       "parent": ""
+         *     }
+         */
+        commitMade: {
+            /**
+             * @description The commit made, written whole: a version, which a run may be asked for and the tree route reads.
+             * @example 7d3e9a1c5b2f4e6d8c0a1b3d5f7e9c2a4b6d8f0e
+             */
+            commit: components["schemas"]["commit"];
+            /**
+             * @description The branch it moved or created, by its short name: the default branch where the request named none.
+             * @example main
+             */
+            branch: components["schemas"]["branch"];
+            /**
+             * @description The commit it follows, as the request named it, and the empty string for the first commit of a repository, which follows none.
+             * @example a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f
+             * @example
+             */
+            parent: components["schemas"]["commit"] | "";
+        };
+        /**
+         * Hook refusal
+         * @description A version the pre-receive hook refused by one of the language's rules, told as every reader of a refusal is told it, agk validate and git's error stream alike: where it is, the rule, what is wrong, what was expected there and the topic of workflow.language that explains it. A person holding the file is sent to its line, a client holding the document as data to its node, and a model correcting a draft to the page that teaches what it got wrong, all from the one refusal, so that no reader is told something another is not. Nothing is written, and the push is recorded as refused.
+         * @example {
+         *       "error": "refused: image-not-pinned at agentiik.yaml:7:12",
+         *       "file": "agentiik.yaml",
+         *       "line": 7,
+         *       "column": 12,
+         *       "pointer": "/steps/normalize/image",
+         *       "rule": "image-not-pinned",
+         *       "detail": "step normalize: the step names ghcr.io/acme/agk-normalize:1.4 by a tag, and its repository holds no digest for it: a server runs every image by the digest its tag was pinned to and reaches no registry to resolve one, so a tag is pinned by agk push, which resolves it where the image is",
+         *       "expected": "an image by its digest, or by a tag the repository records a digest for, as agk push records it",
+         *       "topic": "steps"
+         *     }
+         * @example {
+         *       "error": "refused: metadata-name-not-repository at agentiik.yaml:4:9",
+         *       "file": "agentiik.yaml",
+         *       "line": 4,
+         *       "column": 9,
+         *       "pointer": "/metadata/name",
+         *       "rule": "metadata-name-not-repository",
+         *       "detail": "metadata.name is monthly-invoices, and the repository is monthly-invoicing",
+         *       "expected": "metadata.name equal to the repository's name",
+         *       "topic": "repository"
+         *     }
+         */
+        hookRefusal: {
+            /**
+             * @description The refusal in one line, as git's error stream heads it: refused:, the rule, and where, file:line:column, or the file alone where the refusal names no line in it. Shown to a person; a client branches on rule.
+             * @example refused: image-not-pinned at agentiik.yaml:7:12
+             */
+            error: string;
+            /**
+             * @description The file of the tree the refused node is written in, from its root; absent where the refusal is about no file of the tree.
+             * @example agentiik.yaml
+             * @example ci/common.yaml
+             */
+            file?: string;
+            /**
+             * @description The line the node is written on, counted from 1; absent where the refusal is about the file as a whole.
+             * @example 7
+             */
+            line?: number;
+            /**
+             * @description The column the node starts at, counted from 1, beside its line and never without it.
+             * @example 12
+             */
+            column?: number;
+            /**
+             * @description The node as a JSON Pointer into the file, so that a client holding the document as data goes to it without counting lines; the empty string for the whole document.
+             * @example /steps/normalize/image
+             * @example
+             */
+            pointer: string;
+            /**
+             * @description The rule, spelled as the fixture corpus files a fixture under it and as the refusal format of fixtures/index.json lists them. A string rather than an enumeration, since the hook refuses by rules the engine adds release by release, and a client holding a list would refuse the next one.
+             * @example image-not-pinned
+             * @example cycle-in-graph
+             */
+            rule: string;
+            /**
+             * @description What is wrong, in the documentation's words, the step and the port it is about named first where it is about one.
+             * @example step normalize: the step names ghcr.io/acme/agk-normalize:1.4 by a tag, and its repository holds no digest for it: a server runs every image by the digest its tag was pinned to and reaches no registry to resolve one, so a tag is pinned by agk push, which resolves it where the image is
+             */
+            detail: string;
+            /**
+             * @description What was expected at the node, in the words a person correcting the file acts on.
+             * @example an image by its digest, or by a tag the repository records a digest for, as agk push records it
+             */
+            expected: string;
+            /**
+             * @description The topic of workflow.language that covers the node, one of those language/topics.json names, so that a model told the refusal reads the page that teaches the fix. A string rather than an enumeration, since the topics are the generator's to name and a copy here would drift from them.
+             * @example steps
+             * @example repository
+             */
+            topic: string;
         };
         /**
          * Image tag
@@ -8198,6 +8476,14 @@ export interface components {
              */
             from?: components["schemas"]["from"];
             /**
+             * @description The collection and the tool a run whose trigger_kind is mcp was called through, kept once the collection is removed.
+             * @example {
+             *       "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+             *       "tool": "order_lookup"
+             *     }
+             */
+            collection?: components["schemas"]["properties-collection"];
+            /**
              * @description When the run was written.
              * @example 2026-10-01T05:41:03Z
              */
@@ -8898,6 +9184,146 @@ export interface components {
              * @example []
              */
             workflows?: components["schemas"]["identifier"][];
+        };
+        /**
+         * Collection list
+         * @description The caller's collections, whole and not paged: a principal holds at most 50.
+         * @example {
+         *       "collections": [
+         *         {
+         *           "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+         *           "name": "back-office",
+         *           "description": "Invoices and orders, for the finance assistant.",
+         *           "url": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+         *           "members": [
+         *             {
+         *               "workflow": "finance/monthly-invoicing",
+         *               "tool": "create_invoice"
+         *             },
+         *             {
+         *               "workflow": "support/order-status",
+         *               "ref": "v2",
+         *               "as": "order_lookup",
+         *               "tool": "order_lookup"
+         *             },
+         *             {
+         *               "workflow": "finance/reconcile",
+         *               "tool": null,
+         *               "reason": "no_mcp_block"
+         *             }
+         *           ]
+         *         },
+         *         {
+         *           "id": "01JR8T5Y7A9C1E3G5J7M9P1R3T",
+         *           "name": "support_desk",
+         *           "description": "",
+         *           "url": "https://agentiik.example.com/mcp/collections/01JR8T5Y7A9C1E3G5J7M9P1R3T",
+         *           "members": []
+         *         }
+         *       ]
+         *     }
+         * @example {
+         *       "collections": []
+         *     }
+         */
+        collectionList: {
+            /**
+             * @description Every collection of the caller's, by name, each with its url, its members and what each offers.
+             * @example [
+             *       {
+             *         "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+             *         "name": "back-office",
+             *         "description": "Invoices and orders, for the finance assistant.",
+             *         "url": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+             *         "members": [
+             *           {
+             *             "workflow": "finance/monthly-invoicing",
+             *             "tool": "create_invoice"
+             *           },
+             *           {
+             *             "workflow": "support/order-status",
+             *             "ref": "v2",
+             *             "as": "order_lookup",
+             *             "tool": "order_lookup"
+             *           },
+             *           {
+             *             "workflow": "finance/reconcile",
+             *             "tool": null,
+             *             "reason": "no_mcp_block"
+             *           }
+             *         ]
+             *       }
+             *     ]
+             */
+            collections: components["schemas"]["collection"][];
+        };
+        /**
+         * Collection creation
+         * @description What a collection is made from: its name and, where the caller writes one, its description. It holds no member, since each workflow is added on its own and judged as it is added.
+         * @example {
+         *       "name": "back-office",
+         *       "description": "Invoices and orders, for the finance assistant."
+         *     }
+         * @example {
+         *       "name": "support_desk"
+         *     }
+         */
+        collectionCreate: {
+            /**
+             * @description The collection's name, on the identifier grammar. Refused where another of the caller's collections holds it.
+             * @example back-office
+             */
+            name: components["schemas"]["identifier"];
+            /**
+             * @description What the collection is for, one line of at most 280 characters; the empty string where left out.
+             * @example Invoices and orders, for the finance assistant.
+             */
+            description?: components["schemas"]["description"];
+        };
+        /**
+         * Collection change
+         * @description What PATCH /api/v1/me/collections/{id} changes, as a partial object: each field named is set and each left out kept, null refused rather than read as either. The identifier is not among them, since the url carries it and a client is configured with the url.
+         * @example {
+         *       "name": "finance-desk"
+         *     }
+         * @example {
+         *       "description": "Invoices, orders and the month's reconciliation."
+         *     }
+         */
+        collectionUpdate: {
+            /**
+             * @description The collection's new name. Refused where another of the caller's collections holds it.
+             * @example finance-desk
+             */
+            name?: components["schemas"]["identifier"];
+            /**
+             * @description The collection's new description, the empty string clearing it.
+             * @example Invoices, orders and the month's reconciliation.
+             * @example
+             */
+            description?: components["schemas"]["description"];
+        };
+        /**
+         * Collection member written
+         * @description What a PUT writes: the member whole, ref and as each optional and each left out taking its default, ref the workflow's default branch and as the name its mcp block gives. Whole rather than merged, so that what a PUT sends is what the member is, as a Terraform apply expects of it, whatever the member was before.
+         * @example {
+         *       "ref": "v2",
+         *       "as": "order_lookup"
+         *     }
+         * @example {}
+         */
+        collectionMemberWrite: {
+            /**
+             * @description The branch or the tag the member is read at, by its short name or in full, never a commit; its default branch where left out, whichever branch that is when the list is read.
+             * @example v2
+             * @example refs/heads/main
+             */
+            ref?: components["schemas"]["branch"];
+            /**
+             * @description The name its tool goes by in this collection; the name its mcp block gives where left out.
+             * @example order_lookup
+             */
+            as?: components["schemas"]["identifier"];
         };
         /**
          * Runner
@@ -10612,6 +11038,163 @@ export interface components {
          */
         bio: string;
         /**
+         * Identifier
+         * @description A name given in the workflow file and carried here unchanged: a step or a port. The same grammar the workflow file writes and the brick manifest declares, carrying no path separator, no comma and no space, because the name becomes a directory, a file name and one entry of a comma separated list inside the container; at most 255 characters, the most a directory or a file name holds. A port is written at most 250 in the workflow file and the manifest, since it becomes the file <name>.json, and taken here up to 255, since the engine carries one of 251 to 255 until v0.4.0 refuses it where it is written, as the documentation says.
+         * @example invoice
+         * @example normalize
+         * @example out
+         * @example error
+         */
+        identifier: string;
+        /**
+         * Branch name
+         * @description A branch as a person names it, main or feature/vat-rounding, without the refs/heads/ git keeps it under. Held to git's own rules for a ref name, those of git check-ref-format, since git refuses anything else before a push reaches the server: no space or control character and none of ~ ^ : ? * [ \, no component starting with a dot, no .. and no @{, no // and no .lock ending a component, nothing starting with - or / and nothing ending with / or ., and not @ alone.
+         * @example main
+         * @example master
+         * @example feature/vat-rounding
+         */
+        branch: string;
+        /**
+         * Collection member
+         * @description One workflow of a collection, and what it offers there. What its owner wrote is the workflow, the ref it is read at and the name its tool goes by, the last two only where written. What it offers is what the workflow's entry point declares in its mcp block, read at the head of the member's ref at every tools/list and run at the commit the ref points at when it is called, so that a collection follows a workflow as its triggers follow the default branch, with nothing to add again when the workflow changes. tool is the name it is offered under, or null where it offers nothing, with reason beside it saying why, so that a member missing from a client's list is never one its owner cannot account for.
+         * @example {
+         *       "workflow": "finance/monthly-invoicing",
+         *       "tool": "create_invoice"
+         *     }
+         * @example {
+         *       "workflow": "support/order-status",
+         *       "ref": "v2",
+         *       "as": "order_lookup",
+         *       "tool": "order_lookup"
+         *     }
+         * @example {
+         *       "workflow": "finance/reconcile",
+         *       "tool": null,
+         *       "reason": "no_mcp_block"
+         *     }
+         */
+        collectionMember: {
+            /**
+             * @description The workflow, by namespace and name, NS/NAME, on the grammar a grant on one workflow is written on and by reference to it rather than a copy. A collection may hold workflows of several namespaces, each one its owner may run. A namespace renamed, the member follows it; a workflow deleted, or one its owner may no longer run, stays a member offering nothing until it is taken out, and offers its tool again when the grant comes back.
+             * @example finance/monthly-invoicing
+             * @example support/order-status
+             */
+            workflow: components["schemas"]["1"];
+            /**
+             * @description The branch or the tag the member is read at, as its owner wrote it, by its short name or in full, on git's rules for a ref name; never a commit, which has no head to follow. Absent where none was written, the workflow's default branch then answering, whichever branch that is when the list is read, so that a member written without one follows the default branch as the workflow's triggers do. A member written at a tag holds its tool still while the branch moves.
+             * @example v2
+             * @example main
+             * @example refs/tags/v2
+             */
+            ref?: components["schemas"]["branch"];
+            /**
+             * @description The name the member's tool goes by in this collection, where its owner wrote one; absent, the tool goes by the name its mcp block gives, which is the workflow's name where the block writes none. Two workflows may declare one name, and as is how both sit in one collection; it also keeps the name a client holds while the block renames its tool, which in a collection without as withdraws one tool and publishes another. On the grammar the mcp block's name is written on.
+             * @example order_lookup
+             */
+            as?: components["schemas"]["identifier"];
+            /**
+             * @description The name the member is offered under in tools/list: as where it is written, and otherwise the name the mcp block at the head of its ref gives. null where it offers nothing, reason beside it saying why: such a member is left out of tools/list, and a call naming it is answered as one naming a tool that does not exist. A member is refused when it is written with a name another member already gives, since clients hold the name and a model told of two tools of one name cannot choose between them; as resolves it.
+             * @example create_invoice
+             * @example order_lookup
+             * @example null
+             */
+            tool: components["schemas"]["identifier"] | null;
+            /**
+             * @description Why a member offers nothing, beside a null tool and nowhere else. no_mcp_block: the entry point at the head of its ref declares no mcp block, which is also what a ref that no longer names anything reads as, since there is no entry point there to declare one. not_runnable: its owner may no longer run the workflow, a deleted one included, one reason for both since a workflow one may not run is one whose fate a collection does not tell. A grant revoked takes the tool away from the next list, as the protocol lets a tool set vary by the authorization presented, and the member comes back when the grant does.
+             * @example no_mcp_block
+             * @example not_runnable
+             * @enum {string}
+             */
+            reason?: "no_mcp_block" | "not_runnable";
+        };
+        /**
+         * Collection
+         * @description A connector of one principal's own: the workflows they chose, each one a tool, served at /mcp/collections/{id}, which is the URL a client is given, as GET /api/v1/me/collections/{id} answers it. It belongs to the principal that made it, a user or a service account, who alone lists it, changes it and calls through it; anybody else, an administrator included, is answered as for a collection that does not exist, since a collection grants nothing: it is one principal's arrangement of what they may already run, and sharing a capability is sharing the workflows, from which whoever is shared them assembles their own. What each member offers is read again at every tools/list, so the record says what each offers now and, where one offers nothing, why. Made and changed under /api/v1/me/collections, from the web console, or with the collection tools of the user's server, and never audited, since every call through it is a run, which is. From v0.7.0.
+         * @example {
+         *       "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+         *       "name": "back-office",
+         *       "description": "Invoices and orders, for the finance assistant.",
+         *       "url": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+         *       "members": [
+         *         {
+         *           "workflow": "finance/monthly-invoicing",
+         *           "tool": "create_invoice"
+         *         },
+         *         {
+         *           "workflow": "support/order-status",
+         *           "ref": "v2",
+         *           "as": "order_lookup",
+         *           "tool": "order_lookup"
+         *         },
+         *         {
+         *           "workflow": "finance/reconcile",
+         *           "tool": null,
+         *           "reason": "no_mcp_block"
+         *         }
+         *       ]
+         *     }
+         * @example {
+         *       "id": "01JR8T5Y7A9C1E3G5J7M9P1R3T",
+         *       "name": "support_desk",
+         *       "description": "",
+         *       "url": "https://agentiik.example.com/mcp/collections/01JR8T5Y7A9C1E3G5J7M9P1R3T",
+         *       "members": []
+         *     }
+         */
+        collection: {
+            /**
+             * @description The collection's identifier, given when it is made and never changed, which its address carries: renaming the collection changes nothing a client is configured with.
+             * @example 01JR8Q2W6H3V0X9K4M7N5P1T2C
+             */
+            id: components["schemas"]["ulid"];
+            /**
+             * @description What its owner calls it, unique among their collections and changed at will, since the address carries the identifier rather than the name. Letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters: the grammar a workflow's and a tool's names are written on, so that a name chosen in the console is typed on a command line and written in a client's configuration as it is, with nothing to quote.
+             * @example back-office
+             * @example support_desk
+             */
+            name: components["schemas"]["identifier"];
+            /**
+             * @description What the collection is for, in its owner's words, and the empty string where they wrote none, so that a reader never has to tell an absent description from an empty one. It is shown beside the name wherever the collections are listed, so it is at most 280 characters, a sentence or two, and one line holding no control character, as every field shown in a console and printed at a terminal is.
+             * @example Invoices and orders, for the finance assistant.
+             * @example
+             */
+            description: string;
+            /**
+             * Format: uri
+             * @description The address a client is given, <public URL>/mcp/collections/<id>, written by the API so that no client puts it together from a setting it may not know. It answers the collection's owner alone, and anybody else as for a collection that does not exist; once the collection is removed, it answers everybody so, from the next request. The identifier inside it is held to the ULID grammar by tools/check.py.
+             * @example https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C
+             */
+            url: string;
+            /**
+             * @description The workflows it holds, in the order they were added, each once, since a member is addressed by its workflow, and at most 100: a client reads the whole tool list into a model's context at every list, a hundred tools is past what a model chooses among well, and somebody needing more needs a second collection more than a longer one. Empty for a collection just made.
+             * @example [
+             *       {
+             *         "workflow": "finance/monthly-invoicing",
+             *         "tool": "create_invoice"
+             *       },
+             *       {
+             *         "workflow": "support/order-status",
+             *         "ref": "v2",
+             *         "as": "order_lookup",
+             *         "tool": "order_lookup"
+             *       },
+             *       {
+             *         "workflow": "finance/reconcile",
+             *         "tool": null,
+             *         "reason": "no_mcp_block"
+             *       }
+             *     ]
+             * @example []
+             */
+            members: components["schemas"]["collectionMember"][];
+        };
+        /**
+         * @description What the collection is for, in its owner's words, and the empty string where they wrote none, so that a reader never has to tell an absent description from an empty one. It is shown beside the name wherever the collections are listed, so it is at most 280 characters, a sentence or two, and one line holding no control character, as every field shown in a console and printed at a terminal is.
+         * @example Invoices and orders, for the finance assistant.
+         * @example
+         */
+        description: string;
+        /**
          * @description How long this shard may take, as the step declared it. It travels beside deadline rather than instead of it because the two answer different questions: the deadline is the instant this attempt is stopped at, and the timeout is what a person reading the message sees the workflow having asked for.
          * @example 10m
          * @example 4h
@@ -10847,15 +11430,6 @@ export interface components {
          */
         members: components["schemas"]["namespace"][];
         /**
-         * Identifier
-         * @description A name given in the workflow file and carried here unchanged: a step or a port. The same grammar the workflow file writes and the brick manifest declares, carrying no path separator, no comma and no space, because the name becomes a directory, a file name and one entry of a comma separated list inside the container; at most 255 characters, the most a directory or a file name holds. A port is written at most 250 in the workflow file and the manifest, since it becomes the file <name>.json, and taken here up to 255, since the engine carries one of 251 to 255 until v0.4.0 refuses it where it is written, as the documentation says.
-         * @example invoice
-         * @example normalize
-         * @example out
-         * @example error
-         */
-        identifier: string;
-        /**
          * Run state
          * @description Where a run is, as the documentation fixes the vocabulary. Every component reads this one enumeration: the controller writes it, the API serves it, the console colours it and a phone notifies on it, and a seventh state invented in one of them would be a state the others cannot render.
          * @example running
@@ -10866,21 +11440,13 @@ export interface components {
         runState: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "timed_out";
         /**
          * Trigger kind
-         * @description What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it.
+         * @description What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it. mcp is a tool called through one of the caller's collections, from v0.7.0, and a run of it names the collection and the tool it was called as; workflow.run on the user's server starts a manual run, as the API's manual trigger does, since mcp names a call through a collection.
          * @example schedule
          * @example manual
          * @example workflow
          * @enum {string}
          */
         triggerKind: "manual" | "schedule" | "webhook" | "event" | "mcp" | "terraform" | "workflow";
-        /**
-         * Branch name
-         * @description A branch as a person names it, main or feature/vat-rounding, without the refs/heads/ git keeps it under. Held to git's own rules for a ref name, those of git check-ref-format, since git refuses anything else before a push reaches the server: no space or control character and none of ~ ^ : ? * [ \, no component starting with a dot, no .. and no @{, no // and no .lock ending a component, nothing starting with - or / and nothing ending with / or ., and not @ alone.
-         * @example main
-         * @example master
-         * @example feature/vat-rounding
-         */
-        branch: string;
         /**
          * Commit
          * @description A git commit, written whole: forty lowercase hexadecimal characters, since a workflow repository holds SHA-1 objects. Whole rather than abbreviated, because a version is recorded under the name it was accepted as, and an abbreviation is a name another commit can come to share: a3f9c1e and the forty characters it abbreviates would be two versions, each free to hold its own tree.
@@ -11431,11 +11997,13 @@ export interface components {
                 event?: Record<string, never>[];
             };
             /**
-             * @description The mcp block as the entry point writes it, as workflow.schema.json describes it: the tools this version publishes. Absent where it declares none, which serves no server, and never absent where it declares an empty tool list, which serves one carrying nothing.
+             * @description The mcp block as the entry point writes it, as workflow.schema.json describes it: the tool this version publishes. Absent where it declares none, which publishes no tool, so that a collection naming the workflow at this version offers nothing for it.
              * @example {
-             *       "name": "invoicing",
-             *       "description": "Issue invoices and check their status.",
-             *       "tools": []
+             *       "name": "order_status",
+             *       "description": "Return the state of one order and, once shipped, its tracking link.",
+             *       "output": "status",
+             *       "mode": "sync",
+             *       "timeout": "30s"
              *     }
              */
             mcp?: Record<string, never>;
@@ -12045,6 +12613,22 @@ export interface components {
          *       "created_at": "2026-10-01T04:05:02Z",
          *       "started_at": "2026-10-01T04:05:02Z"
          *     }
+         * @example {
+         *       "namespace": "support",
+         *       "run": "01JR8RB4K2M6P8T0V2X4Z6C8E0",
+         *       "workflow": "order-status",
+         *       "commit": "7d3e9a1c5b2f4e6d8c0a1b3d5f7e9c2a4b6d8f0e",
+         *       "state": "succeeded",
+         *       "trigger_kind": "mcp",
+         *       "triggered_by": "alice",
+         *       "collection": {
+         *         "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+         *         "tool": "order_lookup"
+         *       },
+         *       "created_at": "2026-10-14T09:20:04Z",
+         *       "started_at": "2026-10-14T09:20:04Z",
+         *       "finished_at": "2026-10-14T09:20:11Z"
+         *     }
          */
         run: {
             /**
@@ -12103,6 +12687,26 @@ export interface components {
                  * @example remind
                  */
                 step: components["schemas"]["identifier"];
+            };
+            /**
+             * @description The collection a run whose trigger_kind is mcp was called through, and the tool it was called as. A tool call is a run of the calling principal's like any other, and the run keeps where it came from once the collection is removed or its member renamed, since a run is read long after the call. It names the collection by its identifier, which never changes, rather than by its name, which its owner changes at will and nobody else reads.
+             * @example {
+             *       "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+             *       "tool": "order_lookup"
+             *     }
+             */
+            collection?: {
+                /**
+                 * @description The collection, by the identifier its address carries; kept once the collection is removed, when it names nothing any more.
+                 * @example 01JR8Q2W6H3V0X9K4M7N5P1T2C
+                 */
+                id: components["schemas"]["ulid"];
+                /**
+                 * @description The name the tool was called as, which tools/list offered it under: the member's as where written, and otherwise the name its mcp block gave.
+                 * @example order_lookup
+                 * @example create_invoice
+                 */
+                tool: components["schemas"]["identifier"];
             };
             /**
              * @description When the run was written, which for a schedule is when it fired and not the occurrence it fired for.
@@ -12164,7 +12768,7 @@ export interface components {
                  */
                 finished_at?: components["schemas"]["timestamp"];
             }[];
-        } & unknown;
+        } & (unknown & unknown);
         /**
          * @description The run and the step that called this one, for a run whose trigger_kind is workflow. The caller may be in another namespace, and is named all the same: the callee's reader learns which run asked, and reading that run is still held to its own namespace's grants.
          * @example {
@@ -12183,6 +12787,26 @@ export interface components {
              * @example remind
              */
             step: components["schemas"]["identifier"];
+        };
+        /**
+         * @description The collection a run whose trigger_kind is mcp was called through, and the tool it was called as. A tool call is a run of the calling principal's like any other, and the run keeps where it came from once the collection is removed or its member renamed, since a run is read long after the call. It names the collection by its identifier, which never changes, rather than by its name, which its owner changes at will and nobody else reads.
+         * @example {
+         *       "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+         *       "tool": "order_lookup"
+         *     }
+         */
+        "properties-collection": {
+            /**
+             * @description The collection, by the identifier its address carries; kept once the collection is removed, when it names nothing any more.
+             * @example 01JR8Q2W6H3V0X9K4M7N5P1T2C
+             */
+            id: components["schemas"]["ulid"];
+            /**
+             * @description The name the tool was called as, which tools/list offered it under: the member's as where written, and otherwise the name its mcp block gave.
+             * @example order_lookup
+             * @example create_invoice
+             */
+            tool: components["schemas"]["identifier"];
         };
         /**
          * Digest
@@ -13172,6 +13796,12 @@ export interface components {
         secret: string;
         /** @description The variable's name, read as vars.<name>: letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters, the grammar a workflow file's vars names its keys with. */
         variable: components["schemas"]["identifier"];
+        /** @description The collection, by the identifier its url carries and GET /api/v1/me/collections lists. Another principal's is answered as one that does not exist, to an administrator as to anybody, since a collection is its owner's alone. */
+        collection: components["schemas"]["ulid"];
+        /** @description The namespace of the member's workflow, the half of NS/NAME before the slash, by its name or by a name it held before it was renamed, which reaches it as its name does. */
+        memberNamespace: components["schemas"]["namespace"];
+        /** @description The member's workflow, the half of NS/NAME after the slash, by the name its metadata.name writes. */
+        memberWorkflow: components["schemas"]["identifier"];
         /** @description Read by nobody: the avatar_updated_at of the user or the namespace whose picture it is, which a client writes here so that the picture's address changes when the picture does, and no cache answers a picture set again with the one before it. */
         avatarVersion: string;
         /** @description The runner pool, by its name, its only identity. */
@@ -14342,6 +14972,277 @@ export interface operations {
                     "application/json": components["schemas"]["error"];
                 };
             };
+        };
+    };
+    listCollections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's collections. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["collectionList"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, which registers passkeys and sets its password, and nothing else. */
+            403: components["responses"]["forbidden"];
+        };
+    };
+    createCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The collection's name and, optionally, its description. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["collectionCreate"];
+            };
+        };
+        responses: {
+            /** @description Made: the collection, holding no member yet, and Location naming where the API reads it. */
+            201: {
+                headers: {
+                    /** @description Where the API reads the collection, which is not where a client calls it: that is its url. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["collection"];
+                };
+            };
+            /** @description The body is refused: no name, a name outside the identifier grammar, a description that is not a string, past 280 characters or holding a line break or another control character, null, or a field the route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The bootstrap token, which is nobody and owns nothing, refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. */
+            403: components["responses"]["forbidden"];
+            /** @description Another of the caller's collections holds the name, which is how their owner tells them apart. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            413: components["responses"]["tooLarge"];
+            /** @description The caller holds 50 collections, the most a principal holds: nothing is made. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    getCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection, by the identifier its url carries and GET /api/v1/me/collections lists. Another principal's is answered as one that does not exist, to an administrator as to anybody, since a collection is its owner's alone. */
+                id: components["parameters"]["collection"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The collection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["collection"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No collection of the caller's by that identifier: another principal's, to an administrator as to anybody, since a collection is its owner's alone and asking must teach nothing of another's; one removed; or one never made. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    deleteCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection, by the identifier its url carries and GET /api/v1/me/collections lists. Another principal's is answered as one that does not exist, to an administrator as to anybody, since a collection is its owner's alone. */
+                id: components["parameters"]["collection"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed, and its url answering 404 from the next request. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No collection of the caller's by that identifier: another principal's, to an administrator as to anybody, since a collection is its owner's alone and asking must teach nothing of another's; one removed; or one never made. */
+            404: components["responses"]["notFound"];
+        };
+    };
+    updateCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection, by the identifier its url carries and GET /api/v1/me/collections lists. Another principal's is answered as one that does not exist, to an administrator as to anybody, since a collection is its owner's alone. */
+                id: components["parameters"]["collection"];
+            };
+            cookie?: never;
+        };
+        /** @description What changes, each field left out kept. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["collectionUpdate"];
+            };
+        };
+        responses: {
+            /** @description The collection as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["collection"];
+                };
+            };
+            /** @description The body names nothing to change, a field the route does not read, null, a name outside the identifier grammar, or a description that is not a string, past 280 characters or holding a line break or another control character. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No collection of the caller's by that identifier: another principal's, to an administrator as to anybody, since a collection is its owner's alone and asking must teach nothing of another's; one removed; or one never made. */
+            404: components["responses"]["notFound"];
+            /** @description Another of the caller's collections holds the name. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            413: components["responses"]["tooLarge"];
+        };
+    };
+    writeCollectionMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection, by the identifier its url carries and GET /api/v1/me/collections lists. Another principal's is answered as one that does not exist, to an administrator as to anybody, since a collection is its owner's alone. */
+                id: components["parameters"]["collection"];
+                /** @description The namespace of the member's workflow, the half of NS/NAME before the slash, by its name or by a name it held before it was renamed, which reaches it as its name does. */
+                ns: components["parameters"]["memberNamespace"];
+                /** @description The member's workflow, the half of NS/NAME after the slash, by the name its metadata.name writes. */
+                name: components["parameters"]["memberWorkflow"];
+            };
+            cookie?: never;
+        };
+        /** @description The member whole: ref and as, each optional; {} for the default branch under the block's name. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["collectionMemberWrite"];
+            };
+        };
+        responses: {
+            /** @description The collection as it now stands, the member among its members with what it offers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["collection"];
+                };
+            };
+            /** @description The body is refused: not an object, no body at all, a ref outside git's rules for a ref name, an as outside the identifier grammar, null, or a field the route does not read; or a ref a branch and a tag of the repository both hold by that short name, written in full instead. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No collection of the caller's by that identifier, another principal's to an administrator as to anybody; or no workflow by that namespace and name that the caller may run, which reads as one that does not exist, so that adding one teaches nothing of what the caller may not run. */
+            404: components["responses"]["notFound"];
+            /** @description The name the member's tool would go by is one another member of the collection already gives; the error names that member, and as resolves it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            413: components["responses"]["tooLarge"];
+            /** @description A ref the workflow's repository does not hold, or a 101st member, past the 100 a collection holds. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    removeCollectionMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection, by the identifier its url carries and GET /api/v1/me/collections lists. Another principal's is answered as one that does not exist, to an administrator as to anybody, since a collection is its owner's alone. */
+                id: components["parameters"]["collection"];
+                /** @description The namespace of the member's workflow, the half of NS/NAME before the slash, by its name or by a name it held before it was renamed, which reaches it as its name does. */
+                ns: components["parameters"]["memberNamespace"];
+                /** @description The member's workflow, the half of NS/NAME after the slash, by the name its metadata.name writes. */
+                name: components["parameters"]["memberWorkflow"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The collection as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["collection"];
+                };
+            };
+            /** @description A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No collection of the caller's by that identifier: another principal's, to an administrator as to anybody, since a collection is its owner's alone and asking must teach nothing of another's; one removed; or one never made. */
+            404: components["responses"]["notFound"];
         };
     };
     listNamespaces: {
@@ -15872,6 +16773,86 @@ export interface operations {
             403: components["responses"]["forbidden"];
             /** @description No such workflow, or one the caller cannot read: the same answer; or a ref naming no branch, no tag and no version, or a path naming no file of the tree, a directory included. */
             404: components["responses"]["notFound"];
+        };
+    };
+    commitFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /** @description The files the commit writes, the parent they were read at, the branch it goes onto and its message. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["commitRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed, judged and accepted: the branch points at the commit, which is a version from this answer on. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["commitMade"];
+                };
+            };
+            /** @description The body is not the object the route reads: empty, not JSON, a field other than branch, parent, message and files, a field or a file's path written twice, a branch, a parent or a message that is not a string, files that is not an object or a file that is neither a string nor null, or anything after the document. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description What a push is refused for its pusher's grants: the protected default branch moved by a caller who does not hold grant:manage on the workflow, or a version naming a secret by one who does not hold secret:use. Also a session that may only enrol, and a request carrying a session from another origin than the public URL's, refused before the session is looked up. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description No such workflow, no such namespace, or one where the caller does not hold workflow:write on the workflow: the same answer, as a git push of it would be told. */
+            404: components["responses"]["notFound"];
+            /** @description The branch has moved since parent, the commit the files were read at, as git refuses a push that is no fast-forward: a commit made from a tree nobody read again would undo what landed meanwhile. Nothing is written; the files are read again at the branch's head and committed from it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description A commit past what a push may carry: more than 4096 files, the most a version's tree holds; texts and paths past 4 MiB together, as the tree a push carries is held to; or a body past 16 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description A commit the tree cannot hold, answered with the error alone: a path off a tree's rules, ../x or .git/x among them; a directory of the parent's tree written as a file, or a file of it as a directory; a file removed that the parent does not hold; a text that is not UTF-8; no message, or one of blanks alone; no file; a branch name off git's rules; a parent that is not a commit of the repository, one left out on a branch that points at a commit, or none for a new branch of a repository that holds commits; and the refusals any push meets that name no rule, a workflow being moved to another namespace among them. Or a commit the pre-receive hook refused by one of the language's rules, answered with what the hook tells: the rule, where, the node, what was expected there and the topic to read. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["hookRefusal"] | components["schemas"]["error"];
+                };
+            };
+            /** @description The installation keeps no packs: its object store cannot read a range of an object, and a repository's packs are read one entry at a time. The installation's to fix rather than the caller's. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
         };
     };
     getWorkflowImages: {
