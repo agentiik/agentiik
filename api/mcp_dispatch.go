@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/mcp"
 )
 
@@ -20,17 +22,11 @@ import (
 // hook, the tool checks the same way, since it is the same code; and a refusal comes back in the
 // route's own words.
 
-// throughKey is where a request the MCP server makes says so, and which tool made it: "marked as
-// arriving through MCP so git log and the audit log agree".
-type throughKey struct{}
-
-// through is the tool a request was made by, where the MCP server made it.
-type through struct{ tool string }
-
-// throughOf says which tool of the MCP server made a request, and false for one it did not make.
+// throughOf says which tool of the MCP server made a request, and false for one it did not make:
+// "marked as arriving through MCP so git log and the audit log agree". A request the server makes
+// carries the tool as package audit keeps it, so that every entry its act records names the tool.
 func throughOf(ctx context.Context) (string, bool) {
-	t, ok := ctx.Value(throughKey{}).(through)
-	return t.tool, ok
+	return audit.ThroughOf(ctx)
 }
 
 // toolAnswer is what a route answered a request the MCP server made.
@@ -67,7 +63,7 @@ func (m *MCP) dispatch(r *http.Request, tool, method, path string, query url.Val
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	ctx := context.WithValue(r.Context(), throughKey{}, through{tool: tool})
+	ctx := audit.Through(r.Context(), tool)
 	req, err := http.NewRequestWithContext(ctx, method, target, &payload)
 	if err != nil {
 		return nil, err
@@ -104,6 +100,19 @@ func result(a *toolAnswer) (*mcp.CallResult, error) {
 		}
 	}
 	if a.status >= 400 {
+		// A quota reached is said where a model reads it, as a collection's call says it: "with
+		// retry_after_seconds in structuredContent: what a webhook answers as 429 with
+		// Retry-After, said where a model reads it".
+		if a.status == http.StatusTooManyRequests {
+			if seconds, err := strconv.Atoi(a.header.Get("Retry-After")); err == nil {
+				o, _ := structured.(map[string]any)
+				if o == nil {
+					o = map[string]any{}
+				}
+				o["retry_after_seconds"] = seconds
+				structured = o
+			}
+		}
 		return &mcp.CallResult{Content: []mcp.Content{mcp.Text(refusedText(a.status, structured))}, StructuredContent: structured, IsError: true}, nil
 	}
 	text := strings.TrimSpace(a.body.String())

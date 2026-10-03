@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -54,10 +55,11 @@ const toolOrderSchema = `{"type": "array", "items": {"type": "object", "required
 // reads, holding monthly-invoicing published as a tool and payroll publishing none, and team-ops,
 // where nobody may run anything.
 type collected struct {
-	t     *testing.T
-	rt    *api.Router
-	pool  *db.Pool
-	super string
+	t       *testing.T
+	rt      *api.Router
+	pool    *db.Pool
+	super   string
+	objects artifact.Objects
 }
 
 func servingCollections(t *testing.T) *collected {
@@ -92,7 +94,7 @@ func servingCollections(t *testing.T) *collected {
 	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com", Collections: collections}); err != nil {
 		t.Fatal(err)
 	}
-	c := &collected{t: t, rt: rt, pool: pool, super: super}
+	c := &collected{t: t, rt: rt, pool: pool, super: super, objects: objects}
 	for _, wf := range []struct{ name, document string }{
 		{"monthly-invoicing", toolDocument},
 		{"payroll", strings.ReplaceAll(workflowDocument, "monthly-invoicing", "payroll")},
@@ -374,6 +376,71 @@ func TestACallIsARunThroughTheCollection(t *testing.T) {
 	run := runs[0]
 	if run.Trigger.String() != "mcp" || run.TriggeredBy != "alice" || run.Collection == nil || run.Collection.ID != id || run.Collection.Tool != "create_invoices" {
 		t.Errorf("the run reads %+v %+v", run, run.Collection)
+	}
+}
+
+// "Sanitize tool outputs: secret masking, as in logs: a secret never appears in a result. Above a
+// size ceiling, the result is a reference to an artifact rather than the artifact." A sync call
+// answers the output's envelope as it was stored, which the driver masked before storing it, and
+// read under envelope_max_bytes: an item's files are the references the envelope holds, never their
+// bytes, whatever their size, so no second ceiling is invented.
+func TestASyncCallAnswersTheEnvelopeAsStored(t *testing.T) {
+	c := servingCollections(t)
+	id := c.made("alice", "back-office")
+	c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", map[string]any{})
+
+	super := dbtest.Superuser(t, c.super)
+	stored := make(chan agk.Envelope, 1)
+	go func() {
+		defer close(stored)
+		for range 40 {
+			time.Sleep(50 * time.Millisecond)
+			var run string
+			if err := super.QueryRow(context.Background(), `select id from runs where trigger = 'mcp' and state = 'queued'`).Scan(&run); err != nil {
+				continue
+			}
+			uri, _ := agk.ParseURI("agk://run/" + run + "/archive/ok/invoices.pdf")
+			envelope := agk.Envelope{
+				Meta: agk.Meta{RunID: agk.RunID(run), Step: "archive", Port: "ok", Attempt: 1, Count: 1, ProducedAt: time.Now().UTC().Truncate(time.Millisecond)},
+				Items: []agk.Item{{
+					ID: "01JMZ8W4K7A1B2C3D4E5F6G7H8", Data: map[string]any{"total": 1290.5, "note": "the key was [masked]"},
+					Files: []agk.File{{Name: "invoices.pdf", URI: uri, MediaType: "application/pdf", Size: 50 << 20, SHA256: strings.Repeat("ab", 32)}},
+				}},
+			}
+			digest, size, err := artifact.PutEnvelope(context.Background(), c.objects, "finance", envelope)
+			if err != nil {
+				return
+			}
+			ports, _ := json.Marshal(map[string]any{"ok": map[string]any{"digest": "sha256:" + digest, "size": size, "items": 1}})
+			outputs, _ := json.Marshal(map[string]any{"invoices": map[string]any{"step": "archive", "port": "ok", "count": 1}})
+			super.Exec(context.Background(), `update steps set ports = $2, state = 'succeeded' where run_id = $1 and step = 'archive'`, run, ports)
+			super.Exec(context.Background(), `update runs set state = 'succeeded', started_at = now(), finished_at = now(), outputs = $2 where id = $1`, run, outputs)
+			stored <- envelope
+			return
+		}
+	}()
+	status, result, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/call", map[string]any{
+		"name": "create_invoices", "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
+	})
+	envelope, ok := <-stored
+	if !ok {
+		t.Fatal("no run was started to finish")
+	}
+	if status != http.StatusOK || refusal != nil || result["isError"] == true {
+		t.Fatalf("the call was answered %d %v %v", status, refusal, result)
+	}
+	var want bytes.Buffer
+	if _, err := envelope.Encode(&want); err != nil {
+		t.Fatal(err)
+	}
+	var wanted any
+	json.Unmarshal(want.Bytes(), &wanted)
+	got, _ := json.Marshal(result["structuredContent"])
+	if expected, _ := json.Marshal(wanted); string(got) != string(expected) {
+		t.Errorf("the result is %s, and the envelope stored %s", got, expected)
+	}
+	if text := textOf(result); text != strings.TrimSpace(want.String()) || !strings.Contains(text, "agk://run/") || !strings.Contains(text, "[masked]") {
+		t.Errorf("the result reads %q", text)
 	}
 }
 

@@ -47,6 +47,8 @@ func appendAudit(ctx context.Context, tx pgx.Tx, namespace string, r audit.Recor
 	if err := r.Check(); err != nil {
 		return err
 	}
+	// An act an MCP tool asked for says so, and which tool, in whichever entry records it.
+	r = audit.Marked(ctx, r)
 	detail, err := r.DetailText()
 	if err != nil {
 		return err

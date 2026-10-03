@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/mcp"
@@ -255,7 +256,9 @@ func (c *Collections) call(ctx context.Context, caller Caller, collection string
 		}
 	}
 	block := o.graph.Workflow().MCP
-	started, err := c.starter.Start(ctx, trigger.Request{
+	// The run's entry in the audit log says it came through MCP, by the tool it was called as,
+	// beside the collection it came through.
+	started, err := c.starter.Start(audit.Through(ctx, o.tool), trigger.Request{
 		Namespace: target.Namespace, Workflow: target.Workflow,
 		Kind: agk.TriggerMCP, By: string(caller.Principal),
 		Commit: o.commit, Inputs: inputs,
