@@ -33,6 +33,12 @@ import (
 // wherever it is written, and a link that opens a message to be sent, mailto:, too, since a console
 // showing an address writes it as text for a person to copy rather than as a message the product
 // starts.
+//
+// What //go:embed puts in agentiik-api includes the web console's build, console/dist, so where the
+// console has been built this reads the scripts a browser is sent, its dependencies' code included,
+// since a mailer the console imported would be there and nowhere in its own sources. The api jobs of
+// test.yml do not build the console, and there dist/ holds only its committed .gitignore; console.yml
+// runs this test again once it has built it, which is where what agentiik-api carries is checked.
 func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 	// What no shipped file holds, whatever the case of its letters: the protocol mail is sent
 	// with, the program that sends it on a host, a link that opens a message to be sent, and the
@@ -44,7 +50,7 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 
 	read := map[string]bool{}
 	var embedded []string
-	goFiles, pageFiles, migrations := 0, 0, 0
+	goFiles, pageFiles, migrations, consoleScripts := 0, 0, 0, 0
 	check := func(path string) error {
 		if read[path] {
 			return nil
@@ -112,6 +118,8 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 			migrations++
 		case strings.Contains(filepath.ToSlash(path), "api/signin/"):
 			pageFiles++
+		case strings.HasPrefix(filepath.ToSlash(path), "../console/dist/") && strings.HasSuffix(name, ".js"):
+			consoleScripts++
 		}
 		return nil
 	}
@@ -150,5 +158,10 @@ func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 	// one that followed no //go:embed would pass without reading what the binaries carry.
 	if goFiles < 150 || pageFiles < 5 || migrations < 30 || len(embedded) < migrations+pageFiles {
 		t.Fatalf("read %d files, %d of them Go, %d of the sign-in page's and %d migrations, %d embedded, and the module ships more than that", len(read), goFiles, pageFiles, migrations, len(embedded))
+	}
+	// Where the console is built, agentiik-api carries it, and a walk that read none of its scripts
+	// would pass in console.yml without reading what a browser is sent.
+	if _, err := os.Stat("../console/dist/index.html"); err == nil && consoleScripts == 0 {
+		t.Fatal("console/dist holds a build and none of its scripts was read")
 	}
 }
