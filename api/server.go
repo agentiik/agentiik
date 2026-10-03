@@ -187,6 +187,10 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		// default branch and secret:use where the version names a secret, beside workflow:write.
 		{"POST", "/api/v1/{namespace}/workflows/{workflow}/commits",
 			Needs{Permission: WorkflowWrite, Scope: Workflow, Asks: []Permission{GrantManage, SecretUse}, Includes: true}, s.commitFiles},
+		// A draft judged by the hook's own check, which writes nothing and reads what reading the
+		// workflow reads, and the libraries an include names under the caller's workflow:read there.
+		{"POST", "/api/v1/{namespace}/workflows/{workflow}/validate",
+			Needs{Permission: WorkflowRead, Scope: Workflow, Includes: true}, s.validateFiles},
 		// What a repository's pushes are judged against beyond their tree, written under what
 		// registering a version of it takes, and read under what reading it takes.
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/images",

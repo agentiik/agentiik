@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/internal/dbtest"
 )
@@ -187,5 +188,68 @@ func TestACommitIsAuthoredByTheUsersNameAndAddress(t *testing.T) {
 	g.committed("alice", map[string]any{"message": "first", "files": map[string]any{"agentiik.yaml": workflowDocument}})
 	if out := strings.TrimSpace(g.cloned("alice").must("log", "--format=%an <%ae>", "-1")); out != "Alice Martin <alice.martin@example.com>" {
 		t.Errorf("the commit is authored by %q", out)
+	}
+}
+
+// workflow.validate and workflow.commit are their routes made as the caller: the draft refused is
+// answered with where, what was expected and the topic, and the commit made is a real git commit,
+// marked as made through MCP in its message and in the audit log, naming the tool.
+func TestAClientValidatesAndCommitsThroughTheUsersServer(t *testing.T) {
+	g := servingGit(t, owningGrants{granted: everyone().(granted)})
+	rt := g.h.(*api.Router)
+	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	where := map[string]any{"namespace": "finance", "workflow": "monthly-invoicing"}
+	args := func(more map[string]any) map[string]any {
+		out := map[string]any{}
+		for k, v := range where {
+			out[k] = v
+		}
+		for k, v := range more {
+			out[k] = v
+		}
+		return out
+	}
+
+	_, res, rpcErr := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.validate", "arguments": args(map[string]any{"files": map[string]any{"agentiik.yaml": workflowDocument + "stepz: {}\n"}})})
+	if rpcErr != nil || res["isError"] != true {
+		t.Fatalf("a draft the hook refuses is answered %v, %v", res, rpcErr)
+	}
+	said := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	for _, want := range []string{"/stepz", "expected", "workflow.language with topic repository"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal reads %q, and does not say %s", said, want)
+		}
+	}
+	_, res, rpcErr = called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.validate", "arguments": args(map[string]any{"files": map[string]any{"agentiik.yaml": workflowDocument}})})
+	if rpcErr != nil || res["isError"] == true || res["structuredContent"].(map[string]any)["valid"] != true {
+		t.Fatalf("a valid draft is answered %v, %v", res, rpcErr)
+	}
+
+	_, res, rpcErr = called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.commit", "arguments": args(map[string]any{"message": "Draft the invoicing", "files": map[string]any{"agentiik.yaml": workflowDocument}})})
+	if rpcErr != nil || res["isError"] == true {
+		t.Fatalf("the commit is answered %v, %v", res, rpcErr)
+	}
+	commit := res["structuredContent"].(map[string]any)["commit"].(string)
+	if g.refs()["refs/heads/main"] != commit {
+		t.Errorf("main does not name the commit workflow.commit made")
+	}
+	if body := strings.TrimSpace(g.cloned("alice").must("log", "--format=%B", "-1")); body != "Draft the invoicing\n\nVia: mcp" {
+		t.Errorf("the commit's message reads %q", body)
+	}
+	var marked bool
+	for _, e := range audited(t, g.pool) {
+		d := detailOf(t, e)
+		marked = marked || (e.Action == audit.RefUpdate && d["new"] == commit && d["through"] == "mcp" && d["tool"] == "workflow.commit")
+	}
+	if !marked {
+		t.Error("the ref the commit moved is not recorded as moved through MCP by workflow.commit")
+	}
+
+	// The route's grants are the tool's: a reader commits nothing.
+	_, res, _ = called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.commit", "arguments": args(map[string]any{"parent": commit, "message": "a reader", "files": map[string]any{"a.txt": "a"}})})
+	if res["isError"] != true || g.refs()["refs/heads/main"] != commit {
+		t.Errorf("a reader's commit through MCP is answered %v", res)
 	}
 }

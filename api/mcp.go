@@ -44,6 +44,9 @@ type MCPOptions struct {
 // MCP is the platform's server.
 type MCP struct {
 	server mcp.Server
+
+	// rt is the router the tools make their requests through, as the caller.
+	rt *Router
 }
 
 // NewMCP builds the platform's server and registers it at /mcp, on POST. The router answers any
@@ -57,7 +60,7 @@ func NewMCP(rt *Router, o MCPOptions) (*MCP, error) {
 	if version == "" {
 		version = "(devel)"
 	}
-	m := &MCP{server: mcp.Server{
+	m := &MCP{rt: rt, server: mcp.Server{
 		Info:         mcp.Implementation{Name: "agentiik", Version: version},
 		Instructions: mcpInstructions,
 		Origin:       origin,
@@ -76,15 +79,17 @@ func (m *MCP) serve(w http.ResponseWriter, r *http.Request, caller Caller) {
 		refuse(w, http.StatusUnauthorized, "the MCP endpoint takes a bearer token, an API token or one issued for this installation, and a session is the console's")
 		return
 	}
-	m.server.Serve(w, r, m.offered(caller))
+	m.server.Serve(w, r, m.offered(r, caller))
 }
 
-// offered is what one caller is offered. Every tool and resource here is one "any authenticated
-// principal" may use, since the language and the schemas are what every client needs before it
-// can ask for anything else and they say nothing about any namespace.
-func (m *MCP) offered(Caller) mcp.Surface {
+// offered is what one caller is offered. The language and the schemas are any authenticated
+// principal's, since they are what every client needs before it can ask for anything else and they
+// say nothing about any namespace. workflow.validate and workflow.commit are offered to every caller
+// too until the tool list is filtered by what the caller holds (#660): each is its route made as the
+// caller, so a caller holding nothing is refused by the route as anybody is.
+func (m *MCP) offered(r *http.Request, _ Caller) mcp.Surface {
 	return mcp.Surface{
-		Tools:     []mcp.Tool{workflowLanguage(), workflowSchema()},
+		Tools:     []mcp.Tool{workflowLanguage(), workflowSchema(), m.workflowValidate(r), m.workflowCommit(r)},
 		Resources: languageResources(),
 		Templates: []mcp.Template{
 			{URITemplate: "agentiik://language/{topic}", Name: "language", Title: "A page of the language reference", Description: "One topic of the workflow language, as workflow.language answers it, for a client that prefers attaching documents to calling a tool.", MimeType: "text/markdown"},

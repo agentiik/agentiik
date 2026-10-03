@@ -72,8 +72,8 @@ type pushed struct {
 	reportStatus, quiet, sideband64k bool
 
 	// through is what made the push where it was not git: "mcp" for workflow.commit's, which the
-	// audit log says of the refs it moves and of a refusal.
-	through string
+	// audit log says of the refs it moves and of a refusal, with the tool that made it.
+	through, tool string
 }
 
 // readCommands reads a push's commands, up to the flush that ends them.
@@ -341,6 +341,9 @@ func (s *Server) recordRefusal(ctx context.Context, who Principal, over Target, 
 	detail := map[string]any{"reason": why.short}
 	if p.through != "" {
 		detail["through"] = p.through
+	}
+	if p.tool != "" {
+		detail["tool"] = p.tool
 	}
 	var refs []any
 	for _, c := range p.commands {
@@ -997,6 +1000,9 @@ func (s *Server) accept(ctx context.Context, who Principal, over Target, rc *rec
 			detail := map[string]any{"ref": c.ref, "old": idOrEmpty(c.old), "new": idOrEmpty(c.new), "forced": c.forced}
 			if p.through != "" {
 				detail["through"] = p.through
+			}
+			if p.tool != "" {
+				detail["tool"] = p.tool
 			}
 			if err := ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.RefUpdate, Target: over.Workflow, Result: audit.Done, Detail: detail}); err != nil {
 				return err

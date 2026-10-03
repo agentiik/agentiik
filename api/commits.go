@@ -56,34 +56,53 @@ func (c *commitRequest) field(b *body, name string) error {
 	case "message":
 		return text(b, &c.Message)
 	case "files":
-		return b.object(TreeMaxFiles, fmt.Sprintf("a commit writes at most %d files, the most a version's tree holds", TreeMaxFiles), func(p string) error {
-			for _, f := range c.files {
-				if f.path == p {
-					return twice("the file", p)
-				}
-			}
-			f := committedFile{path: p}
-			if b.d.PeekKind() == jsontext.KindNull {
-				if _, err := b.d.ReadToken(); err != nil {
-					return malformed(err)
-				}
-			} else {
-				var s string
-				if err := text(b, &s); err != nil {
-					return err
-				}
-				f.text = &s
-				c.bytes += len(s)
-			}
-			c.bytes += len(p)
-			if c.bytes > TreeMaxBytes {
-				return &tooLarge{reason: fmt.Sprintf("the files a commit writes are at most %d bytes with their paths, as the tree a push carries is: a file this size belongs in an image or in an artifact", TreeMaxBytes)}
-			}
-			c.files = append(c.files, f)
-			return nil
-		})
+		return filesOf(b, &c.files, &c.bytes)
 	}
 	return fmt.Errorf("the request body names %.64q, and a commit takes branch, parent, message and files", name)
+}
+
+// filesOf reads the files a commit writes or a validation lays over a tree: each path mapped to its
+// text, or to null to remove it, at most TreeMaxFiles of them and TreeMaxBytes with their paths.
+func filesOf(b *body, files *[]committedFile, weight *int) error {
+	return b.object(TreeMaxFiles, fmt.Sprintf("a commit writes at most %d files, the most a version's tree holds", TreeMaxFiles), func(p string) error {
+		for _, f := range *files {
+			if f.path == p {
+				return twice("the file", p)
+			}
+		}
+		f := committedFile{path: p}
+		if b.d.PeekKind() == jsontext.KindNull {
+			if _, err := b.d.ReadToken(); err != nil {
+				return malformed(err)
+			}
+		} else {
+			var s string
+			if err := text(b, &s); err != nil {
+				return err
+			}
+			f.text = &s
+			*weight += len(s)
+		}
+		*weight += len(p)
+		if *weight > TreeMaxBytes {
+			return &tooLarge{reason: fmt.Sprintf("the files a commit writes are at most %d bytes with their paths, as the tree a push carries is: a file this size belongs in an image or in an artifact", TreeMaxBytes)}
+		}
+		*files = append(*files, f)
+		return nil
+	})
+}
+
+// checkFiles refuses a path no tree holds and a text that is not UTF-8, before any tree is written.
+func checkFiles(files []committedFile) error {
+	for _, f := range files {
+		if err := version.TreePath(f.path); err != nil {
+			return &commitRefused{http.StatusUnprocessableEntity, err.Error()}
+		}
+		if f.text != nil && !utf8.ValidString(*f.text) {
+			return &commitRefused{http.StatusUnprocessableEntity, fmt.Sprintf("%s is written as text that is not UTF-8: a binary file is pushed with git", f.path)}
+		}
+	}
+	return nil
 }
 
 // Committed is what the route answers: the commit made, the branch it moved and the commit it
@@ -101,7 +120,13 @@ func (s *Server) commitFiles(w http.ResponseWriter, r *http.Request, who Princip
 		fail(w, statusOf(err), err.Error())
 		return
 	}
-	committed, err := s.commit(r, who, over, c, "")
+	// A commit workflow.commit makes is marked as arriving through MCP, in its message and in the
+	// audit log: the route is the same, and what made the request is the MCP server.
+	via := ""
+	if _, ok := throughOf(r.Context()); ok {
+		via = "mcp"
+	}
+	committed, err := s.commit(r, who, over, c, via)
 	if err != nil {
 		s.answerCommit(w, err)
 		return
@@ -128,13 +153,8 @@ func (s *Server) commit(r *http.Request, who Principal, over Target, c commitReq
 	if len(c.files) == 0 {
 		return Committed{}, &commitRefused{http.StatusUnprocessableEntity, "a commit writes at least one file: files maps each path to its new text, or to null to remove it"}
 	}
-	for _, f := range c.files {
-		if err := version.TreePath(f.path); err != nil {
-			return Committed{}, &commitRefused{http.StatusUnprocessableEntity, err.Error()}
-		}
-		if f.text != nil && !utf8.ValidString(*f.text) {
-			return Committed{}, &commitRefused{http.StatusUnprocessableEntity, fmt.Sprintf("%s is written as text that is not UTF-8: a binary file is pushed with git", f.path)}
-		}
+	if err := checkFiles(c.files); err != nil {
+		return Committed{}, err
 	}
 	if s.packs == nil || s.objects == nil {
 		return Committed{}, &commitRefused{http.StatusServiceUnavailable, noPacks}
@@ -244,6 +264,7 @@ func (s *Server) commit(r *http.Request, who Principal, over Target, c commitReq
 		old = parent
 	}
 	p := pushed{commands: []command{{ref: ref, old: old, new: id}}, through: through}
+	p.tool, _ = throughOf(ctx)
 	received, err := s.receive(ctx, &pack, objects, p)
 	if err != nil {
 		return Committed{}, s.pushRefused(ctx, who, over, p, err)
