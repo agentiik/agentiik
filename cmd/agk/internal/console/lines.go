@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -16,7 +17,9 @@ import (
 //	state  run  namespace/workflow  trigger  started  took  by
 //
 // A run not started yet is dated by its creation, and has taken nothing; one started by no
-// principal, as a schedule's is, leaves its last column empty rather than inventing a name.
+// principal, as a schedule's is, leaves its last column empty rather than inventing a name. Each
+// field is written as the screen draws it, a control as its escape, so that none splits a line or
+// a column.
 func Lines(w io.Writer, runs []db.ListedRun, now time.Time) error {
 	for _, r := range runs {
 		at := r.StartedAt
@@ -24,7 +27,7 @@ func Lines(w io.Writer, runs []db.ListedRun, now time.Time) error {
 			at = r.CreatedAt
 		}
 		if _, err := fmt.Fprintf(w, "%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\n",
-			r.State, r.Run, r.Namespace, r.Workflow, r.Trigger, at.UTC().Format(time.RFC3339), lasted(r.RunSummary, now), r.TriggeredBy); err != nil {
+			r.State, shown.Text(string(r.Run)), shown.Text(r.Namespace), shown.Text(r.Workflow), r.Trigger, at.UTC().Format(time.RFC3339), lasted(r.RunSummary, now), shown.Text(r.TriggeredBy)); err != nil {
 			return err
 		}
 	}

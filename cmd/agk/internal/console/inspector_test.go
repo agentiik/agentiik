@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/db"
@@ -167,6 +168,38 @@ func TestAnAdministratorSeesARunnersPoolAndLabels(t *testing.T) {
 	for _, a := range other.asked {
 		if a == "/api/v1/runners" {
 			t.Error("the runners were asked for by somebody who is not an administrator")
+		}
+	}
+}
+
+// An envelope whose item holds a string of a mebibyte is kept a line at a time as a log is, cut to
+// lineKept, and drawn at once, as wide as the window.
+func TestALongStringInAnEnvelopeIsKeptShort(t *testing.T) {
+	envelope := map[string]any{"items": []any{map[string]any{"id": "a", "data": map[string]any{"page": strings.Repeat("p", 1<<20)}}}}
+	path := "/api/v1/runs/" + failedRun + "/steps/normalize/outputs/ok"
+	reader := &installation{me: &principal{Principal: "alice", Permissions: map[string][]string{"finance": {"run:read", "run:read_data"}}}, envelopes: map[string]any{path: envelope}}
+	m := press(t, inspecting(t, reader, 160), up)
+	if _, ok := m.payloads["normalize/ok"]; !ok {
+		// A mebibyte read and indented under the race detector can take longer than run waits on
+		// a command, which is left waiting; the read is then made here.
+		m = send(t, m, m.readPayload(failedRun, "normalize", "ok")()).(Model)
+	}
+	p := m.payloads["normalize/ok"]
+	if p.err != nil || p.text == "" {
+		t.Fatalf("the envelope was not read: %v", p.err)
+	}
+	for _, l := range strings.Split(p.text, "\n") {
+		if len(l) > lineKept+len("…") {
+			t.Errorf("a line of the envelope is kept %d bytes long", len(l))
+		}
+	}
+	s := soon(t, "drawing an envelope holding a mebibyte", func() string { return screen(m) })
+	if !strings.Contains(s, `"page": "ppp`) {
+		t.Errorf("the envelope is not drawn:\n%s", s)
+	}
+	for i, l := range strings.Split(s, "\n") {
+		if w := lipgloss.Width(l); w != 160 {
+			t.Errorf("line %d is %d columns wide in a window of 160: %q", i, w, l)
 		}
 	}
 }

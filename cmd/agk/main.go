@@ -57,6 +57,11 @@ type Env struct {
 	// Terminal says whether standard input and output are a terminal, for agk console. Nil says
 	// they are not, so that a test prints plain lines rather than opening a screen.
 	Terminal func() bool
+
+	// Shows says whether a writer is a terminal, where what a container wrote is written as agk
+	// console draws it rather than as its bytes. Nil says no writer is one, so that a test reads
+	// the bytes as a pipe would.
+	Shows func(io.Writer) bool
 }
 
 // command is one verb of the documented table.
@@ -128,7 +133,7 @@ func main() {
 	code := run(ctx, Env{
 		Out: os.Stdout, Err: os.Stderr, Dir: dir,
 		Now: time.Now, Getenv: os.Getenv, Executable: os.Executable,
-		ConfigDir: os.UserConfigDir, Browse: browse, Terminal: attached,
+		ConfigDir: os.UserConfigDir, Browse: browse, Terminal: attached, Shows: shows,
 	}, os.Args[1:])
 	stop()
 	os.Exit(code)

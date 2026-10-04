@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // stepLogs stands in for agk logs' follower: each step's lines and what is said about its log, a
@@ -193,5 +194,104 @@ func TestLeavingTheRunStopsFollowingItsLog(t *testing.T) {
 	logs.stopped(t, "invoice")
 	if m.follow != nil || strings.Contains(screen(m), "LOG") {
 		t.Errorf("the runs view still follows a log:\n%s", screen(m))
+	}
+}
+
+// soon is what f answers, the test failing where it has not answered within ten seconds: far more
+// than drawing a line takes, and far less than a cut that measures again after each character
+// takes on a line of a mebibyte, which is hours.
+func soon[T any](t *testing.T, what string, f func() T) T {
+	t.Helper()
+	done := make(chan T, 1)
+	go func() { done <- f() }()
+	select {
+	case v := <-done:
+		return v
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s took more than ten seconds, as a cut that measures again after each character does", what)
+	}
+	var none T
+	return none
+}
+
+// A part of a mebibyte is cut to its width in one pass, a wide character left out whole rather
+// than split, and ends in an ellipsis.
+func TestALineOfAMebibyteIsCutInOnePass(t *testing.T) {
+	cut := soon(t, "cutting a mebibyte", func() []part { return within([]part{{plain, strings.Repeat("x", 1<<20)}}, 120) })
+	if w := widthOf(cut); w != 120 || !strings.HasSuffix(cut[len(cut)-1].text, "x…") {
+		t.Errorf("a mebibyte cut to 120 columns is %d wide: %q", w, cut[len(cut)-1].text[max(0, len(cut[len(cut)-1].text)-20):])
+	}
+	wide := within([]part{{plain, "ab"}, {plain, strings.Repeat("漢", 1<<10)}}, 7)
+	if got := wide[0].text + wide[1].text; got != "ab漢漢…" {
+		t.Errorf("wide characters cut to 7 columns are %q", got)
+	}
+	// A keycap is an ASCII character, U+FE0F and U+20E3, two columns to Lip Gloss, which theme.line
+	// pads by, and one to a cut that counts ASCII a byte at a time.
+	if got := within([]part{{plain, strings.Repeat("1️⃣ ", 1<<10)}}, 40); widthOf(got) != 40 || got[0].text != strings.Repeat("1️⃣ ", 13)+"…" {
+		t.Errorf("keycaps cut to 40 columns are %d wide: %q", widthOf(got), got[0].text)
+	}
+	// At every width, what is cut is no wider, and narrower by a column at most, where a cluster
+	// two columns wide was left out whole.
+	clusters := []part{{plain, "a 1️⃣ x️ 漢 é 👨‍👩‍👧 🇫🇷 ⚠️ "}, {muted, strings.Repeat("#️⃣ ナ 👍🏽 ", 8)}}
+	for width := 1; width <= widthOf(clusters); width++ {
+		if cut := within(clusters, width); widthOf(cut) > width || widthOf(cut) < width-1 {
+			t.Errorf("cut to %d columns, the clusters are %d wide: %+v", width, widthOf(cut), cut)
+		}
+	}
+}
+
+// A log line of keycaps, which Lip Gloss measures two columns each, is cut inside its pane.
+func TestALogLineOfKeycapsIsCutInsideItsPane(t *testing.T) {
+	logs := &stepLogs{lines: map[string][]string{"invoice": {"invoice | answer: " + strings.Repeat("1️⃣ 2️⃣ 3️⃣ ", 30), "invoice | the end"}}}
+	m := followingLogs(t, &installation{}, logs, 160, 40)
+	s := screen(m)
+	drawn := false
+	for i, l := range strings.Split(s, "\n") {
+		if w := lipgloss.Width(l); w != 160 {
+			t.Errorf("line %d is %d columns wide in a window of 160: %q", i, w, l)
+		}
+		drawn = drawn || strings.Contains(l, "invoice | answer: 1️⃣ 2️⃣ 3️⃣") && strings.HasSuffix(l, "… │")
+	}
+	if !drawn {
+		t.Errorf("the line of keycaps is not drawn cut inside its pane:\n%s", s)
+	}
+}
+
+// A log line of a mebibyte, as a runner ships at most, is kept to its first lineKept bytes and an
+// ellipsis, and drawn at once, cut inside its pane, at every size.
+func TestALogLineOfAMebibyteIsKeptShortAndDrawnAtOnce(t *testing.T) {
+	t.Parallel()
+	for _, size := range [][2]int{{80, 24}, {160, 40}} {
+		logs := &stepLogs{lines: map[string][]string{"invoice": {"invoice | " + strings.Repeat("x", 1<<20)}}, live: map[string]bool{"invoice": true}}
+		m := followingLogs(t, &installation{}, logs, size[0], size[1])
+		kept := m.logs[failedRun+"/invoice"].lines
+		if len(kept) != 1 || len(kept[0].text) != lineKept+len("…") || !strings.HasSuffix(kept[0].text, "x…") {
+			t.Fatalf("the inspector keeps %d lines, the first %d bytes long", len(kept), len(kept[0].text))
+		}
+		s := soon(t, "drawing a log line of a mebibyte", func() string { return screen(m) })
+		drawn := false
+		for i, l := range strings.Split(s, "\n") {
+			if w := lipgloss.Width(l); w != size[0] {
+				t.Errorf("at %d by %d, line %d is %d columns wide: %q", size[0], size[1], i, w, l)
+			}
+			drawn = drawn || strings.Contains(l, "invoice | xxx") && strings.HasSuffix(strings.TrimRight(l, " │"), "x…")
+		}
+		if !drawn {
+			t.Errorf("at %d by %d, the line is not drawn cut with an ellipsis:\n%s", size[0], size[1], s)
+		}
+	}
+}
+
+// What the inspector keeps of a line is cut where a character starts, and made safe to draw before
+// its ellipsis, so that a sequence the cut left unended takes nothing after it.
+func TestALineIsCutWhereACharacterStarts(t *testing.T) {
+	if got := clipped(strings.Repeat("x", lineKept)); got != strings.Repeat("x", lineKept) {
+		t.Errorf("a line of lineKept bytes is cut: %d bytes", len(got))
+	}
+	if got := clipped(strings.Repeat("x", lineKept-1) + "漢"); got != strings.Repeat("x", lineKept-1)+"…" {
+		t.Errorf("a character across the cut is split: %q", got[len(got)-8:])
+	}
+	if got := clipped(strings.Repeat("x", lineKept-8) + "\x1b]0;a window title"); got != strings.Repeat("x", lineKept-8)+"…" {
+		t.Errorf("a sequence cut short takes the ellipsis: %q", got[len(got)-8:])
 	}
 }

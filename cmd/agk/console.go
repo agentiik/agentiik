@@ -120,7 +120,10 @@ func plainly(ctx context.Context, e Env, at remote, run, namespace string) int {
 			}
 			return exitRefused
 		}
-		describe(e.Out, d, e.now(), false)
+		// Under TERM=dumb standard output can still be a terminal, and the run is written to it
+		// as agk console draws text. The runs are not screened, their columns being tabs, and
+		// console.Lines writes each field as the screen draws it.
+		describe(e.screened(e.Out), d, e.now(), false)
 		return exitSucceeded
 	}
 	path := "/api/v1/runs?limit=100"

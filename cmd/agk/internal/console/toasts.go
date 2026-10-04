@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -157,7 +158,9 @@ func (m Model) withToasts(t theme, screen string) string {
 	layers := []*lipgloss.Layer{lipgloss.NewLayer(screen)}
 	bottom := m.height - 1
 	for i := len(m.toasts) - 1; i >= 0 && bottom > 1; i-- {
-		box := style.Render(strings.TrimSpace(m.toasts[i].text))
+		// A toast is wrapped into its frame by Lip Gloss rather than drawn by theme.line, and says
+		// what a notification's fields and a run's name hold, so it is made safe to draw here.
+		box := style.Render(shown.Text(strings.TrimSpace(m.toasts[i].text)))
 		h := lipgloss.Height(box)
 		if bottom-h < 1 {
 			break
