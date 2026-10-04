@@ -234,8 +234,10 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 		return noOutcome(err)
 	}
 
+	// What the containers wrote, every log after the run and a failure's last lines, reaches a
+	// terminal as agk logs writes it there, and a file or a pipe as the log holds it.
 	if *showLogs {
-		printLogs(e.Err, layout, out)
+		printLogs(e.screened(e.Err), layout, out)
 	}
 
 	report := e.Out
@@ -245,11 +247,11 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 		report = e.Err
 	}
 	if out.Run.State != agk.Succeeded {
-		reportFailure(e.Err, out)
+		reportFailure(e.screened(e.Err), out)
 		return exitNotSucceeded
 	}
 
-	reportSuccess(report, e.Dir, layout, out)
+	reportSuccess(e.screened(report), e.Dir, layout, out)
 	if *output == "json" {
 		if err := writeOutputs(e.Out, out.Outputs); err != nil {
 			refusal(e.Err, err)

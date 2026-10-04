@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/cmd/agk/internal/local"
+	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/numbertest"
 )
@@ -437,5 +439,82 @@ func TestTheWorkingTreeIsNamedTheWayItWouldBeTyped(t *testing.T) {
 		if got := workingTree(dir, tree); !strings.Contains(got, want) || !strings.Contains(got, "uncommitted changes included") || !strings.Contains(got, "labelled local") {
 			t.Errorf("the working tree %s run from %s reads %q", tree, dir, got)
 		}
+	}
+}
+
+// What the containers of a local run wrote reaches a terminal as agk logs writes it there, with
+// --logs after the run and in a failure's last lines, and a file or a pipe as the log holds it:
+// two lines the driver wrote, and one it could not have, which is shown as it is.
+func TestContainerOutputOnATerminalIsWrittenAsTheConsoleDrawsIt(t *testing.T) {
+	l, err := local.NewLayout(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, shard := agk.NewRunID(), agk.Shard{Index: 2, Of: 3}
+	path, err := l.Log(agk.NewTaskID(run, "fan", 1, shard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc []byte
+	for i, text := range []string{"clip \x1b]52;c;SGFja2Vk\a", "clear \u009b2J"} {
+		line, _ := json.Marshal(driver.Line{At: time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC), Index: i + 1, Stream: driver.Stderr, Text: text})
+		doc = append(append(doc, line...), '\n')
+	}
+	doc = append(doc, "title \x1b]0;x\a\n"...)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, doc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := local.Outcome{
+		Run: agk.Run{ID: run, Workflow: "finance/fan", State: agk.Failed},
+		State: &graph.State{Steps: map[agk.Step]graph.StepState{
+			"fan": {Verdict: agk.VerdictFailed, Shards: []graph.ShardState{{Shard: shard, Attempt: 1, Task: agk.TaskFailed}}},
+		}},
+	}
+	failed := local.Failure{Step: "fan", Shard: shard, Attempt: 1, State: agk.TaskFailed, HasExit: true, ExitCode: 1, Band: agk.Band(1), Log: path}
+
+	on := Env{Shows: func(io.Writer) bool { return true }}
+	var b strings.Builder
+	printLogs(on.screened(&b), l, out)
+	failure(on.screened(&b), failed)
+	for _, want := range []string{"  clip \n  clear \\u009b2J\n  title \n", "exit code 1, application failure: failed\n  clip \n  clear \\u009b2J\n  title \n"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("a terminal is written\n%s\nwhere it reads\n%s", b.String(), want)
+		}
+	}
+	if strings.ContainsAny(b.String(), "\x1b\a\u009b") {
+		t.Errorf("a terminal is written a control: %q", b.String())
+	}
+
+	b.Reset()
+	printLogs(Env{}.screened(&b), l, out)
+	failure(Env{}.screened(&b), failed)
+	if want := "  clip \x1b]52;c;SGFja2Vk\a\n  clear \u009b2J\n  title \x1b]0;x\a\n"; strings.Count(b.String(), want) != 2 {
+		t.Errorf("a file or a pipe is not written the log as it holds it, twice:\n%q", b.String())
+	}
+}
+
+// A terminal is a character device, and a buffer, a pipe or a file is none.
+func TestOnlyACharacterDeviceShows(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	f, err := os.Create(filepath.Join(t.TempDir(), "log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for name, writer := range map[string]io.Writer{"a buffer": &bytes.Buffer{}, "a pipe": w, "a file": f} {
+		if shows(writer) {
+			t.Errorf("%s is taken for a terminal", name)
+		}
+	}
+	if (Env{Shows: shows}).screened(f) != io.Writer(f) {
+		t.Error("a file is written through a screen")
 	}
 }

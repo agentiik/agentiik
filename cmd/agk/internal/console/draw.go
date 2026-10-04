@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 )
 
 // The graph drawn as the web console draws it, in the terminal's own characters: each step a box
@@ -134,8 +135,10 @@ func (c *canvas) path(r role, dashed bool, points ...[2]int) {
 	}
 }
 
+// write puts s on the canvas a character to a cell, as shown.Text has it, since a cell drawn alone
+// would show a control as an escape wider than the cell.
 func (c *canvas) write(x, y int, s string, r role) {
-	for _, ch := range s {
+	for _, ch := range shown.Text(s) {
 		if cell := c.at(x, y); cell != nil {
 			cell.text, cell.role = ch, r
 		}

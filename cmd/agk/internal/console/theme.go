@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 )
 
 // token is one colour of the design system on one ground: its value, and its nearest of the 256.
@@ -147,12 +148,18 @@ type part struct {
 // line draws parts as one line as wide as the window, its padding painted as its parts are, and
 // selected drawn as the selection: the accent's dim fill where the ground is painted, and reverse
 // where it is not, which every terminal has.
+//
+// Each part is drawn, and measured, as shown.Text has it. A line holds log lines, envelopes, names
+// and the API's sentences, written by whoever pushed a workflow or by whatever a brick read, and
+// every line of the screen passes here, so that none of it reaches the terminal as a control and
+// a tab is as wide as it is drawn.
 func (t theme) line(selected bool, width int, parts ...part) string {
 	var b strings.Builder
 	used := 0
 	for _, p := range parts {
-		b.WriteString(t.style(selected, p.role).Render(p.text))
-		used += lipgloss.Width(p.text)
+		text := shown.Text(p.text)
+		b.WriteString(t.style(selected, p.role).Render(text))
+		used += lipgloss.Width(text)
 	}
 	if used < width {
 		b.WriteString(t.style(selected, plain).Render(strings.Repeat(" ", width-used)))

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -82,10 +83,20 @@ func (m Model) readPayload(run, step, port string) tea.Cmd {
 		}
 		var b bytes.Buffer
 		if err := json.Indent(&b, envelope, "", "  "); err != nil {
-			return payloadRead{key: key, text: string(envelope)}
+			return payloadRead{key: key, text: keptLines(string(envelope))}
 		}
-		return payloadRead{key: key, text: b.String()}
+		return payloadRead{key: key, text: keptLines(b.String())}
 	}
+}
+
+// keptLines is an envelope with each of its lines cut to lineKept, as a log's are: one string of a
+// mebibyte in an item is otherwise measured again on every frame.
+func keptLines(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = clipped(l)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // mayReadData says whether the run's payloads are the caller's to read.
@@ -406,8 +417,9 @@ func sizeOf(bytes int64) string {
 	return fmt.Sprintf("%.1f MiB", float64(bytes)/(1<<20))
 }
 
-// cellOf is a text as wide as a cell, cut with an ellipsis or padded.
+// cellOf is a text as wide as a cell, cut with an ellipsis or padded, counted as it is drawn.
 func cellOf(s string, width int) string {
+	s = shown.Text(s)
 	r := []rune(s)
 	if len(r) > width {
 		return string(r[:max(0, width-1)]) + "…"
@@ -416,6 +428,7 @@ func cellOf(s string, width int) string {
 }
 
 func padLeft(s string, width int) string {
+	s = shown.Text(s)
 	if n := len([]rune(s)); n < width {
 		return strings.Repeat(" ", width-n) + s
 	}

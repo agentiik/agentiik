@@ -237,3 +237,29 @@ func TestTheConsoleAsksOfARunAsAgkDoes(t *testing.T) {
 		t.Errorf("the requests sent were %q", bodies)
 	}
 }
+
+// Under TERM=dumb standard output is still a terminal, and a run is written to it as agk console
+// draws text, each control the API's sentence holds shown as its escape.
+func TestAConsoleOnADumbTerminalWritesARunAsItDrawsText(t *testing.T) {
+	d := runReading(agk.Failed, agk.VerdictFailed)
+	d.Reason = "refused\r\x1b]0;pwned\a at creation"
+	s := &consoleStandIn{run: d}
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+
+	out := &strings.Builder{}
+	e := Env{
+		Out: out, Err: &strings.Builder{}, Dir: t.TempDir(),
+		Getenv: func(k string) string {
+			return map[string]string{tokenVariable: "the-token", serverVariable: srv.URL, "TERM": "dumb"}[k]
+		},
+		Terminal: func() bool { return true },
+		Shows:    func(io.Writer) bool { return true },
+	}
+	if code := run(t.Context(), e, []string{"console", aRun}); code != exitSucceeded {
+		t.Fatalf("agk console on a run answered %d", code)
+	}
+	if !strings.Contains(out.String(), `failed: refused\r at creation`+"\n") || strings.ContainsAny(out.String(), "\r\x1b\a") {
+		t.Errorf("agk console on a dumb terminal wrote %q", out.String())
+	}
+}

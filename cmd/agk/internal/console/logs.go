@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 )
 
 // The inspector follows the log of the step chosen, history then live, as agk logs follows it: the
@@ -24,6 +27,28 @@ type Follower func(ctx context.Context, run, step string, out, said io.Writer) e
 // logKept is how many lines of a step's log the inspector keeps: the end is what a screen shows,
 // and the whole log is agk logs' to print.
 const logKept = 2000
+
+// lineKept is how many bytes of one line of a log or an envelope the inspector keeps. It is more
+// than the widest window shows, and it bounds what is measured each time the screen is drawn,
+// which a line of a mebibyte, the most a runner ships, made seconds; 2000 lines kept then hold
+// 8 MiB of what the log wrote, and up to eight times that once a line of tabs is drawn as spaces.
+// agk logs prints the line whole.
+const lineKept = 4 << 10
+
+// clipped is a line as the inspector keeps it: whole where it holds lineKept bytes or fewer, and
+// otherwise its first lineKept, cut where a character starts and ended by an ellipsis. What is kept
+// of a line cut is made safe to draw before the ellipsis is put after it, since a sequence the cut
+// left unended would otherwise take the ellipsis with it.
+func clipped(s string) string {
+	if len(s) <= lineKept {
+		return s
+	}
+	n := lineKept
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return shown.Text(s[:n]) + "…"
+}
 
 // logLine is one line of a log, or one said about it.
 type logLine struct {
@@ -170,7 +195,7 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 		if i < 0 {
 			return len(p), nil
 		}
-		line := logRead{key: w.key, line: logLine{text: string(w.rest[:i]), said: w.said}}
+		line := logRead{key: w.key, line: logLine{text: clipped(string(w.rest[:i])), said: w.said}}
 		w.rest = w.rest[i+1:]
 		select {
 		case w.to <- line:
@@ -208,8 +233,7 @@ func (m Model) logLines(t theme, step string, height int) []string {
 		return append(lines, t.line(false, m.width, part{quiet, said}))
 	}
 	end := len(b.lines) - back
-	shown := b.lines[max(0, end-(height-1)):end]
-	for _, l := range shown {
+	for _, l := range b.lines[max(0, end-(height-1)):end] {
 		r := plain
 		if l.said {
 			r = quiet

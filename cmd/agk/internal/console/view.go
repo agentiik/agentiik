@@ -8,8 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -497,16 +499,21 @@ func laid(cells []cell, grow, width int) []part {
 	return parts
 }
 
-// widthOf is how many columns parts take.
+// widthOf is how many columns parts take, drawn as theme.line draws them.
 func widthOf(parts []part) int {
 	w := 0
 	for _, p := range parts {
-		w += lipgloss.Width(p.text)
+		w += lipgloss.Width(shown.Text(p.text))
 	}
 	return w
 }
 
 // within is parts cut to width, the last character an ellipsis where something was left out.
+//
+// Each part is measured once, as theme.line draws it, and the one that does not fit is cut in one
+// pass, a wide character left out whole rather than split: cut a character at a time and measured
+// again after each, a line costs the square of its length, which a log line of a few kilobytes
+// made seconds on every frame.
 func within(parts []part, width int) []part {
 	if widthOf(parts) <= width {
 		return parts
@@ -517,19 +524,33 @@ func within(parts []part, width int) []part {
 	var out []part
 	used := 0
 	for _, p := range parts {
-		w := lipgloss.Width(p.text)
+		text := shown.Text(p.text)
+		w := lipgloss.Width(text)
 		if used+w <= width-1 {
-			out = append(out, p)
+			out = append(out, part{p.role, text})
 			used += w
 			continue
 		}
-		r := []rune(p.text)
-		for len(r) > 0 && used+lipgloss.Width(string(r)) > width-1 {
-			r = r[:len(r)-1]
-		}
-		return append(out, part{p.role, string(r) + "…"})
+		return append(out, part{p.role, cut(text, width-1-used) + "…"})
 	}
 	return out
+}
+
+// cut is as much of text, which shown.Text has made, as fits in room columns, taken a grapheme
+// cluster at a time and each measured as lipgloss.Width measures it, which is what theme.line pads
+// by. xansi.Truncate counts an ASCII character as one column without looking at what follows it,
+// where a keycap, 1 then U+FE0F and U+20E3, is two to Lip Gloss: a line it cut ran past its pane.
+func cut(text string, room int) string {
+	used := 0
+	for i := 0; i < len(text); {
+		c, w := xansi.FirstGraphemeCluster(text[i:], xansi.GraphemeWidth)
+		if used+w > room {
+			return text[:i]
+		}
+		used += w
+		i += len(c)
+	}
+	return text
 }
 
 // fitted puts left and right on one line as wide as the window, the right cut first where both

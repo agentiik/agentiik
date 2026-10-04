@@ -49,7 +49,8 @@ import (
 //
 // The lines are the command's answer and go to standard output, each written whole even while
 // several streams are read at once. What is said about a log rather than in it, lines that cannot
-// be read back, a log the runner cut, a stream being asked again, goes to standard error.
+// be read back, a log the runner cut, a stream being asked again, goes to standard error. Either,
+// on a terminal, is written as agk console draws it, and to a file or a pipe as the log holds it.
 
 // The pace of asking again: the first wait, the longest, how many attempts in a row that open
 // nothing are made before giving up, and how long a connection may stay silent before it is taken
@@ -96,7 +97,7 @@ func logs(ctx context.Context, e Env, args []string) int {
 		}
 	}
 
-	out, errs := &serial{w: e.Out}, &serial{w: e.Err}
+	out, errs := &serial{w: e.screened(e.Out)}, &serial{w: e.screened(e.Err)}
 	codes := make([]int, len(steps))
 	var wg sync.WaitGroup
 	for i, step := range steps {

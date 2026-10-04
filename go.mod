@@ -39,6 +39,12 @@ require (
 	// console reads from NO_COLOR, COLORTERM and TERM as the documentation's table does and hands
 	// it, so that the renderer neither converts a colour the console chose nor guesses again.
 	github.com/charmbracelet/colorprofile v0.4.3
+	// Charm's ANSI package, used by packages cmd/agk/internal/console and cmd/agk/internal/shown
+	// alone, and already here as a dependency of Lip Gloss: the width Lip Gloss measures a line by,
+	// grapheme cluster by grapheme cluster, so that where the console cuts a line, and the column a
+	// tab from a container is counted to, agree with what is drawn.
+	// Written here, the width of a grapheme cluster would be Unicode's tables kept a second time.
+	github.com/charmbracelet/x/ansi v0.11.8
 	// WebSocket, used by package api alone, for GET /api/v1/me/live, the live connection that tells
 	// a console what changed. The standard library has none, and golang.org/x/net/websocket's own
 	// documentation sends a reader to two packages more actively maintained, of which this is the
@@ -143,7 +149,6 @@ require (
 	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
-	github.com/charmbracelet/x/ansi v0.11.8 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect

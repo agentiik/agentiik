@@ -334,3 +334,60 @@ func TestTheConsoleFollowsALogAsAgkLogsDoes(t *testing.T) {
 		t.Errorf("a refused log answered %v, and said %q", err, said.String())
 	}
 }
+
+// pasteJacking is the line of agentiik/agentiik#860 as a brick wrote it, which writes the clipboard,
+// renames the window and clears the screen, and gapped a stream that says a part of its log is
+// missing for a reason holding a carriage return and a CSI.
+const pasteJacking = "before \x1b]52;c;SGFja2Vk\a \x1b]0;pwned\a \u009b2J after"
+
+func gapped() *streamStandIn {
+	return &streamStandIn{scripts: map[string][]func(http.ResponseWriter, *http.Request){
+		"normalize": {streaming(
+			dispatchEvent(firstDispatch, 1), lineEvent(firstDispatch, 1, 1, pasteJacking),
+			sse("", "gap", map[string]any{"task_id": firstDispatch, "first_line": 2, "lines": 3, "reason": "the shipment was lost\r\x1b[2J"}),
+			endOf(firstDispatch, 4, false), stepOver,
+		)},
+	}}
+}
+
+// On a terminal, agk logs writes each line, and what it says about the log, as agk console draws
+// them: each escape sequence dropped whole and every other control shown as its escape.
+func TestALogOnATerminalIsWrittenAsTheConsoleDrawsIt(t *testing.T) {
+	s := gapped()
+	s.resumed = map[string][]string{}
+	srv := httptest.NewServer(http.HandlerFunc(s.serve))
+	t.Cleanup(srv.Close)
+	quickly(t)
+	out, errs := &strings.Builder{}, &strings.Builder{}
+	e := Env{
+		Out: out, Err: &serial{w: errs}, Dir: t.TempDir(),
+		Getenv: func(k string) string {
+			return map[string]string{tokenVariable: "the-token", serverVariable: srv.URL}[k]
+		},
+		Shows: func(io.Writer) bool { return true },
+	}
+	if code := run(t.Context(), e, []string{"logs", aRun, "normalize"}); code != exitSucceeded {
+		t.Fatalf("agk logs answered %d: %s%s", code, out, errs)
+	}
+	if want := `normalize | before   \u009b2J after` + "\n"; out.String() != want {
+		t.Errorf("agk logs wrote to a terminal\n%q\nwhere it writes\n%q", out.String(), want)
+	}
+	if want := `normalize: 3 lines are missing from line 2: the shipment was lost\r` + "\n"; errs.String() != want {
+		t.Errorf("agk logs said to a terminal\n%q\nwhere it says\n%q", errs.String(), want)
+	}
+}
+
+// To a file or a pipe, agk logs writes each line as the log holds it, for a script that wants the
+// bytes.
+func TestALogToAPipeIsWrittenAsTheLogHoldsIt(t *testing.T) {
+	code, out, errs := followLogs(t, gapped(), aRun, "normalize")
+	if code != exitSucceeded {
+		t.Fatalf("agk logs answered %d: %s%s", code, out, errs)
+	}
+	if want := "normalize | " + pasteJacking + "\n"; out != want {
+		t.Errorf("agk logs wrote to a pipe\n%q\nwhere it writes\n%q", out, want)
+	}
+	if !strings.Contains(errs, "the shipment was lost\r\x1b[2J\n") {
+		t.Errorf("agk logs said to a pipe %q", errs)
+	}
+}
