@@ -125,11 +125,30 @@ type Template struct {
 	MimeType    string `json:"mimeType,omitempty"`
 }
 
-// Contents is what a read answers: a resource's text, and what it is.
+// Contents is what a read answers: a resource's text, or its bytes where they are not text, and
+// what it is.
 type Contents struct {
 	URI      string `json:"uri"`
 	MimeType string `json:"mimeType,omitempty"`
 	Text     string `json:"text"`
+
+	// Blob is the resource's bytes where they are no text, which the revision carries in base64
+	// under blob in place of text. Nil for a resource that is text, an empty one included.
+	Blob []byte `json:"-"`
+}
+
+// MarshalJSON writes text for a resource that is text and blob for one that is not, never both,
+// since the revision's contents are one or the other.
+func (c Contents) MarshalJSON() ([]byte, error) {
+	if c.Blob == nil {
+		type text Contents
+		return json.Marshal(text(c))
+	}
+	return json.Marshal(struct {
+		URI      string `json:"uri"`
+		MimeType string `json:"mimeType,omitempty"`
+		Blob     []byte `json:"blob"`
+	}{c.URI, c.MimeType, c.Blob})
 }
 
 // Surface is what one request's caller is offered. The tools are listed in the order given, which

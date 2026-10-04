@@ -535,6 +535,17 @@ func (c Caller) Administers(ctx context.Context) (bool, error) {
 	return c.allow(ctx, GrantManage, Target{})
 }
 
+// Holds answers whether the caller holds a permission over a target through the credential it
+// presented, asked of the authorizer as the router asks it for every guarded route: for a route
+// about the caller's own that acts on something the caller names, as a collection's member names a
+// workflow its owner has to be able to run.
+func (c Caller) Holds(ctx context.Context, what Permission, over Target) (bool, error) {
+	if c.allow == nil {
+		return false, nil
+	}
+	return c.allow(ctx, what, over)
+}
+
 // Owned answers the namespaces the caller owns through the credential it presented, ordered by
 // name: none through a narrowed one, for the reason Narrowed gives.
 func (c Caller) Owned(ctx context.Context) ([]string, error) {

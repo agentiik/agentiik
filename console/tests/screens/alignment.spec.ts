@@ -41,6 +41,7 @@ const screens: Record<string, string[]> = {
     "/me/profile",
     "/me/tokens",
     "/me/service-accounts",
+    "/me/mcp",
   ],
   dana: ["/", "/runners", "/runners/statistics", "/users", "/users/policy", "/users/audit", "/groups", "/namespaces", "/namespaces?namespace=finance", "/finance/settings", "/me"],
   // Nobody signed in: the sign-in page, whatever the address.

@@ -320,10 +320,11 @@ type API struct {
 	// same origin, or none.
 	Console bool
 
-	// MCP is whether the API serves the Model Context Protocol at /mcp and /mcp/{namespace}/{workflow},
-	// as it does unless AGK_MCP is off: then both answer 404, as a route the installation does not
-	// serve does, and a workflow's mcp block is still accepted and checked at the push, since a file
-	// means the same on every installation and the next one it is pushed to may serve MCP.
+	// MCP is whether the API serves the Model Context Protocol at /mcp and every collection at
+	// /mcp/collections/{id}, as it does unless AGK_MCP is off: then each answers 404, as a route the
+	// installation does not serve does, the collections are kept, and a workflow's mcp block is still
+	// accepted and checked at the push, since a file means the same on every installation and the
+	// next one it is pushed to may serve MCP.
 	MCP bool
 }
 

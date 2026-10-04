@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -110,6 +111,10 @@ type Request struct {
 	// in a chain of calls the run is.
 	Caller *db.Caller
 	Depth  int
+
+	// Collection is the collection a tool was called through and the name it was called as, for
+	// the kind mcp, which the run keeps once the collection is gone.
+	Collection *db.CollectionCall
 }
 
 // Started is a run created: its identifier and the commit it is pinned to.
@@ -256,6 +261,49 @@ func (s *Starter) Declared(ctx context.Context, r Request) (Declaration, error) 
 	return Declaration{Commit: commit, Inputs: wf.Inputs, Files: files}, nil
 }
 
+// Published is what the tool a version publishes takes and gives, as a client of a collection is
+// told of it: the declaration Declared answers, and the schema of the output the tool returns where
+// it names one carrying a schema, with each file of the tree the output's schema reaches by $ref
+// added to the files. "Its references into the repository bundled in, since a client cannot read
+// the tree."
+type Published struct {
+	Declaration
+	Output json.RawMessage
+}
+
+// Publication answers what the tool of the version r names takes and gives, without asking for a
+// run: Declared, and the output's schema compiled against the same tree, so that a reference it
+// makes is one a client is given the file of.
+func (s *Starter) Publication(ctx context.Context, r Request, output string) (Published, error) {
+	d, err := s.Declared(ctx, r)
+	if err != nil || output == "" {
+		return Published{Declaration: d}, err
+	}
+	g, err := s.versions.Graph(ctx, r.Namespace, r.Workflow, d.Commit)
+	if err != nil {
+		return Published{Declaration: d}, err
+	}
+	out, ok := g.Workflow().Outputs[output]
+	if !ok || len(out.Schema) == 0 || strings.TrimSpace(string(out.Schema)) == "null" {
+		return Published{Declaration: d}, nil
+	}
+	tree := &versionTree{ctx: ctx, pool: s.pool, objects: s.objects, namespace: r.Namespace, workflow: r.Workflow, commit: d.Commit}
+	compiler := schema.NewCompilerWithin(tree, graph.InputSchemasMaxBytes)
+	if _, err := compiler.Compile(out.Schema); err != nil {
+		if tree.trouble != nil {
+			return Published{Declaration: d}, fmt.Errorf("the tree of %s/%s@%s could not be read to answer its output: %w", r.Namespace, r.Workflow, d.Commit, tree.trouble)
+		}
+		return Published{Declaration: d}, fmt.Errorf("%w: the workflow output %s: %v", ErrDeclarationRefused, output, err)
+	}
+	if d.Files == nil {
+		d.Files = map[string]any{}
+	}
+	for path, doc := range compiler.Reached() {
+		d.Files[path] = doc
+	}
+	return Published{Declaration: d, Output: out.Schema}, nil
+}
+
 // Create writes the run, tells the controller and records run.trigger, in the transaction ns
 // carries, and answers the run: the one place a run is written, so that a trigger added later is
 // quota-limited, attributed and audited with no code of its own. A caller firing a schedule does it
@@ -281,6 +329,10 @@ func (p Prepared) Create(ctx context.Context, ns *db.NS) (agk.RunID, error) {
 		detail["from"] = map[string]any{"run": string(r.Caller.Run), "step": string(r.Caller.Step)}
 		detail["depth"] = r.Depth
 	}
+	// The collection the tool was called through, so that the audit log and the run say the same.
+	if r.Collection != nil {
+		detail["collection"] = map[string]any{"id": r.Collection.ID, "tool": r.Collection.Tool}
+	}
 	for k, v := range r.Detail {
 		detail[k] = v
 	}
@@ -296,6 +348,7 @@ func (p Prepared) Create(ctx context.Context, ns *db.NS) (agk.RunID, error) {
 		Context:       r.Context,
 		NamespaceVars: vars,
 		Caller:        r.Caller, Depth: r.Depth,
+		Collection: r.Collection,
 	}); err != nil {
 		return "", err
 	}

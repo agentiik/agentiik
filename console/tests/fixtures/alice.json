@@ -17635,31 +17635,16 @@
           }
         },
         "mcp": {
-          "name": "invoicing",
-          "description": "Invoices a batch of orders for the finance team, as the monthly run does.",
-          "tools": [
-            {
-              "name": "create_invoices",
-              "title": "Create invoices",
-              "description": "Invoices the orders given and returns the invoices it created. Refuses an order with no amount.",
-              "input": {
-                "from": {
-                  "input": "orders"
-                }
-              },
-              "output": {
-                "from": {
-                  "output": "invoices"
-                }
-              },
-              "mode": "sync",
-              "timeout": "2m",
-              "annotations": {
-                "idempotentHint": true,
-                "destructiveHint": false
-              }
-            }
-          ]
+          "name": "create_invoices",
+          "title": "Create invoices",
+          "description": "Invoices the orders given and returns the invoices it created. Refuses an order with no amount.",
+          "output": "invoices",
+          "mode": "sync",
+          "timeout": "2m",
+          "annotations": {
+            "idempotentHint": true,
+            "destructiveHint": false
+          }
         }
       },
       "history": [
@@ -34712,6 +34697,44 @@
           "kind": "synced",
           "created_at": "2026-09-27T09:02:00Z",
           "last_used_at": "2026-09-27T12:30:00Z"
+        }
+      ]
+    }
+  },
+  "GET /api/v1/me/collections": {
+    "status": 200,
+    "body": {
+      "collections": [
+        {
+          "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+          "name": "back-office",
+          "description": "Invoices and orders, for the finance assistant.",
+          "url": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+          "members": [
+            {
+              "workflow": "finance/monthly-invoicing",
+              "tool": "create_invoices"
+            },
+            {
+              "workflow": "finance/reconcile",
+              "ref": "v2",
+              "tool": null,
+              "reason": "no_mcp_block"
+            }
+          ]
+        },
+        {
+          "id": "01JR8T5Y7A9C1E3G5J7M9P1R3T",
+          "name": "support_desk",
+          "description": "",
+          "url": "https://agentiik.example.com/mcp/collections/01JR8T5Y7A9C1E3G5J7M9P1R3T",
+          "members": [
+            {
+              "workflow": "team-ops/nightly",
+              "tool": null,
+              "reason": "not_runnable"
+            }
+          ]
         }
       ]
     }

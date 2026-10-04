@@ -15,10 +15,6 @@
   resources: { cpu: "0.5", memory: 256Mi }
 
 mcp:
-  name: common
-  tools:
-    - name: run_common
-      description: Run the shared graph.
-      input:
-        from: { input: orders }
-      mode: sync
+  name: run_common
+  description: Run the shared graph.
+  mode: sync

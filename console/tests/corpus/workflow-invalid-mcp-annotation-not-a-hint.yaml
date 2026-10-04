@@ -1,0 +1,29 @@
+# invalid: An annotation other than the four hints the protocol defines. They are passed through to a client unchanged, so a key the protocol does not define is one no client reads, and a grant is never written here.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+
+mcp:
+  name: create_invoice
+  description: Issue one invoice for a customer.
+  annotations:
+    readOnlyHint: false
+    requiresApproval: true
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]

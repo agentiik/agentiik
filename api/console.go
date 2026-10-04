@@ -77,6 +77,10 @@ type ConsoleOptions struct {
 	// PublicURL is AGK_PUBLIC_URL, or AGK_PROXY_URL behind a proxy, whose path, where it has one,
 	// is the root the console's addresses resolve against.
 	PublicURL string
+
+	// MCPOff is AGK_MCP=off, which the page is told so that "the web console's MCP panel says that
+	// this one serves none" rather than hand a person an address answering 404.
+	MCPOff bool
 }
 
 // Console is the web console as the API serves it.
@@ -161,6 +165,11 @@ func NewConsole(rt *Router, o ConsoleOptions) (*Console, error) {
 	// host, draws every screen and can sign nobody in. It says so, naming the address that works,
 	// rather than leave a person reading "You do not have permission" at every click.
 	base += `<meta name="agentiik-origin" content="` + html.EscapeString(u.Scheme+"://"+u.Host) + `">`
+	// Written where the installation serves no MCP alone, so that a page served by anything else,
+	// a development server among them, offers the addresses as an installation does by default.
+	if o.MCPOff {
+		base += `<meta name="agentiik-mcp" content="off">`
+	}
 	body := bytes.Replace(page.body, []byte(consoleBase), []byte(base), 1)
 	c.index = asset{body: body, contentType: page.contentType, etag: etagOf(body)}
 	delete(c.files, "index.html")

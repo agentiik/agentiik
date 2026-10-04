@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/mcp"
 )
 
@@ -16,24 +18,18 @@ import (
 // of their own: each call runs as the presenting principal, under the grants that govern the
 // console." So a tool does not reach a store or ask the authorizer itself: it makes the request the
 // route serves, through the router, with the credential the MCP request presented, and answers what
-// the route toolAnswer. Whatever the route checks, a scope, a grant, a deny, a protected branch, the
+// the route answered. Whatever the route checks, a scope, a grant, a deny, a protected branch, the
 // hook, the tool checks the same way, since it is the same code; and a refusal comes back in the
 // route's own words.
 
-// throughKey is where a request the MCP server makes says so, and which tool made it: "marked as
-// arriving through MCP so git log and the audit log agree".
-type throughKey struct{}
-
-// through is the tool a request was made by, where the MCP server made it.
-type through struct{ tool string }
-
-// throughOf says which tool of the MCP server made a request, and false for one it did not make.
+// throughOf says which tool of the MCP server made a request, and false for one it did not make:
+// "marked as arriving through MCP so git log and the audit log agree". A request the server makes
+// carries the tool as package audit keeps it, so that every entry its act records names the tool.
 func throughOf(ctx context.Context) (string, bool) {
-	t, ok := ctx.Value(throughKey{}).(through)
-	return t.tool, ok
+	return audit.ThroughOf(ctx)
 }
 
-// toolAnswer is what a route toolAnswer a request the MCP server made.
+// toolAnswer is what a route answered a request the MCP server made.
 type toolAnswer struct {
 	status int
 	header http.Header
@@ -54,7 +50,7 @@ func (a *toolAnswer) WriteHeader(status int) {
 }
 
 // dispatch makes one request of the API as the caller of the MCP request r, for the tool named, and
-// answers what the route toolAnswer. The body is sent as JSON where there is one. Only the caller's
+// answers what the route answered. The body is sent as JSON where there is one. Only the caller's
 // credential is carried, a bearer token, which is the one credential the MCP endpoint takes.
 func (m *MCP) dispatch(r *http.Request, tool, method, path string, query url.Values, body any) (*toolAnswer, error) {
 	var payload bytes.Buffer
@@ -67,7 +63,7 @@ func (m *MCP) dispatch(r *http.Request, tool, method, path string, query url.Val
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	ctx := context.WithValue(r.Context(), throughKey{}, through{tool: tool})
+	ctx := audit.Through(r.Context(), tool)
 	req, err := http.NewRequestWithContext(ctx, method, target, &payload)
 	if err != nil {
 		return nil, err
@@ -92,10 +88,10 @@ func segment(name string) string { return url.PathEscape(name) }
 // result is a route's answer as a tool's result: a success as its JSON, both as text and as
 // structured content, a refusal the caller can act on as a result with isError, its sentence first,
 // and a failure of the installation as an error, which the client is told only that the call could
-// not be toolAnswer.
+// not be answered.
 func result(a *toolAnswer) (*mcp.CallResult, error) {
 	if a.status >= 500 {
-		return nil, fmt.Errorf("api: the route toolAnswer %d: %.300s", a.status, a.body.String())
+		return nil, fmt.Errorf("api: the route answered %d: %.300s", a.status, a.body.String())
 	}
 	var structured any
 	if a.body.Len() > 0 && strings.HasPrefix(a.header.Get("Content-Type"), "application/json") {
@@ -104,6 +100,19 @@ func result(a *toolAnswer) (*mcp.CallResult, error) {
 		}
 	}
 	if a.status >= 400 {
+		// A quota reached is said where a model reads it, as a collection's call says it: "with
+		// retry_after_seconds in structuredContent: what a webhook answers as 429 with
+		// Retry-After, said where a model reads it".
+		if a.status == http.StatusTooManyRequests {
+			if seconds, err := strconv.Atoi(a.header.Get("Retry-After")); err == nil {
+				o, _ := structured.(map[string]any)
+				if o == nil {
+					o = map[string]any{}
+				}
+				o["retry_after_seconds"] = seconds
+				structured = o
+			}
+		}
 		return &mcp.CallResult{Content: []mcp.Content{mcp.Text(refusedText(a.status, structured))}, StructuredContent: structured, IsError: true}, nil
 	}
 	text := strings.TrimSpace(a.body.String())

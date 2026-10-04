@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"regexp"
@@ -50,10 +51,12 @@ func identifier(name, what, where string) error {
 // where a version is made and never where a stored one is read back (LoadStored): a stored
 // version keeps rebuilding, and its runs and replays keep going, after an upgrade.
 //
-// Three of them. A port or a workflow output is written at most agk.PortMaxBytes, "since each
+// Four of them. The mcp block is one tool, "one block, one tool, whose arguments are the workflow's
+// inputs", where a version stored before v0.7.0 may list several and is read back as publishing
+// none. A port or a workflow output is written at most agk.PortMaxBytes, "since each
 // becomes the file <name>.json and no filesystem holds that name past 255 characters with its
 // suffix", which is checked in every place a port is named: the workflow outputs and the port
-// each is taken from, a tool's output, and in each step and each hidden block the ports it
+// each is taken from, the tool's output, and in each step and each hidden block the ports it
 // declares, the inputs it feeds and both ends of every edge. And a file relocated by the long
 // form of files is relocated to an absolute path, since "a relative path has nothing inside a
 // container to be relative to", which is why the runner refuses one and the task message holds
@@ -72,14 +75,17 @@ func (w *Workflow) newRules() error {
 			return r
 		}
 	}
-	if w.MCP != nil {
-		for i, t := range w.MCP.Tools {
-			if t.Output != nil && len(t.Output.Output) > agk.PortMaxBytes {
-				r := refuse(RulePortPastBound, "", "", portPastBound(fmt.Sprintf("mcp.tools[%d].output.from", i), "the workflow output", t.Output.Output))
-				r.At = at.at("mcp", "tools", i, "output", "from").value()
-				return r
-			}
+	if w.mcpRefused != nil {
+		var r *Refusal
+		if errors.As(w.mcpRefused, &r) && r.At == (Position{}) {
+			r.At = at.at("mcp").key()
 		}
+		return w.mcpRefused
+	}
+	if w.MCP != nil && len(w.MCP.Output) > agk.PortMaxBytes {
+		r := refuse(RulePortPastBound, "", "", portPastBound("mcp.output", "the workflow output", w.MCP.Output))
+		r.At = at.at("mcp", "output").value()
+		return r
 	}
 	if err := w.newTriggerRules(); err != nil {
 		return err

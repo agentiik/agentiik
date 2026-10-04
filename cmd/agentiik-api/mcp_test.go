@@ -41,9 +41,11 @@ func TestAGKMCPChoosesWhetherTheEndpointsAreServed(t *testing.T) {
 	}
 }
 
-// Served, /mcp is a route of the API from this process, which asks for a bearer token before
-// anything else; off, it answers 404 as a route the installation does not serve does, whatever the
-// request carries, and the console, which answers every other path, never takes it.
+// Served, /mcp and every collection are routes of the API from this process, which ask for a bearer
+// token before anything else; off, each answers 404 as a route the installation does not serve does,
+// whatever the request carries, and the console, which answers every other path, never takes them.
+// The collections themselves are kept and changed either way, "to be served once the installation
+// does".
 func TestServeAnswersMCPUnlessItIsOff(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -62,11 +64,19 @@ func TestServeAnswersMCPUnlessItIsOff(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r := httptest.NewRequestWithContext(t.Context(), "POST", "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`))
+		for _, path := range []string{"/mcp", "/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C"} {
+			r := httptest.NewRequestWithContext(t.Context(), "POST", path, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`))
+			w := httptest.NewRecorder()
+			in.router.ServeHTTP(w, r)
+			if w.Code != want {
+				t.Errorf("with MCP served %v, %s answered %d %q", served, path, w.Code, w.Body)
+			}
+		}
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/me/collections", nil)
 		w := httptest.NewRecorder()
 		in.router.ServeHTTP(w, r)
-		if w.Code != want {
-			t.Errorf("with MCP served %v, /mcp answered %d %q", served, w.Code, w.Body)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("with MCP served %v, the collections answered %d %q, where they are kept and asked for a credential either way", served, w.Code, w.Body)
 		}
 		in.close()
 	}

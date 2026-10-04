@@ -313,7 +313,7 @@
     <Refused />
   {:else if tab === "mcp" && graph}
     <Pane title="MCP">
-      <McpPanel {graph} {namespace} {workflow} />
+      <McpPanel {api} {graph} {namespace} {workflow} />
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
     {#await import("../components/Editor.svelte") then { default: Editor }}

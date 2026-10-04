@@ -39,6 +39,10 @@ type MCPOptions struct {
 
 	// Version is the program's, which the server names itself with.
 	Version string
+
+	// Collections are the principals' collections, each served at /mcp/collections/{id} beside the
+	// user's server, and none where nil.
+	Collections *Collections
 }
 
 // MCP is the platform's server.
@@ -47,6 +51,11 @@ type MCP struct {
 
 	// rt is the router the tools make their requests through, as the caller.
 	rt *Router
+
+	// collections are what a collection's endpoint offers, and collectionServer the protocol it
+	// speaks it in: the user's server's, offering no resources.
+	collections      *Collections
+	collectionServer mcp.Server
 }
 
 // NewMCP builds the platform's server and registers it at /mcp, on POST. The router answers any
@@ -68,6 +77,17 @@ func NewMCP(rt *Router, o MCPOptions) (*MCP, error) {
 	}}
 	if err := rt.HandleOwn("POST", "/mcp", Own{}, m.serve); err != nil {
 		return nil, err
+	}
+	if o.Collections != nil {
+		m.collections = o.Collections
+		m.collectionServer = mcp.Server{
+			Info:         mcp.Implementation{Name: "agentiik", Version: version},
+			Instructions: collectionInstructions,
+			Origin:       origin,
+		}
+		if err := rt.HandleOwn("POST", "/mcp/collections/{id}", Own{}, m.serveCollection); err != nil {
+			return nil, err
+		}
 	}
 	return m, nil
 }
@@ -115,14 +135,23 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, error) {
 			tools = append(tools, m.tool(r, t))
 		}
 	}
+	// The resources, each listed to whoever holds its tool's permission somewhere, as the tool is,
+	// and read through its tool's route, which decides each read.
+	templates := []mcp.Template{
+		{URITemplate: "agentiik://language/{topic}", Name: "language", Title: "A page of the language reference", Description: "One topic of the workflow language, as workflow.language answers it, for a client that prefers attaching documents to calling a tool.", MimeType: "text/markdown"},
+		{URITemplate: "agentiik://schema/{part}", Name: "schema", Title: "A schema document", Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), as workflow.schema answers it.", MimeType: "application/schema+json"},
+	}
+	if use(holds(WorkflowRead)) {
+		templates = append(templates, treeTemplate)
+	}
+	if use(holds(RunRead)) {
+		templates = append(templates, runTemplate)
+	}
 	return mcp.Surface{
 		Tools:     tools,
 		Resources: languageResources(),
-		Templates: []mcp.Template{
-			{URITemplate: "agentiik://language/{topic}", Name: "language", Title: "A page of the language reference", Description: "One topic of the workflow language, as workflow.language answers it, for a client that prefers attaching documents to calling a tool.", MimeType: "text/markdown"},
-			{URITemplate: "agentiik://schema/{part}", Name: "schema", Title: "A schema document", Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), as workflow.schema answers it.", MimeType: "application/schema+json"},
-		},
-		Read: readLanguage,
+		Templates: templates,
+		Read:      m.reader(r),
 	}, nil
 }
 

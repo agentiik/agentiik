@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
 	"slices"
@@ -121,8 +122,12 @@ func parse(doc []byte) (*Workflow, error) {
 	if wf.On, err = triggerOf(root); err != nil {
 		return nil, err
 	}
-	if wf.MCP, err = mcpOf(root); err != nil {
-		return nil, err
+	// The block is read as one tool. A version stored before v0.7.0 may carry the list of tools
+	// the language had then, which never published anything since nothing served it: read back,
+	// such a version publishes no tool, and the refusal is kept for a version being made, which
+	// newRules applies.
+	if wf.MCP, wf.mcpRefused = mcpOf(root, wf.Metadata.Name, wf.Inputs); wf.mcpRefused != nil {
+		wf.MCP = nil
 	}
 	if wf.Include, err = includesOf(root); err != nil {
 		return nil, err
@@ -697,7 +702,7 @@ func inputMap(entry map[string]any, where string) (map[string]any, error) {
 	return out, nil
 }
 
-func mcpOf(root map[string]any) (*MCP, error) {
+func mcpOf(root map[string]any, workflow string, inputs map[string]Input) (*MCP, error) {
 	raw, ok := root["mcp"]
 	if !ok {
 		return nil, nil
@@ -706,125 +711,82 @@ func mcpOf(root map[string]any) (*MCP, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := closedTo(b, "mcp", "name", "description", "tools"); err != nil {
+	if _, ok := b["tools"]; ok {
+		return nil, fmt.Errorf("mcp lists tools: one block publishes one tool, whose arguments are the workflow's inputs, since a workflow is one boundary; a connector offering several tools is a collection of several workflows")
+	}
+	if err := closedTo(b, "mcp", "name", "title", "description", "output", "mode", "timeout", "annotations"); err != nil {
 		return nil, err
 	}
 
 	m := &MCP{}
-	if m.Name, _, err = textAt(b, "name", "mcp"); err != nil {
+	if m.Name, m.Named, err = textAt(b, "name", "mcp"); err != nil {
 		return nil, err
 	}
-	if m.Name != "" {
-		if err := identifier(m.Name, "the server", "mcp"); err != nil {
+	if m.Named {
+		if err := identifier(m.Name, "the tool", "mcp"); err != nil {
+			return nil, fmt.Errorf("%w. Clients hold the name and send it back in every call", err)
+		}
+	} else {
+		m.Name = workflow
+	}
+	if m.Title, _, err = textAt(b, "title", "mcp"); err != nil {
+		return nil, err
+	}
+	var written bool
+	if m.Description, written, err = textAt(b, "description", "mcp"); err != nil {
+		return nil, err
+	}
+	if !written || strings.TrimSpace(m.Description) == "" {
+		return nil, fmt.Errorf("the tool %s declares no description: it is the field a model actually acts on, and a tool published without one is exactly the tool a model has no way to decide to call", m.Name)
+	}
+	if raw, ok := b["output"]; ok {
+		name, ok := raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("mcp.output is not the name of a workflow output: a tool is a view of the workflow's own boundary, never of a step or a port, which is what keeps the graph free to change beneath it")
+		}
+		if err := identifier(name, "the workflow output", "mcp.output"); err != nil {
 			return nil, err
 		}
+		m.Output = name
 	}
-	if m.Description, _, err = textAt(b, "description", "mcp"); err != nil {
+	mode, err := enumAt(b, "mode", "mcp", "sync", "async")
+	if err != nil {
 		return nil, err
 	}
-	if raw, ok := b["tools"]; ok {
-		list, ok := raw.([]any)
-		if !ok {
-			return nil, fmt.Errorf("mcp.tools is not a list: it is the published tools, one entry each, and an empty list publishes a server with nothing on it")
-		}
-		// An empty list is not the same as no block at all, and it is kept as one: a
-		// tools key written empty makes Tools non-nil.
-		m.Tools = make([]Tool, 0, len(list))
-		for i, raw := range list {
-			t, err := toolOf(raw, fmt.Sprintf("mcp.tools[%d]", i))
-			if err != nil {
-				return nil, err
-			}
-			m.Tools = append(m.Tools, t)
-		}
-	}
-	return m, nil
-}
-
-func toolOf(raw any, where string) (Tool, error) {
-	b, err := mapping(raw, where)
-	if err != nil {
-		return Tool{}, err
-	}
-	if err := closedTo(b, where, "name", "title", "description", "input", "output", "mode", "timeout", "annotations"); err != nil {
-		return Tool{}, err
-	}
-
-	var t Tool
-	written := false
-	if t.Name, written, err = textAt(b, "name", where); err != nil {
-		return Tool{}, err
-	}
-	if !written {
-		return Tool{}, fmt.Errorf("%s declares no name: a tool identifier is unique within the workflow and stable across commits, because clients hold it", where)
-	}
-	if err := identifier(t.Name, "the tool", where); err != nil {
-		return Tool{}, err
-	}
-	if t.Title, _, err = textAt(b, "title", where); err != nil {
-		return Tool{}, err
-	}
-	if t.Description, written, err = textAt(b, "description", where); err != nil {
-		return Tool{}, err
-	}
-	if !written || strings.TrimSpace(t.Description) == "" {
-		return Tool{}, fmt.Errorf("the tool %s declares no description: it is the field a model actually acts on, and a tool published without one is exactly the tool a model has no way to decide to call", t.Name)
-	}
-
-	input, ok := b["input"]
-	if !ok {
-		return Tool{}, fmt.Errorf("the tool %s names no input: a tool is a view of one workflow input, whose JSON Schema becomes its inputSchema", t.Name)
-	}
-	if t.Input, err = toolIOOf(input, where+".input", "input"); err != nil {
-		return Tool{}, err
-	}
-	if output, ok := b["output"]; ok {
-		io, err := toolIOOf(output, where+".output", "output")
-		if err != nil {
-			return Tool{}, err
-		}
-		t.Output = &io
-	}
-
-	mode, err := enumAt(b, "mode", where, "sync", "async")
-	if err != nil {
-		return Tool{}, err
-	}
 	if mode == "async" {
-		t.Mode = ToolAsync
+		m.Mode = ToolAsync
 	}
-	if t.Timeout, err = durationAt(b, "timeout", where); err != nil {
-		return Tool{}, err
+	if m.Timeout, err = durationAt(b, "timeout", "mcp"); err != nil {
+		return nil, err
 	}
-	// The two rules about how long a call waits are read here, with the document, and
-	// not with the graph: both are about the tool alone, the released schema carries
-	// them in the grammar of the timeout itself, and the corpus marks them refused by
-	// the schema. They are refusals of the language all the same, and they name their
-	// rule.
-	if err := toolTimeout(t); err != nil {
-		return Tool{}, err
+	// The two rules about how long a call waits are read here, with the document, and not
+	// with the graph: both are about the tool alone, and the released schema carries them in
+	// the grammar of the timeout itself. They are refusals of the language all the same, and
+	// they name their rule.
+	if err := toolTimeout(m); err != nil {
+		return nil, err
 	}
 	if raw, ok := b["annotations"]; ok {
-		a, err := mapping(raw, where+".annotations")
+		a, err := mapping(raw, "mcp.annotations")
 		if err != nil {
-			return Tool{}, err
+			return nil, err
 		}
-		if err := closedTo(a, where+".annotations", "readOnlyHint", "idempotentHint", "destructiveHint", "openWorldHint"); err != nil {
-			return Tool{}, fmt.Errorf("%w. They are the protocol's own hints, passed through unchanged", err)
+		if err := closedTo(a, "mcp.annotations", "readOnlyHint", "idempotentHint", "destructiveHint", "openWorldHint"); err != nil {
+			return nil, fmt.Errorf("%w. They are the protocol's own hints, passed through unchanged", err)
 		}
 		hints := []struct {
 			key  string
 			into **bool
 		}{
-			{"readOnlyHint", &t.Annotations.ReadOnlyHint},
-			{"idempotentHint", &t.Annotations.IdempotentHint},
-			{"destructiveHint", &t.Annotations.DestructiveHint},
-			{"openWorldHint", &t.Annotations.OpenWorldHint},
+			{"readOnlyHint", &m.Annotations.ReadOnlyHint},
+			{"idempotentHint", &m.Annotations.IdempotentHint},
+			{"destructiveHint", &m.Annotations.DestructiveHint},
+			{"openWorldHint", &m.Annotations.OpenWorldHint},
 		}
 		for _, h := range hints {
-			v, written, err := boolAt(a, h.key, where+".annotations")
+			v, written, err := boolAt(a, h.key, "mcp.annotations")
 			if err != nil {
-				return Tool{}, err
+				return nil, err
 			}
 			if written {
 				kept := v
@@ -832,42 +794,14 @@ func toolOf(raw any, where string) (Tool, error) {
 			}
 		}
 	}
-	return t, nil
-}
-
-func toolIOOf(raw any, where, side string) (ToolIO, error) {
-	b, err := mapping(raw, where)
-	if err != nil {
-		return ToolIO{}, err
+	// "Every input is an argument, and a tool has to publish an inputSchema": an input with
+	// no schema would be an argument a client is told nothing about.
+	for _, name := range slices.Sorted(maps.Keys(inputs)) {
+		if len(inputs[name].Schema) == 0 {
+			return nil, fmt.Errorf("the workflow publishes the tool %s and its input %s carries no schema: every input is one of the tool's arguments, and a tool has to publish an inputSchema, so every input of a workflow publishing one has a schema", m.Name, name)
+		}
 	}
-	if err := closedTo(b, where, "from"); err != nil {
-		return ToolIO{}, err
-	}
-	from, ok := b["from"]
-	if !ok {
-		return ToolIO{}, fmt.Errorf("%s says nothing it is taken from: it is written from: { %s: <name> }", where, side)
-	}
-	f, err := mapping(from, where+".from")
-	if err != nil {
-		return ToolIO{}, err
-	}
-	if err := closedTo(f, where+".from", side); err != nil {
-		return ToolIO{}, fmt.Errorf("%w. The reference is to a workflow input or output, never to a step or a port: a tool is a view of the workflow's own boundary, which is what keeps the graph free to change beneath it", err)
-	}
-	name, written, err := textAt(f, side, where+".from")
-	if err != nil {
-		return ToolIO{}, err
-	}
-	if !written {
-		return ToolIO{}, fmt.Errorf("%s.from names no %s", where, side)
-	}
-	if err := identifier(name, "the workflow "+side, where+".from"); err != nil {
-		return ToolIO{}, err
-	}
-	if side == "input" {
-		return ToolIO{Input: name}, nil
-	}
-	return ToolIO{Output: name}, nil
+	return m, nil
 }
 
 func includesOf(root map[string]any) ([]Include, error) {

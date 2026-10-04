@@ -1,7 +1,8 @@
 # invalid: A sync tool waiting longer than the ceiling. A sync call is capped
 #   at 120 seconds because clients time out, and a workflow that cannot finish
-#   inside it has to be async.
-# refused by: the validator, beyond what JSON Schema can state
+#   inside it has to be async. The value is a literal in this file, so the
+#   ceiling is carried by the grammar of the timeout.
+# refused by: the schema
 # reference: https://agentiik.github.io/docs/#publishing-tools
 
 apiVersion: agentiik.dev/v1
@@ -13,18 +14,14 @@ metadata:
 
 inputs:
   period:
-    schema: { type: string }
+    schema: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" }
     required: true
 
 mcp:
-  name: invoicing
-  tools:
-    - name: reconcile_month
-      description: Reconcile a whole month and return the ledger.
-      input:
-        from: { input: period }
-      mode: sync
-      timeout: 10m
+  name: reconcile_month
+  description: Reconcile a whole month and return the ledger.
+  mode: sync
+  timeout: 10m
 
 steps:
   reconcile:

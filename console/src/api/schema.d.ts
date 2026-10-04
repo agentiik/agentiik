@@ -1262,6 +1262,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/{ns}/workflows/{name}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Judge a draft as a push would, committing nothing
+         * @description Judges files as the version they would make, and commits nothing. The files are laid over the tree of ref as POST /api/v1/{ns}/workflows/{name}/commits lays them over its parent, each path mapped to its text or to null to leave the file out, and the tree is judged by the pre-receive hook's own check, the one agk validate makes, against what the hook reaches: the repository's image pins and brick manifests, the libraries an include names, under the caller's workflow:read there, and the namespace's secret declarations. Includes and inheritance are resolved, the graph built, and cycles and ports checked against the manifests. It is workflow.validate, the only authority on whether a draft is legal, so that a client drafting a workflow, an MCP client or the console, asks the rules a push holds it to rather than a copy of them that would drift. secret:use is not asked, since it is the committer's and is asked when the commit is made, and nothing is audited, since a judgement is no act. Requires workflow:read: it writes nothing, and reads what reading the workflow reads.
+         */
+        post: operations["validateFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/{ns}/workflows/{name}/images": {
         parameters: {
             query?: never;
@@ -5092,7 +5117,7 @@ export interface components {
         };
         /**
          * Hook refusal
-         * @description A version the pre-receive hook refused by one of the language's rules, told as every reader of a refusal is told it, agk validate and git's error stream alike: where it is, the rule, what is wrong, what was expected there and the topic of workflow.language that explains it. A person holding the file is sent to its line, a client holding the document as data to its node, and a model correcting a draft to the page that teaches what it got wrong, all from the one refusal, so that no reader is told something another is not. Nothing is written, and the push is recorded as refused.
+         * @description A version the pre-receive hook refused by one of the language's rules, told as every reader of a refusal is told it, agk validate and git's error stream alike: where it is, the rule, what is wrong, what was expected there and the topic of workflow.language that explains it. A person holding the file is sent to its line, a client holding the document as data to its node, and a model correcting a draft to the page that teaches what it got wrong, all from the one refusal, so that no reader is told something another is not. Nothing is written: a commit refused is recorded as a refused push, and a draft refused at POST /api/v1/{ns}/workflows/{name}/validate as nothing, since a judgement is no act.
          * @example {
          *       "error": "refused: image-not-pinned at agentiik.yaml:7:12",
          *       "file": "agentiik.yaml",
@@ -5118,8 +5143,9 @@ export interface components {
          */
         hookRefusal: {
             /**
-             * @description The refusal in one line, as git's error stream heads it: refused:, the rule, and where, file:line:column, or the file alone where the refusal names no line in it. Shown to a person; a client branches on rule.
+             * @description The refusal in one line: refused: and the rule, and for a refused commit where, as git's error stream heads it, file:line:column, or the file alone where the refusal names no line in it; a refused draft names the rule alone, where being beside it. Shown to a person; a client branches on rule.
              * @example refused: image-not-pinned at agentiik.yaml:7:12
+             * @example refused: image-not-pinned
              */
             error: string;
             /**
@@ -5166,6 +5192,87 @@ export interface components {
              * @example repository
              */
             topic: string;
+        };
+        /**
+         * Validation request
+         * @description What POST /api/v1/{ns}/workflows/{name}/validate judges: files laid over the tree of a ref, as a commit lays them over its parent, so that a client sends what it changed and the draft is still judged whole, as the version it would make.
+         * @example {
+         *       "files": {
+         *         "agentiik.yaml": "apiVersion: agentiik.dev/v1\nkind: Workflow\nmetadata:\n  name: monthly-invoicing\nsteps:\n  normalize:\n    image: ghcr.io/acme/agk-normalize@sha256:4b1d0c7e9a2f3b5c8d6e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c\n    outputs: [ok]\n"
+         *       }
+         *     }
+         * @example {
+         *       "ref": "feature/reminders",
+         *       "files": {
+         *         "scripts/remind.sh": "#!/bin/sh\nset -eu\nexec agk-remind --days \"$1\"\n"
+         *       }
+         *     }
+         * @example {
+         *       "ref": "refs/tags/v2.1.0",
+         *       "files": {
+         *         "scripts/export.sh": null
+         *       }
+         *     }
+         */
+        validateRequest: {
+            /**
+             * @description The ref whose tree the files are laid over: a branch or a tag by its short name or in full, or a whole commit that is a version, resolved as a run asked for by it is, so that a draft is judged against what a run of that ref would read. The default branch's head where left out, and no tree at all where it has none yet, so that the first draft of an empty repository is judged on its files alone.
+             * @example main
+             * @example refs/tags/v2.1.0
+             */
+            ref?: components["schemas"]["startRequest"]["ref"];
+            /**
+             * @description Each path laid over the tree, from its root, mapped to its text, UTF-8, or to null to leave out a file the tree holds; one at least, and at most 4096, their texts and paths 4 MiB together. Held to the rules a commit's files are held to, since a draft judged is a commit not yet made, and what is judged here is what the commit would carry.
+             * @example {
+             *       "agentiik.yaml": "apiVersion: agentiik.dev/v1\nkind: Workflow\nmetadata:\n  name: monthly-invoicing\nsteps:\n  normalize:\n    image: ghcr.io/acme/agk-normalize@sha256:4b1d0c7e9a2f3b5c8d6e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c\n    outputs: [ok]\n"
+             *     }
+             * @example {
+             *       "scripts/export.sh": null
+             *     }
+             */
+            files: components["schemas"]["commitRequest"]["files"];
+        };
+        /**
+         * Draft judged
+         * @description A draft the hook's check accepts, and what the version it would make holds: enough for a client to say what it drafted without reading the graph back, which it reads from the tree route once the draft is committed.
+         * @example {
+         *       "valid": true,
+         *       "steps": 3,
+         *       "inputs": 1,
+         *       "outputs": 1
+         *     }
+         * @example {
+         *       "valid": true,
+         *       "steps": 0,
+         *       "inputs": 0,
+         *       "outputs": 0
+         *     }
+         */
+        validated: {
+            /**
+             * @description Always true: a draft the check refuses is answered 422, so a program branches on the status, and the body says the same for a reader holding the body alone.
+             * @example true
+             * @constant
+             */
+            valid: true;
+            /**
+             * @description How many steps the version would run, includes and inheritance resolved; 0 for a library, whose root is a fragment that nothing runs.
+             * @example 3
+             * @example 0
+             */
+            steps: number;
+            /**
+             * @description How many inputs the version would declare, each a field a run is asked for and an argument of its published tool; 0 for a library.
+             * @example 1
+             * @example 0
+             */
+            inputs: number;
+            /**
+             * @description How many outputs the version would declare; 0 for a library.
+             * @example 1
+             * @example 0
+             */
+            outputs: number;
         };
         /**
          * Image tag
@@ -16845,6 +16952,77 @@ export interface operations {
                 };
             };
             /** @description The installation keeps no packs: its object store cannot read a range of an object, and a repository's packs are read one entry at a time. The installation's to fix rather than the caller's. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+        };
+    };
+    validateFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The workflow, by the name its metadata.name writes. One the caller cannot see is answered as one that does not exist. */
+                name: components["parameters"]["workflow"];
+            };
+            cookie?: never;
+        };
+        /** @description The files laid over the tree, and the ref whose tree they are laid over. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["validateRequest"];
+            };
+        };
+        responses: {
+            /** @description The hook would accept the version these files make: what it would hold. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["validated"];
+                };
+            };
+            /** @description The body is not the object the route reads: empty, not JSON, a field other than ref and files, a field or a file's path written twice, a ref that is not a string, files that is not an object or a file that is neither a string nor null, or anything after the document. A ref a branch and a tag both hold by that short name, refused rather than guessed at and written in full instead, as a run asked for by one is. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the workflow here is a 404. */
+            403: components["responses"]["forbidden"];
+            /** @description No such workflow, no such namespace, or one where the caller does not hold workflow:read on the workflow, which read alike; or a ref naming no branch, no tag and no version of the workflow. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description Files past what a commit may carry, which is what a draft becomes: more than 4096, the most a version's tree holds; texts and paths past 4 MiB together; or a body past 16 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description Files the tree cannot hold, answered with the error alone: a path off a tree's rules, ../x or .git/x among them; a directory of the tree written as a file, or a file of it as a directory; a file left out that the tree does not hold; a text that is not UTF-8; no file. Or a draft the hook's check refuses by one of the language's rules, answered as a refused commit is, with the rule, where, the node, what was expected there and the topic to read. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["hookRefusal"] | components["schemas"]["error"];
+                };
+            };
+            /** @description The installation keeps no packs: its object store cannot read a range of an object, and a repository's packs are read one entry at a time, the tree a draft is laid over among them. The installation's to fix rather than the caller's. */
             503: {
                 headers: {
                     [name: string]: unknown;

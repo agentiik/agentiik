@@ -102,13 +102,16 @@ describe("the manual run form", () => {
 });
 
 describe("the MCP panel", () => {
-  it("shows the tools as a client sees them, each input's schema as it stands", async () => {
+  it("shows the tool as a client sees it, its arguments the workflow's inputs, each with its schema as it stands", async () => {
     open("/finance/workflows/monthly-invoicing/mcp");
-    expect(await screen.findByText(/^https?:\/\/[^/]+\/mcp\/finance\/monthly-invoicing$/)).toBeTruthy();
-    expect(screen.getByText("create_invoices")).toBeTruthy();
+    expect(await screen.findByText("create_invoices")).toBeTruthy();
     expect(screen.getByText("mode: sync · timeout: 2m")).toBeTruthy();
     expect(screen.getByText("idempotentHint: true · destructiveHint: false")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Tool create_invoices" }).textContent).toContain('"^ORD-[0-9]{4}$"');
+    const tool = screen.getByRole("region", { name: "Tool create_invoices" }).textContent ?? "";
+    expect(tool).toContain('"^ORD-[0-9]{4}$"');
+    // Both inputs are arguments, and the one with a default is not required.
+    expect(tool).toMatch(/"orders"[\s\S]*"customers"/);
+    expect(tool).toMatch(/"required":\s*\[\s*"orders"\s*\]/);
   });
 
   it("is offered only where the version declares an mcp block", async () => {

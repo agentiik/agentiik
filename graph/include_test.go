@@ -304,11 +304,8 @@ steps:
 .api-brick:
   timeout: 2m
 mcp:
-  name: common
-  tools:
-    - name: run_common
-      description: Run the shared graph.
-      input: { from: { input: orders } }
+  name: run_common
+  description: Run the shared graph.
 `,
 	}), "agentiik.yaml", nil)
 

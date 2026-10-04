@@ -73,6 +73,18 @@ type NewRun struct {
 	// Depth how deep in a chain of calls it is: its caller's, and one.
 	Caller *Caller
 	Depth  int
+
+	// Collection is the collection a tool was called through and the name it was called as, for
+	// a run of trigger kind mcp, which every such run is and no other.
+	Collection *CollectionCall
+}
+
+// CollectionCall is what a run started by a tool call keeps of how it was called: the collection's
+// identifier and the name the tool went by in it, "which the run records as collection, the
+// collection's id and the tool it was called as, and keeps once the collection is gone".
+type CollectionCall struct {
+	ID   string `json:"id"`
+	Tool string `json:"tool"`
 }
 
 // Caller is the step of another run whose call started a run: "a from naming its caller", and the
@@ -190,13 +202,18 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	if r.Caller != nil {
 		caller = *r.Caller
 	}
+	var through CollectionCall
+	if r.Collection != nil {
+		through = *r.Collection
+	}
 	if _, err := n.tx.Exec(ctx,
 		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs, replay_of, replay_from, trigger_context,
-		                   caller_run, caller_step, caller_task, depth, namespace_vars)
-		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		                   caller_run, caller_step, caller_task, depth, namespace_vars, collection, collection_tool)
+		 values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		n.namespace, string(r.ID), r.Workflow, r.Commit,
 		r.Trigger.String(), nilIfEmpty(by), inputs, nilIfEmpty(string(r.ReplayOf)), nilIfEmpty(string(r.ReplayFrom)), context,
-		nilIfEmpty(string(caller.Run)), nilIfEmpty(string(caller.Step)), nilIfEmpty(string(caller.Task)), r.Depth, vars); err != nil {
+		nilIfEmpty(string(caller.Run)), nilIfEmpty(string(caller.Step)), nilIfEmpty(string(caller.Task)), r.Depth, vars,
+		nilIfEmpty(through.ID), nilIfEmpty(through.Tool)); err != nil {
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) && pg.ConstraintName == "runs_caller_task" {
 			return ErrCalledAlready

@@ -1,0 +1,31 @@
+# valid: the smallest published tool, an async one: a description alone, the
+#   tool taking the workflow's name and returning no output, since an async
+#   call returns the run identifier at once.
+# covers: mcp.description alone, mcp.mode async with no timeout, the name
+#         defaulted to the workflow's.
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: reconcile-month
+  namespace: finance
+
+inputs:
+  period:
+    schema: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" }
+    required: true
+
+mcp:
+  description: >
+    Reconcile a whole month against the bank statements. Long running:
+    returns a run to follow with run.get.
+  mode: async
+
+steps:
+  reconcile:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    inputs:
+      period: ${{ workflow.inputs.period }}
+    outputs: [out]

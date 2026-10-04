@@ -23,10 +23,16 @@ import (
 	"io/fs"
 )
 
-// Version is the agentiik/schemas release the tree under testdata was taken from. The
-// same value is written in testdata/SCHEMAS_VERSION, where a person updating the corpus
-// finds it, and a test holds the two together.
+// Version is the agentiik/schemas release the tree under testdata says it is, as its index
+// writes it. The same value is written in testdata/SCHEMAS_VERSION, where a person updating the
+// corpus finds it, and a test holds the two together.
 const Version = "0.6.0"
+
+// Commit is the agentiik/schemas commit the tree was taken from. Between two releases the
+// corpus still names the release it was last cut at, while its main branch already carries what
+// the next one decides, which the engine adopts before that release is tagged: the commit says
+// which tree it is. It is written in testdata/SCHEMAS_COMMIT, and a test holds the two together.
+const Commit = "60e4fa13046f799fcd3aceec9a437fbb947dfef0"
 
 //go:embed testdata
 var vendored embed.FS

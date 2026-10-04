@@ -53,17 +53,10 @@ const (
 	// image is a base image, no manifest is read and nothing about its ports is
 	// inferred, so outputs must be declared."
 	RuleScriptWithoutOutputs Rule = "script-without-outputs"
-	// RuleMCPToolInputNotDeclared is a published tool naming something the workflow
-	// does not declare. "The reference is to a workflow input or output, never to a
-	// step or a port."
-	RuleMCPToolInputNotDeclared Rule = "mcp-tool-input-not-declared"
-	// RuleMCPToolInputWithoutSchema is a tool whose input is a workflow input carrying
-	// no schema. "A tool has to publish an inputSchema, so the input it maps has to
-	// have one."
-	RuleMCPToolInputWithoutSchema Rule = "mcp-tool-input-without-schema"
-	// RuleMCPDuplicateToolName is two published tools carrying the same name. "A tool
-	// identifier is unique within the workflow, because clients hold it."
-	RuleMCPDuplicateToolName Rule = "mcp-duplicate-tool-name"
+	// RuleMCPOutputNotDeclared is a published tool returning an output the workflow does
+	// not declare. "A tool is a view of the workflow's own boundary, so its result is one
+	// of the workflow's outputs."
+	RuleMCPOutputNotDeclared Rule = "mcp-output-not-declared"
 	// RuleMCPInIncludedFile is an mcp block in an included file. "Reuse applies to
 	// steps and defaults; the published surface is declared by the workflow that
 	// publishes it, so that reading one file tells you everything that workflow

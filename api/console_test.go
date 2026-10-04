@@ -201,6 +201,23 @@ func TestThePagesBaseIsThePublicURLsPath(t *testing.T) {
 	}
 }
 
+// An installation serving no MCP says so in the page, which the console's MCP panel reads to say
+// that this one serves none, and one serving it, as an installation does by default, says nothing.
+func TestThePageSaysWhereNoMCPIsServed(t *testing.T) {
+	rt := router(t, api.DenyAll{})
+	if _, err := api.NewConsole(rt, api.ConsoleOptions{Files: build(), PublicURL: "https://agentiik.example.com", MCPOff: true}); err != nil {
+		t.Fatal(err)
+	}
+	body := browsed(rt, "GET", "/me/mcp", nil).Body.String()
+	want := strings.Replace(page, `<base href="/">`, `<base href="/"><meta name="agentiik-origin" content="https://agentiik.example.com"><meta name="agentiik-mcp" content="off">`, 1)
+	if body != want {
+		t.Errorf("with AGK_MCP off the page is %q, want %q", body, want)
+	}
+	if body := browsed(consoled(t, "https://agentiik.example.com", build()), "GET", "/me/mcp", nil).Body.String(); strings.Contains(body, "agentiik-mcp") {
+		t.Errorf("an installation serving MCP wrote %q", body)
+	}
+}
+
 // A build the API cannot serve refuses the start, naming what is wrong with it, rather than
 // failing at the first browser to ask: no build at all, one with no page, a page with no base or
 // two, and a file of a type the API does not serve.

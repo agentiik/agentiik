@@ -3147,7 +3147,7 @@
     },
     "triggerKind": {
       "title": "Trigger kind",
-      "description": "What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it.",
+      "description": "What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it. mcp is a tool called through one of the caller's collections, from v0.7.0, and a run of it names the collection and the tool it was called as; workflow.run on the user's server starts a manual run, as the API's manual trigger does, since mcp names a call through a collection.",
       "type": "string",
       "enum": [
         "manual",
@@ -5814,12 +5814,14 @@
         },
         "mcp": {
           "type": "object",
-          "description": "The mcp block as the entry point writes it, as workflow.schema.json describes it: the tools this version publishes. Absent where it declares none, which serves no server, and never absent where it declares an empty tool list, which serves one carrying nothing.",
+          "description": "The mcp block as the entry point writes it, as workflow.schema.json describes it: the tool this version publishes. Absent where it declares none, which publishes no tool, so that a collection naming the workflow at this version offers nothing for it.",
           "examples": [
             {
-              "name": "invoicing",
-              "description": "Issue invoices and check their status.",
-              "tools": []
+              "name": "order_status",
+              "description": "Return the state of one order and, once shipped, its tracking link.",
+              "output": "status",
+              "mode": "sync",
+              "timeout": "30s"
             }
           ]
         },
@@ -7042,6 +7044,215 @@
         }
       ]
     },
+    "collection": {
+      "title": "Collection",
+      "description": "A connector of one principal's own: the workflows they chose, each one a tool, served at /mcp/collections/{id}, which is the URL a client is given, as GET /api/v1/me/collections/{id} answers it. It belongs to the principal that made it, a user or a service account, who alone lists it, changes it and calls through it; anybody else, an administrator included, is answered as for a collection that does not exist, since a collection grants nothing: it is one principal's arrangement of what they may already run, and sharing a capability is sharing the workflows, from which whoever is shared them assembles their own. What each member offers is read again at every tools/list, so the record says what each offers now and, where one offers nothing, why. Made and changed under /api/v1/me/collections, from the web console, or with the collection tools of the user's server, and never audited, since every call through it is a run, which is. From v0.7.0.",
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "description",
+        "url",
+        "members"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ulid",
+          "description": "The collection's identifier, given when it is made and never changed, which its address carries: renaming the collection changes nothing a client is configured with.",
+          "examples": [
+            "01JR8Q2W6H3V0X9K4M7N5P1T2C"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/identifier",
+          "description": "What its owner calls it, unique among their collections and changed at will, since the address carries the identifier rather than the name. Letters, digits, hyphens and underscores beginning with a letter or a digit, at most 255 characters: the grammar a workflow's and a tool's names are written on, so that a name chosen in the console is typed on a command line and written in a client's configuration as it is, with nothing to quote.",
+          "examples": [
+            "back-office",
+            "support_desk"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 280,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "What the collection is for, in its owner's words, and the empty string where they wrote none, so that a reader never has to tell an absent description from an empty one. It is shown beside the name wherever the collections are listed, so it is at most 280 characters, a sentence or two, and one line holding no control character, as every field shown in a console and printed at a terminal is.",
+          "examples": [
+            "Invoices and orders, for the finance assistant.",
+            ""
+          ]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://\\S+/mcp/collections/[0-9A-HJKMNP-TV-Z]+$",
+          "description": "The address a client is given, <public URL>/mcp/collections/<id>, written by the API so that no client puts it together from a setting it may not know. It answers the collection's owner alone, and anybody else as for a collection that does not exist; once the collection is removed, it answers everybody so, from the next request. The identifier inside it is held to the ULID grammar by tools/check.py.",
+          "examples": [
+            "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C"
+          ]
+        },
+        "members": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/collectionMember"
+          },
+          "description": "The workflows it holds, in the order they were added, each once, since a member is addressed by its workflow, and at most 100: a client reads the whole tool list into a model's context at every list, a hundred tools is past what a model chooses among well, and somebody needing more needs a second collection more than a longer one. Empty for a collection just made.",
+          "examples": [
+            [
+              {
+                "workflow": "finance/monthly-invoicing",
+                "tool": "create_invoice"
+              },
+              {
+                "workflow": "support/order-status",
+                "ref": "v2",
+                "as": "order_lookup",
+                "tool": "order_lookup"
+              },
+              {
+                "workflow": "finance/reconcile",
+                "tool": null,
+                "reason": "no_mcp_block"
+              }
+            ],
+            []
+          ]
+        }
+      },
+      "examples": [
+        {
+          "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+          "name": "back-office",
+          "description": "Invoices and orders, for the finance assistant.",
+          "url": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+          "members": [
+            {
+              "workflow": "finance/monthly-invoicing",
+              "tool": "create_invoice"
+            },
+            {
+              "workflow": "support/order-status",
+              "ref": "v2",
+              "as": "order_lookup",
+              "tool": "order_lookup"
+            },
+            {
+              "workflow": "finance/reconcile",
+              "tool": null,
+              "reason": "no_mcp_block"
+            }
+          ]
+        },
+        {
+          "id": "01JR8T5Y7A9C1E3G5J7M9P1R3T",
+          "name": "support_desk",
+          "description": "",
+          "url": "https://agentiik.example.com/mcp/collections/01JR8T5Y7A9C1E3G5J7M9P1R3T",
+          "members": []
+        }
+      ]
+    },
+    "collectionMember": {
+      "title": "Collection member",
+      "description": "One workflow of a collection, and what it offers there. What its owner wrote is the workflow, the ref it is read at and the name its tool goes by, the last two only where written. What it offers is what the workflow's entry point declares in its mcp block, read at the head of the member's ref at every tools/list and run at the commit the ref points at when it is called, so that a collection follows a workflow as its triggers follow the default branch, with nothing to add again when the workflow changes. tool is the name it is offered under, or null where it offers nothing, with reason beside it saying why, so that a member missing from a client's list is never one its owner cannot account for.",
+      "type": "object",
+      "required": [
+        "workflow",
+        "tool"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {
+          "$ref": "#/$defs/grantScope/oneOf/1",
+          "description": "The workflow, by namespace and name, NS/NAME, on the grammar a grant on one workflow is written on and by reference to it rather than a copy. A collection may hold workflows of several namespaces, each one its owner may run. A namespace renamed, the member follows it; a workflow deleted, or one its owner may no longer run, stays a member offering nothing until it is taken out, and offers its tool again when the grant comes back.",
+          "examples": [
+            "finance/monthly-invoicing",
+            "support/order-status"
+          ]
+        },
+        "ref": {
+          "$ref": "#/$defs/branch",
+          "description": "The branch or the tag the member is read at, as its owner wrote it, by its short name or in full, on git's rules for a ref name; never a commit, which has no head to follow. Absent where none was written, the workflow's default branch then answering, whichever branch that is when the list is read, so that a member written without one follows the default branch as the workflow's triggers do. A member written at a tag holds its tool still while the branch moves.",
+          "examples": [
+            "v2",
+            "main",
+            "refs/tags/v2"
+          ]
+        },
+        "as": {
+          "$ref": "#/$defs/identifier",
+          "description": "The name the member's tool goes by in this collection, where its owner wrote one; absent, the tool goes by the name its mcp block gives, which is the workflow's name where the block writes none. Two workflows may declare one name, and as is how both sit in one collection; it also keeps the name a client holds while the block renames its tool, which in a collection without as withdraws one tool and publishes another. On the grammar the mcp block's name is written on.",
+          "examples": [
+            "order_lookup"
+          ]
+        },
+        "tool": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The name the member is offered under in tools/list: as where it is written, and otherwise the name the mcp block at the head of its ref gives. null where it offers nothing, reason beside it saying why: such a member is left out of tools/list, and a call naming it is answered as one naming a tool that does not exist. A member is refused when it is written with a name another member already gives, since clients hold the name and a model told of two tools of one name cannot choose between them; as resolves it.",
+          "examples": [
+            "create_invoice",
+            "order_lookup",
+            null
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "no_mcp_block",
+            "not_runnable"
+          ],
+          "description": "Why a member offers nothing, beside a null tool and nowhere else. no_mcp_block: the entry point at the head of its ref declares no mcp block, which is also what a ref that no longer names anything reads as, since there is no entry point there to declare one. not_runnable: its owner may no longer run the workflow, a deleted one included, one reason for both since a workflow one may not run is one whose fate a collection does not tell. A grant revoked takes the tool away from the next list, as the protocol lets a tool set vary by the authorization presented, and the member comes back when the grant does.",
+          "examples": [
+            "no_mcp_block",
+            "not_runnable"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "tool": {
+            "type": "null"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "reason"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "workflow": "finance/monthly-invoicing",
+          "tool": "create_invoice"
+        },
+        {
+          "workflow": "support/order-status",
+          "ref": "v2",
+          "as": "order_lookup",
+          "tool": "order_lookup"
+        },
+        {
+          "workflow": "finance/reconcile",
+          "tool": null,
+          "reason": "no_mcp_block"
+        }
+      ]
+    },
     "run": {
       "title": "Run",
       "description": "One execution of one workflow at one commit, as the API lists and reads it: where it is, what it pins, how far it got, and what started it on whose behalf. Every run names its trigger kind and the principal it is attributed to, whatever created it, since a run appearing with neither is one nobody can account for.",
@@ -7079,6 +7290,28 @@
               ]
             }
           }
+        },
+        {
+          "description": "A run called through a collection names the collection and the tool, and no other run does: workflow.run on the user's server starts a manual run, as the API's manual trigger does, so mcp is a call through a collection and nothing else.",
+          "if": {
+            "properties": {
+              "trigger_kind": {
+                "const": "mcp"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "collection"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "collection"
+              ]
+            }
+          }
         }
       ],
       "examples": [
@@ -7108,6 +7341,22 @@
           },
           "created_at": "2026-10-01T04:05:02Z",
           "started_at": "2026-10-01T04:05:02Z"
+        },
+        {
+          "namespace": "support",
+          "run": "01JR8RB4K2M6P8T0V2X4Z6C8E0",
+          "workflow": "order-status",
+          "commit": "7d3e9a1c5b2f4e6d8c0a1b3d5f7e9c2a4b6d8f0e",
+          "state": "succeeded",
+          "trigger_kind": "mcp",
+          "triggered_by": "alice",
+          "collection": {
+            "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+            "tool": "order_lookup"
+          },
+          "created_at": "2026-10-14T09:20:04Z",
+          "started_at": "2026-10-14T09:20:04Z",
+          "finished_at": "2026-10-14T09:20:11Z"
         }
       ],
       "properties": {
@@ -7190,6 +7439,38 @@
               "description": "The workflow: step of the calling run that made the call.",
               "examples": [
                 "remind"
+              ]
+            }
+          }
+        },
+        "collection": {
+          "description": "The collection a run whose trigger_kind is mcp was called through, and the tool it was called as. A tool call is a run of the calling principal's like any other, and the run keeps where it came from once the collection is removed or its member renamed, since a run is read long after the call. It names the collection by its identifier, which never changes, rather than by its name, which its owner changes at will and nobody else reads.",
+          "type": "object",
+          "required": [
+            "id",
+            "tool"
+          ],
+          "additionalProperties": false,
+          "examples": [
+            {
+              "id": "01JR8Q2W6H3V0X9K4M7N5P1T2C",
+              "tool": "order_lookup"
+            }
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ulid",
+              "description": "The collection, by the identifier its address carries; kept once the collection is removed, when it names nothing any more.",
+              "examples": [
+                "01JR8Q2W6H3V0X9K4M7N5P1T2C"
+              ]
+            },
+            "tool": {
+              "$ref": "#/$defs/identifier",
+              "description": "The name the tool was called as, which tools/list offered it under: the member's as where written, and otherwise the name its mcp block gave.",
+              "examples": [
+                "order_lookup",
+                "create_invoice"
               ]
             }
           }

@@ -458,12 +458,12 @@ func TestAWorkflowOfV030BecomesAnEmptyRepositoryWithEveryVersionItHeld(t *testin
 	// Every row as it is stored, where it is stored and by which transaction: a row written again,
 	// even with the same values, moves or changes its xmin. Less the columns the migrations after
 	// v0.3.0 add, source, a run's replay_of, replay_from, trigger_context, caller_run, caller_step,
-	// caller_task, depth and namespace_vars, and a task's called_run, which a row v0.3.0 wrote reads
-	// as their default without being written again.
+	// caller_task, depth, namespace_vars, collection and collection_tool, and a task's called_run,
+	// which a row v0.3.0 wrote reads as their default without being written again.
 	rows := func(table string) []string {
 		t.Helper()
 		var out []string
-		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - array['source', 'replay_of', 'replay_from', 'trigger_context', 'caller_run', 'caller_step', 'caller_task', 'depth', 'called_run', 'namespace_vars'])::text
+		r, err := conn.Query(ctx, fmt.Sprintf(`select ctid::text || ' ' || xmin::text || ' ' || (to_jsonb(t) - array['source', 'replay_of', 'replay_from', 'trigger_context', 'caller_run', 'caller_step', 'caller_task', 'depth', 'called_run', 'namespace_vars', 'collection', 'collection_tool'])::text
 		                                         from %s t order by 1`, pgx.Identifier{table}.Sanitize()))
 		if err != nil {
 			t.Fatal(err)

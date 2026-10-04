@@ -335,6 +335,23 @@ func TestResourcesAreReadWhereTheServerOffersThem(t *testing.T) {
 	}
 }
 
+// A resource that is text is answered as text, an empty one included, and one that is not as its
+// bytes in base64 under blob, never both, as the revision's two kinds of contents are.
+func TestAResourceIsTextOrBlob(t *testing.T) {
+	for _, c := range []struct {
+		contents mcp.Contents
+		want     string
+	}{
+		{mcp.Contents{URI: "agentiik://finance/w/tree/main/a.txt", MimeType: "text/plain", Text: "a"}, `{"uri":"agentiik://finance/w/tree/main/a.txt","mimeType":"text/plain","text":"a"}`},
+		{mcp.Contents{URI: "agentiik://finance/w/tree/main/empty.txt", Text: ""}, `{"uri":"agentiik://finance/w/tree/main/empty.txt","text":""}`},
+		{mcp.Contents{URI: "agentiik://finance/w/tree/main/logo.png", MimeType: "application/octet-stream", Blob: []byte{0x89, 'P', 'N', 'G'}}, `{"uri":"agentiik://finance/w/tree/main/logo.png","mimeType":"application/octet-stream","blob":"iVBORw=="}`},
+	} {
+		if b, err := json.Marshal(c.contents); err != nil || string(b) != c.want {
+			t.Errorf("%s is written %s, %v, want %s", c.contents.URI, b, err, c.want)
+		}
+	}
+}
+
 // "If the server does not implement the requested RPC method, it MUST respond with 404 Not Found
 // and a JSON-RPC error with code -32601." initialize among them: the revision has no handshake.
 func TestAMethodTheServerDoesNotHaveIsNotFound(t *testing.T) {
