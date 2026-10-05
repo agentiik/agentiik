@@ -153,6 +153,11 @@ func TreeEntry(name string, mode fs.FileMode) error {
 	if err := TreePath(name); err != nil {
 		return err
 	}
+	return treeKind(name, mode)
+}
+
+// treeKind is TreeEntry's refusal of an entry by its kind, of a path TreePath accepts.
+func treeKind(name string, mode fs.FileMode) error {
 	switch {
 	case mode&fs.ModeSymlink != 0:
 		return inTree(RuleSymlinkInTree, name, fmt.Sprintf("%s is a symbolic link, and a tree carries none: its target would be resolved on whatever host lays the tree out, where it could point outside the repository. Commit the file it points to in its place", name))
@@ -203,8 +208,24 @@ func checkTree(tree fs.FS) error {
 		if name == "." {
 			return nil
 		}
-		return TreeEntry(name, d.Type())
+		// A walk holds a directory to TreeEntry before it lists it, and stops at the first
+		// refused, so a path below one adds its name and its length and nothing else to
+		// check. A path failing either is held to the whole rule, which words the refusal as
+		// ever; holding every path to it whole cost a walk of a deep tree the square of its
+		// depth.
+		if dir, base := path.Split(name); dir == "" || len(name) > TreePathMaxBytes || !plainName(base) {
+			if err := TreePath(name); err != nil {
+				return err
+			}
+		}
+		return treeKind(name, d.Type())
 	})
+}
+
+// plainName is whether TreePath accepts a path ending with name below a directory it accepts:
+// nothing in the name is refused, and nothing in it makes the path unclean.
+func plainName(name string) bool {
+	return name != "" && name != "." && name != ".." && len(name) <= TreeNameMaxBytes && utf8.ValidString(name) && !strings.ContainsAny(name, "/\\\x00") && !repo.DotGit(name)
 }
 
 // TreeMaxEntries is the most entries, files and directories together, a walk of a tree visits

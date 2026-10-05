@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 )
@@ -178,4 +180,69 @@ func TestATreeNamingAnObjectTheRepositoryLacksIsBrokenAndNotEmpty(t *testing.T) 
 	if _, err := fs.ReadFile(fsys, "nothing"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a name the tree does not hold reads with %v", err)
 	}
+}
+
+// trees is a repository of trees, each put in it by its entries.
+type trees map[ID][]byte
+
+func (o trees) put(t *testing.T, entries ...TreeEntry) ID {
+	t.Helper()
+	data, err := EncodeTree(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := HashObject(TypeTree, data)
+	o[id] = data
+	return id
+}
+
+func (o trees) OpenObject(_ context.Context, id ID) (ObjectReader, error) {
+	data, ok := o[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrMissing, id)
+	}
+	return &heldObject{Reader: bytes.NewReader(data), t: TypeTree}, nil
+}
+
+// A walk asks for every directory by its whole path, right after its parent, and a path is found
+// from the directories of the path found before it rather than from the root, so that a directory a
+// thousand levels down is a step below its parent rather than a thousand below the root: counted in
+// the trees read with those read already forgotten, rather than in time.
+func TestADirectoryIsFoundFromThePathFoundBeforeIt(t *testing.T) {
+	o := trees{}
+	root := o.put(t)
+	for range 1000 {
+		root = o.put(t, TreeEntry{Name: "d", Mode: ModeTree, ID: root})
+	}
+	lookup := &counting{Lookup: o}
+	fsys := NewTreeFS(t.Context(), lookup, root)
+	bottom := strings.Repeat("d/", 999) + "d"
+	if _, err := fs.ReadDir(fsys, bottom[:len(bottom)-2]); err != nil {
+		t.Fatal(err)
+	}
+	fsys.trees, lookup.asked = map[ID][]TreeEntry{}, nil
+	// The directory above it, where the path found before ends, and the directory itself.
+	if _, err := fs.ReadDir(fsys, bottom); err != nil || len(lookup.asked) != 2 {
+		t.Errorf("listing a directory 1,000 levels down after the one above it read %d trees: %v", len(lookup.asked), err)
+	}
+
+	// Walks of the same tree side by side each see every directory of it, a find meeting another
+	// under way finding its path from the root.
+	fsys = NewTreeFS(t.Context(), o, root)
+	var walks sync.WaitGroup
+	for range 8 {
+		walks.Go(func() {
+			listed := 0
+			err := fs.WalkDir(fsys, ".", func(_ string, d fs.DirEntry, err error) error {
+				if err == nil && d.IsDir() {
+					listed++
+				}
+				return err
+			})
+			if err != nil || listed != 1001 {
+				t.Errorf("a walk beside others listed %d of 1,001 directories: %v", listed, err)
+			}
+		})
+	}
+	walks.Wait()
 }

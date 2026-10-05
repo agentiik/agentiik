@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/agentiik/agentiik/graph"
@@ -82,5 +84,48 @@ func TestATreeReadOutOfGitIsJudgedAsAPushedOne(t *testing.T) {
 	}
 	if _, err := checked.Resolved(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A walk holds a path below a directory to what it adds to it, its name and its length, and a path
+// failing either is refused by the whole rule, in its words, however deep it is: each answered as
+// TreeEntry answers that path. A tree a thousand directories deep and within every bound is not.
+func TestAPathBelowADirectoryIsRefusedAsItsWholePathIs(t *testing.T) {
+	o := objects{}
+	entry := repo.TreeEntry{Name: "agentiik.yaml", Mode: repo.ModeFile, ID: o.put(repo.TypeBlob, aRepository()["agentiik.yaml"].Data)}
+	fragments := repo.TreeEntry{Name: "fragments", Mode: repo.ModeTree, ID: o.tree(t, repo.TreeEntry{Name: "bricks.yaml", Mode: repo.ModeFile, ID: o.put(repo.TypeBlob, aRepository()["fragments/bricks.yaml"].Data)})}
+	empty := o.put(repo.TypeBlob, nil)
+	// at is a tree holding the entry point, its fragment and e at path, each directory of which
+	// is named by it.
+	at := func(path string, e repo.TreeEntry) repo.ID {
+		dirs := strings.Split(path, "/")
+		e.Name = dirs[len(dirs)-1]
+		for i := len(dirs) - 2; i >= 0; i-- {
+			e = repo.TreeEntry{Name: dirs[i], Mode: repo.ModeTree, ID: o.tree(t, e)}
+		}
+		return o.tree(t, entry, fragments, e)
+	}
+	file := repo.TreeEntry{Mode: repo.ModeFile, ID: empty}
+	chain := strings.Repeat("d/", 1100)
+	for _, c := range []struct {
+		path, refused string
+		e             repo.TreeEntry
+		mode          fs.FileMode
+	}{
+		{`a/b/c\d`, `a/b/c\d`, file, 0},
+		{"a/b/\xff", "a/b/\xff", file, 0},
+		{"a/b/" + strings.Repeat("n", 256), "a/b/" + strings.Repeat("n", 256), file, 0},
+		{`a/b\c/d`, `a/b\c`, file, fs.ModeDir},
+		{"a/b/current", "a/b/current", repo.TreeEntry{Mode: repo.ModeSymlink, ID: empty}, fs.ModeSymlink},
+		// The first directory past the bound of a path, 1,025 levels down.
+		{chain + "f", chain[:2049], file, fs.ModeDir},
+	} {
+		_, err := version.Check(t.Context(), repo.NewTreeFS(t.Context(), o, at(c.path, c.e)), everything())
+		if want := version.TreeEntry(c.refused, c.mode); err == nil || err.Error() != want.Error() {
+			t.Errorf("a tree holding %.64q is refused by %v, where %.64q is refused by %v", c.path, err, c.refused, want)
+		}
+	}
+	if _, err := version.Check(t.Context(), repo.NewTreeFS(t.Context(), o, at(chain[:2000]+"f", file)), everything()); err != nil {
+		t.Errorf("a tree holding a file 1,000 directories down is refused by %v", err)
 	}
 }

@@ -189,8 +189,10 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			Needs{Permission: WorkflowWrite, Scope: Workflow, Asks: []Permission{GrantManage, SecretUse}, Includes: true}, s.commitFiles},
 		// A draft judged by the hook's own check, which writes nothing and reads what reading the
 		// workflow reads, and the libraries an include names under the caller's workflow:read there.
+		// It is held to the namespace's secret declarations where the caller holds workflow:read on
+		// the namespace, which shows them, and a grant on the workflow alone shows none.
 		{"POST", "/api/v1/{namespace}/workflows/{workflow}/validate",
-			Needs{Permission: WorkflowRead, Scope: Workflow, Includes: true}, s.validateFiles},
+			Needs{Permission: WorkflowRead, Scope: Workflow, Includes: true, Reveals: WorkflowRead}, s.validateFiles},
 		// What a repository's pushes are judged against beyond their tree, written under what
 		// registering a version of it takes, and read under what reading it takes.
 		{"GET", "/api/v1/{namespace}/workflows/{workflow}/images",
