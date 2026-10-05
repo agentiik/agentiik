@@ -58,10 +58,12 @@ function split(workflow: string): [string, string] {
 }
 
 // offered says what a member offers in a few words: the tool it is offered as, or why it offers
-// none, as the API reasons it.
+// none, as the API reasons it, by the reason's identifier, which is never prettified. It is read as
+// a plain string, so that one the API gives before vendor/openapi.json names it reads as itself.
 export function offered(m: Member): string {
   if (m.tool) return m.tool;
-  return m.reason === "not_runnable" ? "Not runnable" : "No mcp block";
+  const reason: string = m.reason ?? "no_mcp_block";
+  return reason;
 }
 
 // serverAddress is the user's server, /mcp on the installation's public URL, which the page's base

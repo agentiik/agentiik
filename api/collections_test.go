@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,7 +56,7 @@ const toolOrderSchema = `{"type": "array", "items": {"type": "object", "required
 
 // collected is an installation serving collections: finance, where alice edits and runs and bob
 // reads, holding monthly-invoicing published as a tool and payroll publishing none, and team-ops,
-// where nobody may run anything.
+// where nobody may run anything. NAME@NS is NAME through a token narrowed to the namespace NS.
 type collected struct {
 	t       *testing.T
 	rt      *api.Router
@@ -65,6 +68,33 @@ type collected struct {
 func servingCollections(t *testing.T) *collected {
 	t.Helper()
 	pool, super := dbtest.Open(t)
+	return collecting(t, pool, super, strings.ReplaceAll(workflowDocument, "monthly-invoicing", "payroll"))
+}
+
+// servingCollectionsOn is servingCollections on a pool of at most conns connections, payroll
+// published as a tool of its own, run_payroll, so that a member written beside monthly-invoicing is
+// judged against it.
+func servingCollectionsOn(t *testing.T, conns int) *collected {
+	t.Helper()
+	super := dbtest.Migrated(t)
+	url := dbtest.Application(super)
+	if strings.Contains(url, "?") {
+		url += "&"
+	} else {
+		url += "?"
+	}
+	pool, err := db.Open(t.Context(), url+"pool_max_conns="+strconv.Itoa(conns))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	payroll := strings.Replace(strings.ReplaceAll(toolDocument, "monthly-invoicing", "payroll"), "name: create_invoices", "name: run_payroll", 1)
+	return collecting(t, pool, super, payroll)
+}
+
+// collecting serves collections on pool, payroll committed as the document given.
+func collecting(t *testing.T, pool *db.Pool, super, payroll string) *collected {
+	t.Helper()
 	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
 		`insert into namespaces (name) values ('finance'), ('team-ops');
 		 insert into principals (id, kind) values ('alice', 'user'), ('bob', 'user')`); err != nil {
@@ -79,7 +109,7 @@ func servingCollections(t *testing.T) *collected {
 		"alice": {{api.WorkflowRead, finance}, {api.WorkflowWrite, finance}, {api.WorkflowRun, finance}, {api.RunRead, finance}},
 		"bob":   {{api.WorkflowRead, finance}},
 	}}
-	rt, err := api.NewRouter(auth, bearer)
+	rt, err := api.NewRouter(auth, narrowing)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,30 +125,39 @@ func servingCollections(t *testing.T) *collected {
 		t.Fatal(err)
 	}
 	c := &collected{t: t, rt: rt, pool: pool, super: super, objects: objects}
-	for _, wf := range []struct{ name, document string }{
-		{"monthly-invoicing", toolDocument},
-		{"payroll", strings.ReplaceAll(workflowDocument, "monthly-invoicing", "payroll")},
-	} {
-		if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
-			if err := ns.SaveWorkflow(ctx, wf.name, "main"); err != nil {
-				return err
-			}
-			_, err := ns.RecordImages(ctx, wf.name, "alice", time.Time{}, db.Images{Manifests: map[string][]byte{image: []byte(brickManifest)}})
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		status, answer := c.ask("POST", "/api/v1/finance/workflows/"+wf.name+"/commits", "alice",
-			map[string]any{"message": "first", "files": map[string]any{"agentiik.yaml": wf.document, "schemas/order.json": toolOrderSchema}})
-		if status != http.StatusCreated {
-			t.Fatalf("%s could not be committed: %d %v", wf.name, status, answer)
-		}
-	}
+	c.published("monthly-invoicing", toolDocument)
+	c.published("payroll", payroll)
 	return c
+}
+
+// published makes the workflow name in finance, its first commit the document given.
+func (c *collected) published(name, document string) {
+	c.t.Helper()
+	if err := c.pool.In(c.t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		if err := ns.SaveWorkflow(ctx, name, "main"); err != nil {
+			return err
+		}
+		_, err := ns.RecordImages(ctx, name, "alice", time.Time{}, db.Images{Manifests: map[string][]byte{image: []byte(brickManifest)}})
+		return err
+	}); err != nil {
+		c.t.Fatal(err)
+	}
+	status, answer := c.ask("POST", "/api/v1/finance/workflows/"+name+"/commits", "alice",
+		map[string]any{"message": "first", "files": map[string]any{"agentiik.yaml": document, "schemas/order.json": toolOrderSchema}})
+	if status != http.StatusCreated {
+		c.t.Fatalf("%s could not be committed: %d %v", name, status, answer)
+	}
 }
 
 // ask makes one request as who, and answers its status and its JSON body.
 func (c *collected) ask(method, path, who string, body any) (int, map[string]any) {
+	c.t.Helper()
+	return c.askWithin(context.Background(), method, path, who, body)
+}
+
+// askWithin is ask under ctx, which a request that waits on the database for longer than it allows
+// is answered within rather than waiting for ever.
+func (c *collected) askWithin(ctx context.Context, method, path, who string, body any) (int, map[string]any) {
 	c.t.Helper()
 	var payload string
 	if body != nil {
@@ -128,7 +167,7 @@ func (c *collected) ask(method, path, who string, body any) (int, map[string]any
 		}
 		payload = string(b)
 	}
-	r := httptest.NewRequest(method, path, strings.NewReader(payload))
+	r := httptest.NewRequest(method, path, strings.NewReader(payload)).WithContext(ctx)
 	r.Header.Set("Authorization", "Bearer "+who)
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
@@ -273,6 +312,230 @@ func TestAMemberIsJudgedAsItIsAdded(t *testing.T) {
 	}
 	if !slices.Equal(names, []any{"create_invoices", "pay_people"}) {
 		t.Errorf("the collection offers %v", names)
+	}
+}
+
+// A member is judged against the others without its request holding a connection while it asks the
+// pool for another: on a pool of one connection, members written into several collections at once,
+// each judged against a member offering a tool, are all written, where each held the collection's
+// row and waited for a second connection until its deadline. Two members of one name written into
+// one collection at once are still judged one after the other, one written and the other refused,
+// and six of names of their own all written at once, none refused for the others landing while it
+// was judged.
+func TestAMemberIsWrittenWithoutHoldingAConnectionWhileAskingForAnother(t *testing.T) {
+	c := servingCollectionsOn(t, 1)
+	within := func(method, path string, body any) (int, map[string]any) {
+		// A regression waits for a connection that never comes free: the deadline makes it fail
+		// rather than hang.
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		return c.askWithin(ctx, method, path, "alice", body)
+	}
+	var ids []string
+	for _, name := range []string{"one", "two", "three"} {
+		id := c.made("alice", name)
+		if status, answer := within("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", map[string]any{}); status != http.StatusOK {
+			t.Fatalf("the first member was answered %d %v", status, answer)
+		}
+		ids = append(ids, id)
+	}
+	statuses := make([]int, len(ids))
+	answers := make([]map[string]any, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Go(func() {
+			statuses[i], answers[i] = within("PUT", "/api/v1/me/collections/"+id+"/members/finance/payroll", map[string]any{})
+		})
+	}
+	wg.Wait()
+	for i, status := range statuses {
+		if status != http.StatusOK {
+			t.Errorf("a member judged against another was answered %d %v", status, answers[i])
+			continue
+		}
+		var tools []any
+		for _, m := range answers[i]["members"].([]any) {
+			tools = append(tools, m.(map[string]any)["tool"])
+		}
+		if !slices.Equal(tools, []any{"create_invoices", "run_payroll"}) {
+			t.Errorf("the collection offers %v", tools)
+		}
+	}
+
+	id := c.made("alice", "four")
+	statuses = make([]int, 2)
+	for i, workflow := range []string{"monthly-invoicing", "payroll"} {
+		wg.Go(func() {
+			statuses[i], _ = within("PUT", "/api/v1/me/collections/"+id+"/members/finance/"+workflow, map[string]any{"as": "same"})
+		})
+	}
+	wg.Wait()
+	slices.Sort(statuses)
+	if !slices.Equal(statuses, []int{http.StatusOK, http.StatusConflict}) {
+		t.Errorf("two members of one name written at once were answered %v", statuses)
+	}
+
+	// Members of names of their own written into one collection at once are all written, however
+	// many times the others' writes landing first send each back to read what they put in.
+	const many = 6
+	var workflows, want []string
+	for i := range many {
+		workflow, tool := fmt.Sprintf("ledger-%d", i), fmt.Sprintf("post_ledger_%d", i)
+		c.published(workflow, strings.Replace(strings.ReplaceAll(toolDocument, "monthly-invoicing", workflow), "name: create_invoices", "name: "+tool, 1))
+		workflows, want = append(workflows, workflow), append(want, tool)
+	}
+	id = c.made("alice", "ledgers")
+	statuses, answers = make([]int, many), make([]map[string]any, many)
+	start := make(chan struct{})
+	for i, workflow := range workflows {
+		wg.Go(func() {
+			<-start
+			statuses[i], answers[i] = within("PUT", "/api/v1/me/collections/"+id+"/members/finance/"+workflow, map[string]any{})
+		})
+	}
+	close(start)
+	wg.Wait()
+	for i, status := range statuses {
+		if status != http.StatusOK {
+			t.Errorf("%s written beside %d others was answered %d %v", workflows[i], many-1, status, answers[i])
+		}
+	}
+	status, answer := within("GET", "/api/v1/me/collections/"+id, nil)
+	if status != http.StatusOK {
+		t.Fatalf("the collection was answered %d %v", status, answer)
+	}
+	var tools []string
+	for _, m := range answer["members"].([]any) {
+		if tool, ok := m.(map[string]any)["tool"].(string); ok {
+			tools = append(tools, tool)
+		}
+	}
+	slices.Sort(tools)
+	if !slices.Equal(tools, want) {
+		t.Errorf("the collection offers %v", tools)
+	}
+}
+
+// A tool's name is unique in its collection at every list and every call, not only when a member is
+// written: two members whose tools come to go by one name, here by a commit to one's mcp block, both
+// offer nothing beside tool_name_taken, are left out of tools/list, and a call of the name runs
+// neither, where it ran the first as the collection's owner with the arguments meant for the other.
+// A member written again under the name is refused, and as tells them apart.
+func TestTwoMembersGivingOneToolNameOfferNeither(t *testing.T) {
+	c := servingCollections(t)
+	id := c.made("alice", "back-office")
+	for _, workflow := range []string{"payroll", "monthly-invoicing"} {
+		if status, answer := c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/"+workflow, "alice", map[string]any{}); status != http.StatusOK {
+			t.Fatalf("%s was answered %d %v", workflow, status, answer)
+		}
+	}
+	clashing := strings.ReplaceAll(toolDocument, "monthly-invoicing", "payroll")
+	if status, answer := c.ask("POST", "/api/v1/finance/workflows/payroll/commits", "alice",
+		map[string]any{"parent": c.head("payroll"), "message": "publish", "files": map[string]any{"agentiik.yaml": clashing, "schemas/order.json": toolOrderSchema}}); status != http.StatusCreated {
+		t.Fatalf("payroll could not be published: %d %v", status, answer)
+	}
+
+	status, answer := c.ask("GET", "/api/v1/me/collections/"+id, "alice", nil)
+	if status != http.StatusOK {
+		t.Fatalf("the collection was answered %d %v", status, answer)
+	}
+	for _, m := range answer["members"].([]any) {
+		if m := m.(map[string]any); m["tool"] != nil || m["reason"] != "tool_name_taken" {
+			t.Errorf("a member giving a name another gives reads %v", m)
+		}
+	}
+	path := "/mcp/collections/" + id
+	if _, result, refusal := calledAt(t, c.rt, path, "alice", "tools/list", nil); refusal != nil || len(result["tools"].([]any)) != 0 {
+		t.Errorf("the collection lists %v %v", result, refusal)
+	}
+	_, _, refusal := calledAt(t, c.rt, path, "alice", "tools/call", map[string]any{
+		"name": "create_invoices", "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
+	})
+	if refusal == nil || refusal.Code != -32602 || !strings.Contains(refusal.Message, "Unknown tool") {
+		t.Errorf("a call of the name was answered %v", refusal)
+	}
+	if runs := c.runs(); len(runs) != 0 {
+		t.Fatalf("a call of the name started %v", runs)
+	}
+
+	if status, answer := c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/payroll", "alice", map[string]any{}); status != http.StatusConflict {
+		t.Errorf("a member written again under the name was answered %d %v", status, answer)
+	}
+	if status, answer := c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/payroll", "alice", map[string]any{"as": "pay_people"}); status != http.StatusOK {
+		t.Fatalf("a member given its own name was answered %d %v", status, answer)
+	}
+	_, result, _ := calledAt(t, c.rt, path, "alice", "tools/list", nil)
+	var names []string
+	for _, tool := range result["tools"].([]any) {
+		names = append(names, tool.(map[string]any)["name"].(string))
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"create_invoices", "pay_people"}) {
+		t.Errorf("once told apart the collection lists %v", names)
+	}
+}
+
+// A token narrowed by a scope reaches no collection, even narrowed to the namespace of every member:
+// it lists none, every other route and the collection's endpoint answer it 403 whether the
+// collection exists or not, nothing it asked changed anything, and the user's server offers it no
+// collection tool, where it read, renamed and deleted every collection of its principal.
+func TestATokenNarrowedByAScopeReachesNoCollection(t *testing.T) {
+	c := servingCollections(t)
+	id := c.made("alice", "back-office")
+	if status, answer := c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", map[string]any{}); status != http.StatusOK {
+		t.Fatalf("the member was answered %d %v", status, answer)
+	}
+	const narrowed = "alice@finance"
+	if status, answer := c.ask("GET", "/api/v1/me/collections", narrowed, nil); status != http.StatusOK || len(answer["collections"].([]any)) != 0 {
+		t.Errorf("the list was answered %d %v", status, answer)
+	}
+	for _, ask := range []struct {
+		method, path string
+		body         any
+	}{
+		{"POST", "/api/v1/me/collections", map[string]any{"name": "mine"}},
+		{"GET", "/api/v1/me/collections/" + id, nil},
+		{"GET", "/api/v1/me/collections/01JR8V0000000000000000000A", nil},
+		{"PATCH", "/api/v1/me/collections/" + id, map[string]any{"name": "renamed"}},
+		{"PUT", "/api/v1/me/collections/" + id + "/members/finance/payroll", map[string]any{}},
+		{"DELETE", "/api/v1/me/collections/" + id + "/members/finance/monthly-invoicing", nil},
+		{"DELETE", "/api/v1/me/collections/" + id, nil},
+	} {
+		status, answer := c.ask(ask.method, ask.path, narrowed, ask.body)
+		if status != http.StatusForbidden || !strings.Contains(answer["error"].(string), "narrowed by a scope") {
+			t.Errorf("%s %s was answered %d %v", ask.method, ask.path, status, answer)
+		}
+	}
+	for _, at := range []string{id, "01JR8V0000000000000000000A"} {
+		if status, _, _ := calledAt(t, c.rt, "/mcp/collections/"+at, narrowed, "tools/list", nil); status != http.StatusForbidden {
+			t.Errorf("the endpoint of %s was answered %d", at, status)
+		}
+	}
+	status, answer := c.ask("GET", "/api/v1/me/collections", "alice", nil)
+	if status != http.StatusOK || len(answer["collections"].([]any)) != 1 {
+		t.Fatalf("alice's collections read %d %v", status, answer)
+	}
+	if held := answer["collections"].([]any)[0].(map[string]any); held["name"] != "back-office" || len(held["members"].([]any)) != 1 {
+		t.Errorf("after the narrowed token the collection reads %v", held)
+	}
+
+	for who, want := range map[string]int{"alice": 7, narrowed: 0} {
+		_, result, refusal := calledAt(t, c.rt, "/mcp", who, "tools/list", nil)
+		if refusal != nil {
+			t.Fatalf("the user's server listed %v to %s", refusal, who)
+		}
+		n := 0
+		for _, tool := range result["tools"].([]any) {
+			if strings.HasPrefix(tool.(map[string]any)["name"].(string), "collection.") {
+				n++
+			}
+		}
+		if n != want {
+			t.Errorf("%s is offered %d collection tools, and %d are theirs", who, n, want)
+		}
+	}
+	if _, _, refusal := calledAt(t, c.rt, "/mcp", narrowed, "tools/call", map[string]any{"name": "collection.list", "arguments": map[string]any{}}); refusal == nil || !strings.Contains(refusal.Message, "Unknown tool") {
+		t.Errorf("collection.list through a narrowed token was answered %v", refusal)
 	}
 }
 

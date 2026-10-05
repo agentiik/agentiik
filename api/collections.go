@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -27,7 +28,9 @@ import (
 // Every route takes Own, since what it answers is the caller's own: "the principal that made it, a
 // user or a service account, alone lists it, changes it and calls through it. Anybody else, an
 // administrator included, is answered 404, as for a collection that does not exist." A collection
-// grants nothing, so nothing here is audited: every call through one is a run, which is.
+// grants nothing, so nothing here is audited: every call through one is a run, which is. A token
+// narrowed by a scope reaches none, as it reads no notification and changes no profile: a scope
+// keeps only the permissions it names, and none of them is a collection.
 //
 // What a member offers is read at every answer, never kept: the entry point at the head of the
 // member's ref, and whether the caller may run the workflow, which the authorizer is asked about the
@@ -41,6 +44,12 @@ const (
 	// reasonNotRunnable is a member whose workflow the owner may no longer run, deleted ones
 	// included, "since a workflow one may not run is one whose fate a collection does not tell".
 	reasonNotRunnable = "not_runnable"
+	// reasonNameTaken is a member whose tool goes by a name another member's goes by too, both left
+	// out until as or a commit tells them apart. "A tool's name is unique in its collection" at
+	// every list and every call, and not only when a member is written, since a name comes from the
+	// head of a ref somebody else may commit to, and a call meant for one would otherwise run the
+	// other, as the collection's owner and with the arguments meant for the first.
+	reasonNameTaken = "tool_name_taken"
 )
 
 // collectionDescriptionMax is how long a collection's description is: one line a person reads in
@@ -149,8 +158,30 @@ type offer struct {
 	graph  *graph.Graph
 }
 
-// offers reads what each member offers its owner, in the collection's order.
+// offers reads what each member offers its owner, in the collection's order, two members whose
+// tools go by one name each offering nothing beside tool_name_taken.
 func (c *Collections) offers(ctx context.Context, caller Caller, members []db.CollectionMember) ([]offer, error) {
+	out, err := c.given(ctx, caller, members)
+	if err != nil {
+		return nil, err
+	}
+	named := map[string]int{}
+	for _, o := range out {
+		if o.reason == "" {
+			named[o.tool]++
+		}
+	}
+	for i, o := range out {
+		if o.reason == "" && named[o.tool] > 1 {
+			out[i].reason = reasonNameTaken
+		}
+	}
+	return out, nil
+}
+
+// given reads what each member would offer on its own, under the name its tool goes by whether or
+// not another member's goes by it too: what a member being written is judged against.
+func (c *Collections) given(ctx context.Context, caller Caller, members []db.CollectionMember) ([]offer, error) {
 	out := make([]offer, len(members))
 	for i, m := range members {
 		o, err := c.offerOf(ctx, caller, m)
@@ -248,6 +279,21 @@ func owned(caller Caller) (principal, kind string, ok bool) {
 // nothing of another's".
 const noCollection = "no collection of yours by that identifier"
 
+// narrowedReachesNoCollection is the refusal of a token narrowed by a scope, at every route of a
+// collection but the list, which answers it none, as GET /api/v1/me tells it no notification.
+const narrowedReachesNoCollection = "a token narrowed by a scope reaches no collection of its holder's, since a collection names workflows of every namespace its holder runs, which a scope keeps the token from, and making or changing one is none of the permissions a scope keeps: use a credential that carries no scope"
+
+// narrowedRefused answers a token narrowed by a scope 403, and says whether it did. It is asked
+// before the body is read and before anything is looked up, so that the answer is the same whatever
+// the path names and teaches nothing of which collections exist.
+func narrowedRefused(w http.ResponseWriter, caller Caller) bool {
+	if !caller.Narrowed() {
+		return false
+	}
+	fail(w, http.StatusForbidden, narrowedReachesNoCollection)
+	return true
+}
+
 // failCollection answers what the store refused about a collection, or a failure of the
 // installation's.
 func failCollection(w http.ResponseWriter, err error, what string) {
@@ -271,7 +317,8 @@ func (c *Collections) list(w http.ResponseWriter, r *http.Request, caller Caller
 	answer := struct {
 		Collections []CollectionRecord `json:"collections"`
 	}{Collections: []CollectionRecord{}}
-	if !ok {
+	// A token narrowed by a scope is told of none, as GET /api/v1/me tells it no notification.
+	if !ok || caller.Narrowed() {
 		write(w, http.StatusOK, answer)
 		return
 	}
@@ -346,6 +393,9 @@ func checkCollection(c collectionWrite) error {
 
 // create is POST /api/v1/me/collections.
 func (c *Collections) create(w http.ResponseWriter, r *http.Request, caller Caller) {
+	if narrowedRefused(w, caller) {
+		return
+	}
 	principal, kind, ok := owned(caller)
 	if !ok {
 		fail(w, http.StatusForbidden, "the bootstrap token is nobody and owns nothing: a collection is made by the user or the service account that calls through it")
@@ -384,6 +434,9 @@ func (c *Collections) create(w http.ResponseWriter, r *http.Request, caller Call
 
 // get is GET /api/v1/me/collections/{id}.
 func (c *Collections) get(w http.ResponseWriter, r *http.Request, caller Caller) {
+	if narrowedRefused(w, caller) {
+		return
+	}
 	c.answer(w, r, caller, func(ctx context.Context, wide *db.Wide, principal string) (db.Collection, error) {
 		return wide.Collection(ctx, principal, r.PathValue("id"))
 	})
@@ -415,6 +468,9 @@ func (c *Collections) answer(w http.ResponseWriter, r *http.Request, caller Call
 
 // update is PATCH /api/v1/me/collections/{id}.
 func (c *Collections) update(w http.ResponseWriter, r *http.Request, caller Caller) {
+	if narrowedRefused(w, caller) {
+		return
+	}
 	var in collectionWrite
 	if err := readObject(r, &in, collectionMaxBytes, "what changes"); err != nil {
 		fail(w, statusOf(err), err.Error())
@@ -442,6 +498,9 @@ func (c *Collections) update(w http.ResponseWriter, r *http.Request, caller Call
 
 // remove is DELETE /api/v1/me/collections/{id}.
 func (c *Collections) remove(w http.ResponseWriter, r *http.Request, caller Caller) {
+	if narrowedRefused(w, caller) {
+		return
+	}
 	if n, _ := io.ReadFull(io.LimitReader(r.Body, 1), make([]byte, 1)); n > 0 {
 		fail(w, http.StatusBadRequest, "DELETE reads no body, and this request sends one: what is removed is the collection the path names, whole")
 		return
@@ -501,6 +560,9 @@ func checkMember(m memberWrite) error {
 
 // writeMember is PUT /api/v1/me/collections/{id}/members/{ns}/{name}.
 func (c *Collections) writeMember(w http.ResponseWriter, r *http.Request, caller Caller) {
+	if narrowedRefused(w, caller) {
+		return
+	}
 	var in memberWrite
 	if err := readObject(r, &in, collectionMaxBytes, "the member"); err != nil {
 		fail(w, statusOf(err), err.Error())
@@ -566,37 +628,75 @@ func (c *Collections) writeMember(w http.ResponseWriter, r *http.Request, caller
 	}
 
 	// "A tool's name is unique in its collection: a member whose name another member already gives
-	// is refused with 409, naming the other, and as resolves it." Judged against what the others
-	// offer now, under the collection's lock, so that two members written at once are judged one
+	// is refused with 409, naming the other, and as resolves it." What the others give is read
+	// before the collection is held, since reading it asks the authorizer and reads each ref, each in
+	// a transaction of its own: a request holding the collection's row, and the connection under it,
+	// while it waited for another would leave a pool of n connections to n such requests at once,
+	// each waiting for one the others hold, and every other request of the API waiting behind them.
+	// Under the lock the member is judged against the members the collection holds then, each read
+	// before; where another write put in one this request has not read, the lock is let go, that one
+	// read, and the collection held again, so that two members written at once are still judged one
 	// after the other.
 	written, err := c.offerOf(ctx, caller, m)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "what the member offers could not be read")
 		return
 	}
+	// read is what each other member offers, by the member as it was written, kept from one round to
+	// the next so that a round reads only the members another write put in since.
+	read := map[db.CollectionMember]offer{}
+	members := others(col.Members, m)
 	var stored db.Collection
-	err = c.pool.Installation(ctx, db.Collections, func(ctx context.Context, wide *db.Wide) error {
-		held, err := wide.HoldCollection(ctx, principal, col.ID)
-		if err != nil {
-			return err
-		}
+	for {
 		if written.reason == "" {
-			for _, other := range held.Members {
-				if other.Namespace == m.Namespace && other.Workflow == m.Workflow {
-					continue
-				}
-				o, err := c.offerOf(ctx, caller, other)
-				if err != nil {
-					return err
-				}
-				if o.reason == "" && o.tool == written.tool {
-					return &toolNameHeld{tool: written.tool, by: other.Namespace + "/" + other.Workflow}
+			var unread []db.CollectionMember
+			for _, other := range members {
+				if _, ok := read[other]; !ok {
+					unread = append(unread, other)
 				}
 			}
+			given, err := c.given(ctx, caller, unread)
+			if err != nil {
+				fail(w, http.StatusInternalServerError, "what the collection's other members offer could not be read")
+				return
+			}
+			for _, o := range given {
+				read[o.member] = o
+			}
 		}
-		stored, err = wide.WriteCollectionMember(ctx, principal, col.ID, m)
-		return err
-	})
+		judged := true
+		err = c.pool.Installation(ctx, db.Collections, func(ctx context.Context, wide *db.Wide) error {
+			held, err := wide.HoldCollection(ctx, principal, col.ID)
+			if err != nil {
+				return err
+			}
+			if written.reason == "" {
+				members = others(held.Members, m)
+				for _, other := range members {
+					if _, ok := read[other]; !ok {
+						judged = false
+						return nil
+					}
+				}
+				for _, other := range members {
+					if o := read[other]; o.reason == "" && o.tool == written.tool {
+						return &toolNameHeld{tool: written.tool, by: other.Namespace + "/" + other.Workflow}
+					}
+				}
+			}
+			stored, err = wide.WriteCollectionMember(ctx, principal, col.ID, m)
+			return err
+		})
+		// Every round past the first is a member written into the collection between this request's
+		// reading and its holding it, by another of the owner's requests or a namespace renamed under
+		// it, so the rounds end when those writes do; the request's context, ended when its client
+		// goes, bounds them otherwise. No count of rounds bounds them, since one would refuse a member
+		// that clashes with nothing whenever a client adds a few at once, as one calling
+		// collection.add in parallel does: each write landing first costs every other a round.
+		if err != nil || judged {
+			break
+		}
+	}
 	var clash *toolNameHeld
 	if errors.As(err, &clash) {
 		fail(w, http.StatusConflict, clash.Error())
@@ -614,6 +714,13 @@ func (c *Collections) writeMember(w http.ResponseWriter, r *http.Request, caller
 	write(w, http.StatusOK, rec)
 }
 
+// others are the members other than the workflow m names, in the collection's order.
+func others(members []db.CollectionMember, m db.CollectionMember) []db.CollectionMember {
+	return slices.DeleteFunc(slices.Clone(members), func(o db.CollectionMember) bool {
+		return o.Namespace == m.Namespace && o.Workflow == m.Workflow
+	})
+}
+
 // toolNameHeld is a member whose tool would go by a name another member already gives.
 type toolNameHeld struct{ tool, by string }
 
@@ -623,6 +730,9 @@ func (e *toolNameHeld) Error() string {
 
 // removeMember is DELETE /api/v1/me/collections/{id}/members/{ns}/{name}.
 func (c *Collections) removeMember(w http.ResponseWriter, r *http.Request, caller Caller) {
+	if narrowedRefused(w, caller) {
+		return
+	}
 	if n, _ := io.ReadFull(io.LimitReader(r.Body, 1), make([]byte, 1)); n > 0 {
 		fail(w, http.StatusBadRequest, "DELETE reads no body, and this request sends one: what is taken out is the workflow the path names")
 		return

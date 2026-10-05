@@ -159,9 +159,11 @@ func (e *RenameWaits) Held() string {
 }
 
 // principalColumns are the columns outside the principals' own keys that name a principal as text,
-// who did what: a service account of a namespace renamed is written under its new name in each, so
-// that what it did stays its own and a run it started is still started by somebody who exists. The
-// audit log is history, and is not among them.
+// who did what or whose a record is: a service account of a namespace renamed is written under its
+// new name in each, so that what it did and what it holds stay its own, a run it started is still
+// started by somebody who exists, and a key onto principals that cascades a delete, as a
+// collection's onto its owner, does not take a row with the old name. The audit log is history, and
+// is not among them.
 var principalColumns = []struct{ table, column string }{
 	{"api_tokens", "principal"}, {"grants", "principal"}, {"notifications", "recipient"}, {"namespaces", "owner"},
 	{"grants", "granted_by"}, {"workflows", "created_by"}, {"workflows", "deleted_by"},
@@ -171,7 +173,7 @@ var principalColumns = []struct{ table, column string }{
 	{"notification_events", "started_by"}, {"notifications", "acted_by"}, {"workflow_moves", "asked_by"},
 	{"service_accounts", "created_by"}, {"event_deliveries", "publisher"}, {"join_tokens", "issued_by"},
 	{"runner_pools", "created_by"}, {"runners", "drained_by"}, {"runners", "revoked_by"},
-	{"enrolment_codes", "issued_by"},
+	{"enrolment_codes", "issued_by"}, {"collections", "principal"},
 }
 
 // namespaceColumnsUnkeyed are the columns naming a namespace that no key onto namespaces carries,
