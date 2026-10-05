@@ -44,6 +44,22 @@ import (
 // lost theirs asks another, and where nobody is left who can sign in, whoever holds the
 // installation's settings runs agentiik-api recover on its host.
 //
+// The user is told, and nobody else: recovery_code_issued in their GET /api/v1/me when a code is
+// issued for them, naming who issued it, and recovery_code_used when it is spent, naming who issued
+// it and the credential it enrolled, each written in the transaction of the act and recorded in its
+// entry as notified. A code lets whoever holds it sign in as the user while their passkeys keep
+// working, so it is a way an administrator could reach their data that nothing else would tell them
+// of; the user is the one who knows whether they asked for it, and holds the way to undo it,
+// removing the credential it enrolled. Neither carries the code or its link, and neither is
+// dismissed, kept its 90 days, since whoever spent the code signs in as the user and could
+// otherwise dismiss it (db.ErrKeptNotification).
+//
+// Where the policy requires a passkey, a password a code sets opens a session that only enrols, and
+// goes once the account holds min_passkeys: the passkeys registered from such a session are the way
+// in that lasts, and each is told as recovery_code_used too, naming it, the password being marked
+// with who issued the code (db.Wide.MarkRecovered, passkeys.go). A break-glass code is told to every
+// administrator when it is issued, the one recovered included, and not again when spent.
+//
 // The bootstrap token issues them as it administers everything else, until the first administrator
 // has enrolled, and those it issued open nothing once it has ended (db.Wide.EnrolmentCodeByHash).
 // And once a recovery code has enrolled its user, the link they were created with, if still open,
@@ -103,6 +119,21 @@ func issueCode(ctx context.Context, wide *db.Wide, enrol, issuer, login, kind st
 	return issuedCode{value: value, link: enrol + value, expires: expires.UTC()}, issued, nil
 }
 
+// tellRecoveryUsed tells code's user that it enrolled credential at now, in the transaction that
+// spends it, and answers who was told, for the enrolment.use entry to record: the user, where code
+// is a recovery code an administrator or the bootstrap token issued; nobody for an enrolment link,
+// which enrols the first credential of a user who holds none, nor for a break-glass code, whose
+// issue every administrator was told of already.
+func tellRecoveryUsed(ctx context.Context, wide *db.Wide, code db.EnrolmentCode, credential string, now time.Time) ([]string, error) {
+	if code.Kind != db.EnrolmentRecovery || code.IssuedBy == installationActor {
+		return nil, nil
+	}
+	if err := wide.TellRecoveryUsed(ctx, code.Login, code.IssuedBy, credential, now); err != nil {
+		return nil, err
+	}
+	return []string{code.Login}, nil
+}
+
 // enrolAt is the enrolment page's address on publicURL, up to the # a code follows.
 func enrolAt(publicURL string) string {
 	return strings.TrimRight(publicURL, "/") + enrolPage
@@ -139,6 +170,10 @@ func (s *UserAPI) issueRecovery(w http.ResponseWriter, r *http.Request, who Prin
 		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
 		}
+		if err := wide.TellRecoveryIssued(ctx, login, string(who), now); err != nil {
+			return err
+		}
+		issued.Detail["notified"] = []string{login}
 		return wide.Audit(ctx, issued)
 	})
 	switch {

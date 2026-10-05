@@ -49,6 +49,11 @@ export async function fetchable(fetcher: typeof fetch, url: string): Promise<str
       return "Download limit reached. Try again shortly.";
     case 404:
       return "File not found.";
+    case 403:
+      // A file with a fetch budget is spent by a session only from the console's own pages, as the
+      // browser says in Sec-Fetch-Site; a browser saying nothing of where a request comes from is
+      // refused it, since a link or an image on another site could otherwise spend it.
+      return "This file has a download limit, which only a download from the console's own pages may spend, and this browser did not say where the download comes from. Use a current browser, or fetch it with an API token (Authorization: Bearer).";
     case 503:
       return "File storage is not configured.";
   }

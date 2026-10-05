@@ -132,6 +132,40 @@ func TestACallerWithNoCredentialGetsNothing(t *testing.T) {
 	}
 }
 
+// The router tells a route whether its caller may spend what a read spends, an artifact's fetch,
+// from the credential it identified: not where it is a session carried from elsewhere, and so not
+// on a request the router did not serve, which a handler must not take for permission.
+func TestARouteIsToldWhetherItsCallerSpends(t *testing.T) {
+	rt, err := api.NewRouter(holder{who: "alice", what: api.RunRead, over: api.Target{Namespace: "finance"}}, func(r *http.Request) (api.Identity, error) {
+		as, err := bearer(r)
+		as.Elsewhere = r.Header.Get("X-Elsewhere") != ""
+		return as, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.MustHandle("GET", "/api/v1/{namespace}/runs",
+		api.Needs{Permission: api.RunRead, Scope: api.Namespace},
+		func(w http.ResponseWriter, r *http.Request, who api.Principal, over api.Target) {
+			if api.Spends(r) {
+				w.Header().Set("X-Spends", "yes")
+			}
+		})
+	for elsewhere, want := range map[string]string{"": "yes", "yes": ""} {
+		r := httptest.NewRequest("GET", "/api/v1/finance/runs", nil)
+		r.Header.Set("Authorization", "Bearer alice")
+		r.Header.Set("X-Elsewhere", elsewhere)
+		w := httptest.NewRecorder()
+		rt.ServeHTTP(w, r)
+		if w.Code != http.StatusOK || w.Header().Get("X-Spends") != want {
+			t.Errorf("a caller marked elsewhere %q was answered %d, spending %q", elsewhere, w.Code, w.Header().Get("X-Spends"))
+		}
+	}
+	if api.Spends(httptest.NewRequest("GET", "/api/v1/finance/runs", nil)) {
+		t.Error("a request the router did not serve spends")
+	}
+}
+
 // A question that could not be answered is not an answer. Telling a caller they may not have
 // something because the database is down is telling them something untrue.
 func TestAQuestionThatCouldNotBeAnsweredIsNotARefusal(t *testing.T) {

@@ -130,10 +130,13 @@ export async function serviceAccountsOf(api: API): Promise<ServiceAccount[]> {
   return data.service_accounts.filter((a) => a.name !== "agentiik");
 }
 
+// mint mints a token for the caller or a service account of a namespace it owns, shown this once. A
+// token outlives the session that mints it, so a session signed in to more than 10 minutes ago is
+// refused with SignInAgain, as for a passkey.
 export async function mint(api: API, ask: TokenRequest): Promise<Issued> {
   const { data, error, response } = await api.POST("/api/v1/auth/tokens", { body: ask });
   if (!data) {
-    throw refusal(response, error);
+    throw refusedFor(response, error);
   }
   return data;
 }

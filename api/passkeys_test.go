@@ -36,6 +36,7 @@ type ceremonies struct {
 	h         http.Handler
 	bootstrap string
 	policies  *api.PolicyAPI
+	passkeys  *api.PasskeyAPI
 }
 
 func someCeremonies(t *testing.T) ceremonies {
@@ -62,7 +63,7 @@ func ceremoniesOn(t *testing.T, publicURL string) ceremonies {
 	if _, err := api.NewUsers(rt, api.UserOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewPasskeys(rt, api.PasskeyOptions{
+	if in.passkeys, err = api.NewPasskeys(rt, api.PasskeyOptions{
 		Pool: pool, PublicURL: publicURL, Identify: p.Identify, Now: clock,
 		Trouble: func(err error) { t.Errorf("trouble: %s", err) },
 	}); err != nil {

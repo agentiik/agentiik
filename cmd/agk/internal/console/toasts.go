@@ -58,6 +58,10 @@ func (n notice) sentence() string {
 		return "A sign-in with one of your passkeys was refused: its signature counter did not move forward, as a copied authenticator's does."
 	case "break_glass_recovery":
 		return "A recovery code was issued to " + or(n.Login, "an administrator") + " from the installation's host."
+	case "recovery_code_issued":
+		return or(n.By, "An administrator") + " issued you a recovery code."
+	case "recovery_code_used":
+		return "A recovery code " + or(n.By, "an administrator") + " issued enrolled a new way in to your account."
 	}
 	return n.Kind
 }

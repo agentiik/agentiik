@@ -397,9 +397,24 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		entries := append([]entry{{record: audit.Record{
 			Actor: login, Action: audit.CredentialEnrol, Target: set.ID, Result: audit.Done, Detail: enrolled,
 		}}}, removed...)
+		used := map[string]any{"kind": code.Kind, "issued_by": code.IssuedBy, "credential": set.ID}
+		told, err := tellRecoveryUsed(ctx, wide, code, set.ID, now)
+		if err != nil {
+			return err
+		}
+		// Marked with who issued the code where its user was told, and unmarked otherwise, so
+		// that a passkey registered from a session this password opens that may only enrol is
+		// told as the code's too: where the policy requires a passkey, that passkey is the way in
+		// that lasts, and the password goes once the account holds enough (passkeys.go).
+		recoveredBy := ""
+		if told != nil {
+			used["notified"], recoveredBy = told, code.IssuedBy
+		}
+		if err := wide.MarkRecovered(ctx, login, set.ID, recoveredBy); err != nil {
+			return err
+		}
 		entries = append(entries, entry{record: audit.Record{
-			Actor: login, Action: audit.EnrolmentUse, Target: login, Result: audit.Done,
-			Detail: map[string]any{"kind": code.Kind, "issued_by": code.IssuedBy, "credential": set.ID},
+			Actor: login, Action: audit.EnrolmentUse, Target: login, Result: audit.Done, Detail: used,
 		}})
 		kind := SessionFull
 		if held.policy.enrolling() {

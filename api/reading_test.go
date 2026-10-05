@@ -942,6 +942,122 @@ func TestAnArtifactWithABudgetIsServedAndCountedWhenItCompletes(t *testing.T) {
 	}
 }
 
+// A session spends an artifact's fetch only from the public URL's pages: a link followed from
+// another site, an image on another host of the same site, a request saying it comes from another
+// origin, or one saying nothing of where it comes from, as a browser sending no fetch metadata does,
+// is refused with 403 before anything is held, a HEAD too, and the budget is left whole. An artifact
+// with no budget is redirected to from anywhere, since it spends nothing. A fetch from the console's
+// pages, from the address bar, or saying it comes from the public URL's origin, spends one. A bearer
+// token, which no page carries, spends wherever it comes from.
+func TestABudgetIsSpentByASessionFromTheConsolesPagesAlone(t *testing.T) {
+	s := withSomeRuns(t)
+	content := []byte("payslip 2026-01")
+	u := s.anArtifact(t, s.finance[0], "payslip.txt", 3, content)
+	p, err := api.NewPrincipals(s.pool, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AcceptSessions(publicOrigin); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(p, p.Identify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewServer(rt, api.ServerOptions{Pool: s.pool, Versions: s.store, Objects: s.objects, URLs: s.signed}); err != nil {
+		t.Fatal(err)
+	}
+	token := "agk_test_" + strings.Repeat("a", 26)
+	var c *http.Cookie
+	if err := s.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		if err := w.CreateUser(ctx, db.User{Login: "alice", Profile: db.Profile{GivenName: "Alice"}}); err != nil {
+			return err
+		}
+		if err := w.AddCredential(ctx, db.Credential{ID: "alice-passkey", Login: "alice", Type: db.CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}); err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		if err := w.MintToken(ctx, db.APIToken{ID: "01JQ7A0000000000000000000T", Hash: hashOf(token), Principal: "alice", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+			return err
+		}
+		c, err = api.OpenSession(ctx, w, "alice", api.OpenedBy{Credential: "alice-passkey"}, now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.sql(t, `insert into grants (id, principal, namespace, role, granted_by) values ('01JQ7A0000000000000000000G', 'alice', 'finance', 'editor', 'carol')`)
+
+	fetched := func(method string, artifact agk.URI, site, origin string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequestWithContext(t.Context(), method, artifactPath(artifact), nil)
+		r.AddCookie(c)
+		if site != "" {
+			r.Header.Set("Sec-Fetch-Site", site)
+			r.Header.Set("Sec-Fetch-Mode", "no-cors")
+			r.Header.Set("Sec-Fetch-Dest", "image")
+		}
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		rt.ServeHTTP(w, r)
+		return w
+	}
+	left := func(name string) (int, int) {
+		t.Helper()
+		var fetches, held int
+		if err := dbtest.Superuser(t, s.super).QueryRow(t.Context(),
+			`select coalesce(fetches_left, -1), cardinality(fetches_held_until) from artifacts where name = $1`, name).Scan(&fetches, &held); err != nil {
+			t.Fatal(err)
+		}
+		return fetches, held
+	}
+
+	for _, f := range []struct{ method, site, origin string }{
+		{"GET", "cross-site", ""}, {"GET", "same-site", ""}, {"GET", "", ""}, {"GET", "", "https://evil.example.com"},
+		{"GET", "", "https://reports.agentiik.example.com"}, {"HEAD", "cross-site", ""},
+	} {
+		w := fetched(f.method, u, f.site, f.origin)
+		if w.Code != http.StatusForbidden || (f.method == "GET" && !strings.Contains(w.Body.String(), "only from this installation's pages")) {
+			t.Errorf("a %s with Sec-Fetch-Site %q and Origin %q answered %d %s", f.method, f.site, f.origin, w.Code, w.Body)
+		}
+		if fetches, held := left("payslip.txt"); fetches != 3 || held != 0 {
+			t.Errorf("a %s with Sec-Fetch-Site %q and Origin %q left %d fetches, %d held", f.method, f.site, f.origin, fetches, held)
+		}
+	}
+	free := s.anArtifact(t, s.finance[0], "invoice.txt", 0, []byte("invoice 2026-01"))
+	if w := fetched("GET", free, "cross-site", ""); w.Code != http.StatusFound {
+		t.Errorf("an artifact with no budget, from another site, answered %d %s", w.Code, w.Body)
+	}
+
+	// The last fetch spent retires the artifact, which keeps no count then, read as -1.
+	for _, f := range []struct {
+		site, origin string
+		left         int
+	}{{"same-origin", "", 2}, {"none", "", 1}, {"", publicOrigin, -1}} {
+		w := fetched("GET", u, f.site, f.origin)
+		if w.Code != http.StatusOK || w.Body.String() != string(content) {
+			t.Errorf("a GET with Sec-Fetch-Site %q and Origin %q answered %d %s", f.site, f.origin, w.Code, w.Body)
+		}
+		if fetches, _ := left("payslip.txt"); fetches != f.left {
+			t.Errorf("a GET with Sec-Fetch-Site %q and Origin %q left %d fetches", f.site, f.origin, fetches)
+		}
+	}
+	if w := fetched("GET", u, "same-origin", ""); w.Code != http.StatusGone {
+		t.Errorf("a spent budget answered %d %s", w.Code, w.Body)
+	}
+
+	tokened := s.anArtifact(t, s.finance[0], "payroll.txt", 1, content)
+	r := httptest.NewRequestWithContext(t.Context(), "GET", artifactPath(tokened), nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	w := httptest.NewRecorder()
+	rt.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || w.Body.String() != string(content) {
+		t.Errorf("a token's GET from another site answered %d %s", w.Code, w.Body)
+	}
+}
+
 // Bytes that are not the ones the digest names are no fetch of the artifact: a store that handed
 // back something else under its key has served nothing the budget was for, so the fetch is given
 // back.

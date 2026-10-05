@@ -279,6 +279,42 @@ describe("API tokens", () => {
     expect(await within(dialog).findByText("Could not create the token.")).toBeTruthy();
     expect(within(dialog).getByText(/^A token narrows its principal's rights and never widens them\./)).toBeTruthy();
     expect(screen.getByRole("dialog", { name: "Mint a token" })).toBe(dialog);
+    // A 403 with no challenge asks for no sign-in again.
+    expect(within(dialog).queryByText(/Sign in again/)).toBeNull();
+  });
+
+  it("asks for a sign-in again where the session is too old to mint a token, then mints it", async () => {
+    const a = authenticator();
+    const stale = { status: 403, body: { error: "adding a way in takes a sign-in in the last 10 minutes" }, headers: { "WWW-Authenticate": 'Bearer error="insufficient_user_authentication", max_age="600"' } };
+    const issued = { token: "agktoken_abc", api_token: { id: "01M2AD1R3T5W7Y9A1C3E5G7J9Q", principal: "alice", device_label: "laptop", created_at: "2026-10-01T09:00:00Z", expires_at: "2026-12-30T09:00:00Z" } };
+    const { asked } = open(
+      "/me/tokens",
+      alice({
+        "POST /api/v1/auth/tokens": [stale, { status: 201, body: issued }],
+        "POST /api/v1/auth/passkey/options": { status: 200, body: { ceremony: "assertion", options: { challenge: "azJNNGVUQTI5VGdScFJQSGE1bXNjdEh5TXFjUTRMNUdEY1NyZlBSTjd1WQ" } } },
+        "POST /api/v1/auth/passkey/verify": { status: 200, body: { ceremony: "assertion", login: "alice" } },
+      }),
+      { unavailable: "", credentials: a.credentials },
+    );
+    await fireEvent.click(await screen.findByRole("button", { name: "Mint a token" }));
+    const dialog = await screen.findByRole("dialog", { name: "Mint a token" });
+    await fireEvent.input(within(dialog).getByLabelText(/^Label$/), { target: { value: "laptop" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Mint the token" }));
+    expect(await within(dialog).findByText(/Sign in again to mint a token/)).toBeTruthy();
+    // The password is offered beside the passkey, read from the sign-in methods this tab loads then.
+    expect(await within(dialog).findByLabelText("Or with your password")).toBeTruthy();
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Sign in again with a passkey" }));
+    expect(await screen.findByText("agktoken_abc")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Mint a token" })).toBeNull();
+    expect(a.asked.get).toHaveLength(1);
+    const mints = asked.filter((x) => x.key === "POST /api/v1/auth/tokens").map((x) => x.body as Record<string, unknown>);
+    expect(mints).toHaveLength(2);
+    expect(mints.map((b) => ({ ...b, expires_at: typeof b.expires_at }))).toEqual([
+      { device_label: "laptop", expires_at: "string" },
+      { device_label: "laptop", expires_at: "string" },
+    ]);
+    expect(asked.filter((x) => x.key === "POST /api/v1/auth/passkey/options").map((x) => x.body)).toEqual([{ ceremony: "assertion" }]);
+    expect(screen.queryByText(/Adding a way in takes a sign-in/)).toBeNull();
   });
 
   it("reads a scope and a typed list as the API writes them", () => {
