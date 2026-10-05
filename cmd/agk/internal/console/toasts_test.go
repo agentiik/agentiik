@@ -87,6 +87,9 @@ func TestANotificationSaysWhatTheWebConsoleSays(t *testing.T) {
 		recovery:                       "A recovery code was issued to alice from the installation's host.",
 		counter:                        "A sign-in with one of your passkeys was refused: its signature counter did not move forward, as a copied authenticator's does.",
 		{Kind: "admin_access_widened"}: "An administrator widened access in a namespace.",
+		{Kind: "recovery_code_issued", By: "carol"}: "carol issued you a recovery code.",
+		{Kind: "recovery_code_used", By: "carol"}:   "A recovery code carol issued enrolled a new way in to your account.",
+		{Kind: "recovery_code_used"}:                "A recovery code an administrator issued enrolled a new way in to your account.",
 	} {
 		if got := n.sentence(); got != want {
 			t.Errorf("%s says %q, where the web console says %q", n.Kind, got, want)

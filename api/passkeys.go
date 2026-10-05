@@ -567,7 +567,9 @@ func (r *refusal) Error() string { return r.reason }
 // code started it, the sign-in, recorded in the audit log last.
 //
 // One registered from a session needs the session signed in to within proofLife of the options, as
-// the options did (sessions.go).
+// the options did (sessions.go), and the credential that opened it still held; one from a session
+// that only enrols, opened by a password a recovery code set, is told to its user as the code's
+// (recovery.go).
 func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremonyAnswered, now time.Time) {
 	var took db.Challenge
 	presented := b64.EncodeToString(ask.Credential.RawID)
@@ -625,6 +627,8 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		refused(unanswered)
 		return
 	}
+	// from is the session a registration with no code is made from.
+	var from Identity
 	if took.EnrolmentCode == nil {
 		// Started from a session, and finished from the same user's, which has to be live still.
 		as, err := s.registrar(r)
@@ -642,6 +646,7 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 			askAgain(w)
 			return
 		}
+		from = as
 	}
 	made, err := webauthn.VerifyRegistration(
 		webauthn.Ceremony{RPID: s.rpID, Origin: s.origin, Challenge: took.Value, RequireUserVerification: policy.userVerification},
@@ -683,6 +688,21 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		// code alone.
 		if !coded && user.Suspended {
 			return &refusal{reason: "the user was suspended"}
+		}
+		// Nor does one whose credential went since, which took the session with it: the passkey
+		// another registration from one of the password's sessions wrote may have retired it
+		// (retirePassword). Read under the user's row, which that registration held, so that no
+		// passkey of a session a recovery code's password opened is registered untold beside
+		// those told below.
+		var opener db.Credential
+		if !coded {
+			opener, err = wide.Credential(ctx, from.OpenedBy)
+			switch {
+			case errors.Is(err, db.ErrNoCredential):
+				return &refusal{reason: "the session ended"}
+			case err != nil:
+				return err
+			}
 		}
 		// The policy read again under the user's row, since a synced passkey refused only by a
 		// policy read before it would be written beside a policy refusing it, and lift a
@@ -759,6 +779,17 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		if lifted {
 			enrolled["suspension_lifted"] = db.SuspendedNoPasskey
 		}
+		// A passkey registered from a session that may only enrol, which a password a recovery
+		// code set opened, is what the code was spent for: where the policy requires a passkey,
+		// that password enrols and nothing else, and goes once the account holds min_passkeys,
+		// perhaps below, so its user is told of the passkey as they were of the password, naming
+		// it (db.Wide.MarkRecovered).
+		if from.Enrolling && opener.RecoveredBy != "" {
+			if err := wide.TellRecoveryUsed(ctx, user.Login, opener.RecoveredBy, id, now); err != nil {
+				return err
+			}
+			enrolled["recovery_issued_by"], enrolled["notified"] = opener.RecoveredBy, []string{user.Login}
+		}
 		entries := []entry{{record: audit.Record{
 			Actor: user.Login, Action: audit.CredentialEnrol, Target: id, Result: audit.Done, Detail: enrolled,
 		}}}
@@ -768,9 +799,16 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		}
 		entries = append(entries, off...)
 		if coded {
+			used := map[string]any{"kind": code.Kind, "issued_by": code.IssuedBy, "credential": id}
+			told, err := tellRecoveryUsed(ctx, wide, code, id, now)
+			if err != nil {
+				return err
+			}
+			if told != nil {
+				used["notified"] = told
+			}
 			entries = append(entries, entry{record: audit.Record{
-				Actor: user.Login, Action: audit.EnrolmentUse, Target: user.Login, Result: audit.Done,
-				Detail: map[string]any{"kind": code.Kind, "issued_by": code.IssuedBy, "credential": id},
+				Actor: user.Login, Action: audit.EnrolmentUse, Target: user.Login, Result: audit.Done, Detail: used,
 			}})
 		}
 		// The bootstrap ends at the enrolment of the first administrator who can sign in, and not

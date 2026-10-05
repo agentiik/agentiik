@@ -393,6 +393,18 @@ func Administering(r *http.Request) bool {
 // administeringKey is where the router leaves what Administering answers.
 type administeringKey struct{}
 
+// Spends answers, for the route serving r, whether its caller's credential may spend something a
+// read spends, an artifact's fetch: every credential but a session that a safe request carries from
+// anywhere but the public URL's pages, or from a browser that does not say where it comes from (see
+// Identity.Elsewhere). A request the router did not serve answers false, which refuses.
+func Spends(r *http.Request) bool {
+	spends, _ := r.Context().Value(spendsKey{}).(bool)
+	return spends
+}
+
+// spendsKey is where the router leaves what Spends answers.
+type spendsKey struct{}
+
 // Sees answers, for the route serving r, whether its caller sees one namespace's record: every
 // namespace for an administrator, through a credential that carries the power, and otherwise one it
 // holds a grant in and its credential reaches. A route neither taking OnNamespace nor declaring
@@ -707,6 +719,19 @@ type Identity struct {
 	// session holds, since every proof, a sign-in again among them, opens a session of its own:
 	// adding a credential that lasts from a session takes one within proofLife (sessions.go).
 	ProvedAt time.Time
+
+	// OpenedBy is the credential that opened the session the request carries, by its
+	// identifier, and empty for any other credential: a passkey registered from a session reads
+	// it again under its user's row (passkeys.go).
+	OpenedBy string
+
+	// Elsewhere is set for a session that a safe request carries from anywhere but the public
+	// URL's pages, as its Sec-Fetch-Site or Origin header says, or from a browser that says
+	// neither, and zero for every other credential. SameSite=Lax lets such a request carry the
+	// cookie, a link followed from another site or an image on another host of the same site,
+	// and it may read, since what it reads is not the other page's to see, but it spends nothing
+	// a read spends: see Spends.
+	Elsewhere bool
 }
 
 // Target is what is being asked about, resolved from the request before anything is authorised.

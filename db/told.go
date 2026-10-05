@@ -26,7 +26,11 @@ import (
 // holding a role there, each told with the act and who did it. The second kind, a sign-in refused for
 // a passkey's signature counter, is written by the passkey ceremonies, and read here as the first is.
 // The third, the break-glass path used, is told to every administrator, so that the one way to a
-// recovery code that no administrator vouches for is never taken silently.
+// recovery code that no administrator vouches for is never taken silently. The fourth and fifth, a
+// recovery code an administrator issued a user and that code spent, are told to that user alone, who
+// knows whether they asked for it and holds the way to undo it: the code lets whoever holds it sign
+// in as them while their passkeys keep working, which nothing else would tell them of. Those two are
+// kept their 90 days, since whoever spent the code could otherwise dismiss them (undismissed).
 
 // The kinds of notification, as the wire's $defs/notification names them.
 const (
@@ -43,6 +47,14 @@ const (
 	// BreakGlassRecovery is a recovery code issued to an administrator by the break-glass path,
 	// agentiik-api recover, told to every administrator, the one recovered included.
 	BreakGlassRecovery = "break_glass_recovery"
+
+	// RecoveryCodeIssued is a recovery code an administrator, or the bootstrap token, issued a
+	// user, told to that user with who issued it.
+	RecoveryCodeIssued = "recovery_code_issued"
+
+	// RecoveryCodeUsed is such a code spent on the enrolment page, told to its user with who
+	// issued it and the credential it enrolled, which they may remove if it was not them.
+	RecoveryCodeUsed = "recovery_code_used"
 )
 
 // The acts an AdminAccessWidened notification tells, as the wire's $defs/notification names them.
@@ -103,6 +115,17 @@ const NotificationKept = 90 * 24 * time.Hour
 // already, past its 90 days, or never theirs.
 var ErrNoNotification = errors.New("db: no notification of that identifier for that principal")
 
+// ErrKeptNotification is a notification its reader may not dismiss, kept its 90 days: see
+// undismissed.
+var ErrKeptNotification = errors.New("db: that notification is kept its 90 days, and dismissed by nobody")
+
+// undismissed are the kinds of notification kept their NotificationKept whoever asks to dismiss
+// them: a recovery code issued a user and that code spent. Whoever spent the code signs in as the
+// user, from the session it opened or with the credential it enrolled, and so is a reader a
+// dismissal could come from; dismissed by them, the two would be gone before the user read them,
+// and nothing the user reads would say that somebody else holds a way in to their account.
+var undismissed = []string{RecoveryCodeIssued, RecoveryCodeUsed}
+
 // Notification is one thing told to one principal.
 type Notification struct {
 	ID        string
@@ -112,15 +135,18 @@ type Notification struct {
 	// At is when it happened, from which the 90 days it is kept are counted.
 	At time.Time
 
-	// Namespace, Grant, Act and By are where an administrator widened access, the grant as
-	// Widening keeps it, what they did and who they are, on AdminAccessWidened alone.
+	// Namespace, Grant and Act are where an administrator widened access, the grant as Widening
+	// keeps it and what they did, on AdminAccessWidened alone. By is who they are there, and who
+	// issued the recovery code on RecoveryCodeIssued and RecoveryCodeUsed: a login, or operator for
+	// the bootstrap token.
 	Namespace string
 	Grant     *access.Grant
 	Act       string
 	By        string
 
 	// Credential is the passkey whose assertion was refused, by its credential ID, on
-	// PasskeyCounterRefused alone.
+	// PasskeyCounterRefused, and the credential a recovery code enrolled, by the identifier GET
+	// /api/v1/me/credentials lists it with, on RecoveryCodeUsed.
 	Credential string
 
 	// Login is the administrator the break-glass path issued a recovery code, on
@@ -283,6 +309,34 @@ func (w *Wide) TellAdministrators(ctx context.Context, login string, at time.Tim
 	return told, nil
 }
 
+// TellRecoveryIssued writes RecoveryCodeIssued, about the recovery code by issued the user login at
+// at, to login and nobody else. It carries who issued it and never the code or its link, which are
+// shown once to the issuer.
+//
+// It is written in the transaction that issues the code, so that no code commits untold, after the
+// code's row and before the audit entry, in the order TellAdministrators takes its locks: the code's
+// row takes the user's, and the notification the user's principal.
+func (w *Wide) TellRecoveryIssued(ctx context.Context, login, by string, at time.Time) error {
+	if _, err := w.tx.Exec(ctx,
+		`insert into notifications (id, recipient, kind, at, acted_by) values ($1, $2, $3, $4, $5)`,
+		ulid.New(), login, RecoveryCodeIssued, at, by); err != nil {
+		return fmt.Errorf("db: %s could not be told of the recovery code %s issued: %w", login, by, err)
+	}
+	return nil
+}
+
+// TellRecoveryUsed writes RecoveryCodeUsed, about the recovery code by issued the user login having
+// enrolled credential at at, to login and nobody else, in the transaction that spends the code, so
+// that no code is spent untold.
+func (w *Wide) TellRecoveryUsed(ctx context.Context, login, by, credential string, at time.Time) error {
+	if _, err := w.tx.Exec(ctx,
+		`insert into notifications (id, recipient, kind, at, acted_by, credential) values ($1, $2, $3, $4, $5, $6)`,
+		ulid.New(), login, RecoveryCodeUsed, at, by, credential); err != nil {
+		return fmt.Errorf("db: %s could not be told of the recovery code %s issued being spent: %w", login, by, err)
+	}
+	return nil
+}
+
 // NotificationsOf answers what recipient is told as of now, newest first, and removes what it was
 // told more than NotificationKept before now, which is kept no longer. Removed where it is read
 // rather than by a sweep of its own: a notification nobody reads costs a row until its reader asks,
@@ -321,18 +375,32 @@ func (w *Wide) NotificationsOf(ctx context.Context, recipient string, now time.T
 }
 
 // DismissNotification removes one of recipient's notifications, which it lists no more, and is
-// ErrNoNotification where recipient is told nothing of that identifier as of now.
+// ErrNoNotification where recipient is told nothing of that identifier as of now, and
+// ErrKeptNotification, removing nothing, where it is of a kind kept its days (undismissed).
 func (w *Wide) DismissNotification(ctx context.Context, recipient, id string, now time.Time) error {
-	tag, err := w.tx.Exec(ctx,
-		`delete from notifications where recipient = $1 and id = $2 and at > $3`,
-		recipient, id, now.Add(-NotificationKept))
-	if err != nil {
+	var kind string
+	err := w.tx.QueryRow(ctx,
+		`delete from notifications where recipient = $1 and id = $2 and at > $3 and not (kind = any($4))
+		 returning kind`,
+		recipient, id, now.Add(-NotificationKept), undismissed).Scan(&kind)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("db: notification %s could not be dismissed: %w", id, err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNoNotification
+	// Nothing removed: a notification kept its days is told as such to its reader alone, and any
+	// other absence is the one absence.
+	var kept bool
+	if err := w.tx.QueryRow(ctx,
+		`select exists (select from notifications where recipient = $1 and id = $2 and at > $3)`,
+		recipient, id, now.Add(-NotificationKept)).Scan(&kept); err != nil {
+		return fmt.Errorf("db: notification %s could not be dismissed: %w", id, err)
 	}
-	return nil
+	if kept {
+		return ErrKeptNotification
+	}
+	return ErrNoNotification
 }
 
 // TellOwnersIn writes AdminAccessWidened in namespace, as NS.TellOwners writes it in its handle's,

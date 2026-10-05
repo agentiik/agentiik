@@ -1,13 +1,13 @@
 <script lang="ts">
   import type { Me } from "../api/client";
   import { clock } from "../lib/format";
-  import { said } from "../lib/notifications";
+  import { dismissible, said } from "../lib/notifications";
   import Icon from "./Icon.svelte";
   import Popover from "./Popover.svelte";
 
   // The caller's notifications, an entry of the sidebar under the home: how many wait beside its word,
   // or on its bell where the sidebar is folded, and opened, each one's words, its moment and a way to
-  // dismiss it.
+  // dismiss it, where the API lets it be dismissed.
   let { me, folded = false, ondismiss }: { me: Me; folded?: boolean; ondismiss: (id: string) => void } = $props();
 
   const waiting = $derived(me.notifications.length);
@@ -35,7 +35,7 @@
           <li>
             <span class="said">{said(notice)}</span>
             <time class="faint" datetime={notice.at} title={notice.at}>{clock(notice.at, Date.now())}</time>
-            <button class="control" onclick={() => ondismiss(notice.id)}>Dismiss</button>
+            {#if dismissible(notice)}<button class="control" onclick={() => ondismiss(notice.id)}>Dismiss</button>{/if}
           </li>
         {/each}
       </ul>

@@ -131,6 +131,11 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, error) {
 		tools = append(tools, m.workflowCommit(r))
 	}
 	for _, t := range userTools() {
+		if t.own && caller.Narrowed() {
+			// Left out even where the authorizer does not say what is granted, since what keeps
+			// a narrowed token from a collection is the scope and not a grant.
+			continue
+		}
 		if use(t.offered) {
 			tools = append(tools, m.tool(r, t))
 		}

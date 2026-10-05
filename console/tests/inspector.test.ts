@@ -364,6 +364,7 @@ describe("the files of a step and the outputs of a run", () => {
     expect(await fetchable(async () => Object.defineProperty(new Response(null, { status: 200 }), "type", { value: "opaqueredirect" }), "x")).toBe("");
     expect(await fetchable(async () => new Response(null, { status: 409 }), "x")).toMatch(/Download limit reached/);
     expect(await fetchable(async () => new Response(null, { status: 404 }), "x")).toBe("File not found.");
+    expect(await fetchable(async () => new Response(null, { status: 403 }), "x")).toMatch(/^This file has a download limit, which only a download from the console's own pages may spend.* or fetch it with an API token \(Authorization: Bearer\)\.$/);
   });
 });
 

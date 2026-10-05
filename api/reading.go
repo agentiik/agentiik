@@ -346,7 +346,8 @@ const (
 // served, and a transfer that did not complete spends nothing. Nothing of the database is held
 // while the bytes go, and the bytes have fetchTransfer to go in. A HEAD is answered what a GET
 // would be, bytes aside, and holds nothing, since nothing is fetched. A Range is not honoured: the
-// whole artifact is answered, which is the one transfer that can count.
+// whole artifact is answered, which is the one transfer that can count. A budget is spent by a
+// session only from the public URL's pages, 403 otherwise before anything is held (Spends).
 func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	u, err := agk.ParseURI(r.PathValue("uri"))
 	if err != nil || !utf8.ValidString(u.Name) {
@@ -385,6 +386,13 @@ func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principa
 	}
 	if s.objects == nil {
 		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and an artifact is read from nowhere else")
+		return
+	}
+	// Refused before anything is held: a session carried from another site's link or image, or
+	// from a browser that does not say where it comes from, would spend a fetch for whoever
+	// follows or loads it. A HEAD is refused the same, so that it is answered what a GET would be.
+	if !Spends(r) {
+		fail(w, http.StatusForbidden, spentElsewhere)
 		return
 	}
 	if r.Method == http.MethodHead {

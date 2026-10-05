@@ -376,8 +376,8 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		map[string]string{"code": recovery, "password": davesPassword}, http.StatusUnauthorized,
 		"signin.fail 192.0.2.1 dave - done")
 
-	// From that session dave registers a passkey, and signs in with it; the same assertion sent
-	// again, its challenge answered already, signs nobody in.
+	// From that session dave registers a passkey, told to him as the recovery code's, and signs in
+	// with it; the same assertion sent again, its challenge answered already, signs nobody in.
 	davesKeys := webauthntest.New(publicOrigin)
 	w = s.act("POST /api/v1/auth/passkey/options", "/api/v1/auth/passkey/options", enrolling, `{"ceremony":"registration"}`, http.StatusOK)
 	first, _, err := davesKeys.Create(s.options(w))
@@ -656,13 +656,19 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.act("POST /api/v1/runners/{runner}/revoke", "/api/v1/runners/"+runner+"/revoke", carol, `{"reason":"moved"}`, http.StatusOK,
 		"runner.revoke carol "+runner+" - done")
 
-	// carol widening her own access in dave's namespace tells dave, who dismisses it; and dave
-	// signs out. Neither is an act the log records.
+	// carol widening her own access in dave's namespace tells dave, who dismisses it, beside the
+	// recovery code carol issued him, the password it set and the passkey he registered from the
+	// session that password opened, told when they happened; and dave signs out. Neither is an act
+	// the log records.
 	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/dave/grants", carol, `{"principal":"carol","role":"viewer"}`, http.StatusCreated)
 	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+s.answer(w)["id"].(string)+" dave done")
 	w = s.act("GET /api/v1/me", "/api/v1/me", dave, nil, http.StatusOK)
 	told, _ := s.answer(w)["notifications"].([]any)
-	if len(told) != 1 {
+	var kinds []string
+	for _, n := range told {
+		kinds = append(kinds, n.(map[string]any)["kind"].(string))
+	}
+	if !slices.Equal(kinds, []string{"admin_access_widened", "recovery_code_used", "recovery_code_used", "recovery_code_issued"}) {
 		t.Fatalf("dave is told %v", told)
 	}
 	s.act("DELETE /api/v1/me/notifications/{id}", "/api/v1/me/notifications/"+told[0].(map[string]any)["id"].(string), dave, nil, http.StatusNoContent)

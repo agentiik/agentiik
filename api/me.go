@@ -62,8 +62,9 @@ type ServiceAccount struct {
 // Notification is one thing the installation tells the caller, $defs/notification: an
 // administrator having widened access in a namespace, with where, the grant, which act and who did
 // it, and the user put in a group where the act was that; a sign-in refused for a passkey's
-// signature counter, with the passkey; or the break-glass path having issued an administrator a
-// recovery code, with whose account.
+// signature counter, with the passkey; the break-glass path having issued an administrator a
+// recovery code, with whose account; or a recovery code issued the caller, with who issued it, and
+// that code spent, with who issued it and the credential it enrolled.
 type Notification struct {
 	ID         string        `json:"id"`
 	Kind       string        `json:"kind"`
@@ -208,7 +209,9 @@ func (m *MeAPI) answer(w http.ResponseWriter, r *http.Request, caller Caller) {
 // /api/v1/me lists no more. It changes nothing of what happened: the grant.create or the
 // signin.fail the audit log recorded stays. One that is not the caller's, one dismissed already and
 // one past its 90 days are the same absence, and a credential narrowed by a scope dismisses none,
-// as it reads none.
+// as it reads none. A recovery code's, issued the caller or spent on their account, is 409 and kept
+// its 90 days: whoever spent the code signs in as the caller, and would otherwise dismiss what
+// tells the caller of it before they read it (db.ErrKeptNotification).
 func (m *MeAPI) dismiss(w http.ResponseWriter, r *http.Request, caller Caller) {
 	id := r.PathValue("id")
 	if !ulidForm.MatchString(id) || caller.Narrowed() || caller.Principal == BootstrapOperator {
@@ -222,6 +225,9 @@ func (m *MeAPI) dismiss(w http.ResponseWriter, r *http.Request, caller Caller) {
 	case errors.Is(err, db.ErrNoNotification):
 		fail(w, http.StatusNotFound, noSuchNotification)
 		return
+	case errors.Is(err, db.ErrKeptNotification):
+		fail(w, http.StatusConflict, keptNotification)
+		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the notification could not be dismissed")
 		return
@@ -231,6 +237,9 @@ func (m *MeAPI) dismiss(w http.ResponseWriter, r *http.Request, caller Caller) {
 
 // noSuchNotification is a notification the caller is not told, whichever reason it is.
 const noSuchNotification = "no such notification, or not yours"
+
+// keptNotification is a recovery code's notification asked to be dismissed, which nobody may do.
+const keptNotification = "a recovery code issued you, or spent on your account, is told for 90 days and dismissed by nobody, since whoever spent it signs in as you and could otherwise dismiss what tells you of it"
 
 // notificationOf is a notification as the wire writes it, its instants in UTC.
 func notificationOf(t db.Notification) Notification {

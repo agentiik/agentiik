@@ -15,13 +15,15 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/webauthn/webauthntest"
 )
 
 // Recovery codes, over a real PostgreSQL: issued by an administrator at POST
 // /api/v1/users/{login}/recovery, shown once and audited with both identities; refused for the
 // administrator's own account and for a service account; issued by the installation itself on the
-// break-glass path; and spent on the enrolment page, for a passkey or a password, ending the
-// bootstrap token where the account is an administrator's and the token has not ended.
+// break-glass path; spent on the enrolment page, for a passkey or a password, ending the bootstrap
+// token where the account is an administrator's and the token has not ended; and told to its user
+// alone, when it is issued and when it is spent.
 
 // recoveryOf reads a recovery code answered, failing the test unless it is one: shown once, its code
 // the one its link carries, good for an hour from now.
@@ -127,13 +129,16 @@ func TestARecoveryCodeIsRefusedForOnesOwnAccountAndForAServiceAccount(t *testing
 }
 
 // The bootstrap token issues recovery codes, as it administers everything else, until the first
-// administrator has enrolled; issued by operator, they end with it, and once it has ended it issues
-// none.
+// administrator has enrolled; issued by operator, and told to their user as issued by operator, they
+// end with it, and once it has ended it issues none.
 func TestTheBootstrapTokenIssuesRecoveryCodesThatEndWithIt(t *testing.T) {
 	in := somePeople(t)
 	issued := recoveryOf(t, in.ask(t, "POST", "/api/v1/users/alice/recovery", in.bootstrap, "", nil), in.now)
 	if c, err := in.openCode(t, issued.Code); err != nil || c.IssuedBy != "operator" || c.Kind != db.EnrolmentRecovery {
 		t.Errorf("the bootstrap token's recovery code reads as %+v, %v", c, err)
+	}
+	if n := in.count(t, `select count(*) from notifications where recipient = 'alice' and kind = 'recovery_code_issued' and acted_by = 'operator'`); n != 1 {
+		t.Errorf("alice is told %d times of the recovery code the bootstrap token issued her", n)
 	}
 	by := recoveryOf(t, in.ask(t, "POST", "/api/v1/users/alice/recovery", in.carol, "", nil), in.now)
 	carols := recoveryOf(t, in.ask(t, "POST", "/api/v1/users/carol/recovery", in.bootstrap, "", nil), in.now)
@@ -305,8 +310,92 @@ func TestARecoveryCodeEnrolsANewPasskeyAndSignsItsUserIn(t *testing.T) {
 	}
 }
 
+// A recovery code is told to its user and nobody else: when carol issues bob one, bob is told in his
+// GET /api/v1/me that carol issued it, and when it enrols a passkey, that a code carol issued enrolled
+// that passkey, by its credential ID, so that he may remove it if it was not him. The entries
+// recording the issue and the use name him as the one told. Neither notification, nor any row or
+// answer about it, carries the code or its link, and the session the code opened, which whoever
+// spent it holds, dismisses neither: each is 409, and both stay.
+func TestARecoveryCodeIsToldToItsUserAlone(t *testing.T) {
+	in, carol := administering(t)
+	code := recoveryOf(t, in.call(t, "POST", "/api/v1/users/bob/recovery", "", "", carol), *in.clock)
+	issuedAt := *in.clock
+	var by string
+	in.query(t, `select coalesce(string_agg(recipient || ' ' || kind || ' ' || acted_by, ','), '') from notifications`, &by)
+	if by != "bob recovery_code_issued carol" {
+		t.Errorf("the recovery code issued is told as %q", by)
+	}
+	*in.clock = in.clock.Add(time.Minute)
+	w := in.enrol(t, newBrowser(), code.Code, "")
+	var enrolled api.Verified
+	if err := json.Unmarshal(w.Body.Bytes(), &enrolled); err != nil || w.Code != http.StatusOK || enrolled.Credential == nil {
+		t.Fatalf("bob's registration with his recovery code answered %d %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from notifications where recipient <> 'bob'`); n != 0 {
+		t.Errorf("%d notifications of bob's recovery code are told to somebody else", n)
+	}
+	var rows string
+	in.query(t, `select coalesce(string_agg(to_jsonb(n)::text, ','), '') from notifications n`, &rows)
+	for _, shown := range []string{code.Code, code.Link} {
+		if strings.Contains(rows, shown) {
+			t.Errorf("a notification keeps the recovery code or its link: %s", rows)
+		}
+	}
+
+	me := in.call(t, "GET", "/api/v1/me", "", "", session(t, w))
+	var told api.Me
+	if err := json.Unmarshal(me.Body.Bytes(), &told); err != nil || me.Code != http.StatusOK || len(told.Notifications) != 2 {
+		t.Fatalf("bob's GET /api/v1/me answered %d %s", me.Code, me.Body)
+	}
+	for i, want := range []string{
+		`{"id":"` + told.Notifications[0].ID + `","kind":"recovery_code_used","at":"` + in.clock.Format(time.RFC3339Nano) + `","by":"carol","credential":"` + enrolled.Credential.ID + `"}`,
+		`{"id":"` + told.Notifications[1].ID + `","kind":"recovery_code_issued","at":"` + issuedAt.Format(time.RFC3339Nano) + `","by":"carol"}`,
+	} {
+		if !strings.Contains(me.Body.String(), want) {
+			t.Errorf("bob's GET /api/v1/me answered %s, want notification %d to read %s", me.Body, i, want)
+		}
+	}
+	if strings.Contains(me.Body.String(), code.Code) {
+		t.Errorf("bob's GET /api/v1/me carries the recovery code: %s", me.Body)
+	}
+	for _, n := range told.Notifications {
+		d := in.call(t, "DELETE", "/api/v1/me/notifications/"+n.ID, "", "", session(t, w))
+		if d.Code != http.StatusConflict || !strings.Contains(d.Body.String(), "dismissed by nobody") {
+			t.Errorf("dismissing %s from the session the code opened answered %d %s", n.Kind, d.Code, d.Body)
+		}
+	}
+	if n := in.count(t, `select count(*) from notifications where recipient = 'bob'`); n != 2 {
+		t.Errorf("bob is told %d things once the session the code opened asked to dismiss both", n)
+	}
+
+	for _, e := range audited(t, in.pool) {
+		if e.Target != "bob" || (e.Action != "enrolment.issue" && e.Action != "enrolment.use") {
+			continue
+		}
+		if d := detailOf(t, e); d["kind"] == "recovery" && fmt.Sprint(d["notified"]) != "[bob]" {
+			t.Errorf("%s %s %s is recorded as having told %v", e.Actor, e.Action, e.Target, d["notified"])
+		}
+		if strings.Contains(e.Detail, code.Code) {
+			t.Errorf("entry %d carries the recovery code: %s", e.Seq, e.Detail)
+		}
+	}
+	var issues, uses int
+	in.query(t, `select count(*) filter (where action = 'enrolment.issue' and detail::jsonb->'notified' = '["bob"]'),
+	                    count(*) filter (where action = 'enrolment.use' and detail::jsonb->'notified' = '["bob"]')
+	               from audit_log where target = 'bob' and detail::jsonb->>'kind' = 'recovery'`, &issues, &uses)
+	if issues != 1 || uses != 1 {
+		t.Errorf("%d issues and %d uses of bob's recovery code name him as told", issues, uses)
+	}
+
+	// The link bob was created with is no recovery code, and spent, told nothing.
+	if n := in.count(t, `select count(*) from audit_log where action = 'enrolment.use' and detail::jsonb->>'kind' = 'enrolment' and detail::jsonb ? 'notified'`); n != 0 {
+		t.Errorf("%d enrolment links spent are recorded as told", n)
+	}
+}
+
 // A recovery code carol issues sets bob a password on the enrolment page where the policy allows
-// passwords and asks for no passkey, and it signs him in to a full session; the code is spent.
+// passwords and asks for no passkey, and it signs him in to a full session; the code is spent, and
+// bob is told it set the password, by the identifier his sign-in methods list it with.
 func TestARecoveryCodeSetsAPasswordAndSignsItsUserIn(t *testing.T) {
 	in, carol := administering(t)
 	bound := false
@@ -326,13 +415,102 @@ func TestARecoveryCodeSetsAPasswordAndSignsItsUserIn(t *testing.T) {
 	if w := in.call(t, "POST", "/api/v1/auth/password/enrol", body, ""); w.Code != http.StatusUnauthorized {
 		t.Errorf("a recovery code spent set a password again: %d %s", w.Code, w.Body)
 	}
+	if n := in.count(t, fmt.Sprintf(`select count(*) from notifications where recipient = 'bob' and kind = 'recovery_code_used'
+	                                  and acted_by = 'carol' and credential = '%s'`, set.Credential.ID)); n != 1 || set.Credential.ID == "" {
+		t.Errorf("bob is told %d times that the code carol issued him set the password %q", n, set.Credential.ID)
+	}
+}
+
+// Where the policy requires a passkey, a password a recovery code sets opens a session that only
+// enrols, and goes once the account holds min_passkeys: each passkey registered from such a session
+// is told to bob as the code's too, naming it, so that what he is told names the passkey that lasts
+// rather than only the password it retired, and its credential.enrol records whom it told. A second
+// registration from a session the password opened, verified while a first took the password and
+// the session with it, registers nothing, so that no passkey comes of the code untold.
+func TestAPasskeyRegisteredFromWhatARecoveryCodesPasswordOpensIsToldAsTheCodes(t *testing.T) {
+	in, carol := administering(t)
+	bound := false
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.SetInstallationPolicy(ctx, db.AuthPolicy{Password: "allowed", Passkey: "required", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 3}, *in.clock)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code := recoveryOf(t, in.call(t, "POST", "/api/v1/users/bob/recovery", "", "", carol), *in.clock)
+	w := in.call(t, "POST", "/api/v1/auth/password/enrol", fmt.Sprintf(`{"code":%q,"password":"a password nobody guesses"}`, code.Code), "")
+	var set api.PasswordEnrolled
+	if err := json.Unmarshal(w.Body.Bytes(), &set); err != nil || w.Code != http.StatusOK || set.Session != api.SessionEnrolment {
+		t.Fatalf("bob's password from his recovery code answered %d %s", w.Code, w.Body)
+	}
+	enrolling := session(t, w)
+	registered := func(t *testing.T, browser *webauthntest.Authenticator, options []byte) *httptest.ResponseRecorder {
+		t.Helper()
+		made, _, err := browser.Create(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return in.verify(t, "registration", made, "", "", enrolling)
+	}
+	idOf := func(t *testing.T, w *httptest.ResponseRecorder) string {
+		t.Helper()
+		var v api.Verified
+		if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || w.Code != http.StatusOK || v.Credential == nil {
+			t.Fatalf("a passkey registered from the enrolling session answered %d %s", w.Code, w.Body)
+		}
+		return v.Credential.ID
+	}
+
+	// bob holds the passkey his link enrolled; this one brings him to two, short of three.
+	first := idOf(t, registered(t, newBrowser(), in.options(t, `{"ceremony":"registration"}`, enrolling)))
+	held := func() int {
+		t.Helper()
+		return in.count(t, `select count(*) from credentials where login = 'bob' and type = 'password'`)
+	}
+	if held() != 1 {
+		t.Fatal("bob's password went short of min_passkeys")
+	}
+
+	// Two ceremonies from the session; the second is verified, and the third registered and
+	// recorded while it is, bringing bob to three and taking the password and its sessions.
+	late, third := in.options(t, `{"ceremony":"registration"}`, enrolling), in.options(t, `{"ceremony":"registration"}`, enrolling)
+	var last string
+	api.BetweenVerifyAndRegister(in.passkeys, func() {
+		api.BetweenVerifyAndRegister(in.passkeys, nil)
+		last = idOf(t, registered(t, newBrowser(), third))
+	})
+	if w := registered(t, newBrowser(), late); w.Code != http.StatusUnauthorized {
+		t.Errorf("a registration from a session whose password went while it was verified answered %d %s", w.Code, w.Body)
+	}
+	api.BetweenVerifyAndRegister(in.passkeys, nil)
+	if held() != 0 {
+		t.Error("bob's password outlived his third passkey")
+	}
+	if n := in.count(t, `select count(*) from credentials where login = 'bob' and type = 'passkey'`); n != 3 {
+		t.Errorf("bob holds %d passkeys, of three", n)
+	}
+
+	var told string
+	in.query(t, `select string_agg(kind || ' ' || acted_by || ' ' || coalesce(credential, '-'), ',')
+	               from notifications where recipient = 'bob'`, &told)
+	want := []string{"recovery_code_issued carol -", "recovery_code_used carol " + set.Credential.ID, "recovery_code_used carol " + first, "recovery_code_used carol " + last}
+	got := strings.Split(told, ",")
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("bob is told %q, want %q", got, want)
+	}
+	for _, id := range []string{first, last} {
+		if n := in.count(t, fmt.Sprintf(`select count(*) from audit_log where action = 'credential.enrol' and target = '%s'
+		                                  and detail::jsonb->>'recovery_issued_by' = 'carol' and detail::jsonb->'notified' = '["bob"]'`, id)); n != 1 {
+			t.Errorf("the passkey %s is recorded as told %d times", id, n)
+		}
+	}
 }
 
 // The bootstrap token ends at the enrolment of the first administrator who can sign in, whatever
 // code brought them to it: a recovery code the token issued them, for a passkey, or for a password
 // that opens a full session, or one that opens a session that may only enrol and the passkey
-// registered from that session then; and a recovery code the break-glass path issued them. A
-// user's recovery code, spent while it lives, ends nothing.
+// registered from that session then; and a recovery code the break-glass path issued them, which is
+// told no further once spent. A user's recovery code, spent while it lives, ends nothing.
 func TestARecoveryCodeEndsTheBootstrapWhereAnAdministratorEnrolsWithIt(t *testing.T) {
 	ended := func(t *testing.T, in ceremonies) bool {
 		t.Helper()
@@ -421,6 +599,10 @@ func TestARecoveryCodeEndsTheBootstrapWhereAnAdministratorEnrolsWithIt(t *testin
 			t.Fatalf("alice's registration with the break-glass code answered %d %s", w.Code, w.Body)
 		}
 		endedBy(t, in, "alice")
+		// Every administrator was told when it was issued, and nobody is told again.
+		if n := in.count(t, `select count(*) from notifications where kind in ('recovery_code_issued', 'recovery_code_used')`); n != 0 {
+			t.Errorf("the break-glass code is told %d times beside its break_glass_recovery", n)
+		}
 	})
 
 	t.Run("a user's", func(t *testing.T) {

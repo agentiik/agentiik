@@ -51,8 +51,11 @@ type Credential struct {
 	BackupEligible bool
 	BackupState    bool
 
-	// A password: its hash, in the self-describing form its hasher writes.
+	// A password: its hash, in the self-describing form its hasher writes, and who issued the
+	// recovery code that set it, where its user was told of it, empty where anything else set it
+	// (MarkRecovered).
 	PasswordHash string
+	RecoveredBy  string
 
 	// A TOTP: its secret, sealed under the master key, and the time step its code was last
 	// accepted at, zero where none was, which is before every step a clock reads since 1970.
@@ -107,14 +110,15 @@ func nilIfNone(b []byte) []byte {
 
 const credentialColumns = `id, login, type, coalesce(label, ''), created_at, last_used_at,
 	public_key, sign_count, aaguid, coalesce(backup_eligible, false), coalesce(backup_state, false),
-	coalesce(password_hash, ''), totp_sealed, coalesce(totp_step, 0)`
+	coalesce(password_hash, ''), totp_sealed, coalesce(totp_step, 0), coalesce(recovered_by, '')`
 
 func scanCredential(row pgx.Row) (Credential, error) {
 	var c Credential
 	var used *time.Time
 	var count *int64
 	err := row.Scan(&c.ID, &c.Login, &c.Type, &c.Label, &c.CreatedAt, &used,
-		&c.PublicKey, &count, &c.AAGUID, &c.BackupEligible, &c.BackupState, &c.PasswordHash, &c.TOTPSealed, &c.TOTPStep)
+		&c.PublicKey, &count, &c.AAGUID, &c.BackupEligible, &c.BackupState, &c.PasswordHash, &c.TOTPSealed, &c.TOTPStep,
+		&c.RecoveredBy)
 	if used != nil {
 		c.LastUsedAt = *used
 	}
@@ -275,6 +279,29 @@ func (w *Wide) SetPassword(ctx context.Context, login, id, hash string, at time.
 		return Credential{}, false, fmt.Errorf("db: the password of %s could not be set: %w", login, err)
 	}
 	return c, false, nil
+}
+
+// MarkRecovered records who issued the recovery code that set login's password id, by, where its
+// user was told of it, or, with by empty, that something else set it, as the enrolment page does
+// each time it sets one. A password changed keeps what it is marked with, as it keeps its
+// identifier: it is changed from a session, one that may only enrol included, which whoever spent
+// the code holds. A passkey registered from a session the password opens that may only enrol is
+// told to its user as the code's (api, passkeys.go).
+func (w *Wide) MarkRecovered(ctx context.Context, login, id, by string) error {
+	var marked *string
+	if by != "" {
+		marked = &by
+	}
+	tag, err := w.tx.Exec(ctx,
+		`update credentials set recovered_by = $3 where login = $1 and id = $2 and type = 'password'`,
+		login, id, marked)
+	if err != nil {
+		return fmt.Errorf("db: the password of %s could not be marked: %w", login, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s holds no password %s", ErrNoCredential, login, id)
+	}
+	return nil
 }
 
 // EndSessionsOpenedBy revokes at at the live sessions of login that credential opened, but the one
