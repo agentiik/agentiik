@@ -18,10 +18,14 @@ import (
 // "Judges files as the version they would make, and commits nothing." The files are laid over the
 // tree of a ref as POST .../commits lays them over its parent, and the tree is judged by the hook's
 // own check, version.Check, with what the hook reaches: the repository's pins and manifests, the
-// libraries an include names and the namespace's secret declarations. secret:use is not asked,
-// "since it is the committer's and is asked when the commit is made". It is workflow.validate, "the
-// only authority on whether a draft is legal", so that a client asks the rules a push is held to
-// rather than a copy of them.
+// libraries an include names and, for a caller holding workflow:read on the namespace, the
+// namespace's secret declarations. secret:use is not asked, "since it is the committer's and is
+// asked when the commit is made". Nor are the declarations asked for anybody else, since "a grant
+// on one workflow shows none" of them, and a refusal naming the secrets a draft writes that the
+// namespace does not declare would tell which it does: such a draft is judged as if each were
+// declared, and the push holds the commit to them. It is workflow.validate, "the only authority on
+// whether a draft is legal", so that a client asks the rules a push is held to rather than a copy
+// of them.
 
 // validateRequest is what the route reads: "{ref, files}".
 type validateRequest struct {
@@ -129,11 +133,7 @@ func (s *Server) validate(r *http.Request, over Target, v validateRequest) (Vali
 	}
 
 	written := &objectsWritten{}
-	changes := map[string]*string{}
-	for _, f := range v.files {
-		changes[f.path] = f.text
-	}
-	root, err := rewrite(ctx, objects, base, "", changes, written)
+	root, err := rewrite(ctx, objects, base, v.files, written)
 	if err != nil {
 		return Validated{}, err
 	}
@@ -143,6 +143,16 @@ func (s *Server) validate(r *http.Request, over Target, v validateRequest) (Vali
 	}
 	resolvers := s.resolvers(r, over)
 	resolvers.SecretUse = nil
+	// The declarations are shown to a reader of the namespace alone, as secret.list shows them, and
+	// a refusal listing the names a draft writes that are not declared would show the rest to
+	// anybody guessing; the push asks secret:use, a namespace's grant alone, before it checks them.
+	declarations, err := Revealing(r)(ctx, Target{Namespace: over.Namespace})
+	if err != nil {
+		return Validated{}, &pushFault{"the request could not be authorised", err}
+	}
+	if !declarations {
+		resolvers.Secrets = nil
+	}
 	tree := repo.NewTreeFS(ctx, held{written: written, under: objects}, root)
 	checked, err := version.Check(ctx, tree, version.Checking{
 		Committed: true, Namespace: over.Namespace, FormerNamespaces: former, Repository: over.Workflow,
@@ -173,12 +183,9 @@ type held struct {
 }
 
 func (h held) OpenObject(ctx context.Context, id repo.ID) (repo.ObjectReader, error) {
-	if h.written.seen[id] {
-		for _, o := range h.written.objects {
-			if repo.HashObject(o.t, o.data) == id {
-				return &heldObject{Reader: bytes.NewReader(o.data), t: o.t, size: int64(len(o.data))}, nil
-			}
-		}
+	if i, ok := h.written.at[id]; ok {
+		o := h.written.objects[i]
+		return &heldObject{Reader: bytes.NewReader(o.data), t: o.t, size: int64(len(o.data))}, nil
 	}
 	return h.under.OpenObject(ctx, id)
 }

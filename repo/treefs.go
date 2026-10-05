@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,32 @@ type TreeFS struct {
 	root    ID
 	mu      sync.Mutex
 	trees   map[ID][]TreeEntry
+	found   found
+}
+
+// found is the path found last and the directories it passes through, so that the next path is
+// found from the deepest of them it passes through as well: a walk asks for every directory by its
+// whole path, right after its parent, and finding each from the root made every directory of a tree
+// a thousand levels deep cost its depth, and a walk of the tree the square of it.
+type found struct {
+	sync.Mutex
+	name string
+	dirs []foundDir
+}
+
+// foundDir is a directory the path found last passes through, name[:end].
+type foundDir struct {
+	end int
+	e   TreeEntry
+}
+
+// deepest is the last of dirs that name passes through or is, -1 where it is none of them. The
+// directories are nested, so that a path passing through one passes through each above it.
+func (f *found) deepest(name string) int {
+	return sort.Search(len(f.dirs), func(i int) bool {
+		end := f.dirs[i].end
+		return end > len(name) || name[:end] != f.name[:end] || (end < len(name) && name[end] != '/')
+	}) - 1
 }
 
 // NewTreeFS reads the tree named root through objects, each read under ctx.
@@ -63,22 +90,47 @@ func (t *TreeFS) tree(id ID) ([]TreeEntry, error) {
 }
 
 // find answers the entry name names, the root being a tree entry of its own named ".".
+//
+// It stops once its context is done, and so does whatever reads the tree, at its next path: a tree
+// read once is revisited from memory, with no object read to stop at.
 func (t *TreeFS) find(op, name string) (TreeEntry, error) {
 	if !fs.ValidPath(name) {
 		return TreeEntry{}, &fs.PathError{Op: op, Path: name, Err: fs.ErrInvalid}
+	}
+	if err := t.ctx.Err(); err != nil {
+		return TreeEntry{}, &fs.PathError{Op: op, Path: name, Err: err}
 	}
 	e := TreeEntry{Name: ".", Mode: ModeTree, ID: t.root}
 	if name == "." {
 		return e, nil
 	}
-	walked := ""
-	for _, part := range strings.Split(name, "/") {
+	// at is where what is left of name to find starts. A find meeting another under way finds its
+	// path from the root rather than wait for it.
+	at, f := 0, &t.found
+	if f.TryLock() {
+		defer f.Unlock()
+		i := f.deepest(name)
+		if i >= 0 && f.dirs[i].end == len(name) {
+			return f.dirs[i].e, nil
+		}
+		if i >= 0 {
+			e, at = f.dirs[i].e, f.dirs[i].end+1
+		}
+		f.name, f.dirs = name, f.dirs[:i+1]
+	} else {
+		f = nil
+	}
+	for rest := name[at:]; ; {
+		part, after, deeper := strings.Cut(rest, "/")
+		// What was walked is name up to at, rather than a path joined again at each level. The
+		// first step is from the root or from a directory found before, so e is anything else
+		// only after a step, when at is past a name.
 		switch e.Mode {
 		case ModeTree:
 		case ModeSymlink:
-			return TreeEntry{}, &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%s is a symbolic link, which is never followed", walked)}
+			return TreeEntry{}, &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%s is a symbolic link, which is never followed", name[:at-1])}
 		case ModeSubmodule:
-			return TreeEntry{}, &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%s is a submodule, whose tree is another repository's", walked)}
+			return TreeEntry{}, &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%s is a submodule, whose tree is another repository's", name[:at-1])}
 		default:
 			return TreeEntry{}, &fs.PathError{Op: op, Path: name, Err: fs.ErrNotExist}
 		}
@@ -91,9 +143,14 @@ func (t *TreeFS) find(op, name string) (TreeEntry, error) {
 			return TreeEntry{}, &fs.PathError{Op: op, Path: name, Err: fs.ErrNotExist}
 		}
 		e = entries[i]
-		walked = path.Join(walked, part)
+		if f != nil && e.Mode == ModeTree {
+			f.dirs = append(f.dirs, foundDir{end: at + len(part), e: e})
+		}
+		if !deeper {
+			return e, nil
+		}
+		at, rest = at+len(part)+1, after
 	}
-	return e, nil
 }
 
 // Open opens the file, or the directory, name names.
