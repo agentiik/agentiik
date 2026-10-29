@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
+import { serverAddress } from "../src/lib/collections";
 import { Place } from "../src/lib/place.svelte";
 import { Session } from "../src/lib/session.svelte";
 import { scenario } from "./scenario";
@@ -45,6 +46,23 @@ describe("the account's MCP tab", () => {
     const desk = within(screen.getByRole("region", { name: "Collection support_desk" }));
     expect(desk.getByText("not_runnable")).toBeTruthy();
     expect(screen.getByRole("link", { name: "An API token" })).toBeTruthy();
+  });
+
+  it("gives the user's server at the public URL the API declares, whatever address the console was opened at", async () => {
+    const meta = document.createElement("meta");
+    meta.name = "agentiik-origin";
+    meta.content = "https://agentiik.example.com";
+    document.head.append(meta);
+    try {
+      open("/me/mcp");
+      expect(await screen.findByText("https://agentiik.example.com/mcp")).toBeTruthy();
+      expect(screen.queryByText("http://stand-in/mcp")).toBeNull();
+    } finally {
+      meta.remove();
+    }
+    // The public URL's path is the page's base, and its origin the one declared beside it.
+    expect(serverAddress("http://127.0.0.1:41521/agentiik/", "https://agentiik.example.com")).toBe("https://agentiik.example.com/agentiik/mcp");
+    expect(serverAddress("http://localhost:5173/", null)).toBe("http://localhost:5173/mcp");
   });
 
   it("says of two members whose tools go by one name that each offers nothing for it", async () => {

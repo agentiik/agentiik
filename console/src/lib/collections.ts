@@ -66,10 +66,20 @@ export function offered(m: Member): string {
   return reason;
 }
 
-// serverAddress is the user's server, /mcp on the installation's public URL, which the page's base
-// names: the one address every principal gives a client, each answered as themselves.
-export function serverAddress(baseURI: string): string {
-  return new URL("mcp", baseURI).href;
+// serverAddress is the user's server, /mcp on the installation's public URL: the one address every
+// principal gives a client, each answered as themselves. The page's base names the public URL's path
+// alone, so its origin is whichever one the console was opened at; the origin is the one the API
+// declares beside it (lib/origin), as a collection's url is made of the public URL, since a client
+// given another address fails the Origin check or reaches another host. A page that declares none,
+// as the development server's, is taken to be opened at it.
+export function serverAddress(baseURI: string, declared: string | null): string {
+  const here = new URL("mcp", baseURI);
+  if (!declared?.trim()) return here.href;
+  try {
+    return new URL(here.pathname, new URL(declared.trim()).origin).href;
+  } catch {
+    return here.href;
+  }
 }
 
 // mcpServed says whether the installation serves MCP, which the API writes into the page where it
