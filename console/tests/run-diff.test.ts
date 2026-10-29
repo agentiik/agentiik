@@ -86,13 +86,16 @@ describe("the page of two runs", () => {
     expect(asked.filter((a) => a.includes("/steps/normalize/outputs/ok"))).toHaveLength(2);
   });
 
-  it("compares no payload without run:read_data, and says so", async () => {
+  it("compares no payload without run:read_data, and says nothing of what it leaves out", async () => {
     const s = scenario("alice");
     const me = s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> };
     me.permissions.finance = me.permissions.finance!.filter((p) => p !== "run:read_data");
     open(`/finance/runs/${failed}/against/${good}`, s);
-    expect(await screen.findByText(/Inputs hidden/)).toBeTruthy();
+    expect(await screen.findByText(/they part at invoice/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Compare the items" })).toBeNull();
+    expect(screen.queryByText("Same inputs")).toBeNull();
+    expect(screen.queryByText(/hidden/i)).toBeNull();
+    expect(document.body.textContent).not.toContain("run:read_data");
   });
 
   it("is reached from the inspector of a run that ended, against a good run of its commit", async () => {

@@ -163,10 +163,10 @@
 {#if problem && !writing}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
+<!-- The view is drawn to a caller who reads the namespace's workflows alone, as the sidebar offers
+     it, so nothing here says what one who does not would miss. -->
 <Pane title="" label="Variables">
-  {#if !reads}
-    <p class="muted">Hidden (needs <span class="term">workflow:read</span>)</p>
-  {:else if unread}
+  {#if unread}
     <Problem explained={unread} onretry={read} />
   {:else if variables === null}
     <p class="muted">Loading</p>
