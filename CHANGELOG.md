@@ -49,6 +49,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A download the API refuses because the browser did not say which page it comes from, which a file with a download limit requires of a session, says so and points to a current browser.
 - The editor opens as an entry of the history, so that Back closes it, and asks before its changes are lost: Stop editing turns red beside Keep, and a link or Back to another screen waits for Keep or Leave, where all three dropped the changes with nothing asked, the page reloaded or closed being the one case the browser asked about.
 - The users screen lists each user's sign-in methods from `GET /api/v1/users/{login}/credentials`, synced or device-bound, with when each was enrolled and last used, and removes none. `vendor/openapi.json` is taken from the schemas commit that describes the route.
+- Each view of the sidebar keeps its digit in every namespace: a view the principal cannot use is left out with its digit, rather than passing it to the view after it, so that `3` opens Sharing wherever it is shown and nothing where it is not.
 
 ### Command line
 
