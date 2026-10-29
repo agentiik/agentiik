@@ -225,14 +225,23 @@ describe("an envelope", () => {
 });
 
 describe("acting on a run", () => {
-  it("cancels a run still going, once asked twice", async () => {
+  it("cancels a run still going, once asked twice, Keep drawn before the same button turned red", async () => {
     const s = scenario("alice");
     (s[`GET /api/v1/runs/${failed}`]!.body as { state: string }).state = "running";
     s[`POST /api/v1/runs/${failed}/cancel`] = { status: 202, body: { run: failed } };
     const { asked } = open(`/finance/runs/${failed}`, s);
-    await fireEvent.click(await screen.findByRole("button", { name: "Cancel run" }));
+    const cancel = await screen.findByRole("button", { name: "Cancel run" });
+    expect(cancel.classList.contains("danger")).toBe(false);
+    await fireEvent.click(cancel);
     expect(asked.some((a) => a.key.endsWith("/cancel"))).toBe(false);
-    expect(screen.getByText("Cancel this run?")).toBeTruthy();
+    // Nothing is drawn before the two, so the button clicked is where it was for the second click.
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBe(cancel);
+    expect(cancel.classList.contains("danger")).toBe(true);
+    expect([...cancel.parentElement!.children].map((c) => c.textContent!.trim())).toEqual(["Keep", "Cancel run"]);
+    await fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(cancel.classList.contains("danger")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+    await fireEvent.click(cancel);
     await fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(await screen.findByText("Cancelling.")).toBeTruthy();
     expect(asked.filter((a) => a.key === `POST /api/v1/runs/${failed}/cancel`)).toHaveLength(1);

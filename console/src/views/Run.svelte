@@ -215,14 +215,14 @@
     if (confirming) {
       return [
         { keys: ["y"], effect: "Cancel run", does: () => void cancel() },
-        { keys: ["n", "Escape"], effect: "Keep it running", does: () => (confirming = false) },
+        { keys: ["n", "Escape"], effect: "Keep", does: () => (confirming = false) },
       ];
     }
     if (replaying && chosenStep) {
       const from = chosenStep;
       return [
         { keys: ["y"], effect: "Replay from this step", does: () => ((replaying = false), void replay(from)) },
-        { keys: ["n", "Escape"], effect: "Keep it", does: () => (replaying = false) },
+        { keys: ["n", "Escape"], effect: "Keep", does: () => (replaying = false) },
       ];
     }
     const steps = run.steps.map((s) => s.step);
@@ -266,33 +266,27 @@
           {#if run.started_at}· took <span class="term">{lasted(run.started_at, run.finished_at)}</span>{/if}
           · by <span class="term">{run.triggered_by}</span>
         </span>
+        {#if mayRun || reader.ended}
+          <div class="actions">
+            {#if mayRun && !reader.ended}
+              {#if confirming}<button class="control" disabled={acting} onclick={() => (confirming = false)}>Keep</button>{/if}
+              <button class="control" class:danger={confirming} disabled={acting} onclick={() => (confirming ? cancel() : (confirming = true))}><Icon name="control-cancel" size={14} />Cancel run</button>
+            {:else if mayRun}
+              {#if chosenStep && !run.replay_from_start_only}
+                {#if replaying}<button class="control" disabled={acting} onclick={() => (replaying = false)}>Keep</button>{/if}
+                <button class="control primary" class:danger={replaying} disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from this step</button>
+              {/if}
+              <button class="control" disabled={acting} onclick={() => replay()}><Icon name="control-replay" size={14} />Replay from the start</button>
+              {#if run.replay_from_start_only}
+                <span class="muted">from the start only</span>
+              {/if}
+            {/if}
+            <!-- Reading a run against another needs nothing but run:read, which reading this one took. -->
+            {#if reader.ended}<CompareWith {api} {place} {run} />{/if}
+          </div>
+        {/if}
       </div>
       {#if mayRun || reader.ended}
-        <div class="actions">
-          {#if mayRun && !reader.ended}
-            {#if confirming}
-              <span>Cancel this run?</span>
-              <button class="control danger" disabled={acting} onclick={cancel}><Icon name="control-cancel" size={14} />Cancel run</button>
-              <button class="control" disabled={acting} onclick={() => (confirming = false)}>Keep it running</button>
-            {:else}
-              <button class="control" disabled={acting} onclick={() => (confirming = true)}><Icon name="control-cancel" size={14} />Cancel run</button>
-            {/if}
-          {:else if mayRun && replaying && chosenStep && !run.replay_from_start_only}
-            <span>Replay this run from {chosenStep}?</span>
-            <button class="control primary" disabled={acting} onclick={() => ((replaying = false), replay(chosenStep))}><Icon name="control-replay" size={14} />Replay from this step</button>
-            <button class="control" disabled={acting} onclick={() => (replaying = false)}>Keep it</button>
-          {:else if mayRun}
-            {#if chosenStep && !run.replay_from_start_only}
-              <button class="control primary" disabled={acting} onclick={() => replay(chosenStep)}><Icon name="control-replay" size={14} />Replay from this step</button>
-            {/if}
-            <button class="control" disabled={acting} onclick={() => replay()}><Icon name="control-replay" size={14} />Replay from the start</button>
-            {#if run.replay_from_start_only}
-              <span class="muted">from the start only</span>
-            {/if}
-          {/if}
-          <!-- Reading a run against another needs nothing but run:read, which reading this one took. -->
-          {#if reader.ended}<CompareWith {api} {place} {run} />{/if}
-        </div>
         {#if said}<p class="muted" role="status">{said}</p>{/if}
         {#if problem}<Problem explained={problem} />{/if}
       {/if}
@@ -510,17 +504,27 @@
 {/if}
 
 <style>
+  /* The acts sit at the end of the run's line, as a table row's do, so that the Keep a second click
+     is asked with, drawn before the act asked about, leaves that act where the pointer found it. */
   .actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: calc(var(--unit) * 4);
-    margin-top: calc(var(--unit) * 6);
+    margin-left: auto;
+    font-size: var(--type-control-size);
   }
 
   .control.danger {
     border-color: var(--failed);
     color: var(--failed);
+  }
+
+  .control.primary.danger {
+    border-color: var(--failed);
+    background: var(--failed);
+    color: var(--onAccent);
   }
 
   .inspector {
@@ -531,6 +535,7 @@
 
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: calc(var(--unit) * 6);
     font-size: var(--type-identifier-size-max);

@@ -52,9 +52,14 @@ describe("the installation's sign-in policy", () => {
     const { asked } = open("/users/policy", s);
     const form = await screen.findByRole("form", { name: "The installation's sign-in policy" });
     await fireEvent.change(within(form).getByRole("combobox", { name: "password" }), { target: { value: "forbidden" } });
+    const save = within(form).getByRole("button", { name: "Save" });
     await fireEvent.submit(form);
     expect(within(form).getByRole("alert").textContent).toMatch(/Every stored password and one-time code generator is deleted/);
     expect(asked).toEqual([]);
+    // Keep before the same button turned red, and what goes said under them rather than above.
+    expect([...save.parentElement!.children].map((c) => c.textContent!.trim())).toEqual(["Keep", "Save"]);
+    expect(save.classList.contains("danger")).toBe(true);
+    expect(save.compareDocumentPosition(within(form).getByRole("alert")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await fireEvent.click(within(form).getByRole("button", { name: "Keep" }));
     expect((within(form).getByRole("combobox", { name: "password" }) as HTMLSelectElement).value).toBe("allowed");
     await fireEvent.change(within(form).getByRole("combobox", { name: "password" }), { target: { value: "forbidden" } });

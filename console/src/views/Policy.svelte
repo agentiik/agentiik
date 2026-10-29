@@ -124,19 +124,20 @@
           <input type="number" min="1" step="1" bind:value={minimum} required />
         </label>
         {#if problem}<Problem explained={problem} />{/if}
+        <div class="field">
+          <span></span>
+          <span class="buttons">
+            {#if asking}<button class="control" type="button" onclick={() => take(stored!)}>Keep</button>{/if}
+            <button class="control primary" class:danger={asking} disabled={working || !changed}>Save</button>
+          </span>
+        </div>
+        <!-- What goes is said under the buttons, so that Save stays where the first click found it. -->
         {#if asking}
           <p class="takes" role="alert">
             {#if password === "forbidden" && stored.password === "allowed"}Every stored password and one-time code generator is deleted, and every account left with no passkey the policy accepts is suspended.{/if}
             {#if deviceBound && !stored.device_bound_only}Synced passkeys sign nobody in from the next request.{/if}
           </p>
         {/if}
-        <div class="field">
-          <span></span>
-          <span class="buttons">
-            <button class="control primary" class:danger={asking} disabled={working || !changed}>Save</button>
-            {#if asking}<button class="control" type="button" onclick={() => take(stored!)}>Keep</button>{/if}
-          </span>
-        </div>
       </form>
     {/if}
   </Pane>
@@ -186,8 +187,11 @@
     font-size: var(--type-control-size);
   }
 
+  /* Save sits at the end of its column, so that the Keep a second click is asked with, drawn before
+     it, leaves it where the pointer found it. */
   .buttons {
-    display: inline-flex;
+    display: flex;
+    justify-content: flex-end;
     gap: calc(var(--unit) * 2);
   }
 
