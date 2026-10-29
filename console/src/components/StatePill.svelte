@@ -116,9 +116,11 @@
     border-color: var(--failedLine);
   }
 
+  /* A faint state is sunken inside its outline, as the design system's specimen draws it: nothing is
+     happening to it, so it sits below the ground rather than on it. */
   .quiet {
     color: var(--faint);
-    background: var(--surface);
-    border-color: var(--line);
+    background: var(--sunken);
+    border-color: var(--lineStrong);
   }
 </style>
