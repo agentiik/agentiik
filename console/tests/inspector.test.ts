@@ -122,7 +122,7 @@ describe("the log of the task chosen", () => {
     stream.readyState = 2;
     stream.onerror?.call(stream, new Event("error"));
     expect(await screen.findByText("Could not follow the log.")).toBeTruthy();
-    expect(screen.getByText(/The step's logs went with the run's retention\./)).toBeTruthy();
+    expect(screen.getByText(/the step's logs went with the run's retention\./)).toBeTruthy();
   });
 });
 
@@ -273,7 +273,7 @@ describe("acting on a run", () => {
     s[`POST /api/v1/runs/${failed}/replay`] = { status: 409, body: { error: "a step above invoice never ended" } };
     open(`/finance/runs/${failed}`, s);
     await fireEvent.click(await screen.findByRole("button", { name: "Replay from this step" }));
-    expect(await screen.findByText("A step above invoice never ended.")).toBeTruthy();
+    expect(await screen.findByText("a step above invoice never ended.")).toBeTruthy();
   });
 
   it("offers neither to a principal without workflow:run", async () => {

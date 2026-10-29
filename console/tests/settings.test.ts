@@ -120,7 +120,7 @@ describe("a namespace's secrets", () => {
     await fireEvent.change(within(form).getByRole("combobox", { name: "Kept in" }), { target: { value: "env" } });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Variable" }), { target: { value: "AGK_DEV_ALICE_SMTP" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/Env is not a store this installation reads the secrets of alice from\./)).toBeTruthy();
+    expect(await screen.findByText(/env is not a store this installation reads the secrets of alice from\./)).toBeTruthy();
   });
 });
 
@@ -206,7 +206,7 @@ describe("removing a namespace", () => {
     await fireEvent.click(within(pane).getByRole("button", { name: "Delete" }));
     expect(asked.some((a) => a.key === "DELETE /api/v1/namespaces/finance")).toBe(false);
     await fireEvent.click(within(pane).getByRole("button", { name: "Delete" }));
-    expect(await screen.findByText(/Finance still holds 2 workflows, monthly-invoicing and payment-reminders: remove or move them first\./)).toBeTruthy();
+    expect(await screen.findByText(/finance still holds 2 workflows, monthly-invoicing and payment-reminders: remove or move them first\./)).toBeTruthy();
   });
 
   it("turns Delete red only at the second click, Keep drawn before it", async () => {
@@ -256,7 +256,7 @@ describe("a new namespace", () => {
     const form = screen.getByRole("form", { name: "New namespace" });
     await fireEvent.input(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "finance" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/Finance is already a namespace\./)).toBeTruthy();
+    expect(await screen.findByText(/finance is already a namespace\./)).toBeTruthy();
     expect(screen.getByRole("form", { name: "New namespace" })).toBeTruthy();
   });
 });

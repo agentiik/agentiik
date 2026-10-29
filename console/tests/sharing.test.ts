@@ -180,7 +180,7 @@ describe("the sharing panel", () => {
     await fireEvent.change(within(form).getByRole("combobox", { name: "Gives" }), { target: { value: "deny:run:read_data" } });
     expect(within(form).getByRole("button", { name: "Add" })).toBeTruthy();
     await fireEvent.submit(form);
-    expect(await screen.findByText("This would leave no administrator able to sign in.")).toBeTruthy();
+    expect(await screen.findByText("this would leave no administrator able to sign in.")).toBeTruthy();
     expect(asked.find((a) => a.key === "POST /api/v1/alice/grants")!.body).toEqual({ principal: "group:team-ops", deny: "run:read_data" });
   });
 

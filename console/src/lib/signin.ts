@@ -126,14 +126,14 @@ function unavailableOr(r: Refusal): Refusal {
   return r;
 }
 
-// sentence is one of the API's sentences as the console shows it, with a capital and a full stop.
+// sentence is one of the API's sentences as the console shows it, ending with a full stop and
+// beginning as the API began it, since one that begins with an identifier would read as another.
 export function sentence(text: string): string {
   const t = text.trim();
   if (t === "") {
     return t;
   }
-  const capital = t.charAt(0).toUpperCase() + t.slice(1);
-  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
+  return /[.!?]$/.test(t) ? t : `${t}.`;
 }
 
 // wait says, for a person, how long Retry-After asks them to wait, in whole minutes rounded up, or

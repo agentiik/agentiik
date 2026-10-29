@@ -78,12 +78,13 @@ export function refused(failed: string, why: string): Explained {
   return { what: `Could not ${failed}.`, why, next: "", detail: "", transient: false };
 }
 
-// sentence is one of the API's sentences as a sentence of the console's: a capital and a full stop.
+// sentence is one of the API's sentences as a sentence of the console's, ending with a full stop and
+// beginning as the API began it: many begin with an identifier, a login, a branch or a store, which
+// a capital would turn into another.
 function sentence(text: string): string {
   const t = text.trim();
   if (!t) return "The server refused it.";
-  const capital = t.charAt(0).toUpperCase() + t.slice(1);
-  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
+  return /[.!?]$/.test(t) ? t : `${t}.`;
 }
 
 // lowered is one of the API's sentences carried on after a colon, ending with a full stop.

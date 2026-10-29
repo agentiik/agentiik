@@ -136,7 +136,7 @@ describe("what you sign in with", () => {
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
     expect(screen.getByText("This passkey signs nobody in from now on, and the sessions it opened end.")).toBeTruthy();
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
-    expect(await screen.findByText("Removing it would leave fewer passkeys than min_passkeys, 2.")).toBeTruthy();
+    expect(await screen.findByText("removing it would leave fewer passkeys than min_passkeys, 2.")).toBeTruthy();
     expect(asked.filter((a) => a.key === "DELETE /api/v1/me/credentials/aVBob25lUGFzc2tleQ")).toHaveLength(1);
   });
 
@@ -277,7 +277,7 @@ describe("API tokens", () => {
     const dialog = await screen.findByRole("dialog", { name: "Mint a token" });
     await fireEvent.click(within(dialog).getByRole("button", { name: "Mint the token" }));
     expect(await within(dialog).findByText("Could not create the token.")).toBeTruthy();
-    expect(within(dialog).getByText(/^A token narrows its principal's rights and never widens them\./)).toBeTruthy();
+    expect(within(dialog).getByText(/^a token narrows its principal's rights and never widens them\./)).toBeTruthy();
     expect(screen.getByRole("dialog", { name: "Mint a token" })).toBe(dialog);
     // A 403 with no challenge asks for no sign-in again.
     expect(within(dialog).queryByText(/Sign in again/)).toBeNull();
@@ -358,7 +358,7 @@ describe("the users, for an administrator", () => {
     open("/users", alice({ ...users, "POST /api/v1/users/chloe/enrolment": { status: 409, body: { error: "the user already holds a credential; a lost one is replaced with a recovery code" } } }, true));
     const chloe = (await screen.findByText("Chloé Durand")).closest("tr")!;
     await fireEvent.click(within(chloe).getByRole("button", { name: "Enrolment link" }));
-    expect(await screen.findByText("The user already holds a credential; a lost one is replaced with a recovery code.")).toBeTruthy();
+    expect(await screen.findByText("the user already holds a credential; a lost one is replaced with a recovery code.")).toBeTruthy();
   });
 
   it("is no screen for somebody who is not an administrator", async () => {

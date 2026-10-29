@@ -111,7 +111,7 @@ describe("the users, for an administrator", () => {
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     expect(asked.some((a) => a.key.startsWith("DELETE"))).toBe(false);
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
-    expect(await screen.findByText("Carol's personal namespace holds 3 workflows.")).toBeTruthy();
+    expect(await screen.findByText("carol's personal namespace holds 3 workflows.")).toBeTruthy();
     const own = (await screen.findByText("dana", { selector: "td .login" })).closest("tr")!;
     expect(within(own).queryByRole("button", { name: "Remove" })).toBeNull();
   });
@@ -156,7 +156,7 @@ describe("a user's sign-in methods, for an administrator", () => {
     const dana = (await screen.findByText("dana", { selector: "td .login" })).closest("tr")!;
     await fireEvent.click(within(dana).getByRole("button", { name: "Sign-in methods" }));
     const own = await screen.findByRole("dialog", { name: "Sign-in methods of dana" });
-    expect(await within(own).findByText(/A session that may only enrol reaches nothing else/)).toBeTruthy();
+    expect(await within(own).findByText(/a session that may only enrol reaches nothing else/)).toBeTruthy();
   });
 });
 
@@ -197,7 +197,7 @@ describe("the groups, for an administrator", () => {
     const row = (await screen.findByText("group:finance-leads", { selector: "td" })).closest("tr")!;
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
     await fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
-    expect(await screen.findByText("Group:finance-leads owns finance: name another owner first.")).toBeTruthy();
+    expect(await screen.findByText("group:finance-leads owns finance: name another owner first.")).toBeTruthy();
   });
 });
 

@@ -89,7 +89,7 @@ describe("a workflow's settings", () => {
     const form = await screen.findByRole("form", { name: "Default branch of alice/report" });
     await fireEvent.input(within(form).getByRole("textbox"), { target: { value: "release" } });
     await fireEvent.submit(form);
-    expect(await screen.findByText(/^The repository holds no branch release\.$/)).toBeTruthy();
+    expect(await screen.findByText(/^the repository holds no branch release\.$/)).toBeTruthy();
   });
 
   it("move the workflow to another namespace its caller owns, and link to it there", async () => {

@@ -201,7 +201,7 @@ describe("managing runners", () => {
     const form = within(screen.getByRole("form", { name: "New pool" }));
     await fireEvent.input(form.getByLabelText("Name"), { target: { value: "dmz" } });
     await fireEvent.click(form.getByRole("button", { name: "Create" }));
-    expect(await screen.findByText("A runner pool named dmz exists already.")).toBeTruthy();
+    expect(await screen.findByText("a runner pool named dmz exists already.")).toBeTruthy();
   });
 
   it("adds a runner with a join token for the labels ticked, shown once with the command and the environment that redeem it", async () => {
@@ -252,7 +252,7 @@ describe("managing runners", () => {
     form = within(screen.getByRole("form", { name: "Revoke a runner" }));
     await fireEvent.input(form.getByLabelText("Reason"), { target: { value: "disk replaced" } });
     await fireEvent.click(form.getByRole("button", { name: "Revoke" }));
-    expect(await screen.findByText("Only an administrator of the installation orders a runner.")).toBeTruthy();
+    expect(await screen.findByText("only an administrator of the installation orders a runner.")).toBeTruthy();
 
     expect(screen.queryByRole("button", { name: "Orders to runner-dmz-00" })).toBeNull();
     const drainingOrders = screen.getByRole("button", { name: "Orders to runner-dmz-03" });
