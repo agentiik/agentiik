@@ -21,4 +21,4 @@ union, then each deny taken away.
 + workflow:delete   alice: owner
 + run:read          alice: owner; alice: group:team-finance, viewer
 + run:read_data     alice: owner
-↑↓ Grant   enter Resolve for…   s Scope   / Filter   : Commands   esc Runs   q …
+↑↓ Grant   enter Resolve for…   s Scope   / Filter   : Commands   ? Every key

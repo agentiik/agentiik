@@ -221,7 +221,11 @@ type Model struct {
 
 	// unanswered is why the last read failed, said in the top line until a read succeeds.
 	unanswered string
+
+	// listing says whether every key of the view is listed over it, and listedPast how many of the
+	// list's rows are scrolled past, where the window is too short for all of them.
 	listing    bool
+	listedPast int
 
 	// tick is tea.Tick, which a test replaces with one that never fires, so that it reads what
 	// the console shows without waiting for it to be read again.
@@ -645,11 +649,15 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		return m.answer(key)
 	}
 	if m.listing {
-		if key == "?" || key == "esc" {
+		switch key {
+		case "?", "esc":
 			m.listing = false
-		}
-		if key == "q" || key == "ctrl+c" {
+		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "up", "k":
+			m.listedPast = max(0, m.listedPast-1)
+		case "down", "j":
+			m.listedPast = min(m.listedPast+1, m.listedOver())
 		}
 		return m, nil
 	}
@@ -657,7 +665,7 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "?":
-		m.listing = true
+		m.listing, m.listedPast = true, 0
 		return m, nil
 	case ":":
 		m.palette = &palette{}
