@@ -6,7 +6,7 @@ export function consolePolicy(): string;
 
 export function scenarioNamed(name: string): Scenario;
 
-export function serve(options: { scenario: Scenario; port?: number; prefix?: string }): Promise<{
+export function serve(options: { scenario: Scenario; port?: number; prefix?: string; origin?: string }): Promise<{
   url: string;
   state: { scenario: Scenario; asked: string[] };
   close: () => Promise<void>;
