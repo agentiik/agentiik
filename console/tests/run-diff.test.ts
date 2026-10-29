@@ -107,6 +107,16 @@ describe("the page of two runs", () => {
     expect(place.route).toMatchObject({ kind: "namespace", namespace: "finance", view: "workflows", workflow: "monthly-invoicing", run: failed, against: good });
   });
 
+  it("opens the step chosen in either run by links whose words never change, the step named by the pane", async () => {
+    const { place } = open(`/finance/runs/${failed}/against/${good}`, scenario("alice"), "?step=normalize");
+    expect(await screen.findByText("normalize in the two runs")).toBeTruthy();
+    const second = screen.getByRole("link", { name: "Open in the second run" });
+    expect(second.getAttribute("href")).toBe(`/finance/workflows/monthly-invoicing/runs/${good}?step=normalize`);
+    await fireEvent.click(screen.getByRole("link", { name: "Open in the first run" }));
+    expect(place.route).toMatchObject({ kind: "namespace", workflow: "monthly-invoicing", run: failed });
+    expect(place.query.get("step")).toBe("normalize");
+  });
+
   it("answers as the API does for a run that is not there", async () => {
     open(`/finance/runs/${failed}/against/01JMZ0000000000000000000000`);
     expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
