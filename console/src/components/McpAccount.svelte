@@ -131,7 +131,7 @@
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
 <Pane title="Your server">
-  {#if !served}<p class="muted off">This installation serves no MCP, as AGK_MCP is off: these addresses answer 404 until it does. Collections are kept and changed all the same.</p>{/if}
+  {#if !served}<p class="muted off">MCP off</p>{/if}
   <dl class="server">
     <dt>Address</dt>
     <dd>

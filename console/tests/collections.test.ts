@@ -56,24 +56,26 @@ describe("the account's MCP tab", () => {
     expect(shown.queryByText("no_mcp_block")).toBeNull();
   });
 
-  it("says where the installation serves no MCP, and keeps the collections", async () => {
+  it("says MCP off where the installation serves none, as a state and not a sentence, and keeps the collections", async () => {
     const meta = document.createElement("meta");
     meta.name = "agentiik-mcp";
     meta.content = "off";
     document.head.append(meta);
     try {
       open("/me/mcp");
-      expect(await screen.findByText(/This installation serves no MCP, as AGK_MCP is off/)).toBeTruthy();
+      const server = await screen.findByRole("region", { name: "Your server" });
+      expect(within(server).getByText("MCP off")).toBeTruthy();
+      expect(within(server).queryByText(/AGK_MCP|answer 404|all the same/)).toBeNull();
       expect(await screen.findByRole("region", { name: "Collection back-office" })).toBeTruthy();
     } finally {
       meta.remove();
     }
   });
 
-  it("says nothing of AGK_MCP where the installation serves MCP", async () => {
+  it("says nothing of MCP off where the installation serves MCP", async () => {
     open("/me/mcp");
     await screen.findByRole("region", { name: "Collection back-office" });
-    expect(screen.queryByText(/serves no MCP/)).toBeNull();
+    expect(screen.queryByText("MCP off")).toBeNull();
   });
 
   it("makes a collection with its name and description", async () => {
@@ -123,6 +125,26 @@ describe("a workflow's MCP tab", () => {
     await fireEvent.click(within(supportDesk).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(within(supportDesk).getByText("create_invoices")).toBeTruthy());
     expect(asked.find((a) => a.key.startsWith("PUT"))?.body).toEqual({});
+  });
+
+  it("draws the tool by its labels and values, an async one's outputSchema none, and MCP off as a state", async () => {
+    const detail = structuredClone(scenario("alice")["GET /api/v1/finance/workflows/monthly-invoicing"]!) as { status: number; body: { graph: { mcp: Record<string, unknown> } } };
+    detail.body.graph.mcp = { ...detail.body.graph.mcp, mode: "async" };
+    const meta = document.createElement("meta");
+    meta.name = "agentiik-mcp";
+    meta.content = "off";
+    document.head.append(meta);
+    try {
+      open("/finance/workflows/monthly-invoicing/mcp", { "GET /api/v1/finance/workflows/monthly-invoicing": detail });
+      const tool = within(await screen.findByRole("region", { name: "Tool create_invoices" }));
+      expect(tool.getByText("mode: async · timeout: 2m · output: invoices")).toBeTruthy();
+      expect(tool.getByText("outputSchema")).toBeTruthy();
+      expect(tool.getByText("none")).toBeTruthy();
+      expect(screen.getByText("MCP off")).toBeTruthy();
+      expect(screen.queryByText(/run\.get|since an async call|AGK_MCP|no client is offered/)).toBeNull();
+    } finally {
+      meta.remove();
+    }
   });
 
   it("offers no Add to a principal without workflow:run, which adding a member takes", async () => {
