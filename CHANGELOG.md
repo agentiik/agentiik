@@ -75,6 +75,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A field in focus is bordered at the design system's 2.5px, `border.focus`, in the accent, drawn over its hairline, where it took a 1px outline; and the filter of a list and the log's Find, whose field is the box drawn around it, take the same border where they only turned their hairline to the accent.
 - The pill of `queued`, `skipped` and `cancelled` is sunken inside a `lineStrong` outline, as the design system's specimen draws it, where it was drawn on `surface` inside `line`.
 - The line saying the console was opened at another address than the public URL stays at the top of the window, and the sidebar stands whole below it, its foot in the window however the page scrolls, as do a phone's top bar and drawer, where the line pushed the sidebar's last entry, Fold the sidebar, below the window and made every page scroll by its height.
+- The run inspector's row of steps in order says each step's verdict in its word beside its dot, `normalize succeeded`, where its dot's colour alone told it.
 
 ### Command line
 

@@ -295,9 +295,10 @@
       {#if run.replay_of}
         <p class="muted">Replays <span class="code">{run.replay_of}</span>{#if run.replay_from}&nbsp;from <span class="term">{run.replay_from}</span>{/if}.</p>
       {/if}
+      <!-- Each step with its verdict's word beside its dot, since no state is told by colour alone. -->
       <ol class="path" aria-label="Steps in order">
         {#each run.steps as s (s.step)}
-          <li class={s.verdict}><span class="dot" aria-hidden="true"></span><span class="term">{s.step}</span></li>
+          <li class={s.verdict}><span class="dot" aria-hidden="true"></span><span class="term">{s.step}</span> <span class="verdict">{s.verdict}</span></li>
         {/each}
       </ol>
     </Pane>
