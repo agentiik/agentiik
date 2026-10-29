@@ -79,12 +79,15 @@ func (w *Workflow) newRules() error {
 		var r *Refusal
 		if errors.As(w.mcpRefused, &r) && r.At == (Position{}) {
 			// A rule about how long a call waits is placed at the timeout, which is what is
-			// to be changed, or on an async tool taken out; any other at the block.
+			// to be changed, or on an async tool taken out, and a blank description at the
+			// description; any other at the block.
 			switch r.Rule {
 			case RuleMCPTimeoutOnAsyncTool:
 				r.At = at.at("mcp", "timeout").key()
 			case RuleMCPSyncTimeoutZero, RuleMCPSyncTimeoutAboveCeiling:
 				r.At = at.at("mcp", "timeout").value()
+			case RuleMCPToolDescriptionBlank:
+				r.At = at.at("mcp", "description").value()
 			default:
 				r.At = at.at("mcp").key()
 			}

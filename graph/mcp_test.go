@@ -105,6 +105,17 @@ func TestAToolWithoutADescriptionIsPublishedToNobodysBenefit(t *testing.T) {
   description: Issue one invoice.`))
 }
 
+// TestABlankDescriptionIsNoDescription holds the second half of the row: "one of white space
+// alone, as Unicode counts it" tells a model as little. It is refused by a rule, where it was an
+// error naming none, which a hook could place nowhere since the schema it was held to took it.
+func TestABlankDescriptionIsNoDescription(t *testing.T) {
+	for _, blank := range []string{`"   "`, `""`, `"\n\t"`, `"\u00a0\u3000"`, `"\u2028"`} {
+		_, err := Parse([]byte(published(`  name: create_invoice
+  description: ` + blank)))
+		held(t, err, RuleMCPToolDescriptionBlank)
+	}
+}
+
 // TestASyncCallIsCappedAtTwoMinutes holds the ceiling and the form it is written in: "the cap
 // is on the value and not on the unit, so 120s, 2m and 120000ms are the longest forms it
 // accepts and an hour cannot be written at all".

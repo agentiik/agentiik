@@ -103,6 +103,11 @@ const (
 	// can end and was read as the ceiling it is the opposite of. The released schema writes the
 	// timeout's number from 1, in the same pattern that carries the ceiling.
 	RuleMCPSyncTimeoutZero Rule = "mcp-sync-timeout-zero"
+	// RuleMCPToolDescriptionBlank is a tool whose description is white space alone, "as
+	// Unicode counts them", which tells a model as little as none. The value is the name
+	// agentiik/schemas files the fixture under that its schema refuses by a pattern asking for
+	// a character that is not white space.
+	RuleMCPToolDescriptionBlank Rule = "mcp-tool-description-blank"
 	// RuleExpressionSecretInText is a secret in a position inside a string. "An
 	// expression that fills the whole value keeps its type; an expression embedded in
 	// a string is converted to text", and a secret has no text: it is an opaque

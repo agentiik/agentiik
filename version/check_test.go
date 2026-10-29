@@ -378,3 +378,22 @@ func TestATimeoutOffItsGrammarIsRefusedWhereItIsWritten(t *testing.T) {
 		t.Fatalf("a sync tool waiting 30s was refused: %v", err)
 	}
 }
+
+// A tool's description of white space alone is refused as none, by a rule placed at the
+// description, with what was expected there and the topic: the released schema this reader was
+// held to took it, so it was an error placed nowhere, and the hook answered it with no pointer, no
+// expectation and no topic.
+func TestABlankDescriptionIsRefusedWhereItIsWritten(t *testing.T) {
+	for _, blank := range []string{`"   "`, `"\u00a0\u3000"`} {
+		tree := aRepository()
+		tree["agentiik.yaml"].Data = []byte(strings.Replace(string(tree["agentiik.yaml"].Data), "steps:\n", "mcp:\n  description: "+blank+"\nsteps:\n", 1))
+		_, err := version.Check(t.Context(), tree, everything())
+		p, ok := version.Explain(err)
+		if !ok {
+			t.Fatalf("the refusal %v is not explained", err)
+		}
+		if p.Rule != "mcp-tool-description-blank" || p.Pointer != "/mcp/description" || p.File != "agentiik.yaml" || p.Line != 8 || p.Topic != "mcp" || p.Expected == "" {
+			t.Errorf("a blank description is refused as %+v", p)
+		}
+	}
+}
