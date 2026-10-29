@@ -15,7 +15,10 @@ permissions:
 
 jobs:
   console:
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 rather than ubuntu-latest, which is 26.04 now: the Chromium @playwright/test 1.56.1
+    # pins installs on 24.04 and refuses 26.04, so the screens would be drawn nowhere. Raised with the
+    # Playwright that supports the newer image, never past what the pin installs on.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: console
