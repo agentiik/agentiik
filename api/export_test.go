@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"time"
 )
 
@@ -74,6 +75,10 @@ var CheckTree = checkTree
 
 // ManifestsCarried is manifestsCarried, the manifests a push carries as version.Check reaches them.
 var ManifestsCarried = manifestsCarried
+
+// ObserveRequests has every request m's tools make of the API pass through observe first, which is
+// given the API to hand each one on to.
+func ObserveRequests(m *MCP, observe func(next http.Handler) http.Handler) { m.api = observe(m.api) }
 
 // Reencode is what PUT /api/v1/me/avatar stores of a photo sent: a PNG, with its size in pixels.
 func Reencode(raw []byte) ([]byte, int, int, error) { return reencode(raw, "photo") }

@@ -49,8 +49,10 @@ type MCPOptions struct {
 type MCP struct {
 	server mcp.Server
 
-	// rt is the router the tools make their requests through, as the caller.
-	rt *Router
+	// api is what the tools make their requests of, as the caller: the router, held as a handler
+	// and as nothing more, so that all a tool can do is ask a route, which checks it as it checks
+	// anybody, and never read a store or ask the authorizer in the caller's stead.
+	api http.Handler
 
 	// collections are what a collection's endpoint offers, and collectionServer the protocol it
 	// speaks it in: the user's server's, offering no resources.
@@ -69,7 +71,7 @@ func NewMCP(rt *Router, o MCPOptions) (*MCP, error) {
 	if version == "" {
 		version = "(devel)"
 	}
-	m := &MCP{rt: rt, server: mcp.Server{
+	m := &MCP{api: rt, server: mcp.Server{
 		Info:         mcp.Implementation{Name: "agentiik", Version: version},
 		Instructions: mcpInstructions,
 		Origin:       origin,

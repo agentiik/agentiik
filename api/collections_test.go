@@ -70,6 +70,9 @@ type collected struct {
 	super   string
 	objects artifact.Objects
 
+	// mcp is the user's server and the collections' endpoints, which a test observes.
+	mcp *api.MCP
+
 	// standings are what the authorizer says each principal is granted, which a test adds a deny to.
 	standings map[api.Principal][]access.Grant
 }
@@ -123,15 +126,6 @@ func servingCollectionsOn(t *testing.T, conns int) *collected {
 // collecting serves collections on pool, payroll committed as the document given.
 func collecting(t *testing.T, pool *db.Pool, super, payroll string) *collected {
 	t.Helper()
-	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
-		`insert into namespaces (name) values ('finance'), ('team-ops');
-		 insert into principals (id, kind) values ('alice', 'user'), ('bob', 'user')`); err != nil {
-		t.Fatal(err)
-	}
-	store, err := version.New(pool, version.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	finance := api.Target{Namespace: "finance"}
 	standings := map[api.Principal][]access.Grant{
 		"alice": {{ID: "alice-edits", Principal: "alice", Scope: access.Scope{Namespace: "finance"}, Role: access.Editor}},
@@ -141,7 +135,24 @@ func collecting(t *testing.T, pool *db.Pool, super, payroll string) *collected {
 		"alice": {{api.WorkflowRead, finance}, {api.WorkflowWrite, finance}, {api.WorkflowRun, finance}, {api.RunRead, finance}},
 		"bob":   {{api.WorkflowRead, finance}},
 	}}, standings: standings}
-	rt, err := api.NewRouter(auth, narrowing)
+	c := collectingAs(t, pool, super, payroll, auth, narrowing)
+	c.standings = standings
+	return c
+}
+
+// collectingAs is collecting with an authorizer and a way of identifying callers of the test's own.
+func collectingAs(t *testing.T, pool *db.Pool, super, payroll string, auth api.Authorizer, identify api.Identify) *collected {
+	t.Helper()
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+		`insert into namespaces (name) values ('finance'), ('team-ops');
+		 insert into principals (id, kind) values ('alice', 'user'), ('bob', 'user')`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := version.New(pool, version.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(auth, identify)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,10 +164,11 @@ func collecting(t *testing.T, pool *db.Pool, super, payroll string) *collected {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com", Collections: collections}); err != nil {
+	m, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com", Collections: collections})
+	if err != nil {
 		t.Fatal(err)
 	}
-	c := &collected{t: t, rt: rt, pool: pool, super: super, objects: objects, standings: standings}
+	c := &collected{t: t, rt: rt, pool: pool, super: super, objects: objects, mcp: m}
 	c.published("monthly-invoicing", toolDocument)
 	c.published("payroll", payroll)
 	return c
