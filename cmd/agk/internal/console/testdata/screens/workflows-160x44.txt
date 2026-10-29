@@ -1,24 +1,24 @@
 agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   3 Sharing                                                 1 notification  ● live
-Workflows                                                                                       4 workflows named by the last 200 runs, since the API lists none
-WORKFLOW                                                                                                 LATEST      STARTED           RUNS LAST 20
-finance/dunning-reminders                                                                                ● failed    05:30:00             2 █▄
-finance/ledger-export                                                                                    ⠋ running   05:28:45             3 ▁▁█
-finance/monthly-invoicing                                                                                ⠋ running   06:00:12             4 █▇▃▃
-finance/vat-reconcile                                                                                    ● queued    05:22:10             3 █▂
+Workflows                                                                                                                                            7 workflows
+WORKFLOW                                                                                                       LATEST      RUN AT           LAST 20
+alice/report                                                                                                   never run
+alice/vat-reconciliation                                                                                       never run
+finance/dunning-reminders                                                                                      ● failed    05:30:00         ▃▁▁▁▁▁▁█▁▁▁
+finance/ledger-export                                                                                          ⠋ running   05:28:44         ▃▁▁▁▁▁▁█▁▁▁
+finance/monthly-invoicing                                                                                      ⠋ running   06:00:12         ▃▁▁▁▁▁▁█▁▁▁
+finance/vat-reconcile                                                                                          ● queued    05:22:10         ▃▁▁▁▁▁▁█▁▁▁
+team-ops/nightly                                                                                               never run
 
-finance/dunning-reminders
-The workflow could not be read: no such thing, or not yours
-last 20   █▄  median 31s
+alice/report  default branch main · head a3f9c1e
+triggers  schedule 0 6 1 * * Europe/Paris · webhook invoicing/rerun
+last 20   never run
 30 days   no run ended in 30 days
 
-
-
-
-
-
-
-
-
+VERSIONS
+● a3f9c1e  2026-09-28 08:05  Alice Martin      Round VAT per line rather than per invoice
+  5d0b7e2  2026-09-28 07:40  Alice Martin      Split the rounding out of the charge step
+● 9b1f3d5  2026-09-27 14:22  Bruno Petit       Archive what normalize rejected beside the invoices
+● a version: a commit agentiik resolved, which a run can run
 
 
 

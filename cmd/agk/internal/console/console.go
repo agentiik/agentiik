@@ -147,7 +147,8 @@ type Model struct {
 	recent    []db.ListedRun
 	recentFor string
 
-	// sparks are the last runs of each workflow the runs view lists, by namespace/workflow.
+	// sparks are the last runs of each workflow the runs view or the workflows view lists, by
+	// namespace/workflow.
 	sparks map[string]sparkRead
 
 	// seen are the notifications GET /api/v1/me has held since the console opened, and toasts
@@ -181,8 +182,8 @@ type Model struct {
 	// widths count back: four inside a pane, none for a view that is the whole window.
 	framed int
 
-	// The workflows view's: the workflows the runs read name, the one chosen, and what was read of
-	// each beyond its row. graphOf is the workflow whose graph is shown with no run laid over it.
+	// The workflows view's: the workflows listed, the one chosen, and what was read of each beyond
+	// its row. graphOf is the workflow whose graph is shown with no run laid over it.
 	flows       []flowRow
 	flowsRead   bool
 	flowsFailed string
@@ -422,10 +423,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, next
 		}
+		_, waited := m.flowNamespaces()
 		m.me = msg.me
 		var cmds []tea.Cmd
 		m, cmds = m.noticed(msg.me)
 		cmds = append(cmds, next)
+		if !waited && m.view == workflowsView {
+			// Opened before the principal was read, the view learns only now which namespaces to
+			// list the workflows of.
+			cmds = append(cmds, m.readFlows())
+		}
 		if m.me.Admin && m.view == runView && m.runners == nil {
 			cmds = append(cmds, m.readRunners())
 		}
@@ -528,13 +535,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.flowsFailed = said(msg.err)
 			}
 		} else {
-			m.unanswered, m.flowsFailed, m.flowsRead, m.flows = "", "", true, flowRows(msg.runs)
+			m.unanswered, m.flowsFailed, m.flowsRead, m.flows = "", "", true, msg.flows
 			if f, ok := m.chosenFlow(); ok {
 				m.flow = f.key()
 			}
 		}
 		if m.view == workflowsView {
-			return m, tea.Batch(append(m.readChosenFlow(), m.later())...)
+			return m, tea.Batch(append(append(m.readChosenFlow(), m.readFlowSparks()...), m.later())...)
 		}
 	case flowDetailRead:
 		if m.flowDetails == nil {
@@ -695,6 +702,11 @@ func (m Model) press(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ":":
 		m.palette = &palette{}
+		if !m.flowsRead {
+			// The palette finds every workflow the principal reads, those never run among them, which
+			// the workflows listed name and the runs read do not.
+			return m, m.readFlows()
+		}
 		return m, nil
 	}
 	switch key {

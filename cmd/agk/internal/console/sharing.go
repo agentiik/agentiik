@@ -73,7 +73,7 @@ func (m Model) readSharing() tea.Cmd {
 
 // managed are the scopes whose grants the principal may list, where it holds grant:manage: the
 // namespaces and workflows /me names, and the workflows of a namespace managed that the runs read
-// name, in order.
+// or the workflows listed name, in order.
 func (m Model) managed() []string {
 	held := map[string]bool{}
 	for scope, permissions := range m.me.Permissions {
