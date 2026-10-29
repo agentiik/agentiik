@@ -1,6 +1,7 @@
 package console
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -140,6 +141,20 @@ func TestThePaletteDismissesANotification(t *testing.T) {
 	m = press(t, m, down, enter)
 	if len(in.sent) != 1 || in.sent[0] != "DELETE /api/v1/me/notifications/"+widened.ID+" null" || !slices.Contains(in.asked[asked:], "/api/v1/me") {
 		t.Errorf("choosing a notification sent %v and read %v", in.sent, in.asked[asked:])
+	}
+}
+
+// A notification the installation does not dismiss is said so on the key line, as the installation
+// says why, until the next key, which goes where it was going; it was dropped with nothing said.
+func TestARefusedDismissalIsSaid(t *testing.T) {
+	in := &installation{runs: someRuns(), me: withNotices(widened), refusing: errors.New("the installation could not be reached")}
+	m := press(t, typed(t, press(t, opened(t, in, Options{}, 120, 30), colon), "notif"), enter, enter)
+	if len(in.sent) != 1 || m.palette != nil || lastLine(m) != "The notification could not be dismissed: the installation could not be reached" {
+		t.Fatalf("a dismissal refused sent %v, and the key line says %q", in.sent, lastLine(m))
+	}
+	m = press(t, m, down)
+	if m.selected != "01RUNBBBBBBBBBBBBBBBBBBBBB" || !strings.HasPrefix(lastLine(m), "↑↓ Move") {
+		t.Errorf("the key after a dismissal refused selects %q, the key line %q", m.selected, lastLine(m))
 	}
 }
 

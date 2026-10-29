@@ -177,8 +177,12 @@ func (m Model) tabs() []part {
 	return parts
 }
 
-// keyLine names the keys of the view by their effect, as the documentation's bottom line does.
+// keyLine names the keys of the view by their effect, as the documentation's bottom line does, or
+// says what was refused of an act chosen in the palette, until the next key or click.
 func (m Model) keyLine(t theme) string {
+	if m.refused != "" {
+		return t.line(false, m.width, within([]part{{failedText, m.refused}}, m.width)...)
+	}
 	var keys [][2]string
 	switch {
 	case m.palette != nil:

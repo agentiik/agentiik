@@ -22,9 +22,10 @@ import (
 )
 
 // Every view is drawn on the answers recorded for the web console's own tests, the scenario of
-// console/tests/fixtures/alice.json, into a virtual terminal of a fixed size: Lip Gloss's canvas, a
-// grid of cells as wide and as high as the window, which the screen is written into as a terminal
-// would write it. What the grid holds is compared with the screens kept in testdata/screens, at 80
+// console/tests/fixtures/alice.json, and an administrator's, dana.json, for the runners that are an
+// administrator's alone, into a virtual terminal of a fixed size: Lip Gloss's canvas, a grid of
+// cells as wide and as high as the window, which the screen is written into as a terminal would
+// write it. What the grid holds is compared with the screens kept in testdata/screens, at 80
 // by 24 and at 160 by 44, and in each colour depth, which may change the colours and never a cell.
 // No controller, runner or database is behind it: the scenario is the installation.
 //
@@ -38,6 +39,10 @@ var update = flag.Bool("update", false, "rewrite the screens kept in testdata/sc
 // before.
 var recordedNow = time.Date(2026, 9, 30, 6, 2, 0, 0, time.UTC)
 
+// fleetNow is the instant the administrator's runners were recorded at, as the web console's fleet
+// tests read them: its ready runners last heard from seconds before.
+var fleetNow = time.Date(2026, 9, 30, 6, 2, 30, 0, time.UTC)
+
 // answer is one answer of the scenario: its status and its body.
 type answer struct {
 	Status int             `json:"status"`
@@ -47,9 +52,14 @@ type answer struct {
 // scenario is the web console's recorded answers, by "METHOD /path" or "METHOD /path?query".
 type scenario map[string]answer
 
-func loadScenario(t *testing.T) scenario {
+// loadScenario is the scenario of one principal, alice where none is named.
+func loadScenario(t *testing.T, named ...string) scenario {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "console", "tests", "fixtures", "alice.json"))
+	name := "alice"
+	if len(named) > 0 {
+		name = named[0]
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "console", "tests", "fixtures", name+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,10 +117,14 @@ func (s scenario) read(_ context.Context, path string, out any) error {
 }
 
 // onScenario is a console drawn on the scenario in a window of the size given, at a colour depth,
-// its first reads come back and the keys given pressed.
+// its first reads come back and the keys given pressed. Its clock is the instant the scenario was
+// recorded at, where the options give none.
 func onScenario(t *testing.T, s scenario, o Options, width, height int, d depth, keys ...tea.KeyPressMsg) Model {
 	t.Helper()
-	o.Read, o.Now = s.read, func() time.Time { return recordedNow }
+	o.Read = s.read
+	if o.Now == nil {
+		o.Now = func() time.Time { return recordedNow }
+	}
 	o.Installation = "agentiik.example.com"
 	n := New(t.Context(), o)
 	n.tick = func(time.Duration, func(time.Time) tea.Msg) tea.Cmd { return nil }
@@ -191,30 +205,36 @@ func colouredAs(t *testing.T, screen string, d depth) {
 	}
 }
 
-// The views and how each is reached from the console opened.
+// The views, how each is reached from the console opened, and whose scenario it is drawn on: alice's
+// where none is named.
 var views = []struct {
 	name string
 	o    Options
 	keys []tea.KeyPressMsg
+	of   string
 }{
-	{"runs", Options{}, nil},
-	{"run", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, nil},
+	{"runs", Options{}, nil, ""},
+	{"run", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, nil, ""},
 	// g draws the graph in the run's pane where its rows allow, and full screen otherwise.
-	{"run-graph", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{keyG}},
-	{"graph", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, nil},
-	{"graph-list", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{keyG}},
-	{"run-ports", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{tabKey}},
-	{"workflows", Options{}, []tea.KeyPressMsg{two}},
-	{"sharing", Options{}, []tea.KeyPressMsg{three}},
-	{"keys", Options{}, []tea.KeyPressMsg{help}},
-	{"palette", Options{}, []tea.KeyPressMsg{{Code: ':', Text: ":"}}},
+	{"run-graph", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{keyG}, ""},
+	{"graph", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, nil, ""},
+	{"graph-list", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{keyG}, ""},
+	{"run-ports", Options{Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A"}, []tea.KeyPressMsg{tabKey}, ""},
+	{"workflows", Options{}, []tea.KeyPressMsg{two}, ""},
+	{"sharing", Options{}, []tea.KeyPressMsg{three}, ""},
+	{"keys", Options{}, []tea.KeyPressMsg{help}, ""},
+	{"palette", Options{}, []tea.KeyPressMsg{{Code: ':', Text: ":"}}, ""},
+	// The runners are an administrator's, and dana's scenario holds no runs: 4 turns to them from
+	// the runs it could not read.
+	{"runners", Options{Now: func() time.Time { return fleetNow }}, []tea.KeyPressMsg{four}, "dana"},
 }
 
 // Every view, at 80 by 24 and at 160 by 44, is the screen kept for it in each colour depth, its
 // colours those of the depth.
 func TestEveryViewOnTheRecordedAnswers(t *testing.T) {
-	s := loadScenario(t)
+	scenarios := map[string]scenario{"": loadScenario(t), "dana": loadScenario(t, "dana")}
 	for _, v := range views {
+		s := scenarios[v.of]
 		for _, size := range [][2]int{{80, 24}, {160, 44}} {
 			name := fmt.Sprintf("%s-%dx%d", v.name, size[0], size[1])
 			kept := filepath.Join("testdata", "screens", name+".txt")

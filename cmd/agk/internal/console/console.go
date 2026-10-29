@@ -135,6 +135,11 @@ type Model struct {
 	acted   string
 	problem string
 
+	// refused is what the installation refused of an act chosen in the palette, and why, said on
+	// the key line until the next key or click: the palette it was chosen in has closed, and no
+	// pane is about it.
+	refused string
+
 	// spinner turns beside what is going on, while spinning says its next frame is asked for;
 	// recent is the last twenty runs of the run's workflow, read for recentFor.
 	spinner   spinner.Model
@@ -423,6 +428,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(append(cmds, m.readChosen())...)
 	case meAgain:
 		return m, m.readMe()
+	case dismissRefused:
+		m.refused = "The notification could not be dismissed: " + said(msg.err)
 	case toastGone:
 		return m.gone(msg.id), nil
 	case runnersRead:
@@ -590,8 +597,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case typedPaused:
 		return m.paused(msg)
 	case tea.MouseMsg:
+		if _, ok := msg.(tea.MouseClickMsg); ok {
+			m.refused = ""
+		}
 		return m.mouse(msg)
 	case tea.KeyPressMsg:
+		// What was refused is said until the next key, which goes where it was going.
+		m.refused = ""
 		if m.tooSmall() {
 			// Nothing is drawn but the size the window needs, so a key would act on what nobody can
 			// see: c then y cancelled a run whose prompt never showed. q quits, as the window says.
