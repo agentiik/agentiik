@@ -558,6 +558,32 @@ func (c Caller) Holds(ctx context.Context, what Permission, over Target) (bool, 
 	return c.allow(ctx, what, over)
 }
 
+// Denied answers whether an explicit deny takes a permission away from the caller over a target: a
+// deny of it written for the caller or one of its groups, on the target's namespace or on the
+// workflow, and not expired. "Only an explicit deny removes, and it wins over any allow at any
+// scope", so a route that gives something without asking the permission, as a sync call gives the
+// output of the run it started under workflow:run alone, still withholds it from a caller denied it.
+//
+// It reads what the authorizer says the caller is granted, as Effective does. One that does not say
+// is answered as denying, since a deny nobody can read would otherwise deny nothing.
+func (c Caller) Denied(ctx context.Context, what Permission, over Target) (bool, error) {
+	if c.standings == nil {
+		return true, nil
+	}
+	standing, err := c.standings.Standing(ctx, c.Principal)
+	if err != nil {
+		return false, err
+	}
+	principal := access.Principal{Ref: string(c.Principal), Groups: standing.Groups}
+	at := access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}
+	for _, g := range standing.Grants {
+		if g.Takes(principal, what, at) && !g.Expired(standing.At) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Owned answers the namespaces the caller owns through the credential it presented, ordered by
 // name: none through a narrowed one, for the reason Narrowed gives.
 func (c Caller) Owned(ctx context.Context) ([]string, error) {

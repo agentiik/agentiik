@@ -17,6 +17,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
@@ -67,6 +68,28 @@ type collected struct {
 	pool    *db.Pool
 	super   string
 	objects artifact.Objects
+
+	// standings are what the authorizer says each principal is granted, which a test adds a deny to.
+	standings map[api.Principal][]access.Grant
+}
+
+// collecting's authorizer allows what granted lists, and says what each principal is granted, as
+// Principals does: the roles those permissions are, which the user's server lists its tools by, and
+// whatever deny a test writes, which a sync call asks of the grants it reads.
+type standingGrants struct {
+	owningGrants
+	standings map[api.Principal][]access.Grant
+}
+
+func (s standingGrants) Standing(_ context.Context, who api.Principal) (api.Standing, error) {
+	return api.Standing{Grants: s.standings[who], At: time.Now()}, nil
+}
+
+// denied writes a deny of a permission on one workflow of finance for who.
+func (c *collected) denied(who api.Principal, what api.Permission, workflow string) {
+	c.standings[who] = append(c.standings[who], access.Grant{
+		ID: "deny-" + string(what), Principal: string(who), Scope: access.Scope{Namespace: "finance", Workflow: workflow}, Deny: what,
+	})
 }
 
 func servingCollections(t *testing.T) *collected {
@@ -109,10 +132,14 @@ func collecting(t *testing.T, pool *db.Pool, super, payroll string) *collected {
 		t.Fatal(err)
 	}
 	finance := api.Target{Namespace: "finance"}
-	auth := owningGrants{granted: granted{
+	standings := map[api.Principal][]access.Grant{
+		"alice": {{ID: "alice-edits", Principal: "alice", Scope: access.Scope{Namespace: "finance"}, Role: access.Editor}},
+		"bob":   {{ID: "bob-views", Principal: "bob", Scope: access.Scope{Namespace: "finance"}, Role: access.Viewer}},
+	}
+	auth := standingGrants{owningGrants: owningGrants{granted: granted{
 		"alice": {{api.WorkflowRead, finance}, {api.WorkflowWrite, finance}, {api.WorkflowRun, finance}, {api.RunRead, finance}},
 		"bob":   {{api.WorkflowRead, finance}},
-	}}
+	}}, standings: standings}
 	rt, err := api.NewRouter(auth, narrowing)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +155,7 @@ func collecting(t *testing.T, pool *db.Pool, super, payroll string) *collected {
 	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com", Collections: collections}); err != nil {
 		t.Fatal(err)
 	}
-	c := &collected{t: t, rt: rt, pool: pool, super: super, objects: objects}
+	c := &collected{t: t, rt: rt, pool: pool, super: super, objects: objects, standings: standings}
 	c.published("monthly-invoicing", toolDocument)
 	c.published("payroll", payroll)
 	return c
@@ -906,7 +933,36 @@ func TestASyncCallAnswersTheEnvelopeAsStored(t *testing.T) {
 	id := c.made("alice", "back-office")
 	c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", map[string]any{})
 
-	super := dbtest.Superuser(t, c.super)
+	stored := c.succeeding()
+	status, result, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/call", map[string]any{
+		"name": "create_invoices", "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
+	})
+	envelope, ok := <-stored
+	if !ok {
+		t.Fatal("no run was started to finish")
+	}
+	if status != http.StatusOK || refusal != nil || result["isError"] == true {
+		t.Fatalf("the call was answered %d %v %v", status, refusal, result)
+	}
+	var want bytes.Buffer
+	if _, err := envelope.Encode(&want); err != nil {
+		t.Fatal(err)
+	}
+	var wanted any
+	json.Unmarshal(want.Bytes(), &wanted)
+	got, _ := json.Marshal(result["structuredContent"])
+	if expected, _ := json.Marshal(wanted); string(got) != string(expected) {
+		t.Errorf("the result is %s, and the envelope stored %s", got, expected)
+	}
+	if text := textOf(result); text != strings.TrimSpace(want.String()) || !strings.Contains(text, "agk://run/") || !strings.Contains(text, "[masked]") {
+		t.Errorf("the result reads %q", text)
+	}
+}
+
+// succeeding ends the run a tool call starts, as the controller would, its output invoices the
+// envelope it stores, which it answers once it is stored, and nothing where no run was started.
+func (c *collected) succeeding() <-chan agk.Envelope {
+	super := dbtest.Superuser(c.t, c.super)
 	stored := make(chan agk.Envelope, 1)
 	go func() {
 		defer close(stored)
@@ -936,28 +992,44 @@ func TestASyncCallAnswersTheEnvelopeAsStored(t *testing.T) {
 			return
 		}
 	}()
-	status, result, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/call", map[string]any{
+	return stored
+}
+
+// "Only an explicit deny removes, and it wins over any allow at any scope." A sync call returns the
+// output of the run it started under workflow:run alone, run:read_data not asked, and a caller
+// denied run:read_data on the workflow is answered as an async call answers, the run's identifier
+// and its state, and no envelope: a deny written to keep a workflow's payloads from somebody kept
+// none from them through a collection of their own.
+func TestADenyOfRunReadDataWithholdsASyncCallsOutput(t *testing.T) {
+	c := servingCollections(t)
+	id := c.made("alice", "back-office")
+	c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", map[string]any{})
+	c.denied("alice", api.RunReadData, "monthly-invoicing")
+	path := "/mcp/collections/" + id
+
+	stored := c.succeeding()
+	status, result, refusal := calledAt(t, c.rt, path, "alice", "tools/call", map[string]any{
 		"name": "create_invoices", "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
 	})
 	envelope, ok := <-stored
 	if !ok {
 		t.Fatal("no run was started to finish")
 	}
-	if status != http.StatusOK || refusal != nil || result["isError"] == true {
-		t.Fatalf("the call was answered %d %v %v", status, refusal, result)
+	if status != http.StatusOK || refusal != nil {
+		t.Fatalf("the call was answered %d %v", status, refusal)
 	}
-	var want bytes.Buffer
-	if _, err := envelope.Encode(&want); err != nil {
-		t.Fatal(err)
+	conforming(t, c.rt, path, "create_invoices", result)
+	said, _ := json.Marshal(result)
+	text := textOf(result)
+	if _, structured := result["structuredContent"]; structured || result["isError"] != true ||
+		!strings.Contains(text, string(envelope.Meta.RunID)) || !strings.Contains(text, "succeeded") || !strings.Contains(text, "run:read_data") ||
+		strings.Contains(string(said), "1290.5") || strings.Contains(string(said), "agk://run/") {
+		t.Errorf("a caller denied run:read_data was answered %s", said)
 	}
-	var wanted any
-	json.Unmarshal(want.Bytes(), &wanted)
-	got, _ := json.Marshal(result["structuredContent"])
-	if expected, _ := json.Marshal(wanted); string(got) != string(expected) {
-		t.Errorf("the result is %s, and the envelope stored %s", got, expected)
-	}
-	if text := textOf(result); text != strings.TrimSpace(want.String()) || !strings.Contains(text, "agk://run/") || !strings.Contains(text, "[masked]") {
-		t.Errorf("the result reads %q", text)
+
+	// The deny is on that workflow and nowhere else: alice still holds the tool and runs it.
+	if runs := c.runs(); len(runs) != 1 || runs[0].State != agk.Succeeded {
+		t.Errorf("the call ran %v", runs)
 	}
 }
 
