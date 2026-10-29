@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -173,6 +173,25 @@ describe("a workflow's MCP tab", () => {
     const supportDesk = (await yours.findByText("support_desk")).closest("tr")!;
     expect(within(supportDesk).queryByRole("button", { name: "Add" })).toBeNull();
     expect(yours.queryAllByRole("button", { name: "Add" })).toEqual([]);
+  });
+
+  it("is a tab of the workflow's runs and statistics as of its graph, so that Settings stays after it on each", async () => {
+    for (const path of ["/finance/workflows/monthly-invoicing", "/finance/workflows/monthly-invoicing/runs", "/finance/workflows/monthly-invoicing/statistics"]) {
+      open(path);
+      const tabs = await screen.findByRole("navigation", { name: "monthly-invoicing, what is shown" });
+      await waitFor(() => expect(within(tabs).getAllByRole("link").map((l) => l.textContent?.trim())).toEqual(["Graph", "Files", "Runs", "Statistics", "MCP", "Settings"]));
+      cleanup();
+    }
+  });
+
+  it("is no tab of the runs to a principal who runs the workflow without reading it, nor is the workflow read for it", async () => {
+    const me = structuredClone(scenario("alice")["GET /api/v1/me"]!) as { status: number; body: { permissions: Record<string, string[]> } };
+    me.body.permissions["finance"] = me.body.permissions["finance"]!.filter((p) => p !== "workflow:read");
+    const { asked } = open("/finance/workflows/monthly-invoicing/runs", { "GET /api/v1/me": me });
+    const tabs = await screen.findByRole("navigation", { name: "monthly-invoicing, what is shown" });
+    expect(within(tabs).getByRole("link", { name: "Runs" })).toBeTruthy();
+    expect(within(tabs).queryByRole("link", { name: "MCP" })).toBeNull();
+    expect(asked.some((a) => a.key === "GET /api/v1/finance/workflows/monthly-invoicing")).toBe(false);
   });
 
   it("is no tab of a version that publishes no tool, and its address is a page that does not exist", async () => {

@@ -17,6 +17,7 @@
   import { filtersOf, queryOf, RunList, spans, type Filters, type Run, type RunState, type Span } from "../lib/runs.svelte";
   import { settles, workflowTabs } from "../lib/page";
   import { runAt } from "../lib/route";
+  import { published } from "../lib/tool";
 
   // A workflow's runs, a tab of the workflow: newest first and kept live, the ones that failed lifted
   // into a band above the list, since they are why the page is opened. A run is always some
@@ -27,7 +28,18 @@
 
   const filters = $derived({ ...filtersOf(place.query), workflow });
   const graph = $derived(holds(me, "workflow:read", namespace, workflow));
-  const tabs = $derived(workflowTabs(namespace, workflow, "runs", { mcp: false, settles: settles(me, namespace, workflow), reads: graph }));
+  // The MCP tab is reading the workflow's, and is drawn where its version publishes a tool, as on
+  // the workflow's other screens.
+  let mcp = $state(false);
+  $effect(() => {
+    if (!graph) return;
+    let current = true;
+    published(api, namespace, workflow).then((p) => current && (mcp = p));
+    return () => {
+      current = false;
+    };
+  });
+  const tabs = $derived(workflowTabs(namespace, workflow, "runs", { mcp, settles: settles(me, namespace, workflow), reads: graph }));
   // Run asks for a run here too, to whoever may ask for one, which reading the workflow is not: an
   // operator runs a workflow from its runs, the page it opens on.
   const mayRun = $derived(holds(me, "workflow:run", namespace, workflow));
