@@ -11,7 +11,7 @@
   import Icon from "../components/Icon.svelte";
   import Notice from "../components/Notice.svelte";
   import Pane from "../components/Pane.svelte";
-  import { enrolmentFor, recoveryFor, usersOf, type User } from "../lib/credentials";
+  import { credentialsFor, described, enrolmentFor, kindOf, recoveryFor, usersOf, type Credential, type User } from "../lib/credentials";
   import { clock } from "../lib/format";
   import type { Place } from "../lib/place.svelte";
   import { sentence } from "../lib/signin";
@@ -24,7 +24,8 @@
   //
   // An administrator also adds a user, whose enrolment link the API answers with it, and removes one,
   // on a second click: the API refuses a removal that would leave somebody's work or a namespace's
-  // ownership behind, and says what.
+  // ownership behind, and says what. And reads each user's sign-in methods, synced or device-bound,
+  // to know what an account signs in with before recovering it; removing none, which its holder does.
   let { api, place, me }: { api: API; place: Place; me: Me } = $props();
 
   const now = Date.now();
@@ -81,6 +82,26 @@
       issued = { login: u.login, what: "enrolment", link: r.link, expires_at: r.expires_at };
       copied = false;
     });
+  }
+
+  // The sign-in methods of the user whose login reading holds, as GET /api/v1/users/{login}/credentials
+  // lists them. An answer for a user no longer chosen is dropped.
+  let reading = $state("");
+  let held = $state<Credential[] | null>(null);
+  let unheld = $state<Explained | null>(null);
+
+  function methodsOf(login: string) {
+    reading = login;
+    held = null;
+    unheld = null;
+    return credentialsFor(api, login).then(
+      (c) => {
+        if (reading === login) held = c;
+      },
+      (e: unknown) => {
+        if (reading === login) unheld = explain("load the sign-in methods", e);
+      },
+    );
   }
 
   // The form that adds a user, in a dialog opened from the screen's head.
@@ -221,7 +242,10 @@
             <td class="term muted nowrap">{#if u.created_at}<time datetime={u.created_at} title={u.created_at}>{clock(u.created_at, now)}</time>{/if}</td>
             <td class="term muted nowrap">{#if u.last_sign_in_at}<time datetime={u.last_sign_in_at} title={u.last_sign_in_at}>{clock(u.last_sign_in_at, now)}</time>{:else}never{/if}</td>
             <td class="end">
-              {#if asking !== u.login}<button class="control" disabled={working} onclick={() => addressOf(u)}>Email</button>{/if}
+              {#if asking !== u.login}
+                <button class="control" onclick={() => methodsOf(u.login)}>Sign-in methods</button>
+                <button class="control" disabled={working} onclick={() => addressOf(u)}>Email</button>
+              {/if}
               {#if u.login !== own}
                 {#if asking === u.login}
                   <button class="control" onclick={() => (asking = "")}>Keep</button>
@@ -244,6 +268,30 @@
     </table>
   {/if}
 </Pane>
+
+<Dialog title={`Sign-in methods of ${reading}`} width={640} open={reading !== ""} onclose={() => (reading = "")}>
+  {#if unheld}
+    <Problem explained={unheld} onretry={() => methodsOf(reading)} />
+  {:else if held === null}
+    <p class="muted">Loading</p>
+  {:else if held.length === 0}
+    <p class="muted">None enrolled</p>
+  {:else}
+    <table>
+      <thead><tr><th>Credential</th><th>Kind</th><th>Enrolled</th><th>Last used</th></tr></thead>
+      <tbody>
+        {#each held as c (c.id)}
+          <tr>
+            <td>{#if c.type === "passkey"}<Icon name="control-passkey" size={14} />{/if}{described(c)}</td>
+            <td class="muted">{kindOf(c)}</td>
+            <td class="term muted nowrap"><time datetime={c.created_at} title={c.created_at}>{clock(c.created_at, now)}</time></td>
+            <td class="term muted nowrap">{#if c.last_used_at}<time datetime={c.last_used_at} title={c.last_used_at}>{clock(c.last_used_at, now)}</time>{:else}not used yet{/if}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {/if}
+</Dialog>
 
 <Dialog title="Add a user" bind:open={adding}>
   {#if problem}<Problem explained={problem} />{/if}

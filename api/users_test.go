@@ -365,6 +365,7 @@ func TestOnlyAnAdministratorAdministersUsersAndGroups(t *testing.T) {
 		{"PUT", "/api/v1/groups/team-finance/members/bob", ""},
 		{"DELETE", "/api/v1/groups/team-finance/members/bob", ""},
 		{"DELETE", "/api/v1/groups/team-ops", ""},
+		{"GET", "/api/v1/users/bob/credentials", ""},
 		{"DELETE", "/api/v1/users/bob", ""},
 	}
 	narrowed := []string{
@@ -392,6 +393,51 @@ func TestOnlyAnAdministratorAdministersUsersAndGroups(t *testing.T) {
 	in.exec(t, `update users set suspended = true where login = 'carol'`)
 	if w := in.ask(t, "GET", "/api/v1/users", in.carol, "", nil); w.Code != http.StatusUnauthorized {
 		t.Errorf("a suspended administrator listing the users answered %d", w.Code)
+	}
+}
+
+// An administrator reads a user's credentials as the user reads their own, each described and none
+// held: a passkey with its kind and flags, a password and a TOTP generator by their existence alone,
+// oldest first, never a key, a hash or a secret, and kept by no cache. A user who enrolled nothing
+// holds none, and no user by a login is the one 404.
+func TestAnAdministratorListsAUsersCredentials(t *testing.T) {
+	in := somePeople(t)
+	in.wide(t, func(ctx context.Context, w *db.Wide) error {
+		if err := w.AddCredential(ctx, db.Credential{
+			ID: "YWxpY2UtcGhvbmU", Login: "alice", Type: db.CredentialPasskey, Label: "phone",
+			PublicKey: []byte("a public key"), AAGUID: make([]byte, 16), BackupEligible: true, BackupState: true,
+		}); err != nil {
+			return err
+		}
+		_, _, err := w.SetPassword(ctx, "alice", "alice-password", "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g", in.now.Add(-time.Hour))
+		return err
+	})
+	var listed struct {
+		Credentials []map[string]any `json:"credentials"`
+	}
+	w := in.ask(t, "GET", "/api/v1/users/alice/credentials", in.carol, "", &listed)
+	if w.Code != http.StatusOK || w.Header().Get("Cache-Control") != "no-store" || len(listed.Credentials) != 2 {
+		t.Fatalf("alice's credentials answered %d, Cache-Control %q: %s", w.Code, w.Header().Get("Cache-Control"), w.Body)
+	}
+	// The password was set an hour ago and the passkey enrolled now, so the password comes first.
+	if c := listed.Credentials[0]; c["type"] != "password" || c["id"] != "alice-password" {
+		t.Errorf("alice's password is listed as %v", c)
+	}
+	if c := listed.Credentials[1]; c["type"] != "passkey" || c["id"] != "YWxpY2UtcGhvbmU" || c["label"] != "phone" || c["kind"] != "synced" {
+		t.Errorf("alice's passkey is listed as %v", c)
+	}
+	for _, held := range []string{"a public key", "public_key", "argon2id", "hash"} {
+		if strings.Contains(w.Body.String(), held) {
+			t.Errorf("a user's credentials were listed with %q: %s", held, w.Body)
+		}
+	}
+	if w := in.ask(t, "GET", "/api/v1/users/carol/credentials", in.carol, "", &listed); w.Code != http.StatusOK || len(listed.Credentials) != 0 || !strings.Contains(w.Body.String(), `"credentials":[]`) {
+		t.Errorf("the credentials of a user holding none answered %d: %s", w.Code, w.Body)
+	}
+	for _, path := range []string{"/api/v1/users/nobody/credentials", "/api/v1/users/Alice/credentials", "/api/v1/users/operator/credentials"} {
+		if w := in.ask(t, "GET", path, in.carol, "", nil); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "no user by that login") {
+			t.Errorf("%s answered %d: %s", path, w.Code, w.Body)
+		}
 	}
 }
 

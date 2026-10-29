@@ -112,6 +112,12 @@ export function described(c: Credential): string {
   }
 }
 
+// kindOf is what a credential is, as its list says it: a passkey synced or device-bound, the password,
+// or the generator of one-time codes beside it.
+export function kindOf(c: Credential): string {
+  return c.type === "passkey" ? c.kind : c.type === "password" ? "password" : "one-time codes";
+}
+
 export async function tokensOf(api: API): Promise<Token[]> {
   const { data, error, response } = await api.GET("/api/v1/auth/tokens");
   if (!data) {
@@ -179,6 +185,16 @@ export async function usersOf(api: API): Promise<User[]> {
     throw refusal(response, error);
   }
   return data.users;
+}
+
+// credentialsFor reads a user's credentials, for an administrator, as credentialsOf reads the
+// caller's: each described, none held.
+export async function credentialsFor(api: API, login: string): Promise<Credential[]> {
+  const { data, error, response } = await api.GET("/api/v1/users/{login}/credentials", { params: { path: { login } } });
+  if (!data) {
+    throw refusal(response, error);
+  }
+  return data.credentials;
 }
 
 // recoveryFor issues a recovery code for somebody who lost what signs them in, which revokes the one

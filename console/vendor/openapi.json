@@ -82,7 +82,7 @@
     },
     {
       "name": "runs",
-      "description": "Runs, listed across the namespaces the caller reads, read one by one with their steps' logs and envelopes, cancelled and replayed. From v0.6.0 in this document, served since v0.2.0."
+      "description": "Runs, listed across the namespaces the caller reads or within one, read one by one with their steps' logs and envelopes, cancelled and replayed. From v0.6.0 in this document, served since v0.2.0."
     },
     {
       "name": "statistics",
@@ -2064,6 +2064,88 @@
         }
       }
     },
+    "/api/v1/users/{login}/credentials": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/login"
+        }
+      ],
+      "get": {
+        "operationId": "listUserCredentials",
+        "tags": [
+          "users"
+        ],
+        "summary": "List a user's credentials",
+        "description": "A user's credentials, oldest first, as GET /api/v1/me/credentials lists the caller's: their passkeys, each with its identifier, kind, both flags, label, and when it was enrolled and last used; the password where one is still stored; and a TOTP generator where one is enrolled. Never a public key, a hash or a shared secret. So that whoever administers the installation sees what an account signs in with, synced or device-bound, before recovering it; nothing here removes one, which its holder does, a lost one being replaced through a recovery code. A user who enrolled nothing holds none. Administrator only.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#auth"
+        },
+        "responses": {
+          "200": {
+            "description": "The credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/credentialList"
+                },
+                "examples": {
+                  "passkeys": {
+                    "summary": "a password and a synced passkey",
+                    "value": {
+                      "credentials": [
+                        {
+                          "type": "password",
+                          "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+                          "created_at": "2026-09-27T08:55:00Z",
+                          "last_used_at": "2026-09-27T09:00:00Z"
+                        },
+                        {
+                          "type": "passkey",
+                          "id": "aVBob25lUGFzc2tleQ",
+                          "label": "phone",
+                          "backup_eligible": true,
+                          "backup_state": true,
+                          "kind": "synced",
+                          "created_at": "2026-09-27T09:02:00Z",
+                          "last_used_at": "2026-09-27T12:30:00Z"
+                        }
+                      ]
+                    }
+                  },
+                  "none": {
+                    "summary": "a user who enrolled nothing yet",
+                    "value": {
+                      "credentials": []
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/badRequest",
+            "description": "Two credentials: a bearer token beside the session cookie, or two session cookies."
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden",
+            "description": "The caller is not an administrator, or holds a session that may only enrol."
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No user by that login, or a login no user can have."
+          }
+        }
+      }
+    },
     "/api/v1/auth/tokens": {
       "post": {
         "operationId": "createToken",
@@ -2071,7 +2153,7 @@
           "tokens"
         ],
         "summary": "Mint an API token",
-        "description": "Mints an API token for the caller, or for a service account of a namespace the caller owns: 256 bits of entropy, stored hashed, its value shown in this answer and never again. It expires after 90 days unless the request asks for another expiry, and after a year at most, an expiry up to a minute past the year taken as asked for a client whose clock runs a little ahead, so that a token forgotten in a script stops on its own and none is a credential for good. An optional scope narrows it and can only narrow: on every request its rights are its principal's intersected with the scope. A principal holds at most 100 live tokens, counted under a lock on the principal so that two mints at once cannot both take the last place. Audited as api_token.create, in the namespace of a service account's token. A namespace the caller owns is one on which it holds the owner role, by an unexpired grant of its own or of one of its groups, on the namespace rather than on one of its workflows. An administrator's powers pass through a token only where its scope does not narrow them away: a token with no scope carries them, and within or permissions takes them away, so a token an administrator mints to run one workflow never creates a user. None is minted by a token narrowed by a scope, whose narrowing the token it minted would escape; by the bootstrap token, whose one lasting use is to create the first administrator; for a service account by that account's own token, since a token that minted its successor would be a credential for good; or for a namespace's built-in NS/agentiik, the installation's unattended identity, of which a token would let whoever holds it act as the runs nobody started: a script is given a service account of its own.",
+        "description": "Mints an API token for the caller, or for a service account of a namespace the caller owns: 256 bits of entropy, stored hashed, its value shown in this answer and never again. It expires after 90 days unless the request asks for another expiry, and after a year at most, an expiry up to a minute past the year taken as asked for a client whose clock runs a little ahead, so that a token forgotten in a script stops on its own and none is a credential for good. An optional scope narrows it and can only narrow: on every request its rights are its principal's intersected with the scope. A principal holds at most 100 live tokens, counted under a lock on the principal so that two mints at once cannot both take the last place. Audited as api_token.create, in the namespace of a service account's token. A namespace the caller owns is one on which it holds the owner role, by an unexpired grant of its own or of one of its groups, on the namespace rather than on one of its workflows. An administrator's powers pass through a token only where its scope does not narrow them away: a token with no scope carries them, and within or permissions takes them away, so a token an administrator mints to run one workflow never creates a user. A browser's session mints one only where it was signed in to in the last 10 minutes, and is asked to sign in again otherwise, before the body is read, as for a passkey registered from it: a token outlives the session that mints it, its sign-out, its 30 days, a password changed and the passkey that opened it removed, and an administrator's carries their powers, so a session left open or a cookie carried off would otherwise mint a credential for up to a year. A bearer token mints however long ago it was minted. None is minted by a token narrowed by a scope, whose narrowing the token it minted would escape; by the bootstrap token, whose one lasting use is to create the first administrator; for a service account by that account's own token, since a token that minted its successor would be a credential for good; or for a namespace's built-in NS/agentiik, the installation's unattended identity, of which a token would let whoever holds it act as the runs nobody started: a script is given a service account of its own.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#sessions-and-tokens"
@@ -2173,7 +2255,7 @@
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "A session that may only enrol; a token narrowed by a scope; the bootstrap token, whose refusal names agk user create LOGIN --admin; or a service account's token asking for that same account. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
+            "description": "A session that may only enrol; a browser's session signed in to more than 10 minutes ago, with RFC 9470's challenge, which the console answers by asking for a sign-in again; a token narrowed by a scope; the bootstrap token, whose refusal names agk user create LOGIN --admin; or a service account's token asking for that same account. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up."
           },
           "409": {
             "$ref": "#/components/responses/conflict",
@@ -2302,7 +2384,7 @@
           "me"
         ],
         "summary": "Who the caller is",
-        "description": "The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, a user's carrying what they say of themself and when their photo was last set, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; and break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.",
+        "description": "The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, a user's carrying what they say of themself and when their photo was last set, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator; and recovery_code_issued and recovery_code_used, a recovery code an administrator or the bootstrap token issued the caller, naming who, and that code spent, naming who issued it and the credential it enrolled, told to the caller alone and dismissed by nobody. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#administrators"
@@ -2606,7 +2688,7 @@
           "me"
         ],
         "summary": "Dismiss one of the caller's notifications",
-        "description": "Dismisses one of the notifications GET /api/v1/me lists, which lists it no more. One not dismissed is kept 90 days from when it was written: long enough to reach someone back from leave, and bounded so that GET /api/v1/me does not grow for ever. Dismissing changes nothing of what happened: the grant.create, the signin.fail or the enrolment.issue the audit log recorded stays. A notification owed to a group was written once for each of its members, so that one member dismissing it dismisses it for nobody else. A token narrowed by a scope dismisses none, as it reads none.",
+        "description": "Dismisses one of the notifications GET /api/v1/me lists, which lists it no more. One not dismissed is kept 90 days from when it was written: long enough to reach someone back from leave, and bounded so that GET /api/v1/me does not grow for ever. Dismissing changes nothing of what happened: the grant.create, the signin.fail or the enrolment.issue the audit log recorded stays. A notification owed to a group was written once for each of its members, so that one member dismissing it dismisses it for nobody else. A token narrowed by a scope dismisses none, as it reads none. A recovery code's, recovery_code_issued or recovery_code_used, is refused 409 and kept its 90 days, since whoever spent the code signs in as the caller, from the session it opened or with the credential it enrolled, and could otherwise dismiss what tells the caller of it before they read it.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#administrators"
@@ -2629,6 +2711,24 @@
           "404": {
             "$ref": "#/components/responses/notFound",
             "description": "No notification of the caller's by that identifier: dismissed already, past its 90 days, or never the caller's; and any through a token narrowed by a scope, or the bootstrap token, which are told nothing."
+          },
+          "409": {
+            "description": "A recovery code's notification, issued the caller or spent on their account, which nobody dismisses; it stays listed its 90 days.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "kept": {
+                    "summary": "recovery_code_used, asked to be dismissed",
+                    "value": {
+                      "error": "a recovery code issued you, or spent on your account, is told for 90 days and dismissed by nobody, since whoever spent it signs in as you and could otherwise dismiss what tells you of it"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -2724,7 +2824,7 @@
           "me"
         ],
         "summary": "Set the caller's photo",
-        "description": "Sets the caller's photo in place of any before it: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it, which a photo shown to colleagues would hand them. The Content-Type says the body is one of the two and the bytes say which, since a browser names a file's type by its extension. Set by the user alone, as the profile is: the bootstrap token, a service account and a token narrowed by a scope are refused saying so. avatar_updated_at says when it was set, which a client adds to the photo's address. Audited as user.avatar with the size it was stored at, and never the photo.",
+        "description": "Sets the caller's photo in place of any before it: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. Pictures are re-encoded a few at a time in each process of the API, a user's photo and a namespace's picture alike, one for each processor and no more than a quarter of its memory holds at 64 MiB each, so that many sent at once cannot take the memory every other request needs; one that waits five seconds for its turn is refused, and stores nothing. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it, which a photo shown to colleagues would hand them. The Content-Type says the body is one of the two and the bytes say which, since a browser names a file's type by its extension. Set by the user alone, as the profile is: the bootstrap token, a service account and a token narrowed by a scope are refused saying so. avatar_updated_at says when it was set, which a client adds to the photo's address. Audited as user.avatar with the size it was stored at, and never the photo.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#principals"
@@ -2834,6 +2934,30 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Too many pictures are being re-encoded at once to take this photo within five seconds: nothing was stored, and the request may be sent again once Retry-After has passed.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/retryAfter",
+                "description": "One second: a re-encoding takes half a second at the most."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "busy": {
+                    "summary": "no turn to re-encode in time",
+                    "value": {
+                      "error": "this installation is re-encoding too many pictures at once to take this one in time: try again in a moment"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -2925,7 +3049,7 @@
           "collections"
         ],
         "summary": "List the caller's collections",
-        "description": "The caller's collections, by name, whole and not paged, each with its id, its name, its description, the url a client is given and its members, each member with its workflow, its ref and its as where written, and the tool it offers or why it offers none, read at the head of each member's ref as the next tools/list reads it. Any authenticated principal, about its own: nobody reads another principal's, an administrator included, since a collection grants nothing and is one principal's arrangement of what they may already run. The bootstrap token, which is nobody, holds none and lists none.",
+        "description": "The caller's collections, by name, whole and not paged, each with its id, its name, its description, the url a client is given and its members, each member with its workflow, its ref and its as where written, and the tool it offers or why it offers none, read at the head of each member's ref as the next tools/list reads it. Any authenticated principal, about its own: nobody reads another principal's, an administrator included, since a collection grants nothing and is one principal's arrangement of what they may already run. The bootstrap token, which is nobody, holds none and lists none, and a token narrowed by a scope lists none either, since a collection names workflows of every namespace its holder runs, which a scope keeps the token from, and managing one is none of the nine permissions a scope keeps.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#collections"
@@ -2951,7 +3075,7 @@
                           "members": [
                             {
                               "workflow": "finance/monthly-invoicing",
-                              "tool": "create_invoice"
+                              "tool": "create_invoices"
                             },
                             {
                               "workflow": "support/order-status",
@@ -3085,7 +3209,7 @@
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "The bootstrap token, which is nobody and owns nothing, refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up."
+            "description": "The bootstrap token, which is nobody and owns nothing, refused saying so; a token narrowed by a scope, which reaches no collection, refused before the body is read; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up."
           },
           "409": {
             "description": "Another of the caller's collections holds the name, which is how their owner tells them apart.",
@@ -3141,7 +3265,7 @@
           "collections"
         ],
         "summary": "Read one of the caller's collections",
-        "description": "One of the caller's collections, as the list gives it: each member with its workflow, its ref and its as where written, and tool, the name it is offered under, or null beside reason, no_mcp_block where the entry point at the head of its ref declares no mcp block and not_runnable where the caller may no longer run the workflow, deleted ones included. What the web console shows of it, so that a member missing from a client's tool list is one its owner can account for. Another principal's collection is answered 404, to an administrator as to anybody.",
+        "description": "One of the caller's collections, as the list gives it: each member with its workflow, its ref and its as where written, and tool, the name it is offered under, or null beside reason, no_mcp_block where the entry point at the head of its ref declares no mcp block, not_runnable where the caller may no longer run the workflow, deleted ones included, and tool_name_taken where another member's tool has come to go by the same name, both left out until as or a commit tells them apart. What the web console shows of it, so that a member missing from a client's tool list is one its owner can account for. Another principal's collection is answered 404, to an administrator as to anybody.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#collections"
@@ -3165,7 +3289,7 @@
                       "members": [
                         {
                           "workflow": "finance/monthly-invoicing",
-                          "tool": "create_invoice"
+                          "tool": "create_invoices"
                         },
                         {
                           "workflow": "support/order-status",
@@ -3204,7 +3328,7 @@
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "Only for a session that may only enrol. Every other refusal here is a 404."
+            "description": "A token narrowed by a scope, which reaches no collection, refused before anything is looked up, whether the collection exists or not; or a session that may only enrol. Every other refusal here is a 404."
           },
           "404": {
             "$ref": "#/components/responses/notFound",
@@ -3267,7 +3391,7 @@
                       "members": [
                         {
                           "workflow": "finance/monthly-invoicing",
-                          "tool": "create_invoice"
+                          "tool": "create_invoices"
                         },
                         {
                           "workflow": "support/order-status",
@@ -3296,7 +3420,7 @@
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404."
+            "description": "A token narrowed by a scope, which reaches no collection, refused before the body is read and anything is looked up, whether the collection exists or not; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404."
           },
           "404": {
             "$ref": "#/components/responses/notFound",
@@ -3349,7 +3473,7 @@
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404."
+            "description": "A token narrowed by a scope, which reaches no collection, refused before the body is read and anything is looked up, whether the collection exists or not; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404."
           },
           "404": {
             "$ref": "#/components/responses/notFound",
@@ -3424,7 +3548,7 @@
                       "members": [
                         {
                           "workflow": "finance/monthly-invoicing",
-                          "tool": "create_invoice"
+                          "tool": "create_invoices"
                         },
                         {
                           "workflow": "support/order-status",
@@ -3446,14 +3570,14 @@
           },
           "400": {
             "$ref": "#/components/responses/badRequest",
-            "description": "The body is refused: not an object, no body at all, a ref outside git's rules for a ref name, an as outside the identifier grammar, null, or a field the route does not read; or a ref a branch and a tag of the repository both hold by that short name, written in full instead. Two credentials: a bearer token beside the session cookie, or two session cookies."
+            "description": "The body is refused: not an object, no body at all, a ref outside git's rules for a ref name, a ref that is a whole commit, an as outside the identifier grammar, null, or a field the route does not read; or a ref a branch and a tag of the repository both hold by that short name, written in full instead. A commit is refused because a member is read at a branch or a tag, so that it follows the workflow as its triggers follow the default branch. Two credentials: a bearer token beside the session cookie, or two session cookies."
           },
           "401": {
             "$ref": "#/components/responses/unauthorised"
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404."
+            "description": "A token narrowed by a scope, which reaches no collection, refused before the body is read and anything is looked up, whether the collection exists or not; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404."
           },
           "404": {
             "$ref": "#/components/responses/notFound",
@@ -3536,7 +3660,7 @@
                       "members": [
                         {
                           "workflow": "finance/monthly-invoicing",
-                          "tool": "create_invoice"
+                          "tool": "create_invoices"
                         },
                         {
                           "workflow": "finance/reconcile",
@@ -3559,7 +3683,7 @@
           },
           "403": {
             "$ref": "#/components/responses/forbidden",
-            "description": "A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404."
+            "description": "A token narrowed by a scope, which reaches no collection, refused before the body is read and anything is looked up, whether the collection exists or not; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404."
           },
           "404": {
             "$ref": "#/components/responses/notFound",
@@ -3575,7 +3699,7 @@
           "namespaces"
         ],
         "summary": "Create a namespace",
-        "description": "Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20 and the other five unset, so that what its runs produce is kept until somebody decides otherwise. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.",
+        "description": "Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20 and the other five unset, so that what its runs produce is kept until somebody decides otherwise. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words are refused by the grammar: those the API's first path segment routes on, and from v0.7.0 api, hooks, mcp and objects, whose addresses the API answers rather than the web console. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#scopes-and-resolution"
@@ -4094,7 +4218,7 @@
           "namespaces"
         ],
         "summary": "Set a namespace's picture",
-        "description": "Sets the namespace's picture in place of any before it, held to the rules of a user's photo: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it. Set by its owner, whoever holds grant:manage at its scope, a personal namespace's user among them, or an administrator. The record's avatar_updated_at says when it was set, which a client adds to the picture's address. Audited as namespace.avatar with the size it was stored at, and never the picture.",
+        "description": "Sets the namespace's picture in place of any before it, held to the rules of a user's photo: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. Pictures are re-encoded a few at a time in each process of the API, a user's photo and a namespace's picture alike, one for each processor and no more than a quarter of its memory holds at 64 MiB each, so that many sent at once cannot take the memory every other request needs; one that waits five seconds for its turn is refused, and stores nothing. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it. Set by its owner, whoever holds grant:manage at its scope, a personal namespace's user among them, or an administrator. The record's avatar_updated_at says when it was set, which a client adds to the picture's address. Audited as namespace.avatar with the size it was stored at, and never the picture.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#api"
@@ -4203,6 +4327,30 @@
                     "summary": "not a picture",
                     "value": {
                       "error": "the body is not a PNG or a JPEG that can be read, and a picture is one of the two"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Too many pictures are being re-encoded at once to take this picture within five seconds: nothing was stored, and the request may be sent again once Retry-After has passed.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/retryAfter",
+                "description": "One second: a re-encoding takes half a second at the most."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "busy": {
+                    "summary": "no turn to re-encode in time",
+                    "value": {
+                      "error": "this installation is re-encoding too many pictures at once to take this one in time: try again in a moment"
                     }
                   }
                 }
@@ -7968,14 +8116,14 @@
                             {
                               "step": "normalize",
                               "verdict": "succeeded",
-                              "started_at": "2026-09-30T05:40:12Z",
-                              "finished_at": "2026-09-30T05:41:02Z"
+                              "started_at": "2026-10-01T05:41:03Z",
+                              "finished_at": "2026-10-01T05:41:05Z"
                             },
                             {
                               "step": "invoice",
                               "verdict": "failed",
-                              "started_at": "2026-09-30T05:41:03Z",
-                              "finished_at": "2026-09-30T05:44:10Z"
+                              "started_at": "2026-10-01T05:41:05Z",
+                              "finished_at": "2026-10-01T05:42:55Z"
                             }
                           ]
                         },
@@ -7996,6 +8144,128 @@
                   },
                   "nothing": {
                     "summary": "a namespace the caller cannot read, or one with no run",
+                    "value": {
+                      "runs": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A state that is no run state, or a since or an until that is no time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "state": {
+                    "summary": "a state misspelt",
+                    "value": {
+                      "error": "\"failing\" is not a run state"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/runs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        }
+      ],
+      "get": {
+        "operationId": "listNamespaceRuns",
+        "tags": [
+          "runs"
+        ],
+        "summary": "List a namespace's runs",
+        "description": "GET /api/v1/runs within the namespace the path names: the runs of each of its workflows the caller holds run:read on, over the namespace or the workflow itself, newest first, each as the listing across namespaces answers it, narrowed by the same workflow, state, since, until and limit. The namespace is read from the path, a former name reaching it as its name does, and a namespace in the query is not read, since the path's is the only one its questions answer about. Every workflow of the namespace is asked about as one question, so that a namespace the caller holds nothing in lists nothing, as one that does not exist does, and asks what that one asks: a listing is no way of learning which namespaces and workflows exist, by what it answers or by how long it takes.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/runsWorkflow"
+          },
+          {
+            "$ref": "#/components/parameters/runsState"
+          },
+          {
+            "$ref": "#/components/parameters/runsSince"
+          },
+          {
+            "$ref": "#/components/parameters/runsUntil"
+          },
+          {
+            "$ref": "#/components/parameters/runsLimit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The namespace's runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runList"
+                },
+                "examples": {
+                  "runs": {
+                    "summary": "a failed run and a running one",
+                    "value": {
+                      "runs": [
+                        {
+                          "namespace": "finance",
+                          "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                          "workflow": "monthly-invoicing",
+                          "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                          "state": "failed",
+                          "trigger_kind": "manual",
+                          "triggered_by": "alice",
+                          "created_at": "2026-10-01T05:41:03Z",
+                          "started_at": "2026-10-01T05:41:03Z",
+                          "finished_at": "2026-10-01T05:42:55Z",
+                          "steps": [
+                            {
+                              "step": "normalize",
+                              "verdict": "succeeded",
+                              "started_at": "2026-10-01T05:41:03Z",
+                              "finished_at": "2026-10-01T05:41:05Z"
+                            },
+                            {
+                              "step": "invoice",
+                              "verdict": "failed",
+                              "started_at": "2026-10-01T05:41:05Z",
+                              "finished_at": "2026-10-01T05:42:55Z"
+                            }
+                          ]
+                        },
+                        {
+                          "namespace": "finance",
+                          "run": "01JMZ8S3H6X8QK2N4D6F8H0A2C",
+                          "workflow": "ledger-export",
+                          "commit": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
+                          "state": "running",
+                          "trigger_kind": "webhook",
+                          "triggered_by": "finance/agentiik",
+                          "created_at": "2026-10-01T05:28:44Z",
+                          "started_at": "2026-10-01T05:28:45Z",
+                          "steps": []
+                        }
+                      ]
+                    }
+                  },
+                  "nothing": {
+                    "summary": "a namespace the caller holds nothing in, one that does not exist, or one with no run",
                     "value": {
                       "runs": []
                     }
@@ -8168,6 +8438,154 @@
           },
           "404": {
             "$ref": "#/components/responses/notFound"
+          }
+        }
+      }
+    },
+    "/api/v1/{ns}/runs/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ns"
+        },
+        {
+          "$ref": "#/components/parameters/runId"
+        }
+      ],
+      "get": {
+        "operationId": "getNamespaceRun",
+        "tags": [
+          "runs"
+        ],
+        "summary": "Read a run under its namespace",
+        "description": "The run at the path the Location of startRun, cancelRun and replayRun names it by: the answer GET /api/v1/runs/{id} gives, authorised the same way, over the run's own workflow rather than over the namespace, so that run:read held on that workflow alone reads it and a deny of run:read on it refuses it. A run of another namespace than the path names is answered as one that does not exist, before anything is asked about the namespace it is in, so that the path is no way of learning where a run is. A former name of the namespace reaches it as its name does. Its inputs are envelope contents, answered only to a caller holding run:read_data on the run's workflow and otherwise left out. Requires run:read on the run's workflow.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#api"
+        },
+        "responses": {
+          "200": {
+            "description": "The run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/runDetail"
+                },
+                "examples": {
+                  "failed": {
+                    "summary": "a run whose invoice step failed",
+                    "value": {
+                      "namespace": "finance",
+                      "run": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+                      "workflow": "monthly-invoicing",
+                      "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
+                      "state": "failed",
+                      "trigger_kind": "manual",
+                      "triggered_by": "alice",
+                      "created_at": "2026-10-01T05:41:03Z",
+                      "started_at": "2026-10-01T05:41:03Z",
+                      "finished_at": "2026-10-01T05:42:55Z",
+                      "inputs": {
+                        "orders": {
+                          "meta": {
+                            "count": 214
+                          }
+                        }
+                      },
+                      "replay_from_start_only": false,
+                      "steps": [
+                        {
+                          "step": "normalize",
+                          "verdict": "succeeded",
+                          "attempts": 1,
+                          "started_at": "2026-10-01T05:41:03Z",
+                          "finished_at": "2026-10-01T05:41:05Z",
+                          "ports": {
+                            "ok": {
+                              "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                              "size": 10412,
+                              "items": 214
+                            }
+                          }
+                        },
+                        {
+                          "step": "invoice",
+                          "verdict": "failed",
+                          "attempts": 2,
+                          "started_at": "2026-10-01T05:41:05Z",
+                          "finished_at": "2026-10-01T05:42:55Z",
+                          "ports": {
+                            "out": {
+                              "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                              "size": 4212,
+                              "items": 211
+                            },
+                            "error": {
+                              "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+                              "size": 212,
+                              "items": 3
+                            }
+                          },
+                          "image": "ghcr.io/acme/agk-invoice@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+                          "input_ports": [
+                            "orders"
+                          ],
+                          "output_ports": [
+                            "out",
+                            "error"
+                          ]
+                        },
+                        {
+                          "step": "archive",
+                          "verdict": "pending",
+                          "attempts": 0
+                        }
+                      ],
+                      "tasks": [
+                        {
+                          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+                          "step": "normalize",
+                          "state": "succeeded",
+                          "attempt": 1,
+                          "runner": "runner-dmz-02",
+                          "exit_code": 0,
+                          "started_at": "2026-10-01T05:41:03Z",
+                          "finished_at": "2026-10-01T05:41:05Z"
+                        },
+                        {
+                          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+                          "step": "invoice",
+                          "state": "failed",
+                          "attempt": 2,
+                          "shard": {
+                            "index": 3,
+                            "of": 8
+                          },
+                          "runner": "runner-dmz-02",
+                          "exit_code": 108,
+                          "started_at": "2026-10-01T05:42:24Z",
+                          "finished_at": "2026-10-01T05:42:32Z",
+                          "inputs": {
+                            "in": {
+                              "digest": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                              "size": 10412,
+                              "items": 27
+                            }
+                          }
+                        }
+                      ],
+                      "artifacts": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/unauthorised"
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound",
+            "description": "No such run, one the caller may not read, or a run of another namespace than the path names: the same answer for each, so that asking teaches nothing."
           }
         }
       }
@@ -10094,7 +10512,7 @@
           "runs"
         ],
         "summary": "Fetch an artifact",
-        "description": "Fetches one artifact by the URI an envelope names it with: a redirect to a presigned URL good for 5 minutes where it has no fetch budget, so that the bytes never touch the control plane; the bytes themselves where it has one, since a redirect would spend a fetch on a client that never arrived. A fetch counts when the transfer completes, is held while it goes and given back where it does not; one held while every fetch left is being served is answered 409. Expired, or with its budget spent, it is 410 rather than 404, so that a client tells this existed and is finished from this never existed, and the run detail keeps showing it. A HEAD is answered what a GET would be, bytes aside, and spends nothing. A Range is not honoured. Requires run:read_data on the workflow of the run that published it, a run of another namespace answered as one that does not exist.",
+        "description": "Fetches one artifact by the URI an envelope names it with: a redirect to a presigned URL good for 5 minutes where it has no fetch budget, so that the bytes never touch the control plane; the bytes themselves where it has one, since a redirect would spend a fetch on a client that never arrived. A fetch counts when the transfer completes, is held while it goes and given back where it does not; one held while every fetch left is being served is answered 409. Expired, or with its budget spent, it is 410 rather than 404, so that a client tells this existed and is finished from this never existed, and the run detail keeps showing it. A HEAD is answered what a GET would be, bytes aside, and spends nothing. A browser's session spends a budget only from the public URL's pages, where Sec-Fetch-Site is same-origin, or none for the address bar and a bookmark, or, where the browser sends no Sec-Fetch-Site, its one Origin header is the public URL's origin, and is answered 403 otherwise, a HEAD too, before any fetch is held: SameSite=Lax carries the cookie on a link followed from another site and on an image on another host of the same site, so whoever posted one would otherwise spend the budget for whoever followed or loaded it. A bearer token, which no page carries, and an artifact with no budget, are answered from anywhere. A Range is not honoured. Requires run:read_data on the workflow of the run that published it, a run of another namespace answered as one that does not exist.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#artifact-expiry"
@@ -10137,6 +10555,24 @@
           },
           "401": {
             "$ref": "#/components/responses/unauthorised"
+          },
+          "403": {
+            "description": "A browser's session asking for an artifact with a fetch budget from anywhere but the public URL's pages, or from a browser that does not say where the request comes from, refused before any fetch is held.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                },
+                "examples": {
+                  "from elsewhere": {
+                    "summary": "a link followed from another site, or an image on another host of the same site",
+                    "value": {
+                      "error": "a session spends an artifact's fetch only from this installation's pages, and this request comes from another site, or does not say where it comes from, as a browser that sends no Sec-Fetch-Site header does: download it from the console, or with an API token"
+                    }
+                  }
+                }
+              }
+            }
           },
           "404": {
             "description": "No such artifact, never written or in a run the caller may not read.",
@@ -13255,7 +13691,7 @@
             "items": {
               "$ref": "wire.schema.json#/$defs/notification"
             },
-            "description": "What the installation has to tell the caller, newest first: an administrator having written a grant in a namespace the caller owns by the installation's power, put a user in a group holding a role there, or widened their own access there, each with the act and who did it, told to the other administrators too where the namespace had nobody to tell; a sign-in refused for one of the caller's passkeys' signature counters; and a recovery code agentiik-api recover issued an administrator, told to every administrator. Each is kept 90 days from when it was written, or until the caller dismisses it with DELETE /api/v1/me/notifications/{id}; one past its days is removed as this is read. Empty through a token narrowed by a scope, which reads none.",
+            "description": "What the installation has to tell the caller, newest first: an administrator having written a grant in a namespace the caller owns by the installation's power, put a user in a group holding a role there, or widened their own access there, each with the act and who did it, told to the other administrators too where the namespace had nobody to tell; a sign-in refused for one of the caller's passkeys' signature counters; a recovery code agentiik-api recover issued an administrator, told to every administrator; and a recovery code issued the caller, and that code spent, told to the caller alone. Each is kept 90 days from when it was written, or until the caller dismisses it with DELETE /api/v1/me/notifications/{id}, which a recovery code's never is; one past its days is removed as this is read. Empty through a token narrowed by a scope, which reads none.",
             "examples": [
               [],
               [
@@ -15742,8 +16178,9 @@
           "message": {
             "type": "string",
             "minLength": 1,
-            "pattern": "\\S",
-            "description": "The commit's message, which git log shows beside it: one character at least that is not a blank. Written with one line feed ending it; the commit workflow.commit makes carries a Via: mcp trailer besides, so that git log says what arrived through MCP.",
+            "$comment": "The class is Unicode's White_Space property, which Go's strings.TrimSpace trims before the core asks whether a message says anything (api/commits.go), so that the document refuses exactly what the core refuses: \\S would be a different set in each engine, ASCII blanks alone in RE2, and in ECMA-262 one without U+0085 and with U+FEFF, which TrimSpace keeps. The same class holds an mcp tool's description in workflow.schema.json.",
+            "pattern": "[^\\x09-\\x0d\\x20\\x85\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]",
+            "description": "The commit's message, which git log shows beside it: one character at least that is not white space, as Unicode counts it. Written with one line feed ending it; the commit workflow.commit makes carries a Via: mcp trailer besides, so that git log says what arrived through MCP.",
             "examples": [
               "Normalize with the pinned image",
               "Add the reminder script"
@@ -19904,14 +20341,14 @@
                     {
                       "step": "normalize",
                       "verdict": "succeeded",
-                      "started_at": "2026-09-30T05:40:12Z",
-                      "finished_at": "2026-09-30T05:41:02Z"
+                      "started_at": "2026-10-01T05:41:03Z",
+                      "finished_at": "2026-10-01T05:41:05Z"
                     },
                     {
                       "step": "invoice",
                       "verdict": "failed",
-                      "started_at": "2026-09-30T05:41:03Z",
-                      "finished_at": "2026-09-30T05:44:10Z"
+                      "started_at": "2026-10-01T05:41:05Z",
+                      "finished_at": "2026-10-01T05:42:55Z"
                     }
                   ]
                 },
@@ -19950,14 +20387,14 @@
                   {
                     "step": "normalize",
                     "verdict": "succeeded",
-                    "started_at": "2026-09-30T05:40:12Z",
-                    "finished_at": "2026-09-30T05:41:02Z"
+                    "started_at": "2026-10-01T05:41:03Z",
+                    "finished_at": "2026-10-01T05:41:05Z"
                   },
                   {
                     "step": "invoice",
                     "verdict": "failed",
-                    "started_at": "2026-09-30T05:41:03Z",
-                    "finished_at": "2026-09-30T05:44:10Z"
+                    "started_at": "2026-10-01T05:41:05Z",
+                    "finished_at": "2026-10-01T05:42:55Z"
                   }
                 ]
               },
@@ -21601,7 +22038,7 @@
                   "members": [
                     {
                       "workflow": "finance/monthly-invoicing",
-                      "tool": "create_invoice"
+                      "tool": "create_invoices"
                     },
                     {
                       "workflow": "support/order-status",
@@ -21631,7 +22068,7 @@
                 "members": [
                   {
                     "workflow": "finance/monthly-invoicing",
-                    "tool": "create_invoice"
+                    "tool": "create_invoices"
                   },
                   {
                     "workflow": "support/order-status",
