@@ -128,9 +128,13 @@ describe("the inspector's keys", () => {
     s[`POST /api/v1/runs/${failed}/replay`] = { status: 202, body: { run: replay, state: "queued", commit: "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2c4e6b8d01", replay_of: failed, replay_from: "invoice" } };
     const { asked, place } = open(`/finance/runs/${failed}`, s);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
+    const step = await screen.findByRole("button", { name: "Replay from this step" });
     await press("p");
-    expect(screen.getByText("Replay this run from invoice?")).toBeTruthy();
-    expect(line().slice(0, 2)).toEqual(["y Replay from this step", "nesc Keep it"]);
+    // Keep before the same button turned red, the other acts left where they were.
+    expect(screen.getByRole("button", { name: "Replay from this step" })).toBe(step);
+    expect(step.classList.contains("danger")).toBe(true);
+    expect([...step.parentElement!.querySelectorAll("button")].map((b) => b.textContent!.trim())).toEqual(["Keep", "Replay from this step", "Replay from the start", "Compare with another run"]);
+    expect(line().slice(0, 2)).toEqual(["y Replay from this step", "nesc Keep"]);
     await press("x");
     await press("n");
     expect(screen.queryByText(/A new run starts there/)).toBeNull();
@@ -149,8 +153,10 @@ describe("the inspector's keys", () => {
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     expect(line()).toContain("c Cancel run");
     await press("c");
-    expect(screen.getByText("Cancel this run?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel run" }).classList.contains("danger")).toBe(true);
+    expect(line().slice(0, 2)).toEqual(["y Cancel run", "nesc Keep"]);
     await press("Escape");
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
     expect(screen.queryByText(/Its tasks in flight are stopped/)).toBeNull();
     await press("c");
     await press("y");

@@ -160,14 +160,13 @@
 
   {#if manages && !personal}
     <Pane title="Delete namespace" label="Delete namespace">
-      <span class="confirm">
-        {#if asking}
-          <button class="control danger" disabled={working} onclick={remove}><Icon name="control-remove" size={14} />Delete</button>
-          <button class="control" onclick={() => (asking = false)}>Keep</button>
-        {:else}
-          <button class="control danger" onclick={() => (asking = true)}><Icon name="control-remove" size={14} />Delete</button>
-        {/if}
-      </span>
+      <p class="remove">
+        <span class="term">{namespace}</span>
+        <span class="confirm">
+          {#if asking}<button class="control" onclick={() => (asking = false)}>Keep</button>{/if}
+          <button class="control" class:danger={asking} disabled={working} onclick={asking ? remove : () => (asking = true)}><Icon name="control-remove" size={14} />Delete</button>
+        </span>
+      </p>
     </Pane>
   {/if}
 </div>
@@ -225,9 +224,21 @@
     gap: calc(var(--unit) * 4);
   }
 
+  /* Delete sits at the end of the namespace's row, as a table row's acts do, so that the Keep its
+     second click is asked with, drawn before it, leaves it where the pointer found it. */
+  .remove {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--unit) * 3) calc(var(--unit) * 6);
+    margin: 0;
+    font-size: var(--type-control-size);
+  }
+
   .confirm {
     display: inline-flex;
     gap: calc(var(--unit) * 2);
+    margin-left: auto;
   }
 
   .control.danger {

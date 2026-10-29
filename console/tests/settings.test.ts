@@ -209,6 +209,19 @@ describe("removing a namespace", () => {
     expect(await screen.findByText(/Finance still holds 2 workflows, monthly-invoicing and payment-reminders: remove or move them first\./)).toBeTruthy();
   });
 
+  it("turns Delete red only at the second click, Keep drawn before it", async () => {
+    open("/finance/settings", owning());
+    const pane = await screen.findByRole("region", { name: "Delete namespace" });
+    const remove = within(pane).getByRole("button", { name: "Delete" });
+    expect(remove.classList.contains("danger")).toBe(false);
+    await fireEvent.click(remove);
+    expect(within(pane).getByRole("button", { name: "Delete" })).toBe(remove);
+    expect(remove.classList.contains("danger")).toBe(true);
+    expect(within(pane).getAllByRole("button").map((b) => b.textContent!.trim())).toEqual(["Keep", "Delete"]);
+    await fireEvent.click(within(pane).getByRole("button", { name: "Keep" }));
+    expect(remove.classList.contains("danger")).toBe(false);
+  });
+
   it("goes home once it is gone", async () => {
     const s = owning();
     s["DELETE /api/v1/namespaces/finance"] = { status: 204 };

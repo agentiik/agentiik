@@ -59,6 +59,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The editor opens as an entry of the history, so that Back closes it, and asks before its changes are lost: Stop editing turns red beside Keep, and a link or Back to another screen waits for Keep or Leave, where all three dropped the changes with nothing asked, the page reloaded or closed being the one case the browser asked about.
 - The users screen lists each user's sign-in methods from `GET /api/v1/users/{login}/credentials`, synced or device-bound, with when each was enrolled and last used, and removes none. `vendor/openapi.json` is taken from the schemas commit that describes the route.
 - Each view of the sidebar keeps its digit in every namespace: a view the principal cannot use is left out with its digit, rather than passing it to the view after it, so that `3` opens Sharing wherever it is shown and nothing where it is not.
+- A confirmation draws Keep before the same button turned red, so that the button clicked stays where it was and the second click lands on it: Cancel run and Replay from this step, at the end of the run's line, Delete of a namespace's settings, red only once asked, at the end of the namespace's row, and Save of the sign-in policy, what it takes away said under it. Cancel run drew a question before itself, which a second click landed on, Replay drew a question and a blue button, and Delete was red before it was asked and came before Keep.
 
 ### Command line
 
