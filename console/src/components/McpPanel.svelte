@@ -5,6 +5,7 @@
   import type { Graph } from "../lib/graph";
   import { explain, type Explained } from "../lib/problem";
   import { toolOf } from "../lib/tool";
+  import Notice from "./Notice.svelte";
   import Problem from "./Problem.svelte";
 
   // The tool a workflow is, exactly as a client of a collection holding it sees it: its name,
@@ -20,14 +21,16 @@
   const served = mcpServed(document);
 
   let collections = $state<Collection[] | null>(null);
+  let unread = $state<Explained | null>(null);
   let problem = $state<Explained | null>(null);
   let adding = $state("");
 
   async function reread() {
+    unread = null;
     try {
       collections = await collectionsOf(api);
     } catch (e) {
-      problem = explain("load your collections", e);
+      unread = explain("load your collections", e);
     }
   }
 
@@ -75,10 +78,13 @@
   <p class="muted">No tool</p>
 {/if}
 
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
+
 <section class="collections" aria-label="Your collections">
   <p class="label">Your collections</p>
-  {#if problem}<Problem explained={problem} />{/if}
-  {#if collections === null}
+  {#if unread}
+    <Problem explained={unread} onretry={reread} />
+  {:else if collections === null}
     <p class="muted">Loading</p>
   {:else}
     <table>

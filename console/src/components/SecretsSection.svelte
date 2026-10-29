@@ -176,7 +176,6 @@
 
 {#if reads && writes}
   <Dialog title={rotating ? `Rotate ${rotating}` : "Declare a secret"} open={writing} onclose={() => ((declaring = false), (rotating = ""))}>
-    {#if problem}<Problem explained={problem} />{/if}
     <form onsubmit={declare} aria-label={rotating ? `Rotate ${rotating}` : "Declare a secret"}>
       {#if !rotating}
         <label>
@@ -207,6 +206,7 @@
         {#if rotating}<button class="control" type="button" onclick={() => (rotating = "")}>Cancel</button>{/if}
       </span>
     </form>
+    {#if problem}<Problem explained={problem} />{/if}
   </Dialog>
 {/if}
 

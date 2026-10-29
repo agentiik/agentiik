@@ -93,6 +93,7 @@ describe("a namespace's sign-in policy", () => {
     await fireEvent.change(within(form).getByRole("combobox", { name: "password" }), { target: { value: "forbidden" } });
     await fireEvent.submit(form);
     expect(await within(form).findByText("Policy saved.")).toBeTruthy();
+    expect(within(form).getByText("Policy saved.").closest(".notice")).toBeTruthy();
     await waitFor(() => expect(asked).toEqual([{ key: "PUT /api/v1/finance/auth/policy", body: { password: "forbidden", device_bound_only: true } }]));
   });
 });

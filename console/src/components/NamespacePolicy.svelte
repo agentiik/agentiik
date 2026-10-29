@@ -3,6 +3,7 @@
   import { policyOf, type Policy } from "../lib/credentials";
   import { explain, type Explained } from "../lib/problem";
   import Pane from "./Pane.svelte";
+  import Notice from "./Notice.svelte";
   import Problem from "./Problem.svelte";
 
   // A namespace's tightening of the sign-in policy, in its settings: what applies to an account
@@ -139,12 +140,13 @@
         <span class="term">min_passkeys</span>
         <input type="number" min={installation.min_passkeys} step="1" bind:value={minimum} placeholder={`${installation.min_passkeys}, as the installation`} />
       </label>
-      {#if problem}<Problem explained={problem} />{/if}
-      {#if said}<p class="said" role="status">{said}</p>{/if}
       <div class="field">
         <span></span>
         <span><button class="control primary" disabled={working || !changed}>Save</button></span>
       </div>
+      <!-- What Save did is said under it, never above, where it would push Save down the page. -->
+      {#if problem}<Problem explained={problem} />{/if}
+      {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
     </form>
   {:else}
     <dl class="read">
@@ -209,10 +211,6 @@
     background: var(--raised);
     color: var(--text);
     font-size: var(--type-control-size);
-  }
-
-  .said {
-    margin: 0;
   }
 
   @media (max-width: 759px) {

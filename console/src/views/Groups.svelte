@@ -176,7 +176,6 @@
 </Pane>
 
 <Dialog title="New group" bind:open={creating}>
-  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={create} aria-label="Create a group">
     <label>
       <span>Name</span>
@@ -188,6 +187,7 @@
     </label>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create the group</button></p>
   </form>
+  {#if problem}<Problem explained={problem} />{/if}
 </Dialog>
 
 <style>

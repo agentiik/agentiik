@@ -73,7 +73,6 @@
     </p>
   </div>
 {:else}
-  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={issue} aria-label="Add a runner">
     <label>
       <span>Pool</span>
@@ -95,6 +94,7 @@
     </fieldset>
     <p class="buttons"><button class="control primary" disabled={working || !chosen}><Icon name="control-add" size={14} />Issue a join token</button></p>
   </form>
+  {#if problem}<Problem explained={problem} />{/if}
 {/if}
 
 <style>

@@ -409,7 +409,6 @@
 </div>
 
 <Dialog title="Commit" bind:open={committing}>
-  {#if commitProblem}<Problem explained={commitProblem} />{/if}
   <form class="form" onsubmit={send} aria-label="Commit">
     <label><span>Message</span><textarea bind:value={message} class="message" rows="3" required></textarea></label>
     {#if commit === null}
@@ -428,6 +427,7 @@
     {/if}
     <p class="buttons"><button class="control primary" disabled={pushing}>Commit</button></p>
   </form>
+  {#if commitProblem}<Problem explained={commitProblem} />{/if}
 </Dialog>
 
 <Dialog title="Add a step" bind:open={adding}>

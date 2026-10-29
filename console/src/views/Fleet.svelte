@@ -170,7 +170,6 @@
 
 <Dialog title={ordering?.order === "revoke" ? "Revoke a runner" : "Drain a runner"} open={ordering !== null} onclose={() => (ordering = null)}>
   {#if ordering}
-    {#if refusedOrder}<Problem explained={refusedOrder} />{/if}
     <form class="order-form" onsubmit={give} aria-label={ordering.order === "revoke" ? "Revoke a runner" : "Drain a runner"}>
       <p class="term">{ordering.runner}</p>
       <label>
@@ -185,6 +184,7 @@
         {/if}
       </p>
     </form>
+    {#if refusedOrder}<Problem explained={refusedOrder} />{/if}
   {/if}
 </Dialog>
 

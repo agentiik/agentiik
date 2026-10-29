@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
@@ -245,6 +245,10 @@ describe("acting on a run", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(await screen.findByText("Cancelling.")).toBeTruthy();
     expect(asked.filter((a) => a.key === `POST /api/v1/runs/${failed}/cancel`)).toHaveLength(1);
+    // What the act did is said at the foot of the screen, and nothing is put in the pane above the
+    // steps, which it would push down under the pointer.
+    expect(screen.getByText("Cancelling.").closest(".notice")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Run" })).queryByText("Cancelling.")).toBeNull();
   });
 
   it("replays a run that ended from the step chosen, and opens the run it started", async () => {
@@ -274,6 +278,8 @@ describe("acting on a run", () => {
     open(`/finance/runs/${failed}`, s);
     await fireEvent.click(await screen.findByRole("button", { name: "Replay from this step" }));
     expect(await screen.findByText("a step above invoice never ended.")).toBeTruthy();
+    expect(screen.getByText("a step above invoice never ended.").closest(".notice")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Run" })).queryByRole("alert")).toBeNull();
   });
 
   it("offers neither to a principal without workflow:run", async () => {

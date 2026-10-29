@@ -218,7 +218,6 @@
 
 {#if reads && writes}
   <Dialog title={editing ? `Edit ${editing}` : "New variable"} open={writing} width={560} onclose={close}>
-    {#if problem}<Problem explained={problem} />{/if}
     <form onsubmit={save} aria-label={editing ? `Edit ${editing}` : "New variable"}>
       {#if !editing}
         <label>
@@ -258,6 +257,7 @@
         <button class="control primary" disabled={working}>Save</button>
       </span>
     </form>
+    {#if problem}<Problem explained={problem} />{/if}
   </Dialog>
 {/if}
 
