@@ -308,6 +308,11 @@ func noticeLine(n api.Notification) string {
 		// Told to every administrator, the one recovered among them: whoever did not run it learns
 		// that whoever holds the host did.
 		return fmt.Sprintf("told %s at %s: agentiik-api recover, run on the installation's host, issued %s, an administrator, a recovery code", n.ID, when, n.Login)
+	case n.Kind == "recovery_code_issued" && n.By != "":
+		// Told to the user alone, who is the one who knows whether they asked for it.
+		return fmt.Sprintf("told %s at %s: %s issued you a recovery code, which enrols a passkey or sets a password on your account for whoever holds it, within the hour; if you did not ask for one, tell another administrator", n.ID, when, n.By)
+	case n.Kind == "recovery_code_used" && n.By != "" && n.Credential != "":
+		return fmt.Sprintf("told %s at %s: a recovery code %s issued you enrolled %s on your account; if that was not you, remove it from your sign-in methods and tell another administrator", n.ID, when, n.By, n.Credential)
 	}
 	return fmt.Sprintf("told %s at %s: %s", n.ID, when, n.Kind)
 }

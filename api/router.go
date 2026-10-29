@@ -771,10 +771,12 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		}
 	}
 	// Set on every route, seeing nothing where the route neither takes OnNamespace nor declares
-	// Needs.Seeing, and administering nowhere a route does not let an administrator through by
-	// the power alone, for the reason the questions below are.
+	// Needs.Seeing, administering nowhere a route does not let an administrator through by the
+	// power alone, and spending wherever the credential is not a session carried from elsewhere,
+	// for the reason the questions below are.
 	r = r.WithContext(context.WithValue(r.Context(), seesKey{}, sees))
 	r = r.WithContext(context.WithValue(r.Context(), administeringKey{}, administering))
+	r = r.WithContext(context.WithValue(r.Context(), spendsKey{}, !as.Elsewhere))
 	// Set on every route, to a question answered false where the route declares none, so that a
 	// request built from this one and served again, as a facade over the API would serve one,
 	// asks what its own route declared rather than what this one did.

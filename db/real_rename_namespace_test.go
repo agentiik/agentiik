@@ -316,3 +316,46 @@ func TestEveryColumnNamingANamespaceFollowsARename(t *testing.T) {
 		t.Errorf("%s names a namespace, and no key carries a rename to it: give it one onto namespaces, or onto what names one, ON UPDATE CASCADE, or have RenameNamespace write it", k.column)
 	}
 }
+
+// Every column holding a key onto a principal is written by a rename, or is a principal's own key,
+// for a reason given here. A rename writes the principals of a namespace's service accounts anew
+// and deletes those under the old name, so a table added later with a key onto principals and left
+// out of principalColumns fails here, rather than every rename failing on its key, or deleting its
+// rows where the key cascades, as collections did.
+func TestEveryKeyOntoAPrincipalFollowsARename(t *testing.T) {
+	_, super := opened(t)
+	rows, err := superuser(t, super).Query(t.Context(), `
+		select c.relname || '.' || a.attname
+		from pg_constraint k
+		join pg_class c on c.oid = k.conrelid
+		join pg_namespace s on s.oid = c.relnamespace and s.nspname = current_schema()
+		join pg_attribute ra on ra.attrelid = k.confrelid and ra.attname = 'id'
+		join pg_attribute a on a.attrelid = k.conrelid and a.attnum = k.conkey[array_position(k.confkey, ra.attnum)]
+		where k.contype = 'f' and k.confrelid = 'principals'::regclass
+		order by 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyed, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := map[string]string{
+		"users.login":                "a login, which names no namespace",
+		"groups.principal":           "a group, which names no namespace",
+		"service_accounts.principal": "generated from the service account's namespace and name, which a key carries",
+	}
+	written := map[string]bool{}
+	for _, c := range principalColumns {
+		written[c.table+"."+c.column] = true
+	}
+	for _, column := range keyed {
+		if _, ok := own[column]; !ok && !written[column] {
+			t.Errorf("%s holds a key onto a principal, which a rename of a namespace writes anew for its service accounts and deletes under the old name: list it in principalColumns", column)
+		}
+	}
+	// More than the principals' own keys, so that a query finding none of the others cannot pass.
+	if len(keyed) < 5 {
+		t.Fatalf("only %v hold a key onto a principal, and more do", keyed)
+	}
+}

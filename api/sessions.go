@@ -72,6 +72,15 @@ const (
 	// URL's pages alone.
 	crossOrigin = "a session changes something only from the pages of this installation's public URL, and this request's Origin header names another or none"
 
+	// spentElsewhere is a read that would spend an artifact's fetch, carried with a session from
+	// anywhere but the public URL's pages, or from a browser that does not say where it comes
+	// from. SameSite=Lax lets a link followed from another site carry the cookie, and an image
+	// on another host of the same site, so that whoever follows or loads one would spend a fetch
+	// whose bytes go to them, until the budget is gone for everybody. A browser that sends neither
+	// Sec-Fetch-Site nor Origin on a GET cannot be told from such a page, and is refused it too,
+	// since the budget is what is at stake; a token, which no page carries, spends as it did.
+	spentElsewhere = "a session spends an artifact's fetch only from this installation's pages, and this request comes from another site, or does not say where it comes from, as a browser that sends no Sec-Fetch-Site header does: download it from the console, or with an API token"
+
 	// enrolsOnly is a session opened to enrol a passkey, anywhere else, the OpenAPI document's
 	// sentence for it.
 	enrolsOnly = "this session enrols passkeys and nothing else"
@@ -177,7 +186,8 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 //
 // A request changing something is refused before the session is looked up where it does not come
 // from the public URL's origin, so that a page of another host neither acts on the session nor
-// keeps it open.
+// keeps it open. A safe one is answered from anywhere, and marked Elsewhere where it does not come
+// from those pages, so that it spends nothing a read spends (fromPages).
 //
 // What a session a password opened may do is read from the policy that applies to its account now,
 // so that a policy changed applies from the next request, as do passkeys enrolled from the session:
@@ -200,6 +210,7 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 			return Identity{Refused: crossOrigin, RefusedAs: http.StatusForbidden}, nil
 		}
 	}
+	elsewhere := safe(r.Method) && !p.fromPages(r)
 	hash := sha256.Sum256([]byte(value))
 	now := p.now()
 	as := Identity{Refused: noSession}
@@ -238,7 +249,10 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 			}
 			ending = !b.Ended()
 		}
-		as = Identity{Principal: Principal(s.Login), Enrolling: enrolling, ProvedAt: s.CreatedAt}
+		as = Identity{
+			Principal: Principal(s.Login), Enrolling: enrolling, ProvedAt: s.CreatedAt, OpenedBy: s.Credential,
+			Elsewhere: elsewhere,
+		}
 		return nil
 	})
 	if err != nil {
@@ -250,6 +264,20 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 		}
 	}
 	return as, nil
+}
+
+// fromPages says whether a request comes from the pages of the public URL, or from the address bar
+// or a bookmark, as the browser that sent it says: Sec-Fetch-Site same-origin or none, where it sends
+// one, since a browser writes it and no page can; and where it sends none, an Origin header that is
+// the public URL's origin. A browser sends no Origin on a GET from its own origin, so one sending
+// neither header says nothing of where it comes from, and is not taken to come from these pages.
+// More than one value of either is a client confused about where it is, and is not either.
+func (p *Principals) fromPages(r *http.Request) bool {
+	if sites := r.Header.Values("Sec-Fetch-Site"); len(sites) > 0 {
+		return len(sites) == 1 && (sites[0] == "same-origin" || sites[0] == "none")
+	}
+	origins := r.Header.Values("Origin")
+	return len(origins) == 1 && origins[0] == p.origin
 }
 
 // sessionOpens says whether s opens anything at now, and whether it may only enrol, read from the
@@ -318,12 +346,12 @@ func (p *Principals) endBootstrapAtSession(ctx context.Context, login string, ha
 }
 
 // proofLife is how recently a session has to have been signed in to for a credential that lasts to
-// be added from it: a first password, a TOTP generator, a passkey registered from the session. Ten
-// minutes, the time the page's steps take from a sign-in, and short enough that a session left open
-// on a shared machine, or a cookie carried off, is not enough to give whoever holds it a way in of
-// their own that outlives the session. A sign-in again opens a session of its own, which proves
-// possession anew: see Identity.ProvedAt. A password changed proves the one it replaces instead,
-// which is sent beside it.
+// be added from it: a first password, a TOTP generator, a passkey registered from the session, an
+// API token minted from it. Ten minutes, the time the page's steps take from a sign-in, and short
+// enough that a session left open on a shared machine, or a cookie carried off, is not enough to
+// give whoever holds it a way in of their own that outlives the session. A sign-in again opens a
+// session of its own, which proves possession anew: see Identity.ProvedAt. A password changed
+// proves the one it replaces instead, which is sent beside it.
 const proofLife = 10 * time.Minute
 
 // signInAgain is a credential that lasts, asked for from a session signed in to longer ago than

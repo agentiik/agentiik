@@ -498,3 +498,111 @@ func TestTheBreakGlassPathIsToldToEveryAdministrator(t *testing.T) {
 		t.Errorf("%d notifications of dan outlived him", left)
 	}
 }
+
+// A recovery code issued a user, and that code spent, are told to that user and nobody else, with who
+// issued it and, once spent, the credential it enrolled, and nothing of the other kinds; neither is
+// dismissed, by the user, whose sessions whoever spent the code may hold, or by anybody else, and both
+// are kept their 90 days; and a notice of either is refused a shape the kind does not carry, so that
+// no row could hold a code or a link.
+func TestARecoveryCodeIsToldToItsUser(t *testing.T) {
+	pool := identity(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []User{
+			{Login: "bob", Profile: Profile{GivenName: "Bob"}}, {Login: "carol", Profile: Profile{GivenName: "Carol"}, Admin: true},
+			{Login: "erin", Profile: Profile{GivenName: "Erin"}, Admin: true},
+		} {
+			if err := w.CreateUser(ctx, u); err != nil {
+				return err
+			}
+		}
+		if err := w.TellRecoveryIssued(ctx, "bob", "carol", now); err != nil {
+			return err
+		}
+		return w.TellRecoveryUsed(ctx, "bob", "carol", "bmV3UGFzc2tleQ", now.Add(time.Minute))
+	})
+	read := func(recipient string) []Notification {
+		t.Helper()
+		var notes []Notification
+		wide(t, pool, func(ctx context.Context, w *Wide) error {
+			var err error
+			notes, err = w.NotificationsOf(ctx, recipient, now.Add(time.Hour))
+			return err
+		})
+		return notes
+	}
+	bob := read("bob")
+	if len(bob) != 2 {
+		t.Fatalf("bob is told %+v", bob)
+	}
+	used, issued := bob[0], bob[1]
+	if used.Kind != RecoveryCodeUsed || used.By != "carol" || used.Credential != "bmV3UGFzc2tleQ" || !used.At.Equal(now.Add(time.Minute)) ||
+		used.Namespace != "" || used.Grant != nil || used.Act != "" || used.Login != "" {
+		t.Errorf("bob is told of the code spent as %+v", used)
+	}
+	if issued.Kind != RecoveryCodeIssued || issued.By != "carol" || !issued.At.Equal(now) ||
+		issued.Credential != "" || issued.Namespace != "" || issued.Grant != nil || issued.Act != "" || issued.Login != "" {
+		t.Errorf("bob is told of the code issued as %+v", issued)
+	}
+	for _, other := range []string{"carol", "erin"} {
+		if n := read(other); len(n) != 0 {
+			t.Errorf("%s, who is not the user, is told %+v", other, n)
+		}
+	}
+
+	// Dismissed by nobody: carol, who issued it, is told it is none of hers, and bob, as whoever
+	// spent the code would be from the session it opened, that it is kept; past its 90 days it is
+	// gone all the same.
+	dismiss := func(recipient, id string, at time.Time) error {
+		return pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
+			return w.DismissNotification(ctx, recipient, id, at)
+		})
+	}
+	for _, n := range bob {
+		if err := dismiss("carol", n.ID, now.Add(time.Hour)); !errors.Is(err, ErrNoNotification) {
+			t.Errorf("carol dismissing bob's %s was answered %v", n.Kind, err)
+		}
+		if err := dismiss("bob", n.ID, now.Add(time.Hour)); !errors.Is(err, ErrKeptNotification) {
+			t.Errorf("bob dismissing his %s was answered %v", n.Kind, err)
+		}
+	}
+	if n := read("bob"); len(n) != 2 {
+		t.Errorf("bob is told %+v once he asked to dismiss both", n)
+	}
+	if err := dismiss("bob", issued.ID, now.Add(NotificationKept+time.Second)); !errors.Is(err, ErrNoNotification) {
+		t.Errorf("bob dismissing his %s past its days was answered %v", issued.Kind, err)
+	}
+
+	for what, refused := range map[string]struct{ stmt, by string }{
+		"a code issued by nobody": {`insert into notifications (id, recipient, kind, at)
+			values ('01JQ5A', 'bob', 'recovery_code_issued', now())`, "notifications_one_kind"},
+		"a code issued naming a credential": {`insert into notifications (id, recipient, kind, at, acted_by, credential)
+			values ('01JQ5A', 'bob', 'recovery_code_issued', now(), 'carol', 'bmV3UGFzc2tleQ')`, "notifications_one_kind"},
+		"a code issued naming an account": {`insert into notifications (id, recipient, kind, at, acted_by, login)
+			values ('01JQ5A', 'bob', 'recovery_code_issued', now(), 'carol', 'bob')`, "notifications_one_kind"},
+		"a code issued naming a namespace": {`insert into notifications (id, recipient, kind, at, acted_by, namespace)
+			values ('01JQ5A', 'bob', 'recovery_code_issued', now(), 'carol', 'finance')`, "notifications_one_kind"},
+		"a code issued naming an act": {`insert into notifications (id, recipient, kind, at, acted_by, act)
+			values ('01JQ5A', 'bob', 'recovery_code_issued', now(), 'carol', 'granted')`, "notifications_one_kind"},
+		"a code spent enrolling nothing": {`insert into notifications (id, recipient, kind, at, acted_by)
+			values ('01JQ5A', 'bob', 'recovery_code_used', now(), 'carol')`, "notifications_one_kind"},
+		"a code spent issued by nobody": {`insert into notifications (id, recipient, kind, at, credential)
+			values ('01JQ5A', 'bob', 'recovery_code_used', now(), 'bmV3UGFzc2tleQ')`, "notifications_one_kind"},
+		"a code spent naming an account": {`insert into notifications (id, recipient, kind, at, acted_by, credential, login)
+			values ('01JQ5A', 'bob', 'recovery_code_used', now(), 'carol', 'bmV3UGFzc2tleQ', 'bob')`, "notifications_one_kind"},
+		"a code spent naming no credential one can have": {`insert into notifications (id, recipient, kind, at, acted_by, credential)
+			values ('01JQ5A', 'bob', 'recovery_code_used', now(), 'carol', 'agkenrol_x/y')`, "notifications_credential_check"},
+		"a break-glass recovery naming who issued it": {`insert into notifications (id, recipient, kind, at, login, acted_by)
+			values ('01JQ5A', 'carol', 'break_glass_recovery', now(), 'carol', 'erin')`, "notifications_one_kind"},
+	} {
+		err := pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
+			_, err := w.tx.Exec(ctx, refused.stmt)
+			return err
+		})
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.ConstraintName != refused.by {
+			t.Errorf("%s was answered %v, and %s refuses it", what, err, refused.by)
+		}
+	}
+}

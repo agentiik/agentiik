@@ -40,11 +40,20 @@ describe("the account's MCP tab", () => {
     const office = within(await screen.findByRole("region", { name: "Collection back-office" }));
     expect(office.getByText("https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C")).toBeTruthy();
     expect(office.getByText("create_invoices")).toBeTruthy();
-    expect(office.getByText("No mcp block")).toBeTruthy();
+    expect(office.getByText("no_mcp_block")).toBeTruthy();
     expect(office.getByText("v2")).toBeTruthy();
     const desk = within(screen.getByRole("region", { name: "Collection support_desk" }));
-    expect(desk.getByText("Not runnable")).toBeTruthy();
+    expect(desk.getByText("not_runnable")).toBeTruthy();
     expect(screen.getByRole("link", { name: "An API token" })).toBeTruthy();
+  });
+
+  it("says of two members whose tools go by one name that each offers nothing for it", async () => {
+    const taken = { workflow: "finance/payroll", tool: null, reason: "tool_name_taken" };
+    const office = { ...collections[0]!, members: [{ workflow: "finance/monthly-invoicing", tool: null, reason: "tool_name_taken" }, taken] };
+    open("/me/mcp", { "GET /api/v1/me/collections": { status: 200, body: { collections: [office, ...collections.slice(1)] } } });
+    const shown = within(await screen.findByRole("region", { name: "Collection back-office" }));
+    expect(shown.getAllByText("tool_name_taken")).toHaveLength(2);
+    expect(shown.queryByText("no_mcp_block")).toBeNull();
   });
 
   it("says where the installation serves no MCP, and keeps the collections", async () => {

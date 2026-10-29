@@ -36,6 +36,10 @@ type routed struct {
 	// offered says whether a caller holding what Effective answers may use the tool anywhere.
 	offered func(Effective) bool
 
+	// own marks a tool about the caller's own collections, which a token narrowed by a scope reaches
+	// none of, whatever it holds: its route refuses such a token, so the tool is left out of its list.
+	own bool
+
 	// request is the route the arguments make, its query and its body, nil for none.
 	request func(args map[string]any) (method, path string, query url.Values, body any)
 
@@ -368,8 +372,9 @@ func userTools() []routed {
 		},
 		{
 			name: "collection.list", title: "List your collections",
-			description: "Your collections, the connectors you assemble from workflows you may run, each one a tool: each with the URL a client is given, its members, and the tool each offers or why it offers none, no_mcp_block or not_runnable.",
+			description: "Your collections, the connectors you assemble from workflows you may run, each one a tool: each with the URL a client is given, its members, and the tool each offers or why it offers none, no_mcp_block, not_runnable or tool_name_taken.",
 			input:       object(nil), annotations: reads(), offered: anybody,
+			own: true,
 			request: func(map[string]any) (string, string, url.Values, any) {
 				return "GET", "/api/v1/me/collections", nil, nil
 			},
@@ -378,6 +383,7 @@ func userTools() []routed {
 			name: "collection.get", title: "Get a collection",
 			description: "One of your collections: its URL, its members and what each offers.",
 			input:       object([]string{"collection"}, argCollection), annotations: reads(), offered: anybody,
+			own: true,
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "GET", "/api/v1/me/collections/" + segment(str(a, "collection")), nil, nil
 			},
@@ -389,6 +395,7 @@ func userTools() []routed {
 				`"name":{"type":"string","description":"The collection's name, unique among yours: letters, digits, hyphens and underscores."}`,
 				`"description":{"type":"string","maxLength":280,"description":"What the collection is for, one line."}`),
 			annotations: writes(), offered: anybody,
+			own: true,
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "POST", "/api/v1/me/collections", nil, pick(a, "name", "description")
 			},
@@ -400,6 +407,7 @@ func userTools() []routed {
 				`"name":{"type":"string","description":"The new name."}`,
 				`"description":{"type":"string","maxLength":280,"description":"The new description, the empty string clearing it."}`),
 			annotations: writes(), offered: anybody,
+			own: true,
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "PATCH", "/api/v1/me/collections/" + segment(str(a, "collection")), nil, pick(a, "name", "description")
 			},
@@ -408,6 +416,7 @@ func userTools() []routed {
 			name: "collection.delete", title: "Delete a collection",
 			description: "Removes one of your collections: its URL answers 404 from the next request, and every client configured with it lists nothing. No workflow and no run changes.",
 			input:       object([]string{"collection"}, argCollection), annotations: removes(), offered: anybody,
+			own: true,
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "DELETE", "/api/v1/me/collections/" + segment(str(a, "collection")), nil, nil
 			},
@@ -419,6 +428,7 @@ func userTools() []routed {
 				`"ref":{"type":"string","description":"The branch or the tag the member is read at, never a commit."}`,
 				`"as":{"type":"string","description":"The name its tool goes by in this collection."}`),
 			annotations: writes(), offered: holds(WorkflowRun),
+			own: true,
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "PUT", "/api/v1/me/collections/" + segment(str(a, "collection")) + "/members/" + segment(str(a, "namespace")) + "/" + segment(str(a, "workflow")), nil, pick(a, "ref", "as")
 			},
@@ -429,6 +439,7 @@ func userTools() []routed {
 			input:       object([]string{"collection", "namespace", "workflow"}, argCollection, argNamespace, argWorkflow),
 			annotations: &mcp.Annotations{ReadOnlyHint: mcp.Hint(false), DestructiveHint: mcp.Hint(false), IdempotentHint: mcp.Hint(true), OpenWorldHint: mcp.Hint(false)},
 			offered:     anybody,
+			own:         true,
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "DELETE", "/api/v1/me/collections/" + segment(str(a, "collection")) + "/members/" + segment(str(a, "namespace")) + "/" + segment(str(a, "workflow")), nil, nil
 			},

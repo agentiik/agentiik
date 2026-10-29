@@ -129,10 +129,13 @@
   }
 
   // Adding a passkey, and signing in again first where the session is too old to add one, asked in
-  // a dialog opened from the screen's head, as everything the console creates is.
+  // a dialog opened from the screen's head, as everything the console creates is. Minting a token
+  // asks for the same sign-in again, since a token outlives the session too; resuming is which of
+  // the two the sign-in again goes on to once it has succeeded.
   let adding = $state(false);
   let label = $state("");
   let again = $state(false);
+  let resuming = $state<"passkey" | "token">("passkey");
   let password = $state("");
   let totp = $state("");
   const holdsPassword = $derived(credentials?.some((c) => c.type === "password") ?? false);
@@ -154,12 +157,21 @@
         said = "";
         if (e instanceof SignInAgain) {
           again = true;
+          resuming = "passkey";
         }
         throw e;
       }
       await reread();
     });
   }
+
+  // resume does again what the sign-in again was asked for.
+  function resume() {
+    return resuming === "token" ? mintOne() : add();
+  }
+
+  // goingOn is what a sign-in again goes on to do, said once it has succeeded.
+  const goingOn = $derived(resuming === "token" ? "Minting the token now." : "Adding the passkey now.");
 
   function signInAgainWithPasskey() {
     return act("sign in again with your passkey", async () => {
@@ -168,9 +180,9 @@
       }
       said = "Waiting for your passkey.";
       await signInWithPasskey(api, passkeys.credentials);
-      said = "Signed in again. Adding the passkey now.";
+      said = `Signed in again. ${goingOn}`;
       working = false;
-      await add();
+      await resume();
     });
   }
 
@@ -180,9 +192,9 @@
       await signInWithPassword(api, me.user?.login ?? me.principal, password, totp.trim());
       password = "";
       totp = "";
-      said = "Signed in again. Adding the passkey now.";
+      said = `Signed in again. ${goingOn}`;
       working = false;
-      await add();
+      await resume();
     });
   }
 
@@ -235,8 +247,8 @@
   let kept = $state<Permission[]>([]);
   let within = $state("");
 
-  function mintOne(event: SubmitEvent) {
-    event.preventDefault();
+  function mintOne(event?: SubmitEvent) {
+    event?.preventDefault();
     return act("create the token", async () => {
       const ask: TokenRequest = { expires_at: expiringIn(days, new Date()) };
       if (whose !== "") {
@@ -255,7 +267,21 @@
           ask.scope.within = reach;
         }
       }
-      issued = await mint(api, ask);
+      try {
+        issued = await mint(api, ask);
+      } catch (e) {
+        if (e instanceof SignInAgain) {
+          again = true;
+          resuming = "token";
+          // Whether a password is offered beside the passkey is read from the sign-in methods,
+          // which this tab does not otherwise load.
+          if (credentials === null) {
+            void reread();
+          }
+        }
+        throw e;
+      }
+      again = false;
       minting = false;
       copied = false;
       deviceLabel = "";
@@ -306,7 +332,7 @@
     {#if shown === "credentials" && !passkeys.unavailable}
       <button class="control primary" onclick={() => ((adding = true), (problem = null), (again = false))}><Icon name="control-add" size={14} />Add a passkey</button>
     {:else if shown === "tokens"}
-      <button class="control primary" onclick={() => ((minting = true), (problem = null))}><Icon name="control-add" size={14} />Mint a token</button>
+      <button class="control primary" onclick={() => ((minting = true), (problem = null), (again = false))}><Icon name="control-add" size={14} />Mint a token</button>
     {/if}
   {/snippet}
 </PageHeader>
@@ -372,21 +398,7 @@
       <input id="passkey-label" maxlength="256" placeholder="work laptop" bind:value={label} />
       <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add a passkey</button></p>
     </form>
-    {#if again}
-      <div class="again">
-        <p>Sign in again to add a passkey.</p>
-        <p><button class="control" disabled={working} onclick={signInAgainWithPasskey}><Icon name="control-passkey" size={14} />Sign in again with a passkey</button></p>
-        {#if holdsPassword}
-          <form onsubmit={signInAgainWithPassword}>
-            <label for="again-password">Or with your password</label>
-            <input id="again-password" type="password" autocomplete="current-password" bind:value={password} />
-            <label for="again-totp">One-time code</label>
-            <input id="again-totp" class="term" inputmode="numeric" autocomplete="one-time-code" maxlength="6" bind:value={totp} />
-            <p><button class="control" disabled={working || password === ""}>Sign in again with the password</button></p>
-          </form>
-        {/if}
-      </div>
-    {/if}
+    {@render signingInAgain("add a passkey")}
     {#if problem}<Problem explained={problem} />{/if}
   </Dialog>
 {:else}
@@ -463,9 +475,29 @@
       <input id="token-within" class="term" placeholder="finance, finance/monthly-invoicing" bind:value={within} />
       <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Mint the token</button></p>
     </form>
+    {@render signingInAgain("mint a token")}
     {#if problem}<Problem explained={problem} />{/if}
   </Dialog>
 {/if}
+
+<!-- The sign-in again a dialog offers where the API asked for one before doing what it was asked: with a passkey, or the password where the account holds one, after which the console does it. -->
+{#snippet signingInAgain(what: string)}
+  {#if again}
+    <div class="again">
+      <p>Sign in again to {what}.</p>
+      <p><button class="control" disabled={working} onclick={signInAgainWithPasskey}><Icon name="control-passkey" size={14} />Sign in again with a passkey</button></p>
+      {#if holdsPassword}
+        <form onsubmit={signInAgainWithPassword}>
+          <label for="again-password">Or with your password</label>
+          <input id="again-password" type="password" autocomplete="current-password" bind:value={password} />
+          <label for="again-totp">One-time code</label>
+          <input id="again-totp" class="term" inputmode="numeric" autocomplete="one-time-code" maxlength="6" bind:value={totp} />
+          <p><button class="control" disabled={working || password === ""}>Sign in again with the password</button></p>
+        </form>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
 
 <style>
 

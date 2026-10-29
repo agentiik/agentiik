@@ -6,13 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // What the password sign-in keeps, against a real PostgreSQL: the step a TOTP code was accepted at,
 // which no code of that step or of an earlier one gets past again, and the type of the credential
 // that opened a session, which says what the session may do; and what setting a password keeps: the
-// password set in place of the one held, a TOTP generator waiting for its first code, and whether a
-// user spent a first administrator's link.
+// password set in place of the one held, who issued the recovery code that set it, a TOTP generator
+// waiting for its first code, and whether a user spent a first administrator's link.
 
 // A TOTP code's step is recorded once: of two sign-ins recording one step at once, one records it,
 // and the other is ErrTOTPSpent, as is an earlier step afterwards; a later one is recorded. Only a
@@ -228,6 +230,63 @@ func TestAPasswordIsSetInPlaceOfTheOneHeld(t *testing.T) {
 	})
 	if !errors.Is(err, ErrNoPrincipal) {
 		t.Errorf("a password for a login nobody holds answered %v", err)
+	}
+}
+
+// A password a recovery code set is marked with who issued the code, read with it, and unmarked by
+// the next code that sets it for nothing to tell; changed, it keeps its mark as it keeps its
+// identifier. Only a password is marked: another credential, or one of somebody else's, is
+// ErrNoCredential, and the table refuses the mark on a passkey.
+func TestAPasswordKeepsWhoIssuedTheRecoveryCodeThatSetIt(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, login := range []string{"bob", "erin"} {
+			if err := w.CreateUser(ctx, User{Login: login, Profile: Profile{GivenName: login}}); err != nil {
+				return err
+			}
+		}
+		if _, _, err := w.SetPassword(ctx, "bob", "bob-password", "$argon2id$first", now); err != nil {
+			return err
+		}
+		if c, err := w.Credential(ctx, "bob-password"); err != nil || c.RecoveredBy != "" {
+			t.Errorf("a password set by nothing reads as %+v: %v", c, err)
+		}
+		if err := w.MarkRecovered(ctx, "bob", "bob-password", "carol"); err != nil {
+			return err
+		}
+		if _, _, err := w.SetPassword(ctx, "bob", "unused", "$argon2id$changed", now.Add(time.Minute)); err != nil {
+			return err
+		}
+		held, err := w.CredentialsOf(ctx, "bob")
+		if err != nil || len(held) != 1 || held[0].RecoveredBy != "carol" {
+			t.Errorf("bob's password, changed since carol's code set it, reads as %+v: %v", held, err)
+		}
+		if err := w.MarkRecovered(ctx, "bob", "bob-password", ""); err != nil {
+			return err
+		}
+		if c, err := w.Credential(ctx, "bob-password"); err != nil || c.RecoveredBy != "" {
+			t.Errorf("a password unmarked reads as %+v: %v", c, err)
+		}
+		if err := w.AddCredential(ctx, Credential{ID: "bobs-passkey", Login: "bob", Type: CredentialPasskey, PublicKey: []byte("key"), AAGUID: make([]byte, 16)}); err != nil {
+			return err
+		}
+		for what, id := range map[string][2]string{
+			"a passkey": {"bob", "bobs-passkey"}, "somebody else's password": {"erin", "bob-password"}, "nothing": {"bob", "none"},
+		} {
+			if err := w.MarkRecovered(ctx, id[0], id[1], "carol"); !errors.Is(err, ErrNoCredential) {
+				t.Errorf("marking %s answered %v", what, err)
+			}
+		}
+		return nil
+	})
+	err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
+		_, err := w.tx.Exec(ctx, `update credentials set recovered_by = 'carol' where id = 'bobs-passkey'`)
+		return err
+	})
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || pg.ConstraintName != "credentials_recovered_by" {
+		t.Errorf("a passkey marked as a recovery code's password was answered %v", err)
 	}
 }
 

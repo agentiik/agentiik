@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +18,9 @@ import (
 // The path off passwords and what guards the credentials added on it, over a real PostgreSQL: the
 // passkey that brings an account to min_passkeys under a policy taking it off passwords takes the
 // password; an account suspended for holding no passkey comes back by enrolling one from a code, the
-// first administrator's enrolment then ending the bootstrap; and a passkey, a first password or a
-// TOTP generator added from a session asks for a sign-in within the last ten minutes.
+// first administrator's enrolment then ending the bootstrap; and a passkey, a first password, a
+// TOTP generator or an API token added from a session asks for a sign-in within the last ten
+// minutes.
 
 // proofLife is how recent a sign-in adding a credential from a session asks for, as the API holds
 // it.
@@ -48,7 +50,7 @@ func askedAgain(w *httptest.ResponseRecorder) bool {
 
 // Under a passkey required, bob, holding a password and a generator, signs in with the password to
 // a session that only enrols, and the second passkey he registers from it takes both, recorded, and
-// the session with them. Where a namespace alice holds a grant in forbids passwords, which she held
+// the session with them, told to nobody, since no recovery code set the password. Where a namespace alice holds a grant in forbids passwords, which she held
 // before it did, her second passkey takes hers too. Where passkeys are optional and passwords
 // allowed, reaching min_passkeys takes nothing.
 func TestThePasskeyThatBringsAnAccountToMinPasskeysTakesItsPassword(t *testing.T) {
@@ -71,6 +73,10 @@ func TestThePasskeyThatBringsAnAccountToMinPasskeysTakesItsPassword(t *testing.T
 	}
 	if got := in.trail(t); !slices.Equal(got[len(got)-2:], []string{"bob credential.remove bob-password", "bob credential.remove bob-totp"}) {
 		t.Errorf("the audit log ends %q", got[len(got)-2:])
+	}
+	// His password was set by no recovery code, and the passkeys it led to are told to nobody.
+	if n := in.count(t, `select count(*) from notifications`); n != 0 {
+		t.Errorf("the passkeys bob's own password led to are told %d times", n)
 	}
 
 	in.policy(t, "allowed", "optional")
@@ -229,6 +235,42 @@ func TestAGeneratorAsksForARecentSignIn(t *testing.T) {
 	}
 	if w := in.call(t, "POST", "/api/v1/me/totp/confirm", fmt.Sprintf(`{"totp":%q}`, code), fresh); w.Code != http.StatusOK {
 		t.Errorf("a generator confirmed nine minutes after its start answered %d %s", w.Code, w.Body)
+	}
+}
+
+// An API token minted from a session asks for a sign-in within the last ten minutes, as a passkey
+// does, since it outlives the session: at ten it mints, past them it is the 403 asking to sign in
+// again, with nothing written, and a fresh sign-in mints. A bearer token mints however old it is.
+func TestATokenMintedFromASessionAsksForARecentSignIn(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	old := in.signedIn(t, "alice", api.SessionFull)
+	*in.clock = in.clock.Add(proofLife)
+	w := in.call(t, "POST", "/api/v1/auth/tokens", `{"device_label":"laptop"}`, old)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("a token minted ten minutes after the sign-in answered %d %s", w.Code, w.Body)
+	}
+	var minted api.IssuedToken
+	if err := json.Unmarshal(w.Body.Bytes(), &minted); err != nil {
+		t.Fatal(err)
+	}
+	*in.clock = in.clock.Add(time.Second)
+	if w := in.call(t, "POST", "/api/v1/auth/tokens", `{"device_label":"laptop"}`, old); !askedAgain(w) {
+		t.Errorf("a token minted ten minutes and a second after the sign-in answered %d %s, %q", w.Code, w.Body, w.Header().Get("WWW-Authenticate"))
+	}
+	if n := in.count(t, `select count(*) from api_tokens where principal = 'alice'`); n != 1 {
+		t.Errorf("alice holds %d tokens, and was minted one", n)
+	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'api_token.create'`); n != 1 {
+		t.Errorf("%d tokens minted are recorded, and one was", n)
+	}
+	fresh := in.signedIn(t, "alice", api.SessionFull)
+	if w := in.call(t, "POST", "/api/v1/auth/tokens", `{}`, fresh); w.Code != http.StatusCreated {
+		t.Errorf("a token minted from a fresh sign-in answered %d %s", w.Code, w.Body)
+	}
+	*in.clock = in.clock.Add(time.Hour)
+	if w := in.bearing(t, "POST", "/api/v1/auth/tokens", minted.Token, `{}`); w.Code != http.StatusCreated {
+		t.Errorf("a token minted with a bearer token an hour after it was answered %d %s", w.Code, w.Body)
 	}
 }
 

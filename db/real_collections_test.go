@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -255,5 +256,63 @@ func TestACollectionGoesWithItsOwnerAndFollowsARename(t *testing.T) {
 	}
 	if left != 0 {
 		t.Fatalf("%d rows of alice's collection outlived her", left)
+	}
+}
+
+// A collection a service account owns follows its namespace's rename with the account, its members
+// intact, as its tokens and its grants do. It was deleted before: the rename writes the account's
+// principal anew and deletes the one under the old name, and a collection's key onto its owner
+// cascades that delete.
+func TestAServiceAccountsCollectionFollowsARename(t *testing.T) {
+	pool, super := opened(t)
+	owners(t, super)
+	ctx := t.Context()
+	// A rename waits for the namespace's runs to finish, and the seeded ones have not.
+	if _, err := superuser(t, super).Exec(ctx, `update runs set state = 'succeeded', started_at = now(), finished_at = now()`); err != nil {
+		t.Fatal(err)
+	}
+	administer := func(fn func(context.Context, *Wide) error) error {
+		return pool.Installation(ctx, NamespaceAdministration, fn)
+	}
+	if err := administer(func(ctx context.Context, w *Wide) error {
+		return w.CreateServiceAccount(ctx, ServiceAccount{Namespace: "finance", Name: "ci", CreatedBy: "alice"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const id = "01JR8Q2W6H3V0X9K4M7N5P1T2C"
+	if err := collections(t, pool, func(ctx context.Context, w *Wide) error {
+		if _, err := w.CreateCollection(ctx, "finance/ci", KindServiceAccount, id, "nightly", "The nightly reports."); err != nil {
+			return err
+		}
+		_, err := w.WriteCollectionMember(ctx, "finance/ci", id, CollectionMember{Namespace: "finance", Workflow: "monthly-invoicing", Ref: "main", As: "invoices"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := administer(func(ctx context.Context, w *Wide) error {
+		_, err := w.RenameNamespace(ctx, "finance", "accounting")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var renamed Collection
+	var before error
+	if err := collections(t, pool, func(ctx context.Context, w *Wide) error {
+		var err error
+		if renamed, err = w.Collection(ctx, "accounting/ci", id); err != nil {
+			return err
+		}
+		_, before = w.Collection(ctx, "finance/ci", id)
+		return nil
+	}); err != nil {
+		t.Fatalf("the service account's collection did not follow the rename: %v", err)
+	}
+	want := []CollectionMember{{Namespace: "accounting", Workflow: "monthly-invoicing", Ref: "main", As: "invoices"}}
+	if renamed.ID != id || renamed.Principal != "accounting/ci" || renamed.Name != "nightly" || renamed.Description != "The nightly reports." || !slices.Equal(renamed.Members, want) {
+		t.Errorf("after the rename the collection reads %+v", renamed)
+	}
+	if !errors.Is(before, ErrNoCollection) {
+		t.Errorf("the old name still finds the collection: %v", before)
 	}
 }

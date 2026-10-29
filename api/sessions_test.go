@@ -429,6 +429,56 @@ func TestASessionChangesSomethingOnlyFromThePublicOrigin(t *testing.T) {
 	}
 }
 
+// A request that reads, carrying a session, is answered from anywhere, and marked Elsewhere unless it
+// comes from the public URL's pages, so that it spends nothing a read spends: as Sec-Fetch-Site says,
+// same-origin or none, or, from a browser sending none, as its one Origin header says. A browser
+// sending neither says nothing of where it comes from, and is marked too. A request changing
+// something has passed the Origin check, and a bearer token, which no page carries, is never marked.
+func TestASessionSpendsOnlyFromThePublicURLsPages(t *testing.T) {
+	in := someSessions(t)
+	c := in.open(t, "alice", api.OpenedBy{Credential: "alice-passkey"})
+	for _, f := range []struct {
+		site, origin string
+		elsewhere    bool
+	}{
+		{"same-origin", "", false},
+		{"none", "", false},
+		{"", publicOrigin, false},
+		{"same-origin", "https://evil.example.com", false},
+		{"same-site", "", true},
+		{"cross-site", "", true},
+		{"cross-site", publicOrigin, true},
+		{"", "", true},
+		{"", "https://evil.example.com", true},
+		{"", "https://reports.agentiik.example.com", true},
+		{"", "null", true},
+		{"same-origin, cross-site", "", true},
+		{"Same-Origin", "", true},
+	} {
+		for _, method := range []string{"GET", "HEAD"} {
+			r := request(t, method, "/api/v1/artifacts/x", f.origin, c)
+			for site := range strings.SplitSeq(f.site, ", ") {
+				if site != "" {
+					r.Header.Add("Sec-Fetch-Site", site)
+				}
+			}
+			as, err := in.p.Identify(r)
+			if err != nil || as.Principal != "alice" || as.Elsewhere != f.elsewhere {
+				t.Errorf("%s with Sec-Fetch-Site %q and Origin %q identified %+v: %v", method, f.site, f.origin, as, err)
+			}
+		}
+	}
+	if as := in.asked(t, "POST", publicOrigin, c); as.Principal != "alice" || as.Elsewhere {
+		t.Errorf("a POST from the public origin identified %+v", as)
+	}
+	r := request(t, "GET", "/api/v1/artifacts/x", "https://evil.example.com")
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	r.Header.Set("Authorization", "Bearer "+in.token(t, "alice", nil, nil, in.clock.Add(time.Hour)))
+	if as, err := in.p.Identify(r); err != nil || as.Principal != "alice" || as.Elsewhere {
+		t.Errorf("a bearer token from another site identified %+v: %v", as, err)
+	}
+}
+
 // The public URL's origin is what a browser writes: the host in lower case, the port where it is not
 // 443, and no path. A URL no browser page has is refused.
 func TestSessionsAreAcceptedOnThePublicURLsOrigin(t *testing.T) {

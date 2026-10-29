@@ -59,6 +59,11 @@ func (m *MCP) serveCollection(w http.ResponseWriter, r *http.Request, caller Cal
 		refuse(w, http.StatusUnauthorized, "a collection's endpoint takes a bearer token, an API token or one issued for this installation, and a session is the console's")
 		return
 	}
+	if caller.Narrowed() {
+		// Before the collection is looked up, so that the answer is the same whatever it names.
+		refuse(w, http.StatusForbidden, narrowedReachesNoCollection)
+		return
+	}
 	principal, _, ok := owned(caller)
 	if !ok {
 		refuse(w, http.StatusNotFound, noCollection)
@@ -89,7 +94,8 @@ func (m *MCP) serveCollection(w http.ResponseWriter, r *http.Request, caller Cal
 		if o.reason != "" {
 			// "A member whose entry point at its ref declares no mcp block, or whose workflow the
 			// owner may no longer run, is left out of tools/list and answered as a tool that does
-			// not exist."
+			// not exist", and so are two whose tools go by one name, so that a call of the name
+			// runs neither rather than whichever comes first.
 			continue
 		}
 		t, err := c.tool(r.Context(), caller, col.ID, o)

@@ -311,11 +311,13 @@ var errTokensMost = errors.New("api: that principal holds as many live tokens as
 // once, and records it in the audit log in the transaction that writes it.
 //
 // What the caller presented is judged before the body is read, since no body changes it: a
-// narrowed token mints nothing, and neither does the bootstrap token. A service account's token
-// mints none for that service account, whose tokens an owner of its namespace renews, nobody mints
-// one for a namespace's built-in identity, which is the installation's own, and nobody is
-// minted a token past tokensMost live ones, counted under a lock on the principal so that two
-// mints at once cannot both take the last place.
+// narrowed token mints nothing, and neither does the bootstrap token; a browser's session mints one
+// only where it was signed in to within proofLife, and is asked to sign in again otherwise, as for a
+// passkey registered from it; a bearer token mints however long ago it was minted. A service
+// account's token mints none for that service account, whose tokens an owner of its namespace
+// renews, nobody mints one for a namespace's built-in identity, which is the installation's own, and
+// nobody is minted a token past tokensMost live ones, counted under a lock on the principal so that
+// two mints at once cannot both take the last place.
 func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 	switch {
 	case caller.Principal == BootstrapOperator:
@@ -323,6 +325,13 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 		return
 	case caller.Narrowed():
 		fail(w, http.StatusForbidden, narrowedMintsNothing)
+		return
+	case caller.Token == "" && !provedSince(caller.ProvedAt, t.now()):
+		// A token outlives the session that mints it: its sign-out, its SessionLifetime, a
+		// password changed and the passkey that opened it removed, and an administrator's
+		// carries their powers. So a session, whose Token is empty, adds one only as it adds a
+		// passkey; the bootstrap token, refused above, carries neither a token nor a proof.
+		askAgain(w)
 		return
 	}
 

@@ -364,6 +364,7 @@ describe("the files of a step and the outputs of a run", () => {
     expect(await fetchable(async () => Object.defineProperty(new Response(null, { status: 200 }), "type", { value: "opaqueredirect" }), "x")).toBe("");
     expect(await fetchable(async () => new Response(null, { status: 409 }), "x")).toMatch(/Download limit reached/);
     expect(await fetchable(async () => new Response(null, { status: 404 }), "x")).toBe("File not found.");
+    expect(await fetchable(async () => new Response(null, { status: 403 }), "x")).toBe("This browser does not say the download comes from the console, which a file with a download limit requires. Use a current browser.");
   });
 });
 
