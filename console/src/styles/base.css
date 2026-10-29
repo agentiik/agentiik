@@ -200,10 +200,13 @@ kbd {
   border-color: var(--faint);
 }
 
-:where(input, select, textarea):focus-visible {
+/* The focus is the 2.5px border the design system gives the element that carries it, drawn over the
+   field's own hairline rather than beside it, so that the field keeps one edge, in the accent. A check
+   box, a radio and a range have no hairline, and take the focus every control takes. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"]), select, textarea):focus-visible {
   border-color: var(--accent);
-  outline: 1px solid var(--accent);
-  outline-offset: 0;
+  outline: var(--border-focus) solid var(--accent);
+  outline-offset: calc(-1 * var(--border-hairline));
 }
 
 :where(input, textarea)::placeholder {
