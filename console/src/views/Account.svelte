@@ -226,6 +226,12 @@
     }
   }
 
+  // A token minted is shown that once: the value is forgotten as the tab is left, as on Done, so that
+  // coming back to the tab, or whoever sits at the screen next, never finds it there again.
+  $effect(() => {
+    if (shown !== "tokens") issued = null;
+  });
+
   $effect(() => {
     if (shown === "tokens") {
       void retokens();

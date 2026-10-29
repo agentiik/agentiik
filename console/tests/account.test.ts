@@ -259,6 +259,20 @@ describe("API tokens", () => {
     expect(screen.queryByText(issued.token)).toBeNull();
   });
 
+  it("forgets the value it showed once the tab is left, so that coming back shows it no more", async () => {
+    const issued = { token: "agktoken_abc", api_token: { id: "01M2AD1R3T5W7Y9A1C3E5G7J9Q", principal: "alice", created_at: "2026-10-01T09:00:00Z", expires_at: "2026-12-30T09:00:00Z" } };
+    const { place } = open("/me/tokens", alice({ "POST /api/v1/auth/tokens": { status: 201, body: issued } }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Mint a token" }));
+    await fireEvent.click(within(await screen.findByRole("dialog", { name: "Mint a token" })).getByRole("button", { name: "Mint the token" }));
+    expect(await screen.findByText("agktoken_abc")).toBeTruthy();
+    place.go({ kind: "account", tab: "profile" });
+    await waitFor(() => expect(screen.queryByText("agktoken_abc")).toBeNull());
+    place.go({ kind: "account", tab: "tokens" });
+    expect(await screen.findByRole("button", { name: "Mint a token" })).toBeTruthy();
+    expect(screen.queryByText("agktoken_abc")).toBeNull();
+    expect(screen.queryByText(/Shown once/)).toBeNull();
+  });
+
   it("mints one for the caller with its full rights where nothing narrows it", async () => {
     const { asked } = open(
       "/me/tokens",
