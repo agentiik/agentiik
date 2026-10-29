@@ -303,7 +303,8 @@ func (m Model) graphLines(t theme, height int) []string {
 	}
 	header = append(header, part{plain, "@" + short(m.graph.Commit) + "  "})
 	if m.run != nil {
-		header = append(header, part{muted, "run " + string(m.run.Run) + "  "}, part{stateRole(m.run.State), m.mark(m.run.State == agk.Running)}, part{plain, " " + m.run.State.String()})
+		// The run's state is drawn whole, its identifier cut first where the line is too narrow.
+		header = ending(append(header, part{muted, "run " + string(m.run.Run)}), []part{{plain, "  "}, {stateRole(m.run.State), m.mark(m.run.State == agk.Running)}, {plain, " " + m.run.State.String()}}, m.width)
 	} else {
 		header = append(header, part{muted, "the version the default branch's head resolves to, with no run laid over it"})
 	}

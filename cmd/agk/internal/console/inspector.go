@@ -230,8 +230,9 @@ func exited(code int) string {
 // runHeader is the run in two lines: what it is and how it stands, and where it failed.
 func (m Model) runHeader(now time.Time) [][]part {
 	r := m.run
+	// The run's state is drawn whole, and what names the run cut first where the pane is too narrow.
 	lines := [][]part{
-		{{strong, "Run "}, {muted, string(r.Run)}, {plain, "  " + r.Namespace + "/" + r.Workflow + "@" + short(r.Commit) + "  "}, {stateRole(r.State), m.mark(r.State == agk.Running)}, {plain, " " + r.State.String()}},
+		ending([]part{{strong, "Run "}, {muted, string(r.Run)}, {plain, "  " + r.Namespace + "/" + r.Workflow + "@" + short(r.Commit)}}, []part{{plain, "  "}, {stateRole(r.State), m.mark(r.State == agk.Running)}, {plain, " " + r.State.String()}}, m.width),
 	}
 	about := []string{r.Trigger.String()}
 	if r.TriggeredBy != "" {
