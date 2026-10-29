@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -232,6 +233,12 @@ func TestTheConsoleAsksOfARunAsAgkDoes(t *testing.T) {
 	err := at.ask(t.Context(), "POST", "/api/v1/runs/"+aRun+"/replay", map[string]string{"step": "invoice"}, &started)
 	if err == nil || !strings.Contains(err.Error(), "the run is not over, and a run is replayed once it is") {
 		t.Errorf("a refused replay is %v", err)
+	}
+	// The console decides what it says of a refusal by its status, which it reads off the error
+	// knowing nothing of the command line's types.
+	var status interface{ Status() int }
+	if !errors.As(err, &status) || status.Status() != http.StatusConflict {
+		t.Errorf("a refused replay carries no status the console can read: %#v", err)
 	}
 	if len(bodies) != 2 || bodies[0] != "POST /api/v1/runs/"+aRun+"/cancel " || bodies[1] != "POST /api/v1/runs/"+aRun+`/replay {"step":"invoice"}` {
 		t.Errorf("the requests sent were %q", bodies)

@@ -103,7 +103,7 @@ func (m Model) cancelledRun(msg cancelled) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.err != nil {
-		m.problem = "The run could not be cancelled: " + said(msg.err)
+		m.problem = "The run could not be cancelled: " + m.reason(msg.err, "workflow:run")
 		return m, nil
 	}
 	m.acted = "Cancelling was asked: the controller stops the tasks in flight, and the run ends cancelled."
@@ -113,7 +113,7 @@ func (m Model) cancelledRun(msg cancelled) (tea.Model, tea.Cmd) {
 // replayedRun opens the run a replay started, or says why the replay was refused.
 func (m Model) replayedRun(msg replayed) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		m.problem = "The run could not be replayed from " + msg.from + ": " + said(msg.err)
+		m.problem = "The run could not be replayed from " + msg.from + ": " + m.reason(msg.err, "workflow:run")
 		return m, nil
 	}
 	m = m.unfollow()

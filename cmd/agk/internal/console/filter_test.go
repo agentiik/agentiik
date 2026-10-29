@@ -1,6 +1,7 @@
 package console
 
 import (
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -125,17 +126,13 @@ func TestTermsAreAskedOfTheInstallationOnceTypingPauses(t *testing.T) {
 		t.Errorf("the runs read again asked %s", last)
 	}
 
-	in.failing = errSaid("state: bogus is no run state")
+	in.failing = refusal{http.StatusBadRequest, "state: bogus is no run state"}
 	m = typed(t, press(t, tm.(Model), backspace, backspace, backspace), "x")
 	m = send(t, m, typedPaused{typed: m.keys}).(Model)
-	if s := screen(m); !strings.Contains(s, "The runs could not be read with these terms: state: bogus is no run state") || strings.Contains(strings.Split(s, "\n")[0], "not answering") {
+	if s := screen(m); !strings.Contains(s, "The runs could not be read with these terms: state: bogus is no run state (400)") || strings.Contains(strings.Split(s, "\n")[0], "not answering") {
 		t.Errorf("a refused term is not said on the filter's line:\n%s", s)
 	}
 }
-
-type errSaid string
-
-func (e errSaid) Error() string { return string(e) }
 
 // A name the API does not take is said, and sent nowhere.
 func TestAnUnknownTermIsSaid(t *testing.T) {

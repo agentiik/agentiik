@@ -188,7 +188,7 @@ func TestADismissalKeepsTheReadsOfMeOneChain(t *testing.T) {
 func TestARefusedDismissalIsSaid(t *testing.T) {
 	in := &installation{runs: someRuns(), me: withNotices(widened), refusing: errors.New("the installation could not be reached")}
 	m := press(t, typed(t, press(t, opened(t, in, Options{}, 120, 30), colon), "notif"), enter, enter)
-	if len(in.sent) != 1 || m.palette != nil || lastLine(m) != "The notification could not be dismissed: the installation could not be reached" {
+	if len(in.sent) != 1 || m.palette != nil || lastLine(m) != "The notification could not be dismissed: the installation is not answering (the installation could not be reached)" {
 		t.Fatalf("a dismissal refused sent %v, and the key line says %q", in.sent, lastLine(m))
 	}
 	m = press(t, m, down)
