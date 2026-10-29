@@ -125,22 +125,35 @@ func TestNewRunIDMintsAULID(t *testing.T) {
 }
 
 // A word reserved late is one of the reserved words, needed by a route under it that a later
-// release serves, and it is the only kind a reference may still name: every other reserved
-// word was reserved before any namespace could take it, so no namespace carries one.
+// release serves, or by the web console's pages of a namespace, which an address the API answers
+// under it would take, and it is the only kind a reference may still name: every other reserved
+// word was reserved before any namespace could take it, so no namespace carries one. The
+// console's words are api, hooks, mcp and objects, reserved in v0.7.0, a release after the
+// console was served: the rule they broke is said of them, and of no other word.
 func TestAWordReservedLateIsReservedAndStillNamesWhatCarriesIt(t *testing.T) {
 	if len(agk.LateReservations) == 0 {
 		t.Fatal("no word is reserved late, and stats is, for GET /api/v1/stats/pools")
 	}
+	var console []string
 	for _, r := range agk.LateReservations {
 		if !agk.IsReservedNamespace(r.Word) {
 			t.Errorf("%s is reserved late and is not one of the reserved words", r.Word)
 		}
-		if _, path, _ := strings.Cut(r.Route, " "); !strings.HasPrefix(path, "/api/v1/"+r.Word+"/") {
-			t.Errorf("%s is reserved for %q, which is not a route under it", r.Word, r.Route)
-		}
 		release := regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
-		if !release.MatchString(r.Served) || !release.MatchString(r.Since) || !earlier(r.Since, r.Served) {
-			t.Errorf("%s is reserved from %q for a route served from %q, which are not two releases, the first before the second", r.Word, r.Since, r.Served)
+		if !release.MatchString(r.Served) || !release.MatchString(r.Since) {
+			t.Errorf("%s is reserved from %q for a route served from %q, which are not two releases", r.Word, r.Since, r.Served)
+		}
+		_, path, _ := strings.Cut(r.Route, " ")
+		switch {
+		case r.Console:
+			console = append(console, r.Word)
+			if path != "/{namespace}" || r.Since != "v0.7.0" || !earlier(r.Served, r.Since) {
+				t.Errorf("%s is reserved from %s for %q, served from %s, and the console's words are reserved from v0.7.0 for its pages of a namespace, served before", r.Word, r.Since, r.Route, r.Served)
+			}
+		case !strings.HasPrefix(path, "/api/v1/"+r.Word+"/"):
+			t.Errorf("%s is reserved for %q, which is not a route under it", r.Word, r.Route)
+		case !earlier(r.Since, r.Served):
+			t.Errorf("%s is reserved from %q for a route served from %q, and a word is reserved a release before its route is served", r.Word, r.Since, r.Served)
 		}
 		if agk.NamesNoNamespace(r.Word) {
 			t.Errorf("%s names no namespace, and an installation may hold one it created before the word was reserved", r.Word)
@@ -148,6 +161,9 @@ func TestAWordReservedLateIsReservedAndStillNamesWhatCarriesIt(t *testing.T) {
 		if got, late := agk.ReservedLate(r.Word); !late || got != r {
 			t.Errorf("the late reservation of %s reads %+v, %v", r.Word, got, late)
 		}
+	}
+	if !slices.Equal(console, []string{"api", "hooks", "mcp", "objects"}) {
+		t.Errorf("the words the console needs reserved are %v, and they are api, hooks, mcp and objects", console)
 	}
 	if !agk.NamesNoNamespace("runs") || !agk.IsReservedNamespace("runs") {
 		t.Error("runs, reserved since namespaces were first created, names a namespace")

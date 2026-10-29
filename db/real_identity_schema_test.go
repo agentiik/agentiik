@@ -186,11 +186,16 @@ func TestTheIdentityTablesHoldTheirRules(t *testing.T) {
 		{"the bootstrap state removed", `delete from bootstrap`, "is kept"},
 		{"the bootstrap state truncated", `truncate bootstrap`, "is kept"},
 	}
-	// Every word the API routes on, as a login, a group and a service account.
+	// Every word the API routes on, as a login, a group and a service account; and the words the
+	// web console needs reserved taken, since the API alone refuses them (consoleWords).
 	for _, word := range agk.ReservedNamespaces {
+		refusedBy := "principals_id_check"
+		if consoleWord(word) {
+			refusedBy = ""
+		}
 		for _, id := range []struct{ id, kind string }{{word, "user"}, {"group:" + word, "group"}, {"finance/" + word, "service_account"}} {
 			cases = append(cases, rule{"the reserved word " + id.id + " as a " + id.kind,
-				`insert into principals (id, kind) values ('` + id.id + `', '` + id.kind + `')`, "principals_id_check"})
+				`insert into principals (id, kind) values ('` + id.id + `', '` + id.kind + `')`, refusedBy})
 		}
 	}
 
@@ -309,9 +314,20 @@ func TestOneNamespaceCannotSeeAnothersGrants(t *testing.T) {
 	}
 }
 
+// consoleWord says whether word is one the web console needs reserved, api, hooks, mcp and objects,
+// which the API refuses to anything new and the database does not: they were reserved in v0.7.0,
+// after principals could be created under them, and a check refusing them would refuse the rows an
+// installation already holds wherever those are loaded again, a restore of its pg_dump among them,
+// since a check holds every row COPY loads.
+func consoleWord(word string) bool {
+	r, late := agk.ReservedLate(word)
+	return late && r.Console
+}
+
 // agentiik_reserved refuses the words the API routes on, which agk.ReservedNamespaces lists: no
 // fewer, so that no login takes a route, and no more, so that no login is refused for a word the
-// API does not route on. The last migration to write the function is the one that holds.
+// API does not route on, the words the web console needs reserved aside (consoleWord). The last
+// migration to write the function is the one that holds.
 func TestTheReservedWordsAreTheAPIs(t *testing.T) {
 	all, err := Migrations()
 	if err != nil {
@@ -332,7 +348,7 @@ func TestTheReservedWordsAreTheAPIs(t *testing.T) {
 	for _, m := range regexp.MustCompile(`'([a-z-]+)'`).FindAllStringSubmatch(body, -1) {
 		listed = append(listed, m[1])
 	}
-	want := slices.Clone(agk.ReservedNamespaces)
+	want := slices.DeleteFunc(slices.Clone(agk.ReservedNamespaces), consoleWord)
 	slices.Sort(listed)
 	slices.Sort(want)
 	if !slices.Equal(listed, want) {

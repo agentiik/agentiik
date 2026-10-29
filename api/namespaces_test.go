@@ -389,6 +389,41 @@ func TestANamespaceCreatedBeforeItsWordWasReservedIsServed(t *testing.T) {
 	}
 }
 
+// A namespace created under api, hooks, mcp or objects before v0.7.0 reserved them, for the addresses
+// the API answers at the root where the web console would read a namespace's pages, is served by the
+// API as before, every route of it, until its owner or an administrator renames it, which gives it its
+// console pages back, its old name reaching it still. Only a new namespace of such a name, or a rename
+// to one, is refused, saying the address is the API's.
+func TestANamespaceUnderAWordTheConsoleNeedsIsServedUntilItIsRenamed(t *testing.T) {
+	in := someNamespaces(t)
+	for _, word := range []string{"api", "hooks", "mcp", "objects"} {
+		w := in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"`+word+`","owner":"alice"}`)
+		says := word + " is the first segment of /" + word + ", an address the API answers, which the web console would otherwise read as a namespace's: the first segment of an address decides whether the API or the web console answers it"
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), says) {
+			t.Errorf("creating %s answered %d %s", word, w.Code, w.Body)
+		}
+	}
+	if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), `insert into namespaces (name) values ('hooks')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		method, path, body string
+		want               int
+		says               string
+	}{
+		{"GET", "/api/v1/namespaces/hooks", "", http.StatusOK, `"name":"hooks"`},
+		{"PUT", "/api/v1/namespaces/hooks/quotas", `{"max_runs_per_hour":10}`, http.StatusOK, `"max_runs_per_hour":10`},
+		{"GET", "/api/v1/namespaces/hooks/quotas", "", http.StatusOK, `"max_runs_per_hour":10`},
+		{"PATCH", "/api/v1/namespaces/finance", `{"name":"mcp"}`, http.StatusConflict, "mcp is the first segment of /mcp, an address the API answers, which the web console would otherwise read as a namespace's: the first segment of an address decides whether the API or the web console answers it, so no namespace is renamed to it"},
+		{"PATCH", "/api/v1/namespaces/hooks", `{"name":"webhooks"}`, http.StatusOK, `"former_names":["hooks"]`},
+		{"GET", "/api/v1/namespaces/hooks", "", http.StatusOK, `"name":"webhooks"`},
+	} {
+		if w := in.ask(t, c.method, c.path, in.carol, c.body); w.Code != c.want || !strings.Contains(w.Body.String(), c.says) {
+			t.Errorf("%s %s answered %d, want %d saying %q: %s", c.method, c.path, w.Code, c.want, c.says, w.Body)
+		}
+	}
+}
+
 // A namespace is read by an administrator and by whoever holds a grant in it, its own or a group's;
 // anybody else, and a principal holding nothing there but a deny, is answered as if it did not
 // exist, and so is one that does not, whoever asks.

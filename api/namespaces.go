@@ -40,7 +40,8 @@ import (
 
 // NamespaceName refuses a name no namespace can be created under: one outside $defs/namespace,
 // lowercase words joined by hyphens, one longer than a name is, or one of the words the API
-// routes on.
+// routes on, or answers the address of at the root, where the web console would look for a
+// namespace's pages.
 //
 // It is the check POST /api/v1/namespaces and agentiik-api namespace create both make, so that the
 // route and the verb refuse the same names.
@@ -61,19 +62,34 @@ func namespaceName(name string, reserved func(string) bool) error {
 	case !givenName.MatchString(name):
 		return fmt.Errorf("%.64q is not a namespace: a namespace is named in lowercase words joined by hyphens, such as finance or team-ops", name)
 	case reserved(name):
-		return fmt.Errorf("%s is %s: the first path segment after /api/v1/ decides the route, so %s cannot name a namespace", name, routesOn(name), strings.Join(agk.ReservedNamespaces, ", "))
+		return fmt.Errorf("%s is %s: %s, so %s cannot name a namespace", name, routesOn(name), decides(name), strings.Join(agk.ReservedNamespaces, ", "))
 	}
 	return nil
 }
 
 // routesOn says how the API routes on a reserved word, for a refusal to name: now, or from the
 // release that serves the route a word reserved late is reserved for, so that nobody is told the
-// API routes on stats before it does.
+// API routes on stats before it does; or, for a word the web console needs reserved, the address
+// the API answers under it, which the console would otherwise read as a namespace's.
 func routesOn(word string) string {
-	if r, late := agk.ReservedLate(word); late {
+	r, late := agk.ReservedLate(word)
+	switch {
+	case late && r.Console:
+		return fmt.Sprintf("the first segment of /%s, an address the API answers, which the web console would otherwise read as a namespace's", word)
+	case late:
 		return fmt.Sprintf("a word the API routes on from %s, for %s", r.Served, r.Route)
 	}
 	return "a word the API routes on"
+}
+
+// decides says what the segment a reserved word would take decides, for a refusal to name: the
+// route, for a word the API routes on after /api/v1/, and who answers the address, the API or the
+// web console, for a word the console needs reserved.
+func decides(word string) string {
+	if r, late := agk.ReservedLate(word); late && r.Console {
+		return "the first segment of an address decides whether the API or the web console answers it"
+	}
+	return "the first path segment after /api/v1/ decides the route"
 }
 
 // NamespaceRecord is a namespace as the wire writes it, $defs/namespaceRecord: its name, whether it
@@ -791,7 +807,7 @@ func (s *NamespaceAPI) update(w http.ResponseWriter, r *http.Request, who Princi
 	to := *ask.Name
 	if to != name {
 		if agk.IsReservedNamespace(to) {
-			fail(w, http.StatusConflict, fmt.Sprintf("%s is %s: the first path segment after /api/v1/ decides the route, so no namespace is renamed to it", to, routesOn(to)))
+			fail(w, http.StatusConflict, fmt.Sprintf("%s is %s: %s, so no namespace is renamed to it", to, routesOn(to), decides(to)))
 			return
 		}
 		if err := NamespaceName(to); err != nil {
