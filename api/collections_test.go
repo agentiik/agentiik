@@ -834,6 +834,68 @@ func TestACallIsARunThroughTheCollection(t *testing.T) {
 	}
 }
 
+// conforming holds a call's result to what the revision asks of it, as a client validating it does:
+// a result that is not an error carries structured content its tool's outputSchema accepts, where
+// the tool publishes one, and an error is the model's to read, which its text is.
+func conforming(t *testing.T, rt *api.Router, path, name string, result map[string]any) {
+	t.Helper()
+	_, listed, _ := calledAt(t, rt, path, "alice", "tools/list", nil)
+	for _, tool := range listed["tools"].([]any) {
+		tool := tool.(map[string]any)
+		output, published := tool["outputSchema"]
+		if tool["name"] != name || !published || result["isError"] == true {
+			continue
+		}
+		doc, _ := jsonschema.UnmarshalJSON(bytes.NewReader(must(json.Marshal(output))))
+		jc := jsonschema.NewCompiler()
+		jc.UseLoader(fetchingNothing{t})
+		if err := jc.AddResource("https://client.example/output.json", doc); err != nil {
+			t.Fatal(err)
+		}
+		s, err := jc.Compile("https://client.example/output.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		structured, present := result["structuredContent"]
+		v, _ := jsonschema.UnmarshalJSON(bytes.NewReader(must(json.Marshal(structured))))
+		if !present {
+			t.Errorf("%s answered no structured content and no error, which a client refuses of a tool publishing an outputSchema: %v", name, result)
+		} else if err := s.Validate(v); err != nil {
+			t.Errorf("%s answered structured content its outputSchema refuses: %v", name, err)
+		}
+	}
+}
+
+// "A run still going when the wait is over goes on, and the call answers its identifier and its
+// state, to follow with the user's server's run.get, rather than an error the run did not make." A
+// sync tool publishes the envelope as its outputSchema, so the answer is no structured content,
+// which that schema would refuse, and as the result has none it is a tool's error, which a client
+// hands the model as it is, its text saying that the run has not failed and goes on.
+func TestARunStillGoingWhenTheWaitEndsIsToldToBeFollowed(t *testing.T) {
+	c := servingCollections(t)
+	id := c.made("alice", "back-office")
+	c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", map[string]any{})
+	path := "/mcp/collections/" + id
+
+	// Nothing ends the run, so the call answers at the end of its block's timeout, 2s.
+	status, result, refusal := calledAt(t, c.rt, path, "alice", "tools/call", map[string]any{
+		"name": "create_invoices", "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
+	})
+	if status != http.StatusOK || refusal != nil {
+		t.Fatalf("the call was answered %d %v", status, refusal)
+	}
+	runs := c.runs()
+	if len(runs) != 1 {
+		t.Fatalf("the call created %v", runs)
+	}
+	conforming(t, c.rt, path, "create_invoices", result)
+	text := textOf(result)
+	if _, structured := result["structuredContent"]; structured || result["isError"] != true ||
+		!strings.Contains(text, string(runs[0].Run)) || !strings.Contains(text, "queued") || !strings.Contains(text, "run.get") || !strings.Contains(text, "not failed") {
+		t.Errorf("a run still going was answered %v", result)
+	}
+}
+
 // "Sanitize tool outputs: secret masking, as in logs: a secret never appears in a result. Above a
 // size ceiling, the result is a reference to an artifact rather than the artifact." A sync call
 // answers the output's envelope as it was stored, which the driver masked before storing it, and

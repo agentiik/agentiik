@@ -554,10 +554,18 @@ func (c *Collections) call(ctx context.Context, caller Caller, collection string
 	}
 	// Still going when the wait is over: the run goes on, and the model is told how to follow it
 	// rather than told it failed.
-	return &mcp.CallResult{
-		Content:           []mcp.Content{mcp.Text(fmt.Sprintf("Run %s of %s/%s is still %s after %s, the longest a sync call waits. It goes on: follow it with the user's server's run.get.", run, target.Namespace, target.Workflow, detail.State, wait))},
-		StructuredContent: map[string]any{"run": string(run), "state": detail.State.String()},
-	}, nil
+	return noOutput(fmt.Sprintf("Run %s of %s/%s is still %s after %s, the longest this call waits, and has not failed: it goes on. Follow it with the user's server's run.get rather than calling the tool again, which would start another run.", run, target.Namespace, target.Workflow, detail.State, wait)), nil
+}
+
+// noOutput answers a sync call whose answer is not the output it returns: its text alone, as a
+// tool's error. A sync tool publishes the envelope as its outputSchema, and "the protocol holds a
+// structured result to its outputSchema": structured content naming the run instead is refused by a
+// client validating it, the answer with it, and a result carrying none that is not an error is
+// refused too, by the revision's clients, of a tool publishing an outputSchema. An error is what a
+// client hands the model as it is, so the text says what became of the run, which keeps the model
+// from calling again for a run that goes on.
+func noOutput(text string) *mcp.CallResult {
+	return &mcp.CallResult{Content: []mcp.Content{mcp.Text(text)}, IsError: true}
 }
 
 // awaited reads the run until it ends or the wait is over, looking again sooner at first and less
