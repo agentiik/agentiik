@@ -109,9 +109,13 @@ describe("the MCP panel", () => {
     expect(screen.getByText("idempotentHint: true · destructiveHint: false")).toBeTruthy();
     const tool = screen.getByRole("region", { name: "Tool create_invoices" }).textContent ?? "";
     expect(tool).toContain('"^ORD-[0-9]{4}$"');
-    // Both inputs are arguments, and the one with a default is not required.
-    expect(tool).toMatch(/"orders"[\s\S]*"customers"/);
+    // Both inputs are arguments, in the order the server writes them, the one with a default not
+    // required and nothing beside them taken; and the result is the envelope of the output.
+    expect(tool).toMatch(/"customers"[\s\S]*"orders"/);
     expect(tool).toMatch(/"required":\s*\[\s*"orders"\s*\]/);
+    expect(tool).toMatch(/"additionalProperties":\s*false/);
+    expect(tool).toContain('"https://json-schema.org/draft/2020-12/schema"');
+    expect(tool).toMatch(/"required":\s*\[\s*"meta",\s*"items"\s*\]/);
   });
 
   it("is offered only where the version declares an mcp block", async () => {

@@ -10,12 +10,14 @@
 
   // The tool a workflow is, exactly as a client of a collection holding it sees it: its name,
   // title, description, mode, timeout and annotations, its inputSchema an object of the
-  // workflow's inputs, each with its schema as it stands, and its outputSchema the schema of the
-  // output it returns, where that output carries one. Read off the version's own mcp block, which
-  // a push held together. Beside it, the caller's collections, those holding the workflow named
-  // with what it offers there, and adding it to another a click away, which the API judges. Adding
-  // it is workflow:run's, since a member is a workflow its collection's owner may run, and Add is
-  // left out where adds is false rather than answered as a workflow that does not exist.
+  // workflow's inputs, each with its schema as it stands, and its outputSchema the envelope of the
+  // output it returns, its items' data held to that output's schema, where the output carries one.
+  // Read off the version's own mcp block, which a push held together, and drawn as the server
+  // publishes it as far as the version's graph says (lib/tool). Beside it, the caller's
+  // collections, those holding the workflow named with what it offers there, and adding it to
+  // another a click away, which the API judges. Adding it is workflow:run's, since a member is a
+  // workflow its collection's owner may run, and Add is left out where adds is false rather than
+  // answered as a workflow that does not exist.
   let { api, graph, namespace, workflow, adds }: { api: API; graph: Graph; namespace: string; workflow: string; adds: boolean } = $props();
 
   const tool = $derived(toolOf(graph, workflow));
