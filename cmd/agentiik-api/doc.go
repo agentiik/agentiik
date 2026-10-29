@@ -114,9 +114,11 @@
 // made, and the runs nobody starts there are attributed to it. Each is recorded as
 // service_account.create by installation in its namespace, and a run finding none lacking says
 // nothing of it. Then it says, in one line for every namespace named after a word reserved since
-// it was created, stats among them (agk.LateReservations), that it keeps its name and is served as
-// before, with nothing to do: nothing renames a namespace, and the word is refused to anything new
-// alone.
+// it was created (agk.LateReservations), that it keeps its name and is served as before, an
+// upgrade renaming nothing and the word being refused to anything new alone: with nothing to do
+// under stats, and under api, hooks, mcp or objects with none of its web console pages opening
+// until it is renamed; and in one line for every login or group under one of those four, which a
+// release before v0.7.0 could create too.
 //
 // And it records the artifact files of the runs v0.2 finished, as init does, where AGK_OBJECTS_DIR
 // is set, as it is among the API's settings, and names a directory it can read, which is all it

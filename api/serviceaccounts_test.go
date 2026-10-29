@@ -151,7 +151,7 @@ func TestAServiceAccountIsCreatedInANamespaceTheCallerOwns(t *testing.T) {
 }
 
 // A namespace v0.2 created under stats, which v0.3.0 reserved for GET /api/v1/stats/pools, keeps
-// its name, since nothing renames a namespace, and what names it works as it did before the word
+// its name, since an upgrade renames nothing, and what names it works as it did before the word
 // was reserved: a grant on it, a service account created in it and removed, that account's token,
 // and a token kept within it. A service account named stats is refused, as a name given under any
 // reserved word is, and the refusal says when the API routes on it.

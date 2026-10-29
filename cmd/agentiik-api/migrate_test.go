@@ -224,6 +224,46 @@ func TestMigrateSaysWhereANamespaceIsNamedAfterAWordReservedSince(t *testing.T) 
 	}
 }
 
+// An installation of v0.6.0 may hold a namespace, a login or a group under api, hooks, mcp or
+// objects, which v0.7.0 reserved for the addresses the API answers at the root, where the web
+// console would read a namespace's pages. migrate keeps each, and says at every run, in one line
+// each, that such a namespace is served by the API as before and opened by the console nowhere,
+// naming the route that renames a shared one, that a login is kept, and that a group keeps its
+// name with nothing to do; it says nothing of a word nothing is named after.
+func TestMigrateNamesWhatIsNamedAfterAWordTheConsoleNeedsReserved(t *testing.T) {
+	b := aBootstrapState(t)
+	if err := migrate(t.Context(), b.database, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`insert into namespaces (name) values ('hooks')`,
+		`insert into principals (id, kind) values ('mcp', 'user'), ('group:objects', 'group')`,
+		`insert into users (login, given_name) values ('mcp', 'Marie')`,
+		`insert into namespaces (name, kind, owner) values ('mcp', 'personal', 'mcp')`,
+		`insert into groups (name) values ('objects')`,
+	} {
+		if _, err := b.admin.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	for run := range 2 {
+		out := b.migrated(theToken, "")
+		for _, line := range []string{
+			"namespace hooks keeps its name and is served by the API as before, every route of it, and the web console opens none of its pages until its owner or an administrator renames it with PATCH /api/v1/namespaces/{ns}: hooks is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
+			"namespace mcp, the personal namespace of the user mcp, is served by the API as before, every route of it, and the web console opens none of its pages: mcp is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
+			"login mcp is kept, and its user signs in with it as before: mcp is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
+			"group objects keeps its name, with nothing to do, since the web console names no page after a group: objects is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
+		} {
+			if !strings.Contains(out, line) {
+				t.Errorf("migrate's run %d did not say %q:\n%s", run+1, line, out)
+			}
+		}
+		if strings.Contains(out, " api ") || strings.Contains(out, "namespace objects") || strings.Contains(out, "login hooks") || strings.Contains(out, "stats") {
+			t.Errorf("migrate's run %d named what nothing is named after:\n%s", run+1, out)
+		}
+	}
+}
+
 // A hash kept is the installation's, from a token set since or from init, and the v0.2 file never
 // replaces it. Once the bootstrap has ended, nothing is imported, nothing is said, and the file is
 // not read at all.

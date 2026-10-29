@@ -166,37 +166,61 @@ func builtInIdentities(ctx context.Context, pool *db.Pool, stdout io.Writer) err
 	return nil
 }
 
-// reservedLater says, in one line for each namespace named after a word reserved since it was
-// created (agk.LateReservations), that it keeps its name and is served as before, with nothing to
-// do: nothing renames a namespace, an upgrade asks nothing beyond compose.yaml and .env, and the
-// route the word was reserved for is served at its own path alone, which no route of a namespace
-// takes. init and migrate say it at every run while the namespace exists, since one of the two runs
-// wherever an installation is upgraded, so that whoever reads either knows why that name is
-// refused to anything new.
+// reservedLater says, in one line each, what an installation holds under a word reserved since it
+// was created (agk.LateReservations), and what it is to do about it. A namespace keeps its name and
+// is served as before, since an upgrade asks nothing beyond compose.yaml and .env and renames
+// nothing, and the route the word was reserved for is served at its own path alone, which no route
+// of a namespace takes: under stats there is nothing to do, and under a word the web console needs
+// reserved, api, hooks, mcp or objects, the console opens none of its pages, which are the API's
+// addresses, until it is renamed. A login or a group under one of those is named too, since the
+// rows from before the word was reserved may be any of the three. init and migrate say it at every
+// run while it lasts, since one of the two runs wherever an installation is upgraded, so that
+// whoever reads either knows why that name is refused to anything new.
 //
 // It never fails: what it reads decides nothing, and a failed init keeps every service of the
 // installation from starting. A read that fails is said, and the next run tries again.
 func reservedLater(ctx context.Context, pool *db.Pool, verb string, stdout io.Writer) {
-	var held []agk.LateReservation
+	var lines []string
 	err := pool.Installation(ctx, db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
-		held = held[:0]
+		lines = lines[:0]
 		for _, r := range agk.LateReservations {
-			_, err := w.NamespaceNamed(ctx, r.Word)
+			reserved := fmt.Sprintf("%s is reserved from %s, so no new namespace, login, group or service account takes it", r.Word, r.Since)
+			n, err := w.NamespaceNamed(ctx, r.Word)
 			switch {
 			case errors.Is(err, db.ErrNoNamespace):
 			case err != nil:
 				return err
+			case !r.Console:
+				lines = append(lines, fmt.Sprintf("namespace %s keeps its name and is served as before, with nothing to do: %s", r.Word, reserved))
+			case n.Kind == db.NamespacePersonal:
+				lines = append(lines, fmt.Sprintf("namespace %s, the personal namespace of the user %s, is served by the API as before, every route of it, and the web console opens none of its pages: %s", r.Word, r.Word, reserved))
 			default:
-				held = append(held, r)
+				lines = append(lines, fmt.Sprintf("namespace %s keeps its name and is served by the API as before, every route of it, and the web console opens none of its pages until its owner or an administrator renames it with PATCH /api/v1/namespaces/{ns}: %s", r.Word, reserved))
+			}
+			_, err = w.User(ctx, r.Word)
+			switch {
+			case errors.Is(err, db.ErrNoPrincipal):
+			case err != nil:
+				return err
+			default:
+				lines = append(lines, fmt.Sprintf("login %s is kept, and its user signs in with it as before: %s", r.Word, reserved))
+			}
+			_, err = w.Group(ctx, r.Word)
+			switch {
+			case errors.Is(err, db.ErrNoPrincipal):
+			case err != nil:
+				return err
+			default:
+				lines = append(lines, fmt.Sprintf("group %s keeps its name, with nothing to do, since the web console names no page after a group: %s", r.Word, reserved))
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		fmt.Fprintf(stdout, "could not tell whether a namespace is named after a word reserved since it was created, and %s goes on: %v\n", verb, err)
+		fmt.Fprintf(stdout, "could not tell whether a namespace, a login or a group is named after a word reserved since it was created, and %s goes on: %v\n", verb, err)
 		return
 	}
-	for _, r := range held {
-		fmt.Fprintf(stdout, "namespace %s keeps its name and is served as before, with nothing to do: %s is reserved from %s, so no new namespace, login, group or service account takes it\n", r.Word, r.Word, r.Since)
+	for _, l := range lines {
+		fmt.Fprintln(stdout, l)
 	}
 }

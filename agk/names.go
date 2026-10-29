@@ -42,7 +42,12 @@ const PortMaxBytes = IdentifierMaxBytes - len(".json")
 // reserved in a release before the route that needs it is served, as LateReservations
 // records. The schemas refuse the same words, and namespace and login creation refuse
 // them from v0.3.0, since each user gets a namespace named after their login.
-var ReservedNamespaces = []string{"auth", "me", "users", "groups", "service-accounts", "namespaces", "runners", "runner-pools", "bus", "tasks", "bricks", "runs", "artifacts", "stats"}
+//
+// From v0.7.0 they are also the first segments of the addresses the API answers at the root
+// of the public URL, api, auth, hooks, mcp and objects, since the web console answers every
+// other address and reads its first segment as a namespace: a namespace named after one of
+// them is one whose console pages are the API's addresses.
+var ReservedNamespaces = []string{"auth", "me", "users", "groups", "service-accounts", "namespaces", "runners", "runner-pools", "bus", "tasks", "bricks", "runs", "artifacts", "stats", "api", "hooks", "mcp", "objects"}
 
 // LateReservation is a word of ReservedNamespaces reserved after an installation could
 // already create a namespace under it: the release that reserved it, the route that needs
@@ -52,17 +57,32 @@ type LateReservation struct {
 	Since  string
 	Route  string
 	Served string
+
+	// Console is set where the route that needs the word is the web console's, its pages of
+	// a namespace at /{namespace}/..., rather than one of the API's under /api/v1/: the API
+	// answers /WORD, which the console would otherwise read as a namespace's address. Those
+	// words were reserved a release after the console was served, in v0.7.0, which broke the
+	// rule above, so an installation may hold a login, a group or a service account under one
+	// as well as a namespace, and a namespace under one is served by the API, every route of
+	// it, while its console pages open nowhere until it is renamed.
+	Console bool
 }
 
-// LateReservations are the words reserved late, stats from v0.3.0 among them. Nothing
-// renames a namespace, and an upgrade asks nothing beyond compose.yaml and .env, so one an
-// installation created under such a word before it was reserved keeps its name and is
-// served as before, the route needing the word being served at its own path alone, which
-// no route of a namespace takes: the word is refused where a name is given, and read
-// wherever an existing one is named, so that a grant, a workflow, a service account or a
-// token naming that namespace works through an upgrade as it did before it.
+// LateReservations are the words reserved late: stats from v0.3.0, for a route of v0.6.0, and
+// api, hooks, mcp and objects from v0.7.0, for the console's pages of v0.6.0. An upgrade asks
+// nothing beyond compose.yaml and .env and renames nothing, so a namespace an installation
+// created under such a word before it was reserved keeps its name until its owner or an
+// administrator renames it, and is served by the API as before, the route needing the word
+// being served at its own path alone, which no route of a namespace takes: the word is refused
+// where a name is given, and read wherever an existing one is named, so that a grant, a
+// workflow, a service account or a token naming that namespace works through an upgrade as
+// it did before it.
 var LateReservations = []LateReservation{
 	{Word: "stats", Since: "v0.3.0", Route: "GET /api/v1/stats/pools", Served: "v0.6.0"},
+	{Word: "api", Since: "v0.7.0", Route: "GET /{namespace}", Served: "v0.6.0", Console: true},
+	{Word: "hooks", Since: "v0.7.0", Route: "GET /{namespace}", Served: "v0.6.0", Console: true},
+	{Word: "mcp", Since: "v0.7.0", Route: "GET /{namespace}", Served: "v0.6.0", Console: true},
+	{Word: "objects", Since: "v0.7.0", Route: "GET /{namespace}", Served: "v0.6.0", Console: true},
 }
 
 // IsReservedNamespace reports whether name is one of ReservedNamespaces, which no
