@@ -51,6 +51,15 @@
   }
 
   const route = (run: string) => runAt(namespace, x?.workflow, run);
+
+  // stepIn is the address of one of the two runs' inspector at a step, and openStep opens it in place
+  // where the click is a plain one.
+  const stepIn = (r: RunDetail, step: string) => place.href(runAt(namespace, r.workflow, r.run)) + `?step=${encodeURIComponent(step)}`;
+  function openStep(e: MouseEvent, r: RunDetail, step: string) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    place.go(runAt(namespace, r.workflow, r.run), false, new URLSearchParams({ step }));
+  }
   const swapped = $derived(runAt(namespace, x?.workflow, b, a));
 
   // Reached by the address it had before runs were put under their workflow, the comparison is
@@ -236,11 +245,10 @@
             </div>
           {/if}
         {/if}
+        <!-- Words that never change, the step each opens at being the pane's. -->
         <p class="open">
-          {#each [x, y] as r, i (r.run)}
-            {@const at = runAt(namespace, r.workflow, r.run)}
-            <a href={place.href(at) + `?step=${encodeURIComponent(chosen.step)}`} onclick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); place.go(at, false, new URLSearchParams({ step: chosen.step })); }}>Open {chosen.step} in the {i === 0 ? "first" : "second"} run</a>
-          {/each}
+          <a href={stepIn(x, chosen.step)} onclick={(e) => openStep(e, x, chosen.step)}>Open in the first run</a>
+          <a href={stepIn(y, chosen.step)} onclick={(e) => openStep(e, y, chosen.step)}>Open in the second run</a>
         </p>
       </Pane>
     {/if}
