@@ -14,7 +14,7 @@
 //
 // # Why the prefix
 //
-// agktoken_, agkgrant_, agkjoin_, agkrunner_, agkenrol_ and agkcode_ say what a credential is
+// agktoken_, agkgrant_, agkjoin_, agkrunner_, agkenrol_, agkcode_ and agkrefresh_ say what a credential is
 // before anybody tries it. That is worth a few bytes for two reasons: a value that leaks into a log
 // or a bug report can be recognised and revoked by whoever finds it, and a value presented to the
 // wrong door can be refused for being the wrong kind rather than for failing a lookup that the
@@ -63,6 +63,13 @@ const (
 	// token. Single use and good for a minute, and worth nothing without the verifier, so the prefix
 	// is for whoever finds one in a browser's history.
 	Code Kind = "agkcode"
+
+	// Refresh is an OAuth refresh token: what an MCP client trades, once, for the next access token
+	// of a grant its person allowed and a refresh token to follow it. Its access tokens are API
+	// tokens, written agktoken_ as every other is, since each is a token of its person; the refresh
+	// token is the one credential of the grant that is not, and its prefix says so to whoever finds
+	// one in a client's storage.
+	Refresh Kind = "agkrefresh"
 )
 
 // Bits is how much entropy every credential carries.
@@ -93,7 +100,7 @@ func New(kind Kind, id string) (clear, hashed string, err error) {
 		if id == "" {
 			return "", "", fmt.Errorf("token: a grant names the task it belongs to, and this one names none")
 		}
-	case Join, Runner, Enrol, Code:
+	case Join, Runner, Enrol, Code, Refresh:
 		if id != "" {
 			return "", "", fmt.Errorf("token: a %s carries no identifier in its text, and this one was given %q: what it is bound to is a row", kind, id)
 		}
@@ -158,7 +165,7 @@ func KindOf(clear string) (Kind, bool) {
 	case Grant:
 		id, secret, ok := strings.Cut(rest, "_")
 		return kind, ok && id != "" && len(secret) >= 16
-	case Join, Runner, Enrol, Code:
+	case Join, Runner, Enrol, Code, Refresh:
 		return kind, len(rest) >= secretLength
 	}
 	return "", false

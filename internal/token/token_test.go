@@ -16,6 +16,8 @@ var (
 	enrolForm = regexp.MustCompile(`^agkenrol_[A-Za-z0-9_-]{43,}$`)
 	// agk login's code, openapi.json's exchangeCode.
 	codeForm = regexp.MustCompile(`^agkcode_[A-Za-z0-9_-]{43,}$`)
+	// An OAuth refresh token, openapi.json's refreshToken.
+	refreshForm = regexp.MustCompile(`^agkrefresh_[A-Za-z0-9_-]{43,}$`)
 )
 
 const aTask = "01M2AAZ9G62NQXFAFCXKRPJEH5"
@@ -33,6 +35,7 @@ func TestWhatIsMintedIsWhatTheWireAccepts(t *testing.T) {
 		{Runner, "", runnerForm},
 		{Enrol, "", enrolForm},
 		{Code, "", codeForm},
+		{Refresh, "", refreshForm},
 	} {
 		clear, hashed, err := New(c.kind, c.id)
 		if err != nil {
