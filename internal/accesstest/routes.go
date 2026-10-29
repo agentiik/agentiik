@@ -133,6 +133,7 @@ var Cases = []Case{
 	{Route: administer("DELETE", "/api/v1/users/{login}")},
 	{Route: administer("POST", "/api/v1/users/{login}/enrolment")},
 	{Route: administer("POST", "/api/v1/users/{login}/recovery")},
+	{Route: administer("GET", "/api/v1/users/{login}/credentials")},
 	{Route: administer("GET", "/api/v1/users/{login}/avatar")},
 	{Route: administer("DELETE", "/api/v1/users/{login}/avatar")},
 	{Route: administer("GET", "/api/v1/groups")},
