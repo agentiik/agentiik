@@ -394,7 +394,7 @@ func (m Model) stepLines(step string, now time.Time, width int) (lines [][]part,
 		case !ok:
 			lines = append(lines, []part{{quiet, "Reading the envelope."}})
 		case p.err != nil:
-			lines = append(lines, []part{{failedText, "The envelope could not be read: " + said(p.err)}})
+			lines = append(lines, []part{{failedText, "The envelope could not be read: " + m.reason(p.err, "run:read_data")}})
 		default:
 			text := strings.Split(strings.TrimRight(p.text, "\n"), "\n")
 			for _, l := range text[:min(len(text), shownLines)] {

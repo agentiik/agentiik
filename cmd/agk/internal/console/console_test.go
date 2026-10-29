@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -86,6 +86,19 @@ type installation struct {
 	refusing error
 }
 
+// refusal is an answer of the installation's that says no, as the command line's Reader and Sender
+// return one: its status and its sentence.
+type refusal struct {
+	status int
+	said   string
+}
+
+func (r refusal) Error() string { return r.said }
+func (r refusal) Status() int   { return r.status }
+
+// notYours is what the API answers a request for what is not there, or not the caller's to see.
+var notYours = refusal{http.StatusNotFound, "no such thing, or not yours"}
+
 // replayRun is the run a replay starts.
 const replayRun = "01RUNREPLAYREPLAYREPLAYREP"
 
@@ -115,12 +128,12 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 		}
 	case path == "/api/v1/runners":
 		if in.me == nil || !in.me.Admin {
-			return errors.New("no such thing, or not yours")
+			return notYours
 		}
 		answer = map[string]any{"runners": in.runners}
 	case path == "/api/v1/runner-pools":
 		if in.me == nil || !in.me.Admin {
-			return errors.New("no such thing, or not yours")
+			return notYours
 		}
 		listed := []api.RunnerPool{}
 		for _, p := range in.pools {
@@ -130,12 +143,12 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 	case strings.HasSuffix(path, "/grants"):
 		g, ok := in.grants[path]
 		if !ok {
-			return errors.New("no such namespace or workflow, or not yours to share")
+			return refusal{http.StatusNotFound, "no such namespace or workflow, or not yours to share"}
 		}
 		answer = map[string]any{"grants": g}
 	case path == "/api/v1/groups":
 		if in.me == nil || !in.me.Admin {
-			return errors.New("no such thing, or not yours")
+			return notYours
 		}
 		answer = map[string]any{"groups": in.groups}
 	case strings.HasPrefix(path, "/api/v1/runs?"):
@@ -143,7 +156,7 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 	case strings.Contains(path, "/steps/"):
 		e, ok := in.envelopes[path]
 		if !ok {
-			return errors.New("no such thing, or not yours")
+			return notYours
 		}
 		answer = e
 	case strings.HasPrefix(path, "/api/v1/runs/"):
@@ -157,7 +170,7 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 	case strings.Contains(path, "/stats/runs?") && in.stats != "":
 		answer = json.RawMessage(in.stats)
 	default:
-		return fmt.Errorf("no route %s", path)
+		return refusal{http.StatusNotFound, "no route " + path}
 	}
 	b, _ := json.Marshal(answer)
 	return json.Unmarshal(b, out)
@@ -495,6 +508,51 @@ func TestAnInstallationThatStopsAnsweringIsSaidSo(t *testing.T) {
 	}
 	if !strings.Contains(screen(m), "01RUNAAAAAAAAAAAAAAAAAAAAA") {
 		t.Errorf("the runs read before are gone:\n%s", screen(m))
+	}
+}
+
+// A read again refused is said as its status decides, and not as the installation not answering:
+// a 403 is a permission not held, named, and a 5xx the installation failing, which may pass. A
+// credential refused, a token revoked while the console is open, says to sign in again in the
+// command line's words, and nothing is asked again, since every request would carry it; it read as
+// an outage, and was asked every five seconds.
+func TestARefusalIsSaidByItsStatus(t *testing.T) {
+	in := &installation{runs: someRuns()}
+	m := opened(t, in, Options{Unaccepted: "the installation did not accept the token agk login kept for it: sign in again with agk login"}, 160, 24)
+	top := func(m Model) string { return strings.TrimRight(strings.Split(screen(m), "\n")[0], " ") }
+
+	in.failing = refusal{http.StatusForbidden, "the caller does not hold run:read on finance"}
+	m = readAgain(t, m, again{view: runsView, shown: m.shown})
+	if got := top(m); !strings.HasSuffix(got, "refused, asked again: you do not hold run:read (403 the caller does not hold run:read on finance)") || strings.Contains(got, "not answering") {
+		t.Errorf("a 403 reads %q", got)
+	}
+	in.failing = refusal{http.StatusBadGateway, "502 Bad Gateway"}
+	m = readAgain(t, m, again{view: runsView, shown: m.shown})
+	if got := top(m); !strings.HasSuffix(got, "not answering, asked again: 502 Bad Gateway") {
+		t.Errorf("a 502 reads %q", got)
+	}
+
+	in.failing = refusal{http.StatusUnauthorized, "the credential presented is not accepted"}
+	m = readAgain(t, m, again{view: runsView, shown: m.shown})
+	if got := top(m); !strings.HasSuffix(got, "the installation did not accept the token agk login kept for it: sign in again with agk login") || strings.Contains(got, "not answering") {
+		t.Errorf("a 401 reads %q", got)
+	}
+	if m.later() != nil {
+		t.Error("a credential refused is asked again")
+	}
+	asked := len(in.asked)
+	m = readAgain(t, readAgain(t, m, again{view: runsView, shown: m.shown}), meAgain{})
+	if len(in.asked) != asked {
+		t.Errorf("a credential refused asked again %v", in.asked[asked:])
+	}
+	// What the installation still holds is said in its own pane, by its status too.
+	in.failing = nil
+	in.run, in.refusing = aFailedRun(), refusal{http.StatusForbidden, "the caller does not hold workflow:run on finance/monthly-invoicing"}
+	in.run.State = agk.Running
+	in.me = mayRunIn()
+	m = press(t, opened(t, in, Options{Run: failedRun}, 160, 40), keyC, yes)
+	if s := screen(m); !strings.Contains(s, "The run could not be cancelled: you do not hold workflow:run (403 the caller does not hold") {
+		t.Errorf("a cancel refused with 403 is not said by its status:\n%s", s)
 	}
 }
 

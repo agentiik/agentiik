@@ -1,7 +1,7 @@
 package console
 
 import (
-	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -94,7 +94,7 @@ func TestARunOverIsReplayedFromTheStepChosen(t *testing.T) {
 
 // A replay refused is said as the installation says it, on the run that was to be replayed.
 func TestARefusedReplayIsSaid(t *testing.T) {
-	in := &installation{me: mayRunIn(), refusing: errors.New("a step above invoice was cancelled with its run, so the run replays from its start only")}
+	in := &installation{me: mayRunIn(), refusing: refusal{http.StatusConflict, "a step above invoice was cancelled with its run, so the run replays from its start only"}}
 	m := press(t, openedOn(t, in, aFailedRun(), 160), keyP, yes)
 	if s := screen(m); m.selected != failedRun || !strings.Contains(s, "The run could not be replayed from invoice: a step above invoice was cancelled with its run") {
 		t.Errorf("a refused replay is not said:\n%s", s)

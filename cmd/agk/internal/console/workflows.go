@@ -320,7 +320,7 @@ func (m Model) workflowsLines(t theme, height int) []string {
 	case !read:
 		lines = append(lines, line(part{quiet, "Reading the workflow."}))
 	case detail.err != nil:
-		lines = append(lines, line(part{failedText, "The workflow could not be read: " + said(detail.err)}))
+		lines = append(lines, line(part{failedText, "The workflow could not be read: " + m.reason(detail.err, "workflow:read")}))
 	default:
 		lines = append(lines, line(label("triggers"), part{plain, triggersOf(detail.detail)}))
 	}
@@ -341,7 +341,7 @@ func (m Model) workflowsLines(t theme, height int) []string {
 	case !read:
 		lines = append(lines, line(label("30 days"), part{quiet, "Reading the statistics."}))
 	case s.err != nil:
-		lines = append(lines, line(label("30 days"), part{failedText, "The statistics could not be read: " + said(s.err)}))
+		lines = append(lines, line(label("30 days"), part{failedText, "The statistics could not be read: " + m.reason(s.err, "run:read")}))
 	default:
 		lines = append(lines, line(append([]part{label("30 days")}, histogram(s.stats)...)...))
 	}

@@ -12,7 +12,7 @@ agentiik  every namespace  alice   1 Runs   2 Workflows   1 notification  ● li
 │ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7… │
 │   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e… │
 │                                                                              │
-│ The envelope could not be read: no such thing, or not yours                  │
+│ The envelope could not be read: not found, or not yours (404 no such thing,… │
 │                                                                              │
 │                                                                              │
 │                                                                              │

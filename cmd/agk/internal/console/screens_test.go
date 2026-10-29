@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"net/url"
@@ -109,9 +108,16 @@ func (s scenario) recorded(path string) (answer, bool) {
 
 func (s scenario) read(_ context.Context, path string, out any) error {
 	a, ok := s.recorded(path)
-	if !ok || a.Status >= 400 {
+	if !ok {
 		// What the scenario does not hold is answered as the API answers what the caller may not see.
-		return errors.New("no such thing, or not yours")
+		return notYours
+	}
+	if a.Status >= 400 {
+		var said struct {
+			Error string `json:"error"`
+		}
+		json.Unmarshal(a.Body, &said)
+		return refusal{a.Status, said.Error}
 	}
 	return json.Unmarshal(a.Body, out)
 }

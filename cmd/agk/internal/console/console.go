@@ -10,8 +10,10 @@ package console
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +58,11 @@ type Options struct {
 	// Theme is AGENTIIK_THEME, light or dark, which settles the ground for a terminal that never
 	// says what its background is, and is empty where the terminal is asked.
 	Theme string
+
+	// Unaccepted is what the top line says once the installation refuses the credential, as the
+	// command line says it of the one it presents: that agk login signs in again, or which variable
+	// holds the token refused. The console knows neither.
+	Unaccepted string
 }
 
 // Run draws the console until it is quit, and hands the screen back as it found it, an interrupt
@@ -225,8 +232,15 @@ type Model struct {
 	// back to, is told from the one that view asks for now.
 	shown int
 
-	// unanswered is why the last read failed, said in the top line until a read succeeds.
+	// unanswered is why the last read failed, said in the top line until a read succeeds; and
+	// runsFailed why the runs could not be read, said where they are listed until they are.
 	unanswered string
+	runsFailed string
+
+	// unaccepted says the installation refused the credential, which the top line says from then on.
+	// Nothing is asked again after it, since the credential is the command line's, read once, and
+	// every request would carry the one refused.
+	unaccepted bool
 
 	// listing says whether every key of the view is listed over it, and listedPast how many of the
 	// list's rows are scrolled past, where the window is too short for all of them.
@@ -379,6 +393,9 @@ func (m Model) readRuns() tea.Cmd {
 // left meanwhile is dropped when it comes, even where that view has been come back to, since it
 // is read again from the moment it is.
 func (m Model) later() tea.Cmd {
+	if m.unaccepted {
+		return nil
+	}
 	v, shown := m.view, m.shown
 	return m.tick(m.o.Every, func(time.Time) tea.Msg { return again{view: v, shown: shown} })
 }
@@ -386,6 +403,10 @@ func (m Model) later() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if frame, ok := msg.(spinner.TickMsg); ok {
 		return m.turned(frame)
+	}
+	if statusOf(failure(msg)) == http.StatusUnauthorized {
+		// Before the message is taken, so that nothing it asks for is read again.
+		m.unaccepted = true
 	}
 	next, cmd := m.update(msg)
 	n := next.(Model)
@@ -415,7 +436,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.settled = true
 	case meRead:
 		var next tea.Cmd
-		if msg.chained {
+		if msg.chained && !m.unaccepted {
 			// Asked again half a minute later, as the runs are, by the one chain of reads: a read
 			// beside it that asked for the next too would start a second chain, for good.
 			next = m.tick(meEvery, func(time.Time) tea.Msg { return meAgain{} })
@@ -444,13 +465,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(append(cmds, m.readChosen())...)
 	case meAgain:
+		if m.unaccepted {
+			return m, nil
+		}
 		return m, m.readMe(true)
 	case dismissed:
 		// What GET /api/v1/me holds once one is gone, read once: the chain every half minute goes
 		// on beside it.
 		return m, m.readMe(false)
 	case dismissRefused:
-		m.refused = "The notification could not be dismissed: " + said(msg.err)
+		m.refused = "The notification could not be dismissed: " + m.reason(msg.err, "")
 	case toastGone:
 		return m.gone(msg.id), nil
 	case runnersRead:
@@ -468,12 +492,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var toasts []tea.Cmd
 		switch {
 		case msg.err != nil && len(parse(m.terms).terms) > 0:
-			m.filterRefused = "The runs could not be read with these terms: " + said(msg.err)
+			m.filterRefused = "The runs could not be read with these terms: " + m.reason(msg.err, "run:read")
 		case msg.err != nil:
-			m.unanswered = said(msg.err)
+			m.unanswered, m.runsFailed = m.unansweredBy(msg.err, "run:read"), m.reason(msg.err, "run:read")
 		default:
 			m, toasts = m.runsEnded(m.runs, msg.runs)
-			m.unanswered, m.filterRefused, m.runs, m.read = "", "", msg.runs, true
+			m.unanswered, m.runsFailed, m.filterRefused, m.runs, m.read = "", "", "", msg.runs, true
 			// A run being opened is named by the selection until it is read, which a list that
 			// does not hold it leaves alone.
 			opening := m.view == runView && m.run == nil
@@ -496,9 +520,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			if m.run == nil {
-				m.runFailed = said(msg.err)
+				m.runFailed = m.reason(msg.err, "run:read")
 			} else {
-				m.unanswered = said(msg.err)
+				m.unanswered = m.unansweredBy(msg.err, "run:read")
 			}
 		} else {
 			m.unanswered, m.runFailed, m.run, m.runRead = "", "", msg.run, true
@@ -530,9 +554,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			if m.flowsRead {
-				m.unanswered = said(msg.err)
+				m.unanswered = m.unansweredBy(msg.err, "run:read")
 			} else {
-				m.flowsFailed = said(msg.err)
+				m.flowsFailed = m.reason(msg.err, "run:read")
 			}
 		} else {
 			m.unanswered, m.flowsFailed, m.flowsRead, m.flows = "", "", true, msg.flows
@@ -556,7 +580,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case workflowRead:
 		if msg.key == m.graphFor {
 			if msg.err != nil {
-				m.graphFailed = said(msg.err)
+				m.graphFailed = m.reason(msg.err, "workflow:read")
 			} else {
 				m.graph, m.graphFailed = msg.graph, ""
 			}
@@ -575,10 +599,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.ended(msg), nil
 	case fleetRead:
 		if msg.err != nil {
+			// The runners are an administrator's, which is no permission a grant gives.
 			if m.fleetRead {
-				m.unanswered = said(msg.err)
+				m.unanswered = m.unansweredBy(msg.err, "")
 			} else {
-				m.fleetFailed = said(msg.err)
+				m.fleetFailed = m.reason(msg.err, "")
 			}
 		} else {
 			m.unanswered, m.fleetFailed, m.fleetRead, m.pools, m.fleet = "", "", true, msg.pools, msg.runners
@@ -598,9 +623,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			if m.grantsFor == m.scope {
-				m.unanswered = said(msg.err)
+				m.unanswered = m.unansweredBy(msg.err, "grant:manage")
 			} else {
-				m.grantsFailed = said(msg.err)
+				m.grantsFailed = m.reason(msg.err, "grant:manage")
 			}
 		} else {
 			m.unanswered, m.grantsFailed, m.grantsFor, m.grants = "", "", msg.scope, msg.grants
@@ -612,7 +637,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.later()
 		}
 	case again:
-		if msg.view == m.view && msg.shown == m.shown {
+		if msg.view == m.view && msg.shown == m.shown && !m.unaccepted {
 			return m, m.readShown()
 		}
 	case typedPaused:
@@ -933,11 +958,115 @@ func moved(runs []db.ListedRun, selected string, by int) string {
 	return string(runs[0].Run)
 }
 
-// said is a refusal or an unreachable installation as the top line says it, on one line.
+// said is what the command line said of a failure, the installation's own sentence for a refusal,
+// on one line.
 func said(err error) string {
 	s := strings.TrimSpace(err.Error())
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
 	return s
+}
+
+// statusOf is the status the installation refused a request with, which the command line's Reader
+// and Sender carry on what they return, and 0 where nothing answered.
+func statusOf(err error) int {
+	var refused interface{ Status() int }
+	if errors.As(err, &refused) {
+		return refused.Status()
+	}
+	return 0
+}
+
+// reason is why a request failed, in a few words decided by its status and not by the API's
+// sentence, with what to do where there is something, and after it the installation's own answer,
+// its status and its sentence (Voice). The API's sentences are written for whoever reads the API,
+// and shown alone they leave a person not knowing whether they did something wrong, whether to wait
+// or whom to ask. A 401 is the credential, whatever the route; a 403 a permission not held, the one
+// the request asks where permission names it; a 404 what is not there or not the principal's,
+// which the API answers alike; a 5xx the installation's own failure; and a request that got no
+// answer is neither. Where the sentence is the reason, a 400, a 409 or a 422, it is the reason, and
+// the status alone follows it.
+func (m Model) reason(err error, permission string) string {
+	status, sentence, answer := statusOf(err), said(err), answerOf(err)
+	switch {
+	case status == 0:
+		return "the installation is not answering (" + sentence + ")"
+	case status == http.StatusUnauthorized:
+		return m.unacceptedSaid() + " (" + answer + ")"
+	case status == http.StatusForbidden && permission != "":
+		return "you do not hold " + permission + " (" + answer + ")"
+	case status == http.StatusForbidden:
+		return "a permission you do not hold (" + answer + ")"
+	case status == http.StatusNotFound:
+		return "not found, or not yours (" + answer + ")"
+	case status == http.StatusTooManyRequests:
+		return "too many requests: wait and try again (" + answer + ")"
+	case status >= 500:
+		return "the installation failed: try again (" + answer + ")"
+	}
+	return sentence + " (" + strconv.Itoa(status) + ")"
+}
+
+// unansweredBy is what the top line says of a read again that failed: that the installation is not
+// answering, and is asked again, where nothing answered or it failed itself, which may pass; and a
+// refusal's reason otherwise, which is asked again too, since a grant may be given back meanwhile.
+func (m Model) unansweredBy(err error, permission string) string {
+	if status := statusOf(err); status == 0 || status >= 500 {
+		return "not answering, asked again: " + answerOf(err)
+	}
+	return "refused, asked again: " + m.reason(err, permission)
+}
+
+// answerOf is the installation's own answer to a request, its status and its sentence, and what
+// the command line said where nothing answered.
+func answerOf(err error) string {
+	status, sentence := statusOf(err), said(err)
+	if code := strconv.Itoa(status); status != 0 && !strings.HasPrefix(sentence, code) {
+		// A refusal with no sentence of its own is its status line, which names the code already.
+		return code + " " + sentence
+	}
+	return sentence
+}
+
+// unacceptedSaid is what a refused credential is said as: the command line's sentence, which knows
+// where the credential came from, or what to do about the token agk login keeps.
+func (m Model) unacceptedSaid() string {
+	if m.o.Unaccepted != "" {
+		return m.o.Unaccepted
+	}
+	return "the installation did not accept the credential: sign in again with agk login"
+}
+
+// failure is the error a message brings back, where it brings one.
+func failure(msg tea.Msg) error {
+	switch msg := msg.(type) {
+	case meRead:
+		return msg.err
+	case runsRead:
+		return msg.err
+	case runRead:
+		return msg.err
+	case flowsRead:
+		return msg.err
+	case flowDetailRead:
+		return msg.err
+	case flowStatsRead:
+		return msg.err
+	case workflowRead:
+		return msg.err
+	case payloadRead:
+		return msg.err
+	case fleetRead:
+		return msg.err
+	case sharingRead:
+		return msg.err
+	case cancelled:
+		return msg.err
+	case replayed:
+		return msg.err
+	case dismissRefused:
+		return msg.err
+	}
+	return nil
 }
