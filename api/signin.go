@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/db"
@@ -77,6 +78,10 @@ type SignInOptions struct {
 
 	// Now is the clock a session ends by, the wall clock where it is nil.
 	Now func() time.Time
+
+	// OAuth is the installation's own authorisation server, whose authorisation endpoint is a page
+	// of this one, /auth/authorize, served where it is given and nowhere else.
+	OAuth *OAuth
 }
 
 // SignInAPI is the sign-in page and the sign-out.
@@ -85,6 +90,7 @@ type SignInAPI struct {
 	sessions  *Principals
 	passwords bool
 	now       func() time.Time
+	oauth     *OAuth
 
 	// ipAddressed is an installation whose public URL names an IP address, where a browser runs no
 	// ceremony and the policy the API applies lets passwords in.
@@ -159,7 +165,7 @@ func NewSignIn(rt *Router, o SignInOptions) (*SignInAPI, error) {
 		pool: o.Pool, sessions: o.Sessions, passwords: o.Passwords, now: o.Now,
 		ipAddressed: net.ParseIP(u.Hostname()) != nil,
 		hsts:        hstsFor(u),
-		pages:       pages, assets: assets,
+		pages:       pages, assets: assets, oauth: o.OAuth,
 	}
 
 	page := Public{Why: "the sign-in page is where somebody who holds no credential yet proves who they are: it answers everybody the same page and its files, reads nothing a request carries but agk login's query, and changes nothing"}
@@ -172,6 +178,12 @@ func NewSignIn(rt *Router, o SignInOptions) (*SignInAPI, error) {
 		{"/auth/assets/{name}", s.asset},
 	} {
 		if err := rt.Handle("GET", r.pattern, page, r.handler); err != nil {
+			return nil, err
+		}
+	}
+	if s.oauth != nil {
+		asked := Public{Why: "the authorisation endpoint is the sign-in page asking a person whether to allow an MCP client: it reads the client's request from its address, fetches the client's document, and changes nothing, the sign-in it asks for being what allows the client"}
+		if err := rt.Handle("GET", authorizePath, asked, s.authorizePage); err != nil {
 			return nil, err
 		}
 	}
@@ -195,8 +207,55 @@ type pageData struct {
 	// Redirect and Challenge are what agk login opened the sign-in page with, where it did.
 	Redirect, Challenge string
 
-	// Reason and Next are a refusal's.
+	// Reason and Next are a refusal's, and Back, where it is one an MCP client is told of, the
+	// address that tells it, BackTo the host it is on.
 	Reason, Next string
+	Back, BackTo string
+
+	// Authorize is what /auth/authorize shows and hands on, where it is that page.
+	Authorize *authorizeData
+}
+
+// authorizeData is what the authorisation page shows of a request that holds, and the request itself,
+// which it hands on with the sign-in that allows it.
+type authorizeData struct {
+	// ClientName is the name the client's document gives, ClientHost the host of its client_id,
+	// which the draft has the page show "in addition to displaying the fetched client information",
+	// and ReturnHost the host its redirect URI names, which the revision has it "clearly display".
+	// Loopback says the code goes to a program on this machine.
+	ClientName, ClientHost, ReturnHost string
+	Loopback                           bool
+
+	// Surface is the resource as a person reads it: /mcp, or a collection by its identifier.
+	Surface string
+
+	// Permissions are those asked, each with what it allows.
+	Permissions []permissionAsked
+
+	// Deny is the address that tells the client its person denied it.
+	Deny string
+
+	// What the page hands on: openapi.json's oauthAuthorization.
+	ClientID, RedirectURI, CodeChallenge, Resource, Scope, State string
+}
+
+// permissionAsked is one permission a client asks for, and what it allows, in the words the page
+// gives a person deciding.
+type permissionAsked struct {
+	Name, Allows string
+}
+
+// allows is what each permission lets a client do, as Permissions says it, for the page.
+var allows = map[Permission]string{
+	WorkflowRead:   "read your workflows' files, versions and schedules",
+	WorkflowRun:    "start, cancel and replay runs, and read the inputs a run takes",
+	WorkflowWrite:  "create workflows, commit to them, rename and move them",
+	WorkflowDelete: "delete workflows with their runs",
+	RunRead:        "read runs, their steps and their logs",
+	RunReadData:    "read the inputs, outputs and artifacts of runs",
+	SecretUse:      "commit a workflow that names a namespace's secrets",
+	SecretWrite:    "declare, change and remove a namespace's secrets, never reading a value",
+	GrantManage:    "share namespaces and workflows, and protect a workflow's default branch",
 }
 
 func (s *SignInAPI) passkeys() string {
@@ -228,6 +287,99 @@ func (s *SignInAPI) signInPage(w http.ResponseWriter, r *http.Request, _ Princip
 		Title: "Sign in to Agentiik", Scripts: true, Passkeys: s.passkeys(), Password: offering(offered), Own: offering(own),
 		Redirect: handOff.RedirectURI, Challenge: handOff.CodeChallenge,
 	})
+}
+
+// authorizePage is GET /auth/authorize, the authorisation endpoint: the request read from the page's
+// address and held to its rules (OAuth.approve), the client's document fetched, and the page naming
+// the client, where it is sent back, the resource and the permissions, which allows it by a sign-in.
+//
+// A client_id or a redirect_uri that does not hold, and a document that cannot be read or does not
+// hold, are a page saying so, sending the browser nowhere, since OAuth 2.1 never sends it to an
+// address it has not checked. Any other refusal is a page with a link back to the client carrying
+// the error, which the person follows: "Authorization servers SHOULD only automatically redirect the
+// user agent if it trusts the redirection URI", and an address a document fetched from anywhere names
+// is none it trusts.
+func (s *SignInAPI) authorizePage(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
+	refused := func(status int, why, next, back, backTo string) {
+		s.page(w, status, "refused.html", pageData{Title: "Cannot allow this client", Reason: sentenceOf(why), Next: next, Back: back, BackTo: backTo})
+	}
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		refused(http.StatusBadRequest, "this page's address carries a query that does not read", "Start again from the client, which opens this page as it should be opened.", "", "")
+		return
+	}
+	if len(q["client_id"]) != 1 || len(q["redirect_uri"]) != 1 {
+		refused(http.StatusBadRequest, "an MCP client opens this page with one client_id and one redirect_uri, and this address carries another number of one or the other", "Start again from the client, which opens this page as it should be opened.", "", "")
+		return
+	}
+	ask := OAuthSignIn{
+		ClientID: q.Get("client_id"), RedirectURI: q.Get("redirect_uri"), CodeChallenge: q.Get("code_challenge"),
+		Resource: q.Get("resource"), Scope: q.Get("scope"), State: q.Get("state"),
+	}
+	approved, err := s.oauth.approve(r.Context(), ask)
+	var client *clientRefused
+	var wrong *oauthRefused
+	switch {
+	case errors.As(err, &client):
+		refused(http.StatusBadRequest, client.why, "Nothing was sent to the client. Tell whoever publishes it, or start again from it.", "", "")
+		return
+	case err != nil && !errors.As(err, &wrong):
+		refused(http.StatusInternalServerError, "the client's request could not be checked", "Try again in a moment.", "", "")
+		return
+	}
+	// What approve does not read, once the client and its redirect URI hold, so that each refusal is
+	// one sent to the client.
+	for _, name := range []string{"response_type", "code_challenge", "code_challenge_method", "resource", "scope", "state"} {
+		if len(q[name]) > 1 {
+			wrong = &oauthRefused{code: "invalid_request", why: "the request names " + name + " more than once"}
+		}
+	}
+	switch {
+	case wrong != nil:
+	case q.Get("response_type") == "":
+		wrong = &oauthRefused{code: "invalid_request", why: "the request names no response_type, which is code"}
+	case q.Get("response_type") != "code":
+		wrong = &oauthRefused{code: "unsupported_response_type", why: "response_type is code, the one OAuth 2.1 keeps"}
+	case q.Get("code_challenge_method") != "S256":
+		wrong = &oauthRefused{code: "invalid_request", why: "code_challenge_method is S256, the one method served, and is required"}
+	}
+	back := hostOf(ask.RedirectURI)
+	if wrong != nil {
+		refused(http.StatusBadRequest, wrong.why, "The client is told why when you return to it.", s.oauth.refusedTo(approved, wrong), back)
+		return
+	}
+	offered, own, err := s.passwordOffered(r)
+	if err != nil {
+		refused(http.StatusInternalServerError, "the page could not read the installation's authentication policy", "Try again in a moment.", "", "")
+		return
+	}
+	surface := "/mcp, everything your account reaches there"
+	if approved.collection != "" {
+		surface = "your collection " + approved.collection
+	}
+	data := &authorizeData{
+		ClientName: approved.client.Name, ClientHost: hostOf(approved.client.ID), ReturnHost: back,
+		Surface: surface, Deny: s.oauth.refusedTo(approved, &oauthRefused{code: "access_denied", why: "the person asked to allow the client denied it"}),
+		ClientID: ask.ClientID, RedirectURI: ask.RedirectURI, CodeChallenge: ask.CodeChallenge,
+		Resource: ask.Resource, Scope: strings.Join(approved.scope, " "), State: ask.State,
+	}
+	_, data.Loopback = loopbackWithoutPort(ask.RedirectURI)
+	for _, p := range approved.scope {
+		data.Permissions = append(data.Permissions, permissionAsked{Name: p, Allows: allows[Permission(p)]})
+	}
+	s.page(w, http.StatusOK, "authorize.html", pageData{
+		Title: "Allow " + approved.client.Name, Scripts: true, Passkeys: s.passkeys(), Password: offering(offered), Own: offering(own),
+		Authorize: data,
+	})
+}
+
+// hostOf is the host of an address, its port with it, as the page names where a client is.
+func hostOf(address string) string {
+	u, err := url.Parse(address)
+	if err != nil {
+		return address
+	}
+	return u.Host
 }
 
 // enrolPage is GET /auth/enrol. The code of the link that opened it is after its #, which a browser

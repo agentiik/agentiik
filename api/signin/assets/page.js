@@ -1,4 +1,4 @@
-// The sign-in and enrolment page: the two passkey ceremonies, the password fallback where the
+// The sign-in and enrolment page, and the page allowing an MCP client: the two passkey ceremonies, the password fallback where the
 // installation offers it, a password set from an enrolment code or from a session and a one-time
 // code generator enrolled beside it, the credentials a signed-in account holds and their removal, a
 // sign-in again where adding a way in asks for a recent one, who this browser is signed in as, and
@@ -901,7 +901,111 @@
     render(await signedIn());
   }
 
-  (main.dataset.page === "enrol" ? enrolPage() : signInPage()).catch((e) => {
+  // The authorisation page.
+  //
+  // An MCP client asks for a token, and the person allows it by signing in,
+  // with a passkey or a password where the policy offers one, the sign-in carrying the client's
+  // request as the API checked it when it served the page. It never assembles an address: it follows
+  // the one the API answers, once it is the client's redirect URI the page was served with, and Deny
+  // is a link the API wrote.
+  async function authorizePage() {
+    const authorization = {
+      client_id: main.dataset.clientId,
+      redirect_uri: main.dataset.redirectUri,
+      code_challenge: main.dataset.codeChallenge,
+      resource: main.dataset.resource,
+    };
+    if (main.dataset.scope) {
+      authorization.scope = main.dataset.scope;
+    }
+    if (main.dataset.state) {
+      authorization.state = main.dataset.state;
+    }
+    const why = unavailable();
+    const offered = main.dataset.password === "offered";
+
+    // allowed follows a sign-in: back to the client, at the address the API wrote, where it is the
+    // client's redirect URI with a query of the API's after it.
+    function allowed(answer) {
+      const to = answer && answer.redirect_to;
+      const base = authorization.redirect_uri;
+      if (typeof to !== "string" || !to.startsWith(base) || !"?&".includes(to.charAt(base.length))) {
+        say("");
+        problem("The installation answered no address of the client's to send this browser back to, and this page follows none other.");
+        return;
+      }
+      say("Signed in as " + answer.login + ". Sending you back to the client.");
+      window.location.assign(to);
+    }
+
+    $("sign-in").addEventListener("click", busy($("sign-in"), async () => {
+      say("Waiting for your passkey…");
+      const started = await call("POST", "auth/passkey/options", { ceremony: "assertion" });
+      if (started.status !== 200) {
+        say("");
+        problem(refusal(started));
+        return;
+      }
+      let credential;
+      try {
+        credential = await navigator.credentials.get({ publicKey: requestOptions(started.answer.options) });
+      } catch (e) {
+        say("");
+        problem(ceremonyProblem(e));
+        return;
+      }
+      if (!credential) {
+        say("");
+        problem("No passkey was offered. Try again, on this device or on a phone nearby.");
+        return;
+      }
+      const verified = await call("POST", "auth/passkey/verify", { ceremony: "assertion", credential: credentialJSON(credential), authorization });
+      if (verified.status !== 200) {
+        say("");
+        problem(refusal(verified));
+        return;
+      }
+      allowed(verified.answer);
+    }));
+
+    $("password").addEventListener("submit", busy($("password-button"), async () => {
+      const body = { login: $("login").value.trim(), password: $("secret").value, authorization };
+      const totp = $("totp").value.trim();
+      if (totp) {
+        body.totp = totp;
+      }
+      $("secret").value = "";
+      $("totp").value = "";
+      const r = await call("POST", "auth/login", body);
+      if (forbidden(r)) {
+        show("password", false);
+        problem(refusal(r));
+        return;
+      }
+      if (r.status !== 200) {
+        problem(refusedAfter(r));
+        return;
+      }
+      if (r.answer.session === "enrolment") {
+        // A session that may only enrol allows no client: its passkey comes first.
+        show("passkey", false);
+        show("password", false);
+        show("enrolling", true);
+        return;
+      }
+      allowed(r.answer);
+    }));
+
+    if (why) {
+      $("unavailable").textContent = why;
+      show("unavailable", true);
+    }
+    show("passkey", !why);
+    show("password", offered);
+  }
+
+  const pages = { enrol: enrolPage, authorize: authorizePage };
+  (pages[main.dataset.page] || signInPage)().catch((e) => {
     problem(sentence(e && e.message ? e.message : e));
   });
 })();

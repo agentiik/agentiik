@@ -81,6 +81,7 @@ const (
 	codeEnrolsOnly      = "the sign-in was a password's where the policy requires a passkey, and may only enrol"
 	codeSynced          = "the passkey that signed in is synced, and device_bound_only applies"
 	codeTokensMost      = "the account holds the most live tokens one principal may hold"
+	codeOfAClient       = "the code was minted for an MCP client, which trades it at the token endpoint"
 )
 
 // unknownExchange is the account a refused exchange names where its code names none: never minted,
@@ -294,6 +295,14 @@ func (s *ExchangeAPI) exchange(w http.ResponseWriter, r *http.Request, _ Princip
 		return
 	}
 	failed.target, failed.credential = code.Login, code.Credential
+	if code.OAuth != nil {
+		// An MCP client's authorisation code, which its client trades at the token endpoint with
+		// what it was bound to there, and which opens nothing here, spent all the same.
+		failed.reason = codeOfAClient
+		s.refuse(r, failed, now)
+		opensNothing()
+		return
+	}
 	// RFC 7636 §4.6: the verifier's SHA-256, base64url with no padding, is the challenge. Compared
 	// in constant time, as every credential is.
 	answered := sha256.Sum256([]byte(ask.Verifier))
@@ -316,44 +325,8 @@ func (s *ExchangeAPI) exchange(w http.ResponseWriter, r *http.Request, _ Princip
 		CreatedAt: now, ExpiresAt: now.AddDate(0, 0, tokenDefaultDays),
 	}
 	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
-		user, err := wide.HoldUser(ctx, code.Login)
-		switch {
-		case errors.Is(err, db.ErrNoPrincipal):
-			return &exchangeOpensNothing{reason: codeAccountRemoved}
-		case err != nil:
+		if err := codeOpens(ctx, wide, code, now, s.ipAddressed); err != nil {
 			return err
-		case user.Suspended:
-			return &exchangeOpensNothing{reason: codeAccountSuspends}
-		}
-		held, err := wide.CredentialsOf(ctx, code.Login)
-		if err != nil {
-			return err
-		}
-		var opened *db.Credential
-		for i := range held {
-			if held[i].ID == code.Credential {
-				opened = &held[i]
-			}
-		}
-		if opened == nil {
-			// Removed since the sign-in, which removes the code with it, and removed between
-			// the code taken and this.
-			return &exchangeOpensNothing{reason: codeCredentialGone}
-		}
-		// What the session the sign-in opened may do now, as Principals reads it at each request.
-		if opened.Type == db.CredentialPassword || (opened.Type == db.CredentialPasskey && opened.BackupEligible) {
-			policy, err := policyFor(ctx, wide, code.Login, now, s.ipAddressed)
-			switch {
-			case err != nil:
-				return err
-			case opened.Type == db.CredentialPasskey && policy.deviceBoundOnly:
-				return errSynced
-			case opened.Type == db.CredentialPasskey:
-			case policy.passwordsForbidden:
-				return errForbidden
-			case policy.enrolling():
-				return errEnrolsOnly
-			}
 		}
 		return mintToken(ctx, wide, row, code.Login, map[string]any{"credential": code.Credential})
 	})
@@ -397,6 +370,55 @@ func (s *ExchangeAPI) exchange(w http.ResponseWriter, r *http.Request, _ Princip
 	shownOnce(w, http.StatusCreated, IssuedToken{Token: clear, APIToken: listedToken(row)})
 }
 
+// codeOpens holds a code taken to what the sign-in that minted it may mint now, in the transaction
+// wide is, as agk login's exchange and the OAuth token endpoint both do: the account read again under
+// its user's row, which every act on an account takes first, the credential that signed in still
+// held, and the policy that applies to the account now where a password or a synced passkey signed
+// in, as Principals reads what a session may do at each request. A code opening nothing is an
+// *exchangeOpensNothing saying why, and one the policy now refuses errSynced, errForbidden or
+// errEnrolsOnly.
+func codeOpens(ctx context.Context, wide *db.Wide, code db.ExchangeCode, now time.Time, ipAddressed bool) error {
+	user, err := wide.HoldUser(ctx, code.Login)
+	switch {
+	case errors.Is(err, db.ErrNoPrincipal):
+		return &exchangeOpensNothing{reason: codeAccountRemoved}
+	case err != nil:
+		return err
+	case user.Suspended:
+		return &exchangeOpensNothing{reason: codeAccountSuspends}
+	}
+	held, err := wide.CredentialsOf(ctx, code.Login)
+	if err != nil {
+		return err
+	}
+	var opened *db.Credential
+	for i := range held {
+		if held[i].ID == code.Credential {
+			opened = &held[i]
+		}
+	}
+	if opened == nil {
+		// Removed since the sign-in, which removes the code with it, and removed between the code
+		// taken and this.
+		return &exchangeOpensNothing{reason: codeCredentialGone}
+	}
+	if opened.Type == db.CredentialPassword || (opened.Type == db.CredentialPasskey && opened.BackupEligible) {
+		policy, err := policyFor(ctx, wide, code.Login, now, ipAddressed)
+		switch {
+		case err != nil:
+			return err
+		case opened.Type == db.CredentialPasskey && policy.deviceBoundOnly:
+			return errSynced
+		case opened.Type == db.CredentialPasskey:
+		case policy.passwordsForbidden:
+			return errForbidden
+		case policy.enrolling():
+			return errEnrolsOnly
+		}
+	}
+	return nil
+}
+
 // exchangeFailure is an exchange refused, and what its entry in the audit log records.
 type exchangeFailure struct {
 	reason string
@@ -415,28 +437,36 @@ type exchangeFailure struct {
 // it records wrote nothing, within the bound the sign-in routes share (failures.go), a refusal after
 // the verifier answered the code recorded whatever the bound says.
 func (s *ExchangeAPI) refuse(r *http.Request, f exchangeFailure, now time.Time) {
+	refuseCode(r, s.pool, s.signIns, s.trouble, f, exchangeCredential, now)
+}
+
+// refuseCode records a one-time code refused, agk login's at the exchange or an MCP client's at the
+// token endpoint, as signin.fail with credentialType, what the code is, in a transaction of its own,
+// within the bound the sign-in routes share (failures.go), a refusal after the verifier answered the
+// code recorded whatever the bound says.
+func refuseCode(r *http.Request, pool *db.Pool, signIns *SignIns, trouble func(error), f exchangeFailure, credentialType string, now time.Time) {
 	unrecorded, recorded := 0, true
 	if f.verified {
-		unrecorded = s.signIns.failures.recordedAnyway()
+		unrecorded = signIns.failures.recordedAnyway()
 	} else {
-		unrecorded, recorded = s.signIns.failures.admit(f.address, now)
+		unrecorded, recorded = signIns.failures.admit(f.address, now)
 	}
 	if !recorded {
 		return
 	}
-	detail := map[string]any{"reason": f.reason, "address": f.address, "credential_type": exchangeCredential}
+	detail := map[string]any{"reason": f.reason, "address": f.address, "credential_type": credentialType}
 	if f.credential != "" {
 		detail["credential"] = f.credential
 	}
 	if unrecorded > 0 {
 		detail["unrecorded"] = unrecorded
 	}
-	err := s.pool.Installation(context.WithoutCancel(r.Context()), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+	err := pool.Installation(context.WithoutCancel(r.Context()), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		return wide.Audit(ctx, audit.Record{
 			Actor: f.address, Action: audit.SigninFail, Target: f.target, Result: audit.Done, Detail: detail,
 		})
 	})
-	if err != nil && s.trouble != nil {
-		s.trouble(fmt.Errorf("a refused exchange could not be recorded: %w", err))
+	if err != nil && trouble != nil {
+		trouble(fmt.Errorf("a refused %s could not be recorded: %w", credentialType, err))
 	}
 }

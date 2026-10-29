@@ -5,6 +5,9 @@
 <h1>{{.Title}}</h1>
 <p class="problem">{{.Reason}}</p>
 <p>{{.Next}}</p>
+{{- if .Back}}
+<p><a href="{{.Back}}">Return to {{.BackTo}}</a>, telling it why.</p>
+{{- end}}
 </main>
 </body>
 </html>

@@ -235,13 +235,18 @@ type APIToken struct {
 
 	// LastUsedAt is the last request it authenticated, and nil until it has been used.
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+
+	// Audience and ClientID are an OAuth grant's: the MCP surface its tokens are accepted at, and
+	// the client they were issued to, whose name is the device label. Left out of any other token.
+	Audience string `json:"audience,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
 }
 
 // listedToken is a stored token as it is answered.
 func listedToken(t db.APIToken) APIToken {
 	listed := APIToken{
 		ID: t.ID, Principal: t.Principal, DeviceLabel: t.DeviceLabel, Scope: scopeOf(t),
-		CreatedAt: t.CreatedAt.UTC(), ExpiresAt: t.ExpiresAt.UTC(),
+		CreatedAt: t.CreatedAt.UTC(), ExpiresAt: t.ExpiresAt.UTC(), Audience: t.Audience, ClientID: t.ClientID,
 	}
 	if !t.LastUsedAt.IsZero() {
 		used := t.LastUsedAt.UTC()

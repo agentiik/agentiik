@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/language"
 	"github.com/agentiik/agentiik/mcp"
 )
@@ -22,10 +23,12 @@ import (
 // what. A tool the caller cannot use is absent rather than refused, as the documentation decides and
 // the revision allows, since "the set MAY vary by the authorization presented on the request".
 //
-// It takes a bearer token and nothing else. "An ordinary API bearer token is also accepted, so a
-// service account needs no browser", beside the OAuth tokens a later release accepts; a session
-// cookie is the console's credential, which no MCP client holds, and a request carrying one alone is
-// answered as one carrying nothing.
+// It takes a bearer token and nothing else: an OAuth token issued for it by the installation's own
+// authorisation server (oauth.go), or "an ordinary API bearer token is also accepted, so a service
+// account needs no browser". A session cookie is the console's credential, which no MCP client holds,
+// and a request carrying one alone is answered as one carrying nothing. Where the installation issues
+// OAuth tokens, a request answered 401 is told where to ask for one, its WWW-Authenticate naming the
+// surface's Protected Resource Metadata.
 
 // mcpInstructions is the discovery's orientation, and "it carries nothing else": what a workflow is,
 // where its entry point is, and the order a client drafting one reads, validates and commits in.
@@ -43,6 +46,10 @@ type MCPOptions struct {
 	// Collections are the principals' collections, each served at /mcp/collections/{id} beside the
 	// user's server, and none where nil.
 	Collections *Collections
+
+	// OAuth is the installation's own authorisation server, which the surfaces' challenges name, and
+	// nil where it issues no token, whose surfaces answer Bearer alone.
+	OAuth *OAuth
 }
 
 // MCP is the platform's server.
@@ -58,6 +65,11 @@ type MCP struct {
 	// speaks it in: the user's server's, offering no resources.
 	collections      *Collections
 	collectionServer mcp.Server
+
+	// oauth is the authorisation server the challenges name, nil for none, and base the public URL
+	// every surface's URL is under, which a request a tool makes carries as the resource it is for.
+	oauth *OAuth
+	base  string
 }
 
 // NewMCP builds the platform's server and registers it at /mcp, on POST. The router answers any
@@ -77,7 +89,12 @@ func NewMCP(rt *Router, o MCPOptions) (*MCP, error) {
 		Origin:       origin,
 		Resources:    true,
 	}}
-	if err := rt.HandleOwn("POST", "/mcp", Own{}, m.serve); err != nil {
+	m.oauth, m.base = o.OAuth, strings.TrimRight(o.PublicURL, "/")
+	guard := Own{}
+	if m.oauth != nil {
+		guard.Challenge = m.challenge
+	}
+	if err := rt.HandleOwn("POST", mcpPath, guard, m.serve); err != nil {
 		return nil, err
 	}
 	if o.Collections != nil {
@@ -87,26 +104,126 @@ func NewMCP(rt *Router, o MCPOptions) (*MCP, error) {
 			Instructions: collectionInstructions,
 			Origin:       origin,
 		}
-		if err := rt.HandleOwn("POST", "/mcp/collections/{id}", Own{}, m.serveCollection); err != nil {
+		if err := rt.HandleOwn("POST", collectionsPath+"{id}", guard, m.serveCollection); err != nil {
 			return nil, err
 		}
 	}
 	return m, nil
 }
 
+// challenge is the WWW-Authenticate a surface answers a request identifying nobody with: the one the
+// authorisation server writes for the surface the request is to, with error="invalid_token" where a
+// token came and opened nothing.
+func (m *MCP) challenge(r *http.Request, invalid bool) string {
+	why := ""
+	if invalid {
+		why = "invalid_token"
+	}
+	return m.oauth.Challenge(r.URL.Path, why, nil)
+}
+
+// noBearer answers a request to a surface that carries a session and no bearer token: 401, asking for
+// a token as a request carrying nothing is asked.
+func (m *MCP) noBearer(w http.ResponseWriter, r *http.Request, why string) {
+	if m.oauth != nil {
+		w.Header().Set("WWW-Authenticate", m.challenge(r, false))
+	} else {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+	}
+	refuse(w, http.StatusUnauthorized, why)
+}
+
+// insufficientScope is the refusal of a call or a read an OAuth token's scope does not reach and its
+// person does.
+const insufficientScope = "the token was not allowed a permission this needs, which its person holds: the client asks them for the scopes WWW-Authenticate names, beside those it holds, and calls again"
+
 // serve answers one request to /mcp, as the caller who presented a bearer token.
+//
+// A call or a read by an OAuth token needing a permission its scope lacks, and its person holds, is
+// answered 403 before anything is asked of the API: "the server SHOULD respond with HTTP 403
+// Forbidden", WWW-Authenticate's error="insufficient_scope" and "scope, specifying the minimum scopes
+// needed for the operation", "all scopes required for the current operation in a single challenge".
+// What it is a call or a read of is read from Mcp-Method and Mcp-Name, which the transport has mirror
+// the body and package mcp refuses where they do not.
 func (m *MCP) serve(w http.ResponseWriter, r *http.Request, caller Caller) {
 	if _, bearer := bearerOf(r); !bearer {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		refuse(w, http.StatusUnauthorized, "the MCP endpoint takes a bearer token, an API token or one issued for this installation, and a session is the console's")
+		m.noBearer(w, r, "the MCP endpoint takes a bearer token, an API token or one issued for this installation, and a session is the console's")
 		return
 	}
-	surface, err := m.offered(r, caller)
+	surface, up, err := m.offered(r, caller)
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "what the caller holds could not be read, and the tools offered are what it holds")
 		return
 	}
+	if needed := up.neededBy(r); len(needed) > 0 && m.oauth != nil {
+		w.Header().Set("WWW-Authenticate", m.oauth.Challenge(mcpPath, "insufficient_scope", permissionNames(needed)))
+		refuse(w, http.StatusForbidden, insufficientScope)
+		return
+	}
 	m.server.Serve(w, r, surface)
+}
+
+// stepUp is what an OAuth token could be allowed that its scope lacks: the permissions each tool its
+// person may use needs and the token does not reach, and those a read of the tree or of a run needs,
+// none where the token reaches it or its person does not.
+type stepUp struct {
+	tools     map[string][]Permission
+	tree, run []Permission
+}
+
+// neededBy is what the request needs that the token lacks: a call of a tool, or a read of a resource,
+// as its Mcp-Method and Mcp-Name say, and nothing for any other.
+func (s stepUp) neededBy(r *http.Request) []Permission {
+	name := r.Header.Get("Mcp-Name")
+	switch r.Header.Get("Mcp-Method") {
+	case "tools/call":
+		return s.tools[name]
+	case "resources/read":
+		switch {
+		case strings.HasPrefix(name, "agentiik://run/"):
+			return s.run
+		case strings.HasPrefix(name, "agentiik://language/"), strings.HasPrefix(name, "agentiik://schema/"):
+			return nil
+		case strings.HasPrefix(name, "agentiik://"):
+			return s.tree
+		}
+	}
+	return nil
+}
+
+// needed is what a caller holding have needs besides to be offered a tool whole offers it: each
+// permission that, added wherever whole holds it, offers the tool, or where no one of them alone does,
+// every one whole holds and have lacks.
+func needed(offered func(Effective) bool, have, whole Effective) []Permission {
+	var out []Permission
+	for _, p := range access.Permissions {
+		if offered(adding(have, whole, p)) {
+			out = append(out, p)
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	for _, p := range access.Permissions {
+		if holds(p)(whole) && !holds(p)(have) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// adding is have with p added at every scope where whole holds it.
+func adding(have, whole Effective, p Permission) Effective {
+	out := Effective{Admin: have.Admin, Groups: have.Groups, Permissions: map[access.Scope]access.Set{}}
+	for at, set := range have.Permissions {
+		out.Permissions[at] = set
+	}
+	for at, set := range whole.Permissions {
+		if set.Has(p) {
+			out.Permissions[at] = access.SetOf(append(out.Permissions[at].Permissions(), p)...)
+		}
+	}
+	return out
 }
 
 // offered is what one caller is offered: "the tool list is filtered by the caller's permissions: a
@@ -118,18 +235,45 @@ func (m *MCP) serve(w http.ResponseWriter, r *http.Request, caller Caller) {
 //
 // An authorizer that does not say what a principal is granted, as a router built for a test may
 // carry, lists every tool, each refused by its route as anybody is.
-func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, error) {
+//
+// An OAuth token is listed what its person holds through the nine permissions, whichever its scope
+// keeps, and answered what it could be allowed besides (stepUp): a permission its person holds is
+// one its client can ask them for, which the revision has a client do on a 403 naming it and call
+// again, so the tool is offered with the way to it rather than hidden. What no scope gives, an
+// administrator's tools and the collections', stays absent, since the token is narrowed whatever it
+// is allowed. An API token narrowed by a scope is listed what it keeps, since nothing can widen it.
+func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, stepUp, error) {
 	tools := []mcp.Tool{workflowLanguage(), workflowSchema()}
 	effective, err := caller.Effective(r.Context())
 	known := err == nil
 	if err != nil && caller.standings != nil {
-		return mcp.Surface{}, err
+		return mcp.Surface{}, stepUp{}, err
 	}
-	use := func(offered func(Effective) bool) bool { return !known || offered(effective) }
-	if use(holds(WorkflowRead)) {
+	listed := effective
+	var up stepUp
+	if known && caller.Audience != "" {
+		whole, err := caller.throughEveryPermission().Effective(r.Context())
+		if err != nil {
+			return mcp.Surface{}, stepUp{}, err
+		}
+		listed, up.tools = whole, map[string][]Permission{}
+	}
+	use := func(offered func(Effective) bool) bool { return !known || offered(listed) }
+	// offer says whether a tool is offered, and where the token reaches less than its person, what
+	// it would need to be allowed to call it.
+	offer := func(name string, offered func(Effective) bool) bool {
+		if !use(offered) {
+			return false
+		}
+		if up.tools != nil && !offered(effective) {
+			up.tools[name] = needed(offered, effective, listed)
+		}
+		return true
+	}
+	if offer("workflow.validate", holds(WorkflowRead)) {
 		tools = append(tools, m.workflowValidate(r))
 	}
-	if use(holds(WorkflowWrite)) {
+	if offer("workflow.commit", holds(WorkflowWrite)) {
 		tools = append(tools, m.workflowCommit(r))
 	}
 	// Left out even where the authorizer does not say what is granted, since what keeps these
@@ -144,7 +288,7 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, error) {
 		if t.person && (caller.Narrowed() || account) {
 			continue
 		}
-		if use(t.offered) {
+		if offer(t.name, t.offered) {
 			tools = append(tools, m.tool(r, t))
 		}
 	}
@@ -156,16 +300,22 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, error) {
 	}
 	if use(holds(WorkflowRead)) {
 		templates = append(templates, treeTemplate)
+		if up.tools != nil && !holds(WorkflowRead)(effective) {
+			up.tree = needed(holds(WorkflowRead), effective, listed)
+		}
 	}
 	if use(holds(RunRead)) {
 		templates = append(templates, runTemplate)
+		if up.tools != nil && !holds(RunRead)(effective) {
+			up.run = needed(holds(RunRead), effective, listed)
+		}
 	}
 	return mcp.Surface{
 		Tools:     tools,
 		Resources: languageResources(),
 		Templates: templates,
 		Read:      m.reader(r),
-	}, nil
+	}, up, nil
 }
 
 // readOnly are the annotations of a tool that reads and changes nothing: "the read-only tools carry

@@ -847,6 +847,50 @@ async function scenarios() {
   await settle();
   check(/password is removed/.test(text(b, "status")) && !visible(b, "signed-in"), "the page does not say the password went with the session: " + JSON.stringify(text(b, "status")));
 
+  // An MCP client's authorisation: the sign-in carries the request the page was served with, and the
+  // page follows the address the API answers only where it is the client's redirect URI with a query
+  // after it; a session that may only enrol sends nobody back.
+  const authorized = pages["authorize"].data;
+  const handedOn = JSON.stringify({
+    client_id: authorized["data-client-id"], redirect_uri: authorized["data-redirect-uri"], code_challenge: authorized["data-code-challenge"],
+    resource: authorized["data-resource"], scope: authorized["data-scope"], state: authorized["data-state"],
+  });
+  for (const [where, back, follows] of [
+    ["the client's redirect URI", authorized["data-redirect-uri"] + "?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0&iss=https%3A%2F%2Fagentiik.example.com", true],
+    ["another path", authorized["data-redirect-uri"] + "x?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0", false],
+    ["another host", "https://evil.example/?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0", false],
+  ]) {
+    scenario = "an MCP client allowed with a passkey, answered with " + where;
+    b = stage("authorize", "https://agentiik.example.com/auth/authorize?client_id=x");
+    all.push(b);
+    await settle();
+    check(visible(b, "passkey") && !visible(b, "password") && !visible(b, "enrolling"), "the page does not offer the passkey's sign-in alone");
+    await fire(b, "sign-in", "click");
+    request(b, "auth/passkey/options").answer(200, assertion);
+    await settle();
+    const verify = request(b, "auth/passkey/verify");
+    check(verify.body.ceremony === "assertion" && JSON.stringify(verify.body.authorization) === handedOn && !("terminal" in verify.body),
+      "the verification sent " + JSON.stringify(verify.body));
+    verify.answer(200, { ceremony: "assertion", login: "alice", redirect_to: back });
+    await settle();
+    check((b.location.assigned === back) === follows, "the page went to " + b.location.assigned);
+    check(follows || visible(b, "problem"), "the page says nothing of an address it does not follow");
+  }
+  scenario = "an MCP client allowed with a password that may only enrol";
+  b = stage("authorize-password", "https://agentiik.example.com/auth/authorize?client_id=x");
+  all.push(b);
+  await settle();
+  check(visible(b, "password"), "the page does not offer the password");
+  b.elements.login.value = "alice";
+  b.elements.secret.value = "correct horse battery staple";
+  await fire(b, "password", "submit");
+  const allowing = request(b, "auth/login");
+  check(JSON.stringify(allowing.body.authorization) === handedOn && allowing.body.login === "alice", "the sign-in sent " + JSON.stringify(allowing.body));
+  allowing.answer(200, { login: "alice", session: "enrolment" });
+  await settle();
+  check(b.location.assigned === null && visible(b, "enrolling") && !visible(b, "password") && !visible(b, "passkey"),
+    "a session that may only enrol went to " + b.location.assigned + ", or did not say a passkey comes first");
+
   scenario = "every request";
   for (const browser of all) {
     for (const q of browser.requests) {

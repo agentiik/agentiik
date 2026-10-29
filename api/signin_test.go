@@ -212,8 +212,11 @@ func TestEveryElementThePageScriptNamesIsOnItsPage(t *testing.T) {
 	h := in.signInOn(t, "https://agentiik.example.com", true)
 	script := fetched(t, h, "/auth/assets/page.js").Body.String()
 	shared, rest, ok := strings.Cut(script, "// The sign-in page.")
-	signIn, enrol, ok2 := strings.Cut(rest, "// The enrolment page.")
-	if !ok || !ok2 {
+	signIn, rest, ok2 := strings.Cut(rest, "// The enrolment page.")
+	// The authorisation page's part, which the sign-in page's tests of an installation issuing
+	// OAuth tokens hold to its page (oauth_test.go).
+	enrol, _, ok3 := strings.Cut(rest, "// The authorisation page.")
+	if !ok || !ok2 || !ok3 {
 		t.Fatal("page.js no longer says where each page's part of it starts")
 	}
 	named := func(part string) []string {

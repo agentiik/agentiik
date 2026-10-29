@@ -427,7 +427,7 @@ func (rt *Router) HandleOwn(method, pattern string, g Own, h OwnHandler) error {
 	}
 	standings, _ := rt.auth.(Standings)
 	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
-		rt.serveOwn(w, r, owners, standings, h)
+		rt.serveOwn(w, r, owners, standings, g.Challenge, h)
 	}); err != nil {
 		return err
 	}
@@ -451,18 +451,29 @@ type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
 // It asks the authorizer nothing, so a refusal added to allow reaches none of these routes: an
 // enrolment-only session "enrols passkeys and nothing else", and is refused by rt.identify, which
 // confined makes of the router's Identify, with the 403 openapi.json answers it on each of them.
-func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, standings Standings, h OwnHandler) {
+func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, standings Standings, challenge func(*http.Request, bool) string, h OwnHandler) {
 	as, err := rt.identify(r)
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
 		return
 	}
 	if as.Principal == "" {
+		if challenge != nil && as.RefusedAs == 0 {
+			// The route's own challenge, a protected resource's, which says where to ask for
+			// a token as well as that one is wanted.
+			w.Header().Set("WWW-Authenticate", challenge(r, as.Refused != ""))
+			why := as.Refused
+			if why == "" {
+				why = "this request carries no credential"
+			}
+			refuse(w, http.StatusUnauthorized, why)
+			return
+		}
 		unauthenticated(w, as)
 		return
 	}
 	h(w, r, Caller{
-		Principal: as.Principal, Token: as.Token, ProvedAt: as.ProvedAt, scope: as.Scope, owners: owners, standings: standings,
+		Principal: as.Principal, Token: as.Token, ProvedAt: as.ProvedAt, Audience: as.Audience, scope: as.Scope, owners: owners, standings: standings,
 		allow: func(ctx context.Context, what Permission, over Target) (bool, error) {
 			return rt.allow(ctx, as, what, over)
 		},
@@ -482,8 +493,9 @@ const apiPrefix = "/api/v1/"
 
 // apiRoots are the first segments of every path the API answers besides a repository's, which is
 // /{namespace}/{name}.git/ and told apart by its shape: the API under /api, the sign-in page under
-// /auth, the triggers' webhooks under /hooks, the MCP server at /mcp and the built-in object store
-// under /objects. Every other path is the console's.
+// /auth, the triggers' webhooks under /hooks, the MCP server at /mcp, the built-in object store
+// under /objects, and from v0.7.0 the OAuth metadata the MCP surfaces publish under /.well-known,
+// which RFC 8414 and RFC 9728 place at the root of the host. Every other path is the console's.
 //
 // Fixed here rather than read off the routes, and a route refused registration outside them, for
 // two readers. The console, which answers every other path, would otherwise take one of the API's
@@ -493,7 +505,7 @@ const apiPrefix = "/api/v1/"
 // the documentation's list, before any route is registered under it; /hooks and /mcp are held
 // before their routes are served, so that the console never answers what an API of a later release
 // will.
-var apiRoots = []string{"api", "auth", "hooks", "mcp", "objects"}
+var apiRoots = []string{"api", "auth", "hooks", "mcp", "objects", ".well-known"}
 
 // underRoot says whether a path, unescaped, is under one of apiRoots: its first segment is one.
 func underRoot(p string) bool {
@@ -527,7 +539,7 @@ func (rt *Router) register(method, pattern string, h http.HandlerFunc) (err erro
 		return nil
 	}
 	if !underRoot(pattern) {
-		return fmt.Errorf("api: %s %s is outside the paths the API answers, /api/, /auth/, /hooks/, /mcp, /objects/ and a repository's: every other path is the console's, and an installation serving the console's files from a proxy of its own sends the API those alone, so the root joins apiRoots, and the documentation's list, first", method, pattern)
+		return fmt.Errorf("api: %s %s is outside the paths the API answers, /api/, /auth/, /hooks/, /mcp, /objects/, /.well-known/ and a repository's: every other path is the console's, and an installation serving the console's files from a proxy of its own sends the API those alone, so the root joins apiRoots, and the documentation's list, first", method, pattern)
 	}
 	if rest, under := strings.CutPrefix(pattern, apiPrefix); under {
 		first, _, _ := strings.Cut(rest, "/")

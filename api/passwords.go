@@ -109,6 +109,10 @@ type PasswordOptions struct {
 	// Trouble is told what went wrong where an answer is given all the same: a failed sign-in that
 	// could not be recorded, or a hash or a secret that could not be read.
 	Trouble func(error)
+
+	// OAuth is the installation's own authorisation server, which a sign-in carrying an MCP
+	// client's authorization mints its code for, and nil where it issues no token.
+	OAuth *OAuth
 }
 
 // PasswordAPI is the password sign-in.
@@ -119,6 +123,7 @@ type PasswordAPI struct {
 	signIns  *SignIns
 	now      func() time.Time
 	trouble  func(error)
+	oauth    *OAuth
 
 	// origin is the sign-in page's, host the public URL's, which a TOTP generator names its
 	// account at, and ipAddressed an installation addressed by an IP address.
@@ -196,7 +201,7 @@ func NewPasswords(rt *Router, o PasswordOptions) (*PasswordAPI, error) {
 		return nil, err
 	}
 	s := &PasswordAPI{
-		pool: o.Pool, totp: o.TOTP, identify: o.Identify, signIns: o.SignIns, now: o.Now, trouble: o.Trouble,
+		pool: o.Pool, totp: o.TOTP, identify: o.Identify, signIns: o.SignIns, now: o.Now, trouble: o.Trouble, oauth: o.OAuth,
 		origin: origin, host: strings.ToLower(u.Hostname()), ipAddressed: net.ParseIP(u.Hostname()) != nil,
 		attempts: newAttempts(), hashing: newHashing(hashingTurns(), hashingWait), nobody: nobody,
 	}
@@ -220,6 +225,11 @@ type passwordAsked struct {
 	// signs in on an installation addressed by an IP address, where no passkey can be used.
 	Terminal *TerminalSignIn
 
+	// Authorization is what an MCP client opened /auth/authorize with, for a sign-in that allows it,
+	// and approved is it held to its rules again, by login.
+	Authorization *OAuthSignIn
+	approved      *approval
+
 	// coded is whether the request wrote a TOTP code, null being none.
 	coded bool
 }
@@ -235,6 +245,8 @@ func (q *passwordAsked) field(b *body, name string) error {
 		return text(b, &q.TOTP)
 	case "terminal":
 		return readTerminal(b, &q.Terminal)
+	case "authorization":
+		return readAuthorization(b, &q.Authorization)
 	}
 	return unknown(name)
 }
@@ -251,8 +263,12 @@ func (q passwordAsked) check() error {
 	case q.coded && !sixDigits(q.TOTP):
 		// The code is not repeated, since it may be most of a real one.
 		return fmt.Errorf("totp: a TOTP code is %d digits, as the generator shows it", totp.Digits)
+	case q.Terminal != nil && q.Authorization != nil:
+		return errors.New("authorization: a sign-in hands its code to agk login or to an MCP client, and this one names both")
 	case q.Terminal != nil:
 		return q.Terminal.check()
+	case q.Authorization != nil:
+		return q.Authorization.check()
 	}
 	return nil
 }
@@ -351,6 +367,15 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 	if err := ask.check(); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if ask.Authorization != nil {
+		// Before the attempt is counted and the password hashed, as for a passkey's sign-in.
+		approved, status, why := approveSignIn(r.Context(), s.oauth, *ask.Authorization)
+		if approved == nil {
+			fail(w, status, why)
+			return
+		}
+		ask.approved = approved
 	}
 	now := s.now().Truncate(time.Microsecond)
 	address := s.signIns.addressOf(r)
@@ -482,7 +507,7 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 		case held.totp.ID != a.totp.ID:
 			return &refusal{reason: "the TOTP generator was enrolled or removed during the sign-in"}
 		}
-		cookie, answer, err = s.signIn(ctx, wide, held, address, step, ask.Terminal, now)
+		cookie, answer, err = s.signIn(ctx, wide, held, address, step, ask.Terminal, ask.approved, now)
 		return err
 	})
 	var refusedFor *refusal
@@ -567,7 +592,7 @@ var errForbidden = errors.New("api: passwords are forbidden")
 // enrolment-only as the policy says, recorded as signin.succeed, and, for a sign-in agk login started
 // that opened a full session, its one-time code. It answers the cookie to set once the transaction
 // commits, and what the answer says.
-func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, address string, step int64, terminal *TerminalSignIn, now time.Time) (*http.Cookie, SignedIn, error) {
+func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, address string, step int64, terminal *TerminalSignIn, approved *approval, now time.Time) (*http.Cookie, SignedIn, error) {
 	login := a.user.Login
 	if a.totp.ID != "" {
 		if err := wide.TOTPUsed(ctx, a.totp.ID, step, now); err != nil {
@@ -611,8 +636,13 @@ func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, addr
 	}
 	signedIn.record.Detail["session"] = kind
 	answer := SignedIn{Login: login, Session: kind}
-	if terminal != nil && kind == SessionFull {
+	switch {
+	case terminal != nil && kind == SessionFull:
 		if answer.RedirectTo, err = handOff(ctx, wide, terminal, login, a.password.ID, now); err != nil {
+			return nil, SignedIn{}, err
+		}
+	case approved != nil && kind == SessionFull:
+		if answer.RedirectTo, err = s.oauth.handOff(ctx, wide, approved, login, a.password.ID, now); err != nil {
 			return nil, SignedIn{}, err
 		}
 	}

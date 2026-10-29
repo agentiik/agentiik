@@ -78,6 +78,12 @@ func (m *MCP) serveTo(w http.ResponseWriter, r *http.Request, tool, method, path
 		target += "?" + query.Encode()
 	}
 	ctx := audit.Through(r.Context(), tool)
+	// The surface the request is made for, which the token it carries was issued for where it is an
+	// OAuth token: the route is the API's own, made inside the process for that surface, and the
+	// token is accepted there for it alone, never forwarded anywhere else.
+	if resource := servedResource(r, m.base); resource != "" {
+		ctx = forResource(ctx, resource)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, target, &payload)
 	if err != nil {
 		return err
