@@ -20,15 +20,22 @@ import (
 // lapsed."
 
 // runBy creates decidedRun as trigger started it, attributed to by, as the API or a trigger writes
-// it: by is left empty for a run nobody asked for, which is its namespace's built-in identity's.
+// it: by is left empty for a run nobody asked for, which is its namespace's built-in identity's. A
+// run of a tool's call records the collection it came through and the name it was called by, as
+// every such run does.
 func runBy(t *testing.T, pool *db.Pool, run agk.RunID, trigger agk.TriggerKind, by string) {
 	t.Helper()
+	var through *db.CollectionCall
+	if trigger == agk.TriggerMCP {
+		through = &db.CollectionCall{ID: "01JR8Q2W6H3V0X9K4M7N5P1T2C", Tool: "create_invoices"}
+	}
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 		return ns.CreateRun(ctx, db.NewRun{
 			ID: run, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
 			Trigger: trigger, TriggeredBy: by,
-			Inputs: json.RawMessage(`{"orders": [{"customer_id": "C-1042"}]}`),
-			Steps:  []agk.Step{"normalize", "archive"},
+			Inputs:     json.RawMessage(`{"orders": [{"customer_id": "C-1042"}]}`),
+			Steps:      []agk.Step{"normalize", "archive"},
+			Collection: through,
 		})
 	}); err != nil {
 		t.Fatal(err)
@@ -189,6 +196,14 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 			reason := fmt.Sprintf("alice no longer holds workflow:run on finance/monthly-invoicing: grant %s (operator on the namespace finance) was revoked at %s", id, at.UTC().Format(time.RFC3339Nano))
 			return "alice", reason, reason + " by bob"
 		}},
+		{"alice's grant revoked since she called a collection's tool", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
+			// The run a tool's call started is its caller's, and asked about again as any run is.
+			runBy(t, pool, decidedRun, agk.TriggerMCP, "alice")
+			id := grantOn(t, conn, "alice")
+			at := revoke(t, pool, conn, id)
+			reason := fmt.Sprintf("alice no longer holds workflow:run on finance/monthly-invoicing: grant %s (operator on the namespace finance) was revoked at %s", id, at.UTC().Format(time.RFC3339Nano))
+			return "alice", reason, reason + " by bob"
+		}},
 		{"alice's grant expired since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			id := grantOn(t, conn, "alice")
@@ -339,8 +354,9 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 }
 
 // The principals that still hold workflow:run are let in: alice by her own grant, by her group's
-// alone, and a schedule's run by the grant an owner gave the built-in identity. And a grant ending
-// later than now, or a deny that has ended, takes nothing away.
+// alone, and through a collection's tool she called, and a schedule's run by the grant an owner gave
+// the built-in identity. And a grant ending later than now, or a deny that has ended, takes nothing
+// away.
 func TestARunWhosePrincipalStillHoldsWorkflowRunIsLetIn(t *testing.T) {
 	for _, c := range []struct {
 		what    string
@@ -349,6 +365,7 @@ func TestARunWhosePrincipalStillHoldsWorkflowRunIsLetIn(t *testing.T) {
 		setUp   []string
 	}{
 		{"alice by her own grant", agk.TriggerManual, "alice", nil},
+		{"alice through a collection's tool, by her own grant", agk.TriggerMCP, "alice", nil},
 		{"alice by her group's grant alone", agk.TriggerManual, "alice", []string{
 			`delete from grants where principal = 'alice'`,
 			`insert into principals (id, kind) values ('group:team-finance', 'group')`,

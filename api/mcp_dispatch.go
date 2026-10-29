@@ -88,7 +88,7 @@ func (m *MCP) serveTo(w http.ResponseWriter, r *http.Request, tool, method, path
 	}
 	req.RemoteAddr = r.RemoteAddr
 	req.Host = r.Host
-	m.rt.ServeHTTP(w, req)
+	m.api.ServeHTTP(w, req)
 	return nil
 }
 
