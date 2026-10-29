@@ -134,11 +134,11 @@ func TestTheLogScrollsBack(t *testing.T) {
 	}
 	m = press(t, m, tabKey, tabKey, up, up, up)
 	s := screen(m)
-	if m.focus != logPane || !strings.Contains(s, "3 lines back") || !strings.Contains(s, "line 057") || strings.Contains(s, "line 058") {
+	if m.focus != logPane || !strings.Contains(s, "3 rows back") || !strings.Contains(s, "line 057") || strings.Contains(s, "line 058") {
 		t.Errorf("↑ three times in the log shows:\n%s", s)
 	}
 	m = press(t, m, down, down, down, down)
-	if s := screen(m); !strings.Contains(s, "line 060") || strings.Contains(s, "lines back") {
+	if s := screen(m); !strings.Contains(s, "line 060") || strings.Contains(s, " back") {
 		t.Errorf("↓ back to the end shows:\n%s", s)
 	}
 	m.unfollow()
@@ -173,7 +173,7 @@ func TestABorderIsDraggedAndAClickFocuses(t *testing.T) {
 	m = send(t, m, tea.MouseClickMsg{X: 80, Y: 30, Button: tea.MouseLeft}).(Model)
 	m = send(t, m, tea.MouseWheelMsg{X: 158, Y: 20, Button: tea.MouseWheelUp}).(Model)
 	if m.focus != runPane || m.scrolledBack() != 1 {
-		t.Errorf("the wheel over the log leaves the focus on %v and the log %d lines back", m.focus, m.scrolledBack())
+		t.Errorf("the wheel over the log leaves the focus on %v and the log %d rows back", m.focus, m.scrolledBack())
 	}
 	m.unfollow()
 }
