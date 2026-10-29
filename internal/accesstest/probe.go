@@ -137,6 +137,8 @@ func (f *Fixture) lets(c Case, as Asker, at Target, h Holding) bool {
 		// Git is answered with the command line's token alone, and a session is no credential
 		// there.
 		return false
+	case c.Bearer && as.Bearer == "":
+		return false
 	case c.Owned && c.Makes == "token" && as.Principal == NightlySync:
 		// The token made is finance/nightly-sync's own, which it revokes as its own.
 		return true
@@ -161,6 +163,8 @@ func (f *Fixture) lets(c Case, as Asker, at Target, h Holding) bool {
 // beginning of the body the router answers it with, empty where the route answers it itself.
 func refusal(c Case, as Asker, h Holding) (int, string) {
 	switch {
+	case as.Bearer == "" && c.Bearer && as.Session != nil:
+		return http.StatusUnauthorized, ""
 	case as.Bearer == "" && (as.Session == nil || c.Repository):
 		return http.StatusUnauthorized, noCredential
 	case c.Runner && as.Bearer == "":

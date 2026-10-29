@@ -34,6 +34,9 @@ func accessInstallation(t *testing.T, clock *accesstest.Clock, publicURL string)
 		t.Fatal("bus-init failed")
 	}
 	s := servingSettings(t, database.Application, dir, natsFrom(t, dir))
+	// Serving MCP, as an installation does unless AGK_MCP is off and as package e2e's does, so that
+	// the user's server, every collection and the authorisation server are asked about with the rest.
+	s.MCP = true
 	s.now = clock.Now
 	if publicURL != "" {
 		s.PublicURL = publicURL
