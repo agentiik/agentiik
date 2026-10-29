@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -70,6 +71,10 @@ type installation struct {
 	// graph is the resolved graph the workflow's route answers, as JSON, and detail the whole of
 	// its answer where a test gives one; stats is what the statistics route answers.
 	graph, detail, stats string
+
+	// workflows are what GET /api/v1/{ns}/workflows lists, by namespace, where a test gives them,
+	// and the workflows the runs name otherwise.
+	workflows map[string][]db.ListedWorkflow
 
 	// grants are what each grants route answers, by path, and groups the groups an administrator
 	// reads.
@@ -143,6 +148,8 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 		answer = e
 	case strings.HasPrefix(path, "/api/v1/runs/"):
 		answer = in.run
+	case strings.HasSuffix(path, "/workflows") && strings.Count(path, "/") == 4:
+		answer = map[string]any{"workflows": in.listed(strings.Split(path, "/")[3])}
 	case strings.Contains(path, "/workflows/") && in.detail != "":
 		answer = json.RawMessage(in.detail)
 	case strings.Contains(path, "/workflows/") && in.graph != "":
@@ -154,6 +161,26 @@ func (in *installation) read(_ context.Context, path string, out any) error {
 	}
 	b, _ := json.Marshal(answer)
 	return json.Unmarshal(b, out)
+}
+
+// listed is what GET /api/v1/{ns}/workflows answers: the workflows a test gives the namespace, or
+// else those its runs name, by name, each with its newest run.
+func (in *installation) listed(ns string) []db.ListedWorkflow {
+	if w, ok := in.workflows[ns]; ok {
+		return w
+	}
+	by := map[string]db.ListedWorkflow{}
+	for _, r := range in.runs {
+		if _, ok := by[r.Workflow]; ok || r.Namespace != ns {
+			continue
+		}
+		by[r.Workflow] = db.ListedWorkflow{Name: r.Workflow, Latest: &db.LatestRun{Run: r.Run, State: r.State, TriggerKind: r.Trigger, CreatedAt: r.CreatedAt}}
+	}
+	listed := []db.ListedWorkflow{}
+	for _, name := range slices.Sorted(maps.Keys(by)) {
+		listed = append(listed, by[name])
+	}
+	return listed
 }
 
 func someRuns() []db.ListedRun {
