@@ -160,8 +160,12 @@
     cursor: text;
   }
 
+  /* The field inside draws no focus of its own, the box around it being the field a person sees: the
+     box carries the focus border a field does. */
   .find:focus-within {
     border-color: var(--accent);
+    outline: var(--border-focus) solid var(--accent);
+    outline-offset: calc(-1 * var(--border-hairline));
   }
 
   .find input {
