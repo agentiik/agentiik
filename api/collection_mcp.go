@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,9 +48,10 @@ const collectionInstructions = "Each tool runs a workflow of the installation as
 // itself, "because clients time out".
 const syncWaitCeiling = 120 * time.Second
 
-// treeBase is what a bundled schema's references resolve against, the base under which the engine
-// compiles every schema a workflow writes: "./schemas/order.json" written in a workflow input is
-// agk://repo/schemas/order.json, the $id the file is bundled under.
+// treeBase is what a bundled schema's references are resolved against before they are rewritten,
+// the base under which the engine compiles every schema a workflow writes: "./schemas/order.json"
+// written in a workflow input is agk://repo/schemas/order.json, the file the bundle embeds by its
+// path, schemas/order.json.
 const treeBase = "agk://repo/"
 
 // serveCollection answers one request to a collection's endpoint, as its owner presenting a bearer
@@ -134,9 +137,18 @@ func (c *Collections) tool(ctx context.Context, caller Caller, collection string
 	if len(required) > 0 {
 		input["required"] = required
 	}
+	// Each input's schema is a document the engine compiles on its own, under treeBase.
+	var documents []string
+	for name := range properties {
+		documents = append(documents, "/properties/"+pointerToken(name))
+	}
+	inputSchema, err := bundled(input, p.Files, documents...)
+	if err != nil {
+		return mcp.Tool{}, err
+	}
 	t := mcp.Tool{
 		Name: o.tool, Title: block.Title, Description: block.Description,
-		InputSchema: bundled(input, p.Files),
+		InputSchema: inputSchema,
 	}
 	if len(p.Output) > 0 && block.Mode != graph.ToolAsync {
 		// What the result is: the output's envelope, whose items carry what the output's schema
@@ -144,7 +156,7 @@ func (c *Collections) tool(ctx context.Context, caller Caller, collection string
 		// protocol holds a structured result to its outputSchema. An async tool answers the run it
 		// started and never the output, so it publishes none: a structured result has to conform
 		// to the outputSchema a tool publishes, and the run's identifier is no envelope.
-		t.OutputSchema = bundled(map[string]any{
+		if t.OutputSchema, err = bundled(map[string]any{
 			"type": "object", "required": []string{"meta", "items"},
 			"properties": map[string]any{
 				"meta": map[string]any{"type": "object"},
@@ -156,7 +168,9 @@ func (c *Collections) tool(ctx context.Context, caller Caller, collection string
 					},
 				}},
 			},
-		}, p.Files)
+		}, p.Files, "/properties/items/items/properties/data"); err != nil {
+			return mcp.Tool{}, err
+		}
 	}
 	if a := block.Annotations; a != (graph.Annotations{}) {
 		t.Annotations = &mcp.Annotations{ReadOnlyHint: a.ReadOnlyHint, IdempotentHint: a.IdempotentHint, DestructiveHint: a.DestructiveHint, OpenWorldHint: a.OpenWorldHint}
@@ -167,35 +181,257 @@ func (c *Collections) tool(ctx context.Context, caller Caller, collection string
 	return t, nil
 }
 
-// bundled is a schema with every file of the tree it reaches embedded under $defs, each by its path
-// and carrying the $id the engine compiled it under, and the whole given the base those $ids
-// resolve against: a reference written "./schemas/order.json" then resolves to the file embedded
-// beside it, as JSON Schema 2020-12 resolves an embedded resource, with nothing rewritten.
-func bundled(root map[string]any, files map[string]any) json.RawMessage {
+// bundled is a schema with every file of the tree it reaches embedded under $defs, each by its
+// path, and every reference written in it rewritten into a pointer inside it, "#/$defs/<path>" and
+// the place in the file, which every client resolves with no retrieval and no knowledge of a base.
+// Each reference is first resolved as the engine resolves it, against treeBase moved by every $id
+// met on the way to it; then the $ids, the anchors and each document's $schema are left out, since
+// nothing is resolved against them any more and one left in would move the pointers beneath it.
+// Kept, they defeated a client twice over: a file declaring an $id of its own was no longer the
+// resource its path names, and Python's urljoin, which referencing and jsonschema resolve with,
+// resolves nothing under the agk: scheme.
+//
+// documents are the places in root holding a schema the engine compiles as a document of its own,
+// an input's or the output's, each resolving against treeBase alone. A reference that reaches no
+// file the bundle holds refuses the bundle, and the tool with it, rather than publishing what a
+// client would have to fetch; one under another scheme than agk is a meta-schema, which the engine
+// knows without fetching it, as a client does, and is kept as written.
+func bundled(root map[string]any, files map[string]any, documents ...string) (json.RawMessage, error) {
 	root["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-	root["$id"] = treeBase
 	if len(files) > 0 {
-		defs := map[string]any{}
-		for path, doc := range files {
-			if o, ok := doc.(map[string]any); ok {
-				embedded := make(map[string]any, len(o)+1)
-				for k, v := range o {
-					embedded[k] = v
-				}
-				if _, has := embedded["$id"]; !has {
-					embedded["$id"] = treeBase + path
-				}
-				doc = embedded
-			}
-			defs[path] = doc
-		}
-		root["$defs"] = defs
+		root["$defs"] = files
 	}
+	// Written and read back, numbers as written, so that what is rewritten is a copy: the files
+	// are the publication kept for every list of the version.
 	b, err := json.Marshal(root)
 	if err != nil {
-		return json.RawMessage(`{"type":"object"}`)
+		return nil, err
 	}
-	return b
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	var bundle any
+	if err := d.Decode(&bundle); err != nil {
+		return nil, err
+	}
+
+	// The resources a reference may name: each file by the URL its path is under and by every $id
+	// it declares, and each document by treeBase and the $ids it declares, which only its own
+	// references reach, since the engine compiles each on its own.
+	type unit struct {
+		at, base string
+		own      *resources
+	}
+	tree := &resources{}
+	var units []unit
+	for _, at := range documents {
+		own := &resources{}
+		own.name(treeBase, at)
+		units = append(units, unit{at: at, base: treeBase, own: own})
+	}
+	for _, path := range sortedKeys(files) {
+		at := "/$defs/" + pointerToken(path)
+		base := resourceOf(&url.URL{Scheme: "agk", Host: "repo", Path: "/" + path})
+		tree.name(base, at)
+		units = append(units, unit{at: at, base: base, own: tree})
+	}
+	for _, u := range units {
+		node, _ := pointed(bundle, u.at)
+		if err := eachSchema(node, u.at, u.base, func(o map[string]any, at, base string) error {
+			if _, ok := o["$id"].(string); ok && !u.own.name(base, at) {
+				return fmt.Errorf("api: two schemas of the tree declare %s, which a client could not tell apart", base)
+			}
+			for _, key := range []string{"$anchor", "$dynamicAnchor"} {
+				if anchor, ok := o[key].(string); ok {
+					u.own.anchor(base, anchor, at)
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	for _, u := range units {
+		node, _ := pointed(bundle, u.at)
+		if err := eachSchema(node, u.at, u.base, func(o map[string]any, at, base string) error {
+			if ref, ok := o["$ref"].(string); ok {
+				to, err := inBundle(bundle, ref, base, u.own, tree)
+				if err != nil {
+					return fmt.Errorf("api: the schema at %s: %w", at, err)
+				}
+				o["$ref"] = to
+			}
+			delete(o, "$id")
+			delete(o, "$anchor")
+			delete(o, "$schema")
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(bundle)
+}
+
+// resources are the schemas a reference resolves to by URL, each by the pointer to it in a bundle,
+// and the anchors each declares.
+type resources struct {
+	at      map[string]string
+	anchors map[string]map[string]string
+}
+
+// name records the resource at a URL, and answers false where another place already holds it.
+func (r *resources) name(url, at string) bool {
+	if r.at == nil {
+		r.at = map[string]string{}
+	}
+	if held, ok := r.at[url]; ok && held != at {
+		return false
+	}
+	r.at[url] = at
+	return true
+}
+
+func (r *resources) anchor(url, anchor, at string) {
+	if r.anchors == nil {
+		r.anchors = map[string]map[string]string{}
+	}
+	if r.anchors[url] == nil {
+		r.anchors[url] = map[string]string{}
+	}
+	r.anchors[url][anchor] = at
+}
+
+// inBundle is a reference as the pointer into the bundle to what it resolves to against base,
+// looked up among a document's own resources first and then among the tree's.
+func inBundle(bundle any, ref, base string, scopes ...*resources) (string, error) {
+	from, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	written, err := url.Parse(ref)
+	if err != nil {
+		return "", fmt.Errorf("%q is no reference: %w", ref, err)
+	}
+	u := from.ResolveReference(written)
+	key := resourceOf(u)
+	for _, s := range scopes {
+		at, ok := s.at[key]
+		if !ok {
+			continue
+		}
+		switch fragment := u.Fragment; {
+		case fragment == "":
+		case strings.HasPrefix(fragment, "/"):
+			at += fragment
+		default:
+			if at, ok = s.anchors[key][fragment]; !ok {
+				return "", fmt.Errorf("%q names the anchor %s, which %s does not declare", ref, fragment, key)
+			}
+		}
+		if _, ok := pointed(bundle, at); !ok {
+			return "", fmt.Errorf("%q names %s, which holds nothing there", ref, u)
+		}
+		return (&url.URL{Fragment: at}).String(), nil
+	}
+	if u.Scheme != "agk" {
+		return ref, nil
+	}
+	return "", fmt.Errorf("%q resolves to %s, which is no file the bundle holds", ref, key)
+}
+
+// resourceOf is the URL a resource is named by: the URL with no fragment, its path written as the
+// engine's loader reads it, so that a path and a reference to it agree however either escapes it.
+func resourceOf(u *url.URL) string {
+	v := *u
+	v.Fragment, v.RawFragment, v.RawPath = "", "", ""
+	return v.String()
+}
+
+// The keywords of JSON Schema 2020-12 whose value is a schema, an object of schemas or a list of
+// them, with the ones earlier drafts wrote, which a file may still carry: what eachSchema walks
+// into, so that a $ref, an $id or an $anchor is read where it is a keyword, and never under enum,
+// const, default or examples, where it is the value written.
+var (
+	schemaKeywords  = []string{"additionalProperties", "propertyNames", "items", "contains", "not", "if", "then", "else", "unevaluatedItems", "unevaluatedProperties", "contentSchema", "additionalItems"}
+	schemasKeywords = []string{"properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"}
+	listKeywords    = []string{"allOf", "anyOf", "oneOf", "prefixItems", "items"}
+)
+
+// eachSchema visits every schema object of node, the pointer to it and the base its references
+// resolve against: base, moved by the $id of every object from node down to it, its own included.
+func eachSchema(node any, at, base string, visit func(o map[string]any, at, base string) error) error {
+	o, ok := node.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if id, ok := o["$id"].(string); ok {
+		from, err := url.Parse(base)
+		if err != nil {
+			return err
+		}
+		to, err := url.Parse(id)
+		if err != nil {
+			return fmt.Errorf("api: the schema at %s declares the $id %q, which is no URL: %w", at, id, err)
+		}
+		base = resourceOf(from.ResolveReference(to))
+	}
+	if err := visit(o, at, base); err != nil {
+		return err
+	}
+	for _, key := range schemaKeywords {
+		if _, list := o[key].([]any); !list {
+			if err := eachSchema(o[key], at+"/"+pointerToken(key), base, visit); err != nil {
+				return err
+			}
+		}
+	}
+	for _, key := range schemasKeywords {
+		named, _ := o[key].(map[string]any)
+		for _, name := range sortedKeys(named) {
+			if err := eachSchema(named[name], at+"/"+pointerToken(key)+"/"+pointerToken(name), base, visit); err != nil {
+				return err
+			}
+		}
+	}
+	for _, key := range listKeywords {
+		listed, _ := o[key].([]any)
+		for i, v := range listed {
+			if err := eachSchema(v, at+"/"+pointerToken(key)+"/"+strconv.Itoa(i), base, visit); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// pointed is what a JSON Pointer names in a document, and false where it names nothing.
+func pointed(doc any, pointer string) (any, bool) {
+	if pointer == "" {
+		return doc, true
+	}
+	for _, token := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		switch v := doc.(type) {
+		case map[string]any:
+			var ok bool
+			if doc, ok = v[token]; !ok {
+				return nil, false
+			}
+		case []any:
+			i, err := strconv.Atoi(token)
+			if err != nil || i < 0 || i >= len(v) {
+				return nil, false
+			}
+			doc = v[i]
+		default:
+			return nil, false
+		}
+	}
+	return doc, true
+}
+
+// pointerToken is a name as one token of a JSON Pointer, as RFC 6901 escapes it.
+func pointerToken(name string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(name, "~", "~0"), "/", "~1")
 }
 
 func sortedKeys[V any](m map[string]V) []string {
