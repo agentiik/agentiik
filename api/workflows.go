@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"regexp"
 	"slices"
@@ -904,7 +905,11 @@ func (s *Server) readTree(w http.ResponseWriter, r *http.Request, _ Principal, o
 			return
 		}
 		defer body.Close()
+		// A file of the tree is bytes whoever can push wrote, served on the console's origin, so
+		// a browser is told neither to sniff it nor to render it, as an artifact's bytes are.
 		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name[strings.LastIndex(name, "/")+1:]}))
 		w.Header().Set("Content-Length", strconv.FormatInt(f.Size, 10))
 		w.Header().Set("ETag", `"`+f.SHA256+`"`)
 		w.WriteHeader(http.StatusOK)

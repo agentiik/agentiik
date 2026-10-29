@@ -181,8 +181,12 @@ func (s *ObjectAPI) fetch(w http.ResponseWriter, r *http.Request, key string) {
 
 	// An object is bytes, and its media type lives on the envelope entry that names it. A
 	// store that guessed one would be deciding how a browser treats content it was handed a
-	// digest for.
+	// digest for. It is served on the console's origin, so a browser is told neither to sniff
+	// it nor to render it: an object whoever can produce an artifact wrote would otherwise be
+	// 'self' to the console's script-src, a script an HTML injection could load.
 	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "attachment")
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, rc)
