@@ -247,7 +247,8 @@ func stepStrip(r db.ListedRun) []part {
 	return parts
 }
 
-// sparkRead is the last twenty runs of a workflow the runs view lists, for its sparkline.
+// sparkRead is the last twenty runs of a workflow the runs view or the workflows view lists, for
+// its sparkline.
 type sparkRead struct {
 	key  string
 	runs []db.ListedRun
@@ -264,11 +265,32 @@ func (m Model) readSparks() []tea.Cmd {
 	if !m.full() {
 		return nil
 	}
+	var keys []string
+	for _, r := range m.shownRuns() {
+		keys = append(keys, r.Namespace+"/"+r.Workflow)
+	}
+	return m.sparksOf(keys)
+}
+
+// readFlowSparks reads the last runs of each workflow the workflows view lists that has run, as the
+// runs view reads its own, at any width, since the list draws them at any.
+func (m Model) readFlowSparks() []tea.Cmd {
+	var keys []string
+	for _, f := range m.flows {
+		if f.latest != nil {
+			keys = append(keys, f.key())
+		}
+	}
+	return m.sparksOf(keys)
+}
+
+// sparksOf reads the last runs of each workflow named, by namespace/workflow, once however often it
+// is named, where none are read or those read are a minute old.
+func (m Model) sparksOf(keys []string) []tea.Cmd {
 	now := m.o.Now()
 	var cmds []tea.Cmd
 	seen := map[string]bool{}
-	for _, r := range m.shownRuns() {
-		key := r.Namespace + "/" + r.Workflow
+	for _, key := range keys {
 		if seen[key] {
 			continue
 		}
@@ -276,7 +298,7 @@ func (m Model) readSparks() []tea.Cmd {
 		if s, ok := m.sparks[key]; ok && now.Sub(s.at) < sparkEvery {
 			continue
 		}
-		ns, wf := r.Namespace, r.Workflow
+		ns, wf, _ := strings.Cut(key, "/")
 		cmds = append(cmds, func() tea.Msg {
 			var listed struct {
 				Runs []db.ListedRun `json:"runs"`

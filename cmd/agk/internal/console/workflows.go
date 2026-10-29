@@ -3,6 +3,7 @@ package console
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -15,23 +16,24 @@ import (
 )
 
 // The workflows view lists the workflows of the namespace shown, or of every namespace the
-// principal reads, each with its latest run and its last twenty, and for the one chosen its
+// principal reads the runs of, as GET /api/v1/{ns}/workflows lists them to the web console: each
+// with its latest run, one never run among them, and its last twenty; and for the one chosen its
 // repository, its declared triggers, its versions, and the compact form of its statistics: a
-// histogram of its durations over 30 days, its p50 and p95 marked. The API lists no namespace's
-// workflows, so the view lists those its last 200 runs name, as the web console's workflows page
-// does, and says so. enter opens the graph of the version the default branch's head resolves to.
+// histogram of its durations over 30 days, its p50 and p95 marked. enter opens the graph of the
+// version the default branch's head resolves to.
 
-// flowsRead is the runs the workflows are read from.
+// flowsRead is the workflows of every namespace listed, or why one of them could not be read.
 type flowsRead struct {
-	runs  []db.ListedRun
+	flows []flowRow
 	err   error
 	shown int
 }
 
-// flowRow is one workflow as the list draws it: the runs of it among those read, newest first.
+// flowRow is one workflow as the list draws it: its namespace, its name and its newest run, nil
+// where it was never run.
 type flowRow struct {
 	namespace, workflow string
-	runs                []db.ListedRun
+	latest              *db.LatestRun
 }
 
 func (f flowRow) key() string { return f.namespace + "/" + f.workflow }
@@ -100,9 +102,6 @@ type (
 	}
 )
 
-// flowsLimit is how many runs the workflows are read from, as many as the web console reads.
-const flowsLimit = 200
-
 // histogramBins and histogramDays are the compact statistics' bins and range: a dozen bins, which
 // a line holds, over the 30 days the documentation names.
 const (
@@ -110,41 +109,51 @@ const (
 	histogramDays = 30
 )
 
+// readFlows reads the workflows of every namespace flowNamespaces names, one after the other, and
+// lists none of them until all are read: a namespace that could not be read fails the whole, since
+// a list without it would read as one where it holds no workflow.
 func (m Model) readFlows() tea.Cmd {
-	path := fmt.Sprintf("/api/v1/runs?limit=%d", flowsLimit)
-	if m.o.Namespace != "" {
-		path += "&namespace=" + url.QueryEscape(m.o.Namespace)
+	namespaces, known := m.flowNamespaces()
+	if !known {
+		return nil
 	}
 	shown := m.shown
 	return func() tea.Msg {
-		var listed struct {
-			Runs []db.ListedRun `json:"runs"`
+		var rows []flowRow
+		for _, ns := range namespaces {
+			var listed struct {
+				Workflows []db.ListedWorkflow `json:"workflows"`
+			}
+			if err := m.o.Read(m.ctx, "/api/v1/"+url.PathEscape(ns)+"/workflows", &listed); err != nil {
+				return flowsRead{err: err, shown: shown}
+			}
+			for _, w := range listed.Workflows {
+				rows = append(rows, flowRow{namespace: ns, workflow: w.Name, latest: w.Latest})
+			}
 		}
-		err := m.o.Read(m.ctx, path, &listed)
-		return flowsRead{runs: listed.Runs, err: err, shown: shown}
+		slices.SortFunc(rows, func(a, b flowRow) int { return cmp.Compare(a.key(), b.key()) })
+		return flowsRead{flows: rows, shown: shown}
 	}
 }
 
-// flowRows groups the runs read by workflow, by namespace and name.
-func flowRows(runs []db.ListedRun) []flowRow {
-	by := map[string]*flowRow{}
-	var rows []*flowRow
-	for _, r := range runs {
-		key := r.Namespace + "/" + r.Workflow
-		row, ok := by[key]
-		if !ok {
-			row = &flowRow{namespace: r.Namespace, workflow: r.Workflow}
-			by[key] = row
-			rows = append(rows, row)
+// flowNamespaces are the namespaces whose workflows are listed: the one the console opened on, or
+// every one where /me says the principal holds run:read, on it or on one workflow of it, which is
+// what the route lists a workflow to. Which those are is not known before /me is read.
+func (m Model) flowNamespaces() ([]string, bool) {
+	if m.o.Namespace != "" {
+		return []string{m.o.Namespace}, true
+	}
+	if m.me.Principal == "" {
+		return nil, false
+	}
+	held := map[string]bool{}
+	for scope, permissions := range m.me.Permissions {
+		if slices.Contains(permissions, "run:read") {
+			ns, _, _ := strings.Cut(scope, "/")
+			held[ns] = true
 		}
-		row.runs = append(row.runs, r)
 	}
-	slices.SortFunc(rows, func(a, b *flowRow) int { return cmp.Compare(a.key(), b.key()) })
-	out := make([]flowRow, len(rows))
-	for i, r := range rows {
-		out[i] = *r
-	}
-	return out
+	return slices.Sorted(maps.Keys(held)), true
 }
 
 // chosenFlow is the workflow chosen, the first where none is.
@@ -266,30 +275,29 @@ func (m Model) workflowsLines(t theme, height int) []string {
 	case !m.flowsRead:
 		return []string{line(part{quiet, "Reading the workflows."})}
 	case len(m.flows) == 0:
-		return []string{line(part{quiet, "No workflow has run yet."})}
+		return []string{line(part{quiet, "No workflow."})}
 	}
 	now := m.o.Now()
-	lines := []string{line(fitted([]part{{strong, "Workflows"}}, []part{{muted, fmt.Sprintf("%s named by the last %d runs, since the API lists none", counting(len(m.flows), "workflow"), flowsLimit)}}, m.width)...)}
+	lines := []string{line(fitted([]part{{strong, "Workflows"}}, []part{{muted, counting(len(m.flows), "workflow")}}, m.width)...)}
 	h := func(s string) []part { return []part{{quiet, s}} }
-	columns := func(name, latest, at, runs, last []part) []part {
-		return laid([]cell{{name, 0, false}, {latest, stateWidth, false}, {at, 16, false}, {runs, 5, true}, {last, 20, false}}, 0, m.width)
+	columns := func(name, latest, at, last []part) []part {
+		return laid([]cell{{name, 0, false}, {latest, stateWidth, false}, {at, 16, false}, {last, 20, false}}, 0, m.width)
 	}
-	lines = append(lines, line(columns(h("WORKFLOW"), h("LATEST"), h("STARTED"), h("RUNS"), h("LAST 20"))...))
+	lines = append(lines, line(columns(h("WORKFLOW"), h("LATEST"), h("RUN AT"), h("LAST 20"))...))
 	chosen, _ := m.chosenFlow()
 	room := max(1, height/2-2)
 	at := slices.IndexFunc(m.flows, func(f flowRow) bool { return f.key() == chosen.key() })
 	first := min(max(0, at-room+1), max(0, len(m.flows)-room))
 	for i := first; i < len(m.flows) && i < first+room; i++ {
 		f := m.flows[i]
-		latest := f.runs[0]
-		drawn, _ := bars(f.runs[:min(len(f.runs), 20)], now)
+		latest, when := []part{{quiet, "never run"}}, []part{{muted, ""}}
+		if r := f.latest; r != nil {
+			latest = []part{{stateRole(r.State), m.mark(r.State == agk.Running)}, {plain, " " + r.State.String()}}
+			when = []part{{muted, clock(r.CreatedAt, now)}}
+		}
+		drawn, _ := bars(m.sparks[f.key()].runs, now)
 		t.pick(len(lines), m.width, "flow", f.key())
-		lines = append(lines, t.line(f.key() == chosen.key(), m.width, columns(
-			[]part{{plain, f.key()}},
-			[]part{{stateRole(latest.State), m.mark(latest.State == agk.Running)}, {plain, " " + latest.State.String()}},
-			[]part{{muted, clock(startOf(latest), now)}},
-			[]part{{plain, fmt.Sprint(len(f.runs))}},
-			drawn)...))
+		lines = append(lines, t.line(f.key() == chosen.key(), m.width, columns([]part{{plain, f.key()}}, latest, when, drawn)...))
 	}
 	lines = append(lines, line())
 
@@ -316,12 +324,19 @@ func (m Model) workflowsLines(t theme, height int) []string {
 	default:
 		lines = append(lines, line(label("triggers"), part{plain, triggersOf(detail.detail)}))
 	}
-	drawn, median := bars(chosen.runs[:min(len(chosen.runs), 20)], now)
-	last := append([]part{label("last 20")}, drawn...)
-	if median > 0 {
-		last = append(last, part{muted, "  median " + Took(median)})
+	switch spark, read := m.sparks[chosen.key()]; {
+	case chosen.latest == nil:
+		lines = append(lines, line(label("last 20"), part{quiet, "never run"}))
+	case !read:
+		lines = append(lines, line(label("last 20"), part{quiet, "Reading the runs."}))
+	default:
+		drawn, median := bars(spark.runs, now)
+		last := append([]part{label("last 20")}, drawn...)
+		if median > 0 {
+			last = append(last, part{muted, "  median " + Took(median)})
+		}
+		lines = append(lines, line(last...))
 	}
-	lines = append(lines, line(last...))
 	switch s, read := m.flowStatsOf[chosen.key()]; {
 	case !read:
 		lines = append(lines, line(label("30 days"), part{quiet, "Reading the statistics."}))

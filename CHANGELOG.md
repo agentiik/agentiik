@@ -75,6 +75,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk console` turns the spinner beside a run going on in the runs' pane while the run open beside it is settled, where it asked for the next frame only while the run open was running, so that a failed run open froze the spinners of the runs going on beside it; folded to its line, the pane draws no spinner and asks for none.
 - `agk console` says on its key line that a notification could not be dismissed, and why, until the next key or click, where a dismissal the installation refused was dropped with nothing said; the runners view is among the screens its tests keep, drawn on the administrator's recorded answers at 80 by 24 and 160 by 44 in each colour depth.
 - `agk console` reads `GET /api/v1/me` once after a notification is dismissed, where each dismissal started a second chain of reads every 30 seconds beside the one already running, for as long as the console stayed open.
+- `agk console`'s workflows view lists what `GET /api/v1/{ns}/workflows` lists, for the namespace shown or for every namespace where `/me` says the principal reads runs, each workflow with its latest run, one never run among them, and its last twenty runs read for it, and the palette finds them too: it listed the workflows the last 200 runs named and said on screen that the API listed none, so that a workflow never run, or not run among the last 200, could be neither found nor opened.
 
 ### MCP
 

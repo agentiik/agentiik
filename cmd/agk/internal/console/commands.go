@@ -98,8 +98,13 @@ func (m Model) commands() []command {
 	}})
 	out = append(out, pressing("Every key", "?"), pressing("Quit", "q"))
 
-	// The broadest first where two match as closely: a workflow before the runs of it.
+	// The broadest first where two match as closely: a workflow before the runs of it. The workflows
+	// are those listed, one never run among them, and those the runs read name, which may be read
+	// before them.
 	workflows := map[string]bool{}
+	for _, f := range m.flows {
+		workflows[f.key()] = true
+	}
 	for _, r := range m.runs {
 		workflows[r.Namespace+"/"+r.Workflow] = true
 	}
