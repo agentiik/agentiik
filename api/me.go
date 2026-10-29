@@ -63,8 +63,9 @@ type ServiceAccount struct {
 // administrator having widened access in a namespace, with where, the grant, which act and who did
 // it, and the user put in a group where the act was that; a sign-in refused for a passkey's
 // signature counter, with the passkey; the break-glass path having issued an administrator a
-// recovery code, with whose account; or a recovery code issued the caller, with who issued it, and
-// that code spent, with who issued it and the credential it enrolled.
+// recovery code, with whose account; a recovery code issued the caller, with who issued it, and
+// that code spent, with who issued it and the credential it enrolled; or a new login given the
+// caller, with the one they had, the one they were given and who gave it.
 type Notification struct {
 	ID         string        `json:"id"`
 	Kind       string        `json:"kind"`
@@ -75,6 +76,8 @@ type Notification struct {
 	Grant      *access.Grant `json:"grant,omitempty"`
 	Credential string        `json:"credential,omitempty"`
 	Login      string        `json:"login,omitempty"`
+	From       string        `json:"from,omitempty"`
+	To         string        `json:"to,omitempty"`
 }
 
 // MeOptions are what the routes about the caller are given.
@@ -245,7 +248,7 @@ const keptNotification = "a recovery code issued you, or spent on your account, 
 func notificationOf(t db.Notification) Notification {
 	told := Notification{
 		ID: t.ID, Kind: t.Kind, At: t.At.UTC(), Act: t.Act, By: t.By,
-		Namespace: t.Namespace, Credential: t.Credential, Login: t.Login,
+		Namespace: t.Namespace, Credential: t.Credential, Login: t.Login, From: t.From, To: t.To,
 	}
 	if t.Grant != nil {
 		g := answeredGrant(*t.Grant)

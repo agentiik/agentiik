@@ -494,7 +494,7 @@ export interface paths {
         };
         /**
          * Who the caller is
-         * @description The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, a user's carrying what they say of themself and when their photo was last set, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator; and recovery_code_issued and recovery_code_used, a recovery code an administrator or the bootstrap token issued the caller, naming who, and that code spent, naming who issued it and the credential it enrolled, told to the caller alone and dismissed by nobody. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.
+         * @description The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, a user's carrying what they say of themself and when their photo was last set, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator; recovery_code_issued and recovery_code_used, a recovery code an administrator or the bootstrap token issued the caller, naming who, and that code spent, naming who issued it and the credential it enrolled, told to the caller alone and dismissed by nobody; and, from v0.7.0, login_changed, a new login an administrator gave the caller in place of one a later release made a reserved word, naming the one they had, the one they were given and who gave it. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.
          */
         get: operations["getMe"];
         put?: never;
@@ -716,7 +716,7 @@ export interface paths {
         head?: never;
         /**
          * Change a namespace's settings
-         * @description The namespace's settings, as a partial object: each field the body names is set and each it leaves out is kept, so that the route takes more fields as a namespace's settings grow and a client sends only what it changes. Today it takes name, which renames a shared namespace in one transaction carrying every row that names it: its workflows with their versions, refs and runs, its grants and denies, its secrets and their values, its triggers and webhooks, its quotas, its authentication policy and its picture, and its service accounts, which become NEW/NAME, the built-in one among them, keeping their tokens and their grants in every namespace; a token narrowed to it, a pool accepting it by name, an event trigger of another namespace hearing it, and who did what wherever one of its service accounts acted, follow it. Its objects and sealed values stay under the name it was created with, so nothing is copied. The name it leaves stays its own, listed in former_names: every address naming it, this route's among them, reaches the namespace, and no other namespace or login takes it until the namespace is removed. Renaming it to one of its former names takes that name back; renaming it to its own name changes nothing and is recorded as unchanged. A user's personal namespace is never renamed, since it is named after a login and a login never changes. Refused while a run of it is queued, running or waiting, since its tasks carry its name to their runners; while a move of one of its workflows to or from it waits to be carried out; and while a runner not revoked narrows itself to it by name on its host, which no rename reaches. By its owner, whoever holds grant:manage at its scope, or an administrator. Audited as namespace.rename on the installation, with from and to, the new name as its target.
+         * @description The namespace's settings, as a partial object: each field the body names is set and each it leaves out is kept, so that the route takes more fields as a namespace's settings grow and a client sends only what it changes. Today it takes name, which renames a shared namespace in one transaction carrying every row that names it: its workflows with their versions, refs and runs, its grants and denies, its secrets and their values, its triggers and webhooks, its quotas, its authentication policy and its picture, and its service accounts, which become NEW/NAME, the built-in one among them, keeping their tokens and their grants in every namespace; a token narrowed to it, a pool accepting it by name, an event trigger of another namespace hearing it, and who did what wherever one of its service accounts acted, follow it. Its objects and sealed values stay under the name it was created with, so nothing is copied. The name it leaves stays its own, listed in former_names: every address naming it, this route's among them, reaches the namespace, and no other namespace or login takes it until the namespace is removed. Renaming it to one of its former names takes that name back; renaming it to its own name changes nothing and is recorded as unchanged. A user's personal namespace is not renamed here: it is named after its user's login and renamed with it, at PATCH /api/v1/users/{login}, where an administrator gives a user whose login a later release made a reserved word a new one. Refused while a run of it is queued, running or waiting, since its tasks carry its name to their runners; while a move of one of its workflows to or from it waits to be carried out; and while a runner not revoked narrows itself to it by name on its host, which no rename reaches. By its owner, whoever holds grant:manage at its scope, or an administrator. Audited as namespace.rename on the installation, with from and to, the new name as its target.
          */
         patch: operations["updateNamespace"];
         trace?: never;
@@ -815,7 +815,7 @@ export interface paths {
         };
         /**
          * Read a user
-         * @description One user: login, display name, the email address an administrator gave them, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.
+         * @description One user: login, display name, the email address an administrator gave them, whether an administrator, whether suspended and, where the policy suspended them, suspended_for, when created and when last signed in, what they say of themself and when their photo was last set; never a credential, which GET /api/v1/users/{login}/credentials lists, and never the photo, which is read on its own. Administrator only. What the Terraform provider refreshes and imports a user with.
          */
         get: operations["getUser"];
         put?: never;
@@ -829,7 +829,7 @@ export interface paths {
         head?: never;
         /**
          * Change what an administrator gives a user
-         * @description Changes what an administrator gives a user after creating them, as the body names it: email, set to what the body holds, the empty string removing it, and kept where the body leaves it out. The address is for the people the user works with to reach them at, read wherever the user is answered, and nothing sends anything to it: the product signs nobody in, enrols nobody and recovers no account by mail. It is held as at the creation: one @ with something on each side, no space or control character, and at most 254 characters. Nothing else of a user is the administrator's to change here: the given and family names and the rest of the profile are the user's own, written at PATCH /api/v1/me, and display_name is made of the names and written by nobody, each refused saying so. The user's row is held while the change is merged into it, and the answer is the user as GET /api/v1/users/{login} answers them. Administrator only, and the bootstrap token's until the first administrator has signed in. Audited as user.update with the names of the fields that changed and never what they hold, since the log is kept for good and an address is somebody's to have removed; unchanged where none did.
+         * @description Changes what an administrator gives a user after creating them, as the body names it: email, set to what the body holds, the empty string removing it, and kept where the body leaves it out; and, from v0.7.0, login, for a user whose login a later release made a reserved word. The address is for the people the user works with to reach them at, read wherever the user is answered, and nothing sends anything to it: the product signs nobody in, enrols nobody and recovers no account by mail. It is held as at the creation: one @ with something on each side, no space or control character, and at most 254 characters. A new login is given to a user whose login a release reserved after it was given, as v0.7.0 reserved api, hooks, mcp and objects, and to no other: a login is also the name of its user's personal namespace, so it never changes otherwise, and a user whose login became a reserved word keeps a personal namespace whose console pages never open. It is held as a login at the creation: the namespace grammar, at most 255 characters, no reserved word, operator or installation, and no name a user, a namespace or a namespace's former name holds. The path names the user by the login they have, a word reserved since: the API reads it there, although $defs/login, which the path's parameter refers to, refuses it. Everything naming the user follows in one transaction: their credentials, their sessions and tokens, which stay valid, their memberships, their grants and denies and those they wrote, what they are told, and who did what wherever they did something; the audit log is history, and keeps the login each entry was recorded under, as a notification keeps the logins it named when it was told and a commit its author and committer. Their personal namespace, where they have one, since it is created at their first sign-in, is renamed with them as PATCH /api/v1/namespaces/{ns} renames a shared one, and refused for that route's reasons: the old login stays its own as a former name, so that every address written with it still reaches the namespace and nobody else takes it. From the answer on, the user is read under the new login, and the old one names no user. The user is told with a login_changed notification naming the login they had, the one they were given and who gave it, unless they gave it themselves. Nothing else of a user is the administrator's to change here: the given and family names and the rest of the profile are the user's own, written at PATCH /api/v1/me, and display_name is made of the names and written by nobody, each refused saying so. The user's row is held while the change is merged into it, and the answer is the user as GET /api/v1/users/{login} answers them. Administrator only, and the bootstrap token's until the first administrator has signed in. Audited as user.update where the body names email, with the names of the fields that changed and never what they hold, since the log is kept for good and an address is somebody's to have removed, and as unchanged where none did; and a new login as user.rename on the installation, with from and to, the new login as its target, and the rename of their personal namespace beside it as namespace.rename, with personal, as a removal records namespace.delete beside user.delete, so that whoever reads the log for the renames of namespaces finds every one.
          */
         patch: operations["updateUser"];
         trace?: never;
@@ -1139,7 +1139,7 @@ export interface paths {
         };
         /**
          * Read a workflow
-         * @description The workflow's repository; the version a run naming no ref runs, the default branch's head, and the graph it resolves to, includes resolved, inheritance applied, images by digest; and a page of the default branch's first-parent history, newest first, each commit that is a version carrying it. A workflow whose versions agk push sent as trees, and which no git push has filled yet, lists those versions instead, and a run naming no ref runs the latest of them. Pages follow next, through from. Requires workflow:read.
+         * @description The workflow's repository; a version and the graph it resolves to, includes resolved, inheritance applied, images by digest: the version ref names, or where none is named the one a run naming no ref runs, the default branch's head; and a page of the default branch's first-parent history, newest first, each commit that is a version carrying it. A workflow whose versions agk push sent as trees, and which no git push has filled yet, lists those versions instead, and a run naming no ref runs the latest of them. Pages follow next, through from. The entry point's text is not answered here, since a file's bytes are the tree route's: a client reads it with GET /api/v1/{ns}/workflows/{name}/tree/{ref}?path=agentiik.yaml, ref being the answer's version.commit, so that the text and the graph are one version's even where the ref moved between the two requests. Requires workflow:read.
          */
         get: operations["getWorkflow"];
         put?: never;
@@ -3180,7 +3180,7 @@ export interface components {
                 [key: string]: components["schemas"]["permission"][];
             };
             /**
-             * @description What the installation has to tell the caller, newest first: an administrator having written a grant in a namespace the caller owns by the installation's power, put a user in a group holding a role there, or widened their own access there, each with the act and who did it, told to the other administrators too where the namespace had nobody to tell; a sign-in refused for one of the caller's passkeys' signature counters; a recovery code agentiik-api recover issued an administrator, told to every administrator; and a recovery code issued the caller, and that code spent, told to the caller alone. Each is kept 90 days from when it was written, or until the caller dismisses it with DELETE /api/v1/me/notifications/{id}, which a recovery code's never is; one past its days is removed as this is read. Empty through a token narrowed by a scope, which reads none.
+             * @description What the installation has to tell the caller, newest first: an administrator having written a grant in a namespace the caller owns by the installation's power, put a user in a group holding a role there, or widened their own access there, each with the act and who did it, told to the other administrators too where the namespace had nobody to tell; a sign-in refused for one of the caller's passkeys' signature counters; a recovery code agentiik-api recover issued an administrator, told to every administrator; a recovery code issued the caller, and that code spent, told to the caller alone; and, from v0.7.0, a new login an administrator gave the caller, naming the one they had, the one they were given and who gave it. Each is kept 90 days from when it was written, or until the caller dismisses it with DELETE /api/v1/me/notifications/{id}, which a recovery code's never is; one past its days is removed as this is read. Empty through a token narrowed by a scope, which reads none.
              * @example []
              * @example [
              *       {
@@ -3218,7 +3218,7 @@ export interface components {
         };
         /**
          * Credential list
-         * @description The caller's credentials, each described and none held: no public key, no hash, no shared secret.
+         * @description Credentials, each described and none held: no public key, no hash, no shared secret. The caller's own at GET /api/v1/me/credentials, and a user's, to an administrator, at GET /api/v1/users/{login}/credentials.
          * @example {
          *       "credentials": [
          *         {
@@ -3279,7 +3279,7 @@ export interface components {
          */
         credentialList: {
             /**
-             * @description Passkeys, the password where one is still stored, and a TOTP generator where one is enrolled, oldest first. Empty for a service account, which holds tokens only, and for the bootstrap token.
+             * @description Passkeys, the password where one is still stored, and a TOTP generator where one is enrolled, oldest first. Empty for a user who has enrolled nothing yet, for a service account, which holds tokens only, and for the bootstrap token.
              * @example [
              *       {
              *         "type": "passkey",
@@ -3605,12 +3605,15 @@ export interface components {
         };
         /**
          * User change
-         * @description What an administrator changes of a user after creating them, and nothing else: the email address, set to what the field holds, the empty string removing it, and kept where it is left out. Null is refused rather than read as either. The names and the rest of the profile are the user's, and the display name nobody's.
+         * @description What an administrator changes of a user after creating them, and nothing else: the email address, set to what the field holds, the empty string removing it, and kept where it is left out; and, from v0.7.0, the login, for a user whose login a later release made a reserved word and for no other. Null is refused in either field rather than read as a removal or as a field left out. The names and the rest of the profile are the user's, and the display name nobody's.
          * @example {
          *       "email": "bob.martin@example.com"
          *     }
          * @example {
          *       "email": ""
+         *     }
+         * @example {
+         *       "login": "mc-petit"
          *     }
          */
         userUpdate: {
@@ -3620,6 +3623,11 @@ export interface components {
              * @example
              */
             email?: components["schemas"]["email"];
+            /**
+             * @description A new login, from v0.7.0, for a user whose login a release reserved after it was given, as v0.7.0 reserved api, hooks, mcp and objects, and for no other: a login is also the name of its user's personal namespace, and never changes otherwise. Held as a login is at the creation, and refused where a user, a namespace or a namespace's former name holds it. Their personal namespace follows it, keeping the old login as a former name.
+             * @example mc-petit
+             */
+            login?: components["schemas"]["namespace"];
         };
         /**
          * Enrolment link
@@ -4330,7 +4338,7 @@ export interface components {
         };
         /**
          * Workflow
-         * @description A workflow: its repository, the version a run naming no ref runs with the graph it resolves to, and a page of the default branch's history.
+         * @description A workflow: its repository, a version with the graph it resolves to, the one ref names or else the one a run naming no ref runs, and a page of the default branch's history.
          * @example {
          *       "repository": {
          *         "namespace": "finance",
@@ -4731,7 +4739,7 @@ export interface components {
              */
             repository: components["schemas"]["repository"];
             /**
-             * @description The version a run naming no ref runs: the default branch's head, or, while that branch is unborn, the latest version agk push sent as a tree before the repository's first git push. Absent where there is neither.
+             * @description The version ref names, or where none is named the version a run naming no ref runs: the default branch's head, or, while that branch is unborn, the latest version agk push sent as a tree before the repository's first git push. Absent where none is named and there is neither; a ref naming no version is a 404 rather than an answer without one.
              * @example {
              *       "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
              *       "parent": "5d0b7e2c9a4f1e3d8c6b0a2f4e6d8c0b2a4f6e8d",
@@ -4903,7 +4911,7 @@ export interface components {
              */
             graph?: components["schemas"]["resolvedGraph"];
             /**
-             * @description A page of the default branch's first-parent history, newest first, from its head or from the commit from names; each commit a version carries it. While the default branch is unborn, the versions agk push sent as trees instead, newest first. Empty for a repository holding nothing.
+             * @description A page of the default branch's first-parent history, newest first, from its head or from the commit from names, whatever version ref names; each commit a version carries it. While the default branch is unborn, the versions agk push sent as trees instead, newest first. Empty for a repository holding nothing.
              * @example [
              *       {
              *         "commit": "a3f9c1e04b7d2e8f6a1c3b5d7e9f0a2b4c6d8e0f",
@@ -10298,7 +10306,7 @@ export interface components {
         label: string;
         /**
          * Namespace
-         * @description The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. A namespace made before v0.3.0 under one keeps its name until its owner renames it, and the API still serves it, every route of it, with nothing to do; only its creation, and a rename to one, are refused: a reader validating what such an installation answers meets a refusal the API does not make. A shared namespace is renamed by its owner or an administrator, every row naming it following in one transaction, and the name it leaves stays its own as a former name, which every address naming it still reaches and no other namespace or login takes while it lives. Its objects and sealed values stay under the name it was created with, its storage name, so that a rename copies nothing; that name is the installation's to keep and no record here carries it.
+         * @description The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. api, hooks, mcp and objects are reserved from v0.7.0, because an address's first path segment decides who answers it: the API answers /api, /auth, /hooks, /mcp and /objects, and the web console every other one, which it reads as a namespace, so that a namespace named after one of them would be one whose pages the console never opens. A namespace made under one of these words before it was reserved keeps its name until it is renamed, and the API still serves it, every route of it; only its creation, and a rename to one, are refused: a reader validating what such an installation answers meets a refusal the API does not make. Under stats there is nothing to do; under api, hooks, mcp or objects the web console opens none of its pages, which renaming a shared one gives back, as an administrator giving a user a new login gives back their personal one, which follows the login. A shared namespace is renamed by its owner or an administrator, and a personal one with its user's login, every row naming it following in one transaction, and the name it leaves stays its own as a former name, which every address naming it still reaches and no other namespace or login takes while it lives. Its objects and sealed values stay under the name it was created with, its storage name, so that a rename copies nothing; that name is the installation's to keep and no record here carries it.
          * @example finance
          * @example team-ops
          */
@@ -10712,7 +10720,7 @@ export interface components {
         };
         /**
          * Credential
-         * @description One way a user proves who they are, as the caller's credentials list them: a passkey, a password or a TOTP generator. The record describes the credential and never holds it: no public key, no hash, no shared secret, and the objects are closed so that none of them can be written here at all. A reader tells the three apart by type. Two rules need the rest of the user's credentials and are left to the API: a TOTP exists only alongside a password, since with user verification required a passkey assertion already proves two factors, and a removal leaving fewer passkeys than min_passkeys is refused.
+         * @description One way a user proves who they are, as a listing of credentials writes it, the caller's own or, to an administrator, a user's: a passkey, a password or a TOTP generator. The record describes the credential and never holds it: no public key, no hash, no shared secret, and the objects are closed so that none of them can be written here at all. A reader tells the three apart by type. Two rules need the rest of the user's credentials and are left to the API: a TOTP exists only alongside a password, since with user verification required a passkey assertion already proves two factors, and a removal leaving fewer passkeys than min_passkeys is refused.
          * @example {
          *       "type": "passkey",
          *       "id": "Q2hyb21lUGFzc2tleTAx",
@@ -10800,7 +10808,7 @@ export interface components {
         actor: components["schemas"]["principalRef"] | "operator" | "installation";
         /**
          * User
-         * @description A local account: a login and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, the display name made of their given and family names, the email address an administrator gave them, and when their photo was last set, null where they hold none: answered wherever a user is, so that every client draws a person the same way.
+         * @description A local account: a login and the credentials it signs in with. The credentials are listed on their own, the caller's at GET /api/v1/me/credentials and a user's, to an administrator, at GET /api/v1/users/{login}/credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, the display name made of their given and family names, the email address an administrator gave them, and when their photo was last set, null where they hold none: answered wherever a user is, so that every client draws a person the same way.
          * @example {
          *       "kind": "user",
          *       "login": "alice",
@@ -10844,7 +10852,7 @@ export interface components {
              */
             kind: "user";
             /**
-             * @description What the user signs in as, and the reference a grant names them by. It cannot change: it is also the name of their personal namespace, which cannot be renamed.
+             * @description What the user signs in as, and the reference a grant names them by. It is also the name of their personal namespace, and so changes in one case alone: where a later release made it a reserved word, as v0.7.0 did api, hooks, mcp and objects, an administrator gives the user a new one at PATCH /api/v1/users/{login}, their personal namespace following it and keeping the old one as a former name.
              * @example alice
              */
             login: components["schemas"]["namespace"];
@@ -10982,6 +10990,12 @@ export interface components {
             created_at?: components["schemas"]["timestamp"];
         };
         /**
+         * @description One name the namespace answered to before a rename, on the grammar every namespace's name is written on. A word reserved since may be among them, the name of a namespace made before it was reserved and renamed since, so the reserved words are not refused here.
+         * @example finance
+         * @example finance-old
+         */
+        items: string;
+        /**
          * Role
          * @description A named set of permissions a grant binds, by the documentation's table: viewer reads, operator runs and follows runs, editor reads, runs, writes, reads data and uses and writes secrets, and owner adds workflow:delete and grant:manage. operator deliberately lacks workflow:read, so a colleague can launch a job without seeing the queries, endpoints and business rules inside it, and run:read_data, so the payloads stay out of its reach; someone who needs both holds both roles. Four and no more, since a role invented per installation is one the clients cannot explain.
          * @example viewer
@@ -11061,7 +11075,7 @@ export interface components {
         } & (unknown | unknown);
         /**
          * Notification
-         * @description Something the installation tells one principal of its own accord, listed in their GET /api/v1/me and kept 90 days from when it was written, or until they dismiss it with DELETE /api/v1/me/notifications/{id}: long enough to reach someone back from leave, and bounded so that the list does not grow for ever. Three kinds, each told to whoever can act on it. admin_access_widened is an administrator having widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, which is how an administrator reads another namespace's payloads, since they hold no run:read_data of their own; it is told to the namespace's owners, because an owner does not read the audit log and the people whose data it is should hear it from the installation itself, and where the act found nobody to tell, to the other administrators as well, so that an act where nobody owns is not told only to the owner it made. passkey_counter_refused is a sign-in refused because a passkey's signature counter did not move forward, which is what a cloned authenticator's does; it is told to the passkey's user, who is the one who knows whether the other copy is theirs. break_glass_recovery is a recovery code agentiik-api recover issued an administrator from the installation's host, the one way to a recovery code no administrator vouches for; it is told to every administrator, the one recovered and suspended ones included, so that an administrator who did not run it learns that whoever holds the host did. Each kind carries what its reader needs and nothing of the others', so the fields one requires the others refuse.
+         * @description Something the installation tells one principal of its own accord, listed in their GET /api/v1/me and kept 90 days from when it was written, or until they dismiss it with DELETE /api/v1/me/notifications/{id}, but a recovery code's, which nobody dismisses: long enough to reach someone back from leave, and bounded so that the list does not grow for ever. Six kinds, each told to whoever can act on it. admin_access_widened is an administrator having widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, which is how an administrator reads another namespace's payloads, since they hold no run:read_data of their own; it is told to the namespace's owners, because an owner does not read the audit log and the people whose data it is should hear it from the installation itself, and where the act found nobody to tell, to the other administrators as well, so that an act where nobody owns is not told only to the owner it made. passkey_counter_refused is a sign-in refused because a passkey's signature counter did not move forward, which is what a cloned authenticator's does; it is told to the passkey's user, who is the one who knows whether the other copy is theirs. break_glass_recovery is a recovery code agentiik-api recover issued an administrator from the installation's host, the one way to a recovery code no administrator vouches for; it is told to every administrator, the one recovered and suspended ones included, so that an administrator who did not run it learns that whoever holds the host did. recovery_code_issued is a recovery code an administrator, or the bootstrap token, issued the reader, and recovery_code_used that code spent on the enrolment page; both are told to the reader alone, who is the one who knows whether they asked for it and holds the way to undo it, removing the credential it enrolled, since the code lets whoever holds it sign in as them while their passkeys keep working. Neither carries the code or its link, and neither is dismissed, kept its 90 days, since whoever spent the code signs in as the reader and could otherwise dismiss both before the reader read them. login_changed is a new login an administrator gave the reader, which happens only where a later release made their login a reserved word, as v0.7.0 did api, hooks, mcp and objects; it is told to the user unless they gave it themselves, since a login is what they sign in as and what every grant names them by, and they should hear it changed from the installation rather than find it out at their next sign-in; telling somebody what they have just done would tell them nothing. Each kind carries what its reader needs and nothing of the others', so the fields one requires the others refuse.
          * @example {
          *       "id": "01M2AF6V8X0Z2B4D6F8H0K2M4P",
          *       "kind": "admin_access_widened",
@@ -11108,6 +11122,27 @@ export interface components {
          *       "at": "2026-09-27T16:40:00Z",
          *       "login": "alice"
          *     }
+         * @example {
+         *       "id": "01M2AK7T9W1Y3A5C7E9G1J3K5N",
+         *       "kind": "recovery_code_issued",
+         *       "at": "2026-09-27T18:00:00Z",
+         *       "by": "carol"
+         *     }
+         * @example {
+         *       "id": "01M2AK9W1Y3A5C7E9G1J3K5N7Q",
+         *       "kind": "recovery_code_used",
+         *       "at": "2026-09-27T18:20:00Z",
+         *       "by": "carol",
+         *       "credential": "bmV3UGFzc2tleQ"
+         *     }
+         * @example {
+         *       "id": "01M2AK5V7X9Z1B3D5F7H9K1M3P",
+         *       "kind": "login_changed",
+         *       "at": "2026-10-06T09:00:00Z",
+         *       "from": "mcp",
+         *       "to": "mc-petit",
+         *       "by": "alice"
+         *     }
          */
         notification: {
             /**
@@ -11116,15 +11151,18 @@ export interface components {
              */
             id: components["schemas"]["ulid"];
             /**
-             * @description What happened. admin_access_widened: an administrator widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, a role given to it or a deny taken from it; act and by say which act and who did it, namespace and grant where and which. passkey_counter_refused: a sign-in with one of the reader's passkeys was refused because its signature counter was at or below the one stored, one of the two not zero, and credential says which passkey. break_glass_recovery: agentiik-api recover issued the administrator login names a recovery code. The documentation names the three as written here.
+             * @description What happened. admin_access_widened: an administrator widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, a role given to it or a deny taken from it; act and by say which act and who did it, namespace and grant where and which. passkey_counter_refused: a sign-in with one of the reader's passkeys was refused because its signature counter was at or below the one stored, one of the two not zero, and credential says which passkey. break_glass_recovery: agentiik-api recover issued the administrator login names a recovery code. recovery_code_issued: by issued the reader a recovery code. recovery_code_used: the recovery code by issued the reader was spent, enrolling credential, and where the policy requires a passkey, each passkey registered from a session the password it set opens is told the same, naming the passkey. login_changed: an administrator gave the reader a new login, in place of one a later release made a reserved word; from and to say which they had and which they were given, and by who gave it. The documentation names the six as written here.
              * @example admin_access_widened
              * @example passkey_counter_refused
              * @example break_glass_recovery
+             * @example recovery_code_issued
+             * @example recovery_code_used
+             * @example login_changed
              * @enum {string}
              */
-            kind: "admin_access_widened" | "passkey_counter_refused" | "break_glass_recovery";
+            kind: "admin_access_widened" | "passkey_counter_refused" | "break_glass_recovery" | "recovery_code_issued" | "recovery_code_used" | "login_changed";
             /**
-             * @description When it happened: the grant written, the deny taken away or the membership changed, the sign-in refused, or the recovery code issued. The 90 days it is kept are counted from here.
+             * @description When it happened: the grant written, the deny taken away or the membership changed, the sign-in refused, the recovery code issued or spent, or the login given. The 90 days it is kept are counted from here.
              * @example 2026-09-27T14:00:00Z
              */
             at: components["schemas"]["timestamp"];
@@ -11136,11 +11174,11 @@ export interface components {
              */
             act?: "granted" | "deny_lifted" | "joined_group" | "left_group" | "group_removed";
             /**
-             * @description Who did it, on admin_access_widened alone: the administrator's login, or operator for the bootstrap token, which administers the installation until the first administrator has signed in. Named rather than referred to, as login is, so that removing the account leaves what the others were told.
+             * @description Who did it, on admin_access_widened and login_changed, and who issued the recovery code, on recovery_code_issued and recovery_code_used: the administrator's login, or operator for the bootstrap token, which administers the installation until the first administrator has signed in. Named rather than referred to, as login is, so that removing the account leaves what the others were told; a new login given it later leaves it too, since a notification keeps the logins it named when it was told, as the audit log keeps the one each entry was recorded under. It is written on the grammar of a namespace's former name rather than on $defs/login, as from is, since the login it kept may be a word a later release reserved.
              * @example alice
              * @example operator
              */
-            by?: components["schemas"]["namespace"] | "operator";
+            by?: components["schemas"]["items"] | "operator";
             /**
              * @description The namespace the administrator acted in, on admin_access_widened alone: one whose record names the reader as its owner, or, where the record names none, as a namespace from before v0.3.0 does, one on which the reader holds the owner role, by a grant of their own or of a group they are in; or, where the act found nobody to tell there, any namespace, the reader being another administrator.
              * @example finance
@@ -11168,16 +11206,26 @@ export interface components {
              */
             grant?: components["schemas"]["accessGrant"];
             /**
-             * @description The passkey whose assertion was refused, on passkey_counter_refused alone, by the credential ID GET /api/v1/me/credentials lists it with, so that its user can find it and remove it with DELETE /api/v1/me/credentials/{id} where the other copy is not theirs. The API does not lock it: WebAuthn calls a counter that did not move a signal rather than a proof, and a lock would let a faulty authenticator shut its owner out.
+             * @description The passkey whose assertion was refused, on passkey_counter_refused, and the credential a recovery code enrolled, on recovery_code_used, the passkey's credential ID or the password's identifier, which are written alike, by the identifier GET /api/v1/me/credentials lists it with, so that its user can find it and remove it with DELETE /api/v1/me/credentials/{id} where the other copy is not theirs. The API does not lock it: WebAuthn calls a counter that did not move a signal rather than a proof, and a lock would let a faulty authenticator shut its owner out.
              * @example aVBob25lUGFzc2tleQ
              */
             credential?: components["schemas"]["id"];
             /**
-             * @description The administrator agentiik-api recover issued a recovery code, on break_glass_recovery; or the user an administrator put in a group, on admin_access_widened whose act is joined_group, and there alone, since the group routes are an administrator's and an owner could not learn otherwise who now holds the role. Named rather than referred to, so that removing the account, which is what the others may do on reading this, leaves what they were told.
+             * @description The administrator agentiik-api recover issued a recovery code, on break_glass_recovery; or the user an administrator put in a group, on admin_access_widened whose act is joined_group, and there alone, since the group routes are an administrator's and an owner could not learn otherwise who now holds the role. Named rather than referred to, so that removing the account, which is what the others may do on reading this, leaves what they were told, as a new login given it later does. It is written on the grammar of a namespace's former name rather than on $defs/login, as from is, since the login it kept may be a word a later release reserved.
              * @example alice
              */
-            login?: components["schemas"]["namespace"];
-        } & (unknown & unknown & unknown);
+            login?: components["schemas"]["items"];
+            /**
+             * @description The login the reader had, on login_changed alone: a word a release reserved after it was given, which is why it is written on the grammar of a namespace's former name rather than on $defs/login, which refuses it. Their personal namespace, where they have one, keeps it as a former name, so that every address written with it still reaches that namespace and nobody else takes it.
+             * @example mcp
+             */
+            from?: components["schemas"]["items"];
+            /**
+             * @description The login the reader was given, on login_changed alone, and what they sign in as from then on. Named rather than referred to, as from and by are, so that what they were told reads as it happened.
+             * @example mc-petit
+             */
+            to?: components["schemas"]["namespace"];
+        } & (unknown & unknown & unknown & unknown & unknown & unknown);
         /**
          * @description The name the user is called by, set by the user at PATCH /api/v1/me or by an administrator creating them, and the empty string where neither has said it. The display name is made of it and the family name. One line of at most 128 characters holding no control character, for the reason the display name holds none, and free text otherwise: names are written in more ways than any grammar a person would have to fit theirs into. Kept apart from the family name so that a client can address the user by it, or sort a list by the other, which a display name written whole lets nobody do.
          * @example Alice
@@ -11237,7 +11285,7 @@ export interface components {
          * @description One workflow of a collection, and what it offers there. What its owner wrote is the workflow, the ref it is read at and the name its tool goes by, the last two only where written. What it offers is what the workflow's entry point declares in its mcp block, read at the head of the member's ref at every tools/list and run at the commit the ref points at when it is called, so that a collection follows a workflow as its triggers follow the default branch, with nothing to add again when the workflow changes. tool is the name it is offered under, or null where it offers nothing, with reason beside it saying why, so that a member missing from a client's list is never one its owner cannot account for.
          * @example {
          *       "workflow": "finance/monthly-invoicing",
-         *       "tool": "create_invoice"
+         *       "tool": "create_invoices"
          *     }
          * @example {
          *       "workflow": "support/order-status",
@@ -11271,19 +11319,20 @@ export interface components {
              */
             as?: components["schemas"]["identifier"];
             /**
-             * @description The name the member is offered under in tools/list: as where it is written, and otherwise the name the mcp block at the head of its ref gives. null where it offers nothing, reason beside it saying why: such a member is left out of tools/list, and a call naming it is answered as one naming a tool that does not exist. A member is refused when it is written with a name another member already gives, since clients hold the name and a model told of two tools of one name cannot choose between them; as resolves it.
-             * @example create_invoice
+             * @description The name the member is offered under in tools/list: as where it is written, and otherwise the name the mcp block at the head of its ref gives. null where it offers nothing, reason beside it saying why: such a member is left out of tools/list, and a call naming it is answered as one naming a tool that does not exist. A member is refused when it is written with a name another member already gives, since clients hold the name and a model told of two tools of one name cannot choose between them; as resolves it. Two members whose names come to be one after both were written, a commit moving the head of a ref or a grant given back, are both null beside tool_name_taken, so that a call meant for one never runs the other.
+             * @example create_invoices
              * @example order_lookup
              * @example null
              */
             tool: components["schemas"]["identifier"] | null;
             /**
-             * @description Why a member offers nothing, beside a null tool and nowhere else. no_mcp_block: the entry point at the head of its ref declares no mcp block, which is also what a ref that no longer names anything reads as, since there is no entry point there to declare one. not_runnable: its owner may no longer run the workflow, a deleted one included, one reason for both since a workflow one may not run is one whose fate a collection does not tell. A grant revoked takes the tool away from the next list, as the protocol lets a tool set vary by the authorization presented, and the member comes back when the grant does.
+             * @description Why a member offers nothing, beside a null tool and nowhere else. no_mcp_block: the entry point at the head of its ref declares no mcp block, which is also what a ref that no longer names anything reads as, since there is no entry point there to declare one. not_runnable: its owner may no longer run the workflow, a deleted one included, one reason for both since a workflow one may not run is one whose fate a collection does not tell. A grant revoked takes the tool away from the next list, as the protocol lets a tool set vary by the authorization presented, and the member comes back when the grant does. tool_name_taken: another member's tool goes by the name this one's goes by, both left out until as or a commit tells them apart, since a tool's name is unique in its collection at every tools/list and every tools/call, and a name comes from the head of a ref somebody may commit to after the member was written.
              * @example no_mcp_block
              * @example not_runnable
+             * @example tool_name_taken
              * @enum {string}
              */
-            reason?: "no_mcp_block" | "not_runnable";
+            reason?: "no_mcp_block" | "not_runnable" | "tool_name_taken";
         };
         /**
          * Collection
@@ -11296,7 +11345,7 @@ export interface components {
          *       "members": [
          *         {
          *           "workflow": "finance/monthly-invoicing",
-         *           "tool": "create_invoice"
+         *           "tool": "create_invoices"
          *         },
          *         {
          *           "workflow": "support/order-status",
@@ -11348,7 +11397,7 @@ export interface components {
              * @example [
              *       {
              *         "workflow": "finance/monthly-invoicing",
-             *         "tool": "create_invoice"
+             *         "tool": "create_invoices"
              *       },
              *       {
              *         "workflow": "support/order-status",
@@ -11446,7 +11495,7 @@ export interface components {
         };
         /**
          * Namespace record
-         * @description A namespace as a user or an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.
+         * @description A namespace as a user or an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename, and which is renamed only with their login, where an administrator gives a user whose login a later release made a reserved word a new one; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.
          * @example {
          *       "name": "finance",
          *       "kind": "shared",
@@ -12882,7 +12931,7 @@ export interface components {
                 /**
                  * @description The name the tool was called as, which tools/list offered it under: the member's as where written, and otherwise the name its mcp block gave.
                  * @example order_lookup
-                 * @example create_invoice
+                 * @example create_invoices
                  */
                 tool: components["schemas"]["identifier"];
             };
@@ -12982,7 +13031,7 @@ export interface components {
             /**
              * @description The name the tool was called as, which tools/list offered it under: the member's as where written, and otherwise the name its mcp block gave.
              * @example order_lookup
-             * @example create_invoice
+             * @example create_invoices
              */
             tool: components["schemas"]["identifier"];
         };
@@ -13924,6 +13973,8 @@ export interface components {
         historyFrom: components["schemas"]["commit"];
         /** @description How many commits a page lists, 50 where it is left out and 500 at the most, as GET /api/v1/runs lists runs. */
         historyLimit: number;
+        /** @description The version answered, with the graph it resolves to: a branch or a tag, by its short name or written in full, or a commit written whole that is a version of the workflow, resolved as a run asked for by that ref resolves it. Where none is named, the version a run naming no ref runs: the default branch's head, or while it is unborn the latest version agk push sent as a tree. Every branch and every tag holding a commit is at a version, since a push makes a version of each commit it leaves a ref pointing at; a commit a push only carried on the way is none, and is answered 404 as a ref naming nothing is, and so is a branch nothing was pushed to yet. A name a branch and a tag both hold is refused with 400 rather than guessed at. It chooses the version alone: the repository, its labels included, and the history answered beside it are the default branch's whatever it names, so that from and limit page the same history with it or without it, and the labels are those a search finds the workflow by. */
+        versionRef: string;
         /** @description The start of the range, included, in RFC 3339. Where it is left out the range is the 24 hours before to, and where both are left out the last 24 hours. Refused with 400 where it is not before to, and beside range=max. */
         statsFrom: components["schemas"]["timestamp"];
         /** @description max starts the range at the first thing the route counts before to, in place of from: the first run created among those it counts, or refused for /quotas, which counts refusals too, and for /api/v1/stats/pools the first capacity a runner reported, so that the whole of what an installation kept is read at once rather than guessed at with a span. It reaches back 1,000 buckets at most, the range then starting where the 1,000th does, and where there is nothing to count it is the 24 hours before to. Refused with 400 beside from, since both say where the range starts. The answer's from is where it started. The only value. */
@@ -15627,7 +15678,7 @@ export interface operations {
             403: components["responses"]["forbidden"];
             /** @description No such namespace, a name no namespace can have, or one the caller neither owns, holding grant:manage at its scope, nor administers. */
             404: components["responses"]["notFound"];
-            /** @description The rename cannot be made, the error saying why: a user's personal namespace; a name a namespace, a login or a reserved word holds, or a former name of another namespace; a run of the namespace queued, running or waiting; a move of one of its workflows asked and not carried out; or a runner not revoked narrowing itself to it by name. */
+            /** @description The rename cannot be made, the error saying why: a user's personal namespace, renamed with its user's login alone; a name a namespace, a login or a reserved word holds, or a former name of another namespace; a run of the namespace queued, running or waiting; a move of one of its workflows asked and not carried out; or a runner not revoked narrowing itself to it by name. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16017,13 +16068,15 @@ export interface operations {
                     "application/json": components["schemas"]["user"];
                 };
             };
-            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, email null or not a string, or an address that is not one @ with something on each side, holds a space or a control character, or is over 254 characters; a name or another field of the profile, which is the user's, or display_name, which nobody writes, each refused saying so. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
+            /** @description The body is refused: empty, naming nothing to change, a field the route does not read, email or login null or not a string, an address that is not one @ with something on each side, holds a space or a control character, or is over 254 characters, or a login outside the namespace grammar, over 255 characters, a reserved word, operator or installation; a name or another field of the profile, which is the user's, or display_name, which nobody writes, each refused saying so. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
             /** @description The caller is not an administrator, and not the bootstrap token before the first administrator has signed in; or it holds a session that may only enrol. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
             403: components["responses"]["forbidden"];
             /** @description No user by that login, or a login no user can have. */
             404: components["responses"]["notFound"];
+            /** @description A new login the user cannot be given, the error saying why: a user whose login no release reserved after it was given, which never changes; a login a user, a namespace or a namespace's former name holds; or, where the user has a personal namespace, what refuses that namespace's rename at PATCH /api/v1/namespaces/{ns}: a run of it queued, running or waiting, a move of one of its workflows to or from it asked and not carried out, or a runner not revoked narrowing itself to it by name. */
+            409: components["responses"]["conflict"];
             413: components["responses"]["tooLarge"];
         };
     };
@@ -16673,6 +16726,8 @@ export interface operations {
     getWorkflow: {
         parameters: {
             query?: {
+                /** @description The version answered, with the graph it resolves to: a branch or a tag, by its short name or written in full, or a commit written whole that is a version of the workflow, resolved as a run asked for by that ref resolves it. Where none is named, the version a run naming no ref runs: the default branch's head, or while it is unborn the latest version agk push sent as a tree. Every branch and every tag holding a commit is at a version, since a push makes a version of each commit it leaves a ref pointing at; a commit a push only carried on the way is none, and is answered 404 as a ref naming nothing is, and so is a branch nothing was pushed to yet. A name a branch and a tag both hold is refused with 400 rather than guessed at. It chooses the version alone: the repository, its labels included, and the history answered beside it are the default branch's whatever it names, so that from and limit page the same history with it or without it, and the labels are those a search finds the workflow by. */
+                ref?: components["parameters"]["versionRef"];
                 /** @description The commit the history is listed from, itself included: the next of the page before. The default branch's head where it is left out. */
                 from?: components["parameters"]["historyFrom"];
                 /** @description How many commits a page lists, 50 where it is left out and 500 at the most, as GET /api/v1/runs lists runs. */
@@ -16698,12 +16753,12 @@ export interface operations {
                     "application/json": components["schemas"]["workflowDetail"];
                 };
             };
-            /** @description from is not a whole commit, or limit is not a number from 1 to 500. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            /** @description ref is a name a branch and a tag both hold, from is not a whole commit, or limit is not a number from 1 to 500. Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
             /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
             403: components["responses"]["forbidden"];
-            /** @description No such workflow, or one the caller cannot read: the same answer; or a from naming no commit of the history listed. */
+            /** @description No such workflow, or one the caller cannot read: the same answer; a ref naming no branch, no tag and no version of the workflow, a commit a push only carried on the way and a branch nothing was pushed to yet among them; or a from naming no commit of the history listed. */
             404: components["responses"]["notFound"];
         };
     };

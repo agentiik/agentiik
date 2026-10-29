@@ -47,8 +47,8 @@ import (
 // links and recovery codes, the sign-ins that succeed and fail, groups and their members, service
 // accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap;
 // and from v0.4.0 the workflow repository's; and from v0.6.0 the profile's, what a user says of
-// themself, their photo, and what an administrator gives them, and a namespace's variables. Approval
-// arrives with the wait step in v0.8.0.
+// themself, their photo, and what an administrator gives them, and a namespace's variables; and from
+// v0.7.0 a user given a new login. Approval arrives with the wait step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -115,6 +115,13 @@ const (
 	// changed and never what they hold, as UserProfile is, since the log is kept for good and an
 	// address is somebody's to have removed.
 	UserUpdate = "user.update"
+	// UserRename is a user given a new login by an administrator at the same route, because a
+	// later release made theirs a reserved word, recorded on the installation with the new login as
+	// its target and from and to, since the entries recorded before keep the login they were
+	// recorded under; the rename of their personal namespace beside it is a NamespaceRename
+	// carrying personal, so that whoever reads the log for the renames of namespaces finds every
+	// one.
+	UserRename = "user.rename"
 	// GroupCreate and GroupDelete are a group created and removed, and GroupMemberAdd and
 	// GroupMemberRemove one member put in or taken out, since a member gains or loses what the
 	// group's grants give.

@@ -606,3 +606,84 @@ func TestARecoveryCodeIsToldToItsUser(t *testing.T) {
 		}
 	}
 }
+
+// A new login is told to its user alone, under the login they were given, with the one they had and
+// who gave it, and nothing of the other kinds; it is dismissed by its reader, as every kind but a
+// recovery code's is, and by nobody else; and a notice of it is refused a shape the kind does not
+// carry.
+func TestANewLoginIsToldToItsUser(t *testing.T) {
+	pool := identity(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []User{{Login: "mc-petit", Profile: Profile{GivenName: "Marie-Claire"}}, {Login: "carol", Profile: Profile{GivenName: "Carol"}, Admin: true}} {
+			if err := w.CreateUser(ctx, u); err != nil {
+				return err
+			}
+		}
+		return w.TellLoginChanged(ctx, "mcp", "mc-petit", "carol", now)
+	})
+	read := func(recipient string) []Notification {
+		t.Helper()
+		var notes []Notification
+		wide(t, pool, func(ctx context.Context, w *Wide) error {
+			var err error
+			notes, err = w.NotificationsOf(ctx, recipient, now.Add(time.Hour))
+			return err
+		})
+		return notes
+	}
+	told := read("mc-petit")
+	if len(told) != 1 || told[0].Kind != LoginChanged || told[0].From != "mcp" || told[0].To != "mc-petit" || told[0].By != "carol" || !told[0].At.Equal(now) ||
+		told[0].Namespace != "" || told[0].Grant != nil || told[0].Act != "" || told[0].Credential != "" || told[0].Login != "" {
+		t.Fatalf("mc-petit is told %+v", told)
+	}
+	if n := read("carol"); len(n) != 0 {
+		t.Errorf("carol, who gave the login, is told %+v", n)
+	}
+	if Undismissed(LoginChanged) {
+		t.Error("a new login is said to be kept from its reader's dismissal")
+	}
+	dismiss := func(recipient string) error {
+		return pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
+			return w.DismissNotification(ctx, recipient, told[0].ID, now.Add(time.Hour))
+		})
+	}
+	if err := dismiss("carol"); !errors.Is(err, ErrNoNotification) {
+		t.Errorf("carol dismissing mc-petit's new login was answered %v", err)
+	}
+	if err := dismiss("mc-petit"); err != nil {
+		t.Errorf("mc-petit dismissing her new login was answered %v", err)
+	}
+	if n := read("mc-petit"); len(n) != 0 {
+		t.Errorf("mc-petit is told %+v once she dismissed it", n)
+	}
+
+	for what, refused := range map[string]struct{ stmt, by string }{
+		"a new login given by nobody": {`insert into notifications (id, recipient, kind, at, from_login, to_login)
+			values ('01JQ5A', 'mc-petit', 'login_changed', now(), 'mcp', 'mc-petit')`, "notifications_one_kind"},
+		"a new login naming no login it replaced": {`insert into notifications (id, recipient, kind, at, acted_by, to_login)
+			values ('01JQ5A', 'mc-petit', 'login_changed', now(), 'carol', 'mc-petit')`, "notifications_one_kind"},
+		"a new login naming none given": {`insert into notifications (id, recipient, kind, at, acted_by, from_login)
+			values ('01JQ5A', 'mc-petit', 'login_changed', now(), 'carol', 'mcp')`, "notifications_one_kind"},
+		"a new login naming an account": {`insert into notifications (id, recipient, kind, at, acted_by, from_login, to_login, login)
+			values ('01JQ5A', 'mc-petit', 'login_changed', now(), 'carol', 'mcp', 'mc-petit', 'carol')`, "notifications_one_kind"},
+		"a new login naming a credential": {`insert into notifications (id, recipient, kind, at, acted_by, from_login, to_login, credential)
+			values ('01JQ5A', 'mc-petit', 'login_changed', now(), 'carol', 'mcp', 'mc-petit', 'bmV3UGFzc2tleQ')`, "notifications_one_kind"},
+		"a new login off the grammar": {`insert into notifications (id, recipient, kind, at, acted_by, from_login, to_login)
+			values ('01JQ5A', 'mc-petit', 'login_changed', now(), 'carol', 'mcp', 'MC Petit')`, "notifications_to_login_check"},
+		"a recovery code naming a login it replaced": {`insert into notifications (id, recipient, kind, at, acted_by, from_login)
+			values ('01JQ5A', 'mc-petit', 'recovery_code_issued', now(), 'carol', 'mcp')`, "notifications_one_kind"},
+		"a break-glass recovery naming a login given": {`insert into notifications (id, recipient, kind, at, login, to_login)
+			values ('01JQ5A', 'carol', 'break_glass_recovery', now(), 'carol', 'mc-petit')`, "notifications_one_kind"},
+	} {
+		err := pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
+			_, err := w.tx.Exec(ctx, refused.stmt)
+			return err
+		})
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.ConstraintName != refused.by {
+			t.Errorf("%s was answered %v, and %s refuses it", what, err, refused.by)
+		}
+	}
+}
