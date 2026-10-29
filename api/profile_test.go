@@ -374,6 +374,28 @@ func TestAnAdministratorGivesAUserAnEmailAddress(t *testing.T) {
 	}
 }
 
+// Pictures are re-encoded a few at a time in the API, a user's photo and a namespace's picture
+// alike, since a hundred sent at once would otherwise each take their 50 MiB together: one sent
+// while every turn is held waits for one, and is answered 503 with Retry-After where none comes in
+// time, storing nothing; once a turn is given back, it is taken.
+func TestAPhotoWaitsItsTurnToBeReencoded(t *testing.T) {
+	in := someProfiles(t)
+	hold := api.Reencoding(t, 1, 50*time.Millisecond)
+	done := hold()
+	sent := aJPEG(t, quarters(64, 64))
+	w := in.ask(t, "PUT", "/api/v1/me/avatar", "alice", "image/jpeg", sent)
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "1" || !strings.Contains(w.Body.String(), "too many pictures at once") {
+		t.Errorf("a photo sent while every turn is held answered %d, Retry-After %q: %s", w.Code, w.Header().Get("Retry-After"), w.Body)
+	}
+	if w := in.ask(t, "GET", "/api/v1/me/avatar", "alice", "", nil); w.Code != http.StatusNotFound {
+		t.Errorf("a photo refused for its turn was stored: reading it answered %d", w.Code)
+	}
+	done()
+	if w := in.ask(t, "PUT", "/api/v1/me/avatar", "alice", "image/jpeg", sent); w.Code != http.StatusNoContent {
+		t.Errorf("a photo sent once the turn was given back answered %d: %s", w.Code, w.Body)
+	}
+}
+
 // A photo is stored as a PNG of its pixels alone and read by its owner and by an administrator,
 // with what a browser keeps it by; refused for a type, a weight or a size in pixels it may not have,
 // and by whoever has no photo to set; removed by its owner as often as they like, and by an

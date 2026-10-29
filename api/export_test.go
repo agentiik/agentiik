@@ -35,6 +35,23 @@ func Hashing(s *PasswordAPI, turns int, wait time.Duration) func() func() {
 	}
 }
 
+// Reencoding gives the API the turns to re-encode pictures and the wait for one given in place of
+// those sized from the machine, answers the function that takes one of its turns and holds it until
+// the function it answers is called, and puts the sized ones back at the test's end.
+func Reencoding(t interface{ Cleanup(func()) }, turns int, wait time.Duration) func() func() {
+	was := reencoding
+	reencoding = newHashing(turns, wait)
+	t.Cleanup(func() { reencoding = was })
+	held := reencoding
+	return func() func() {
+		done, ok := held.turn(context.Background())
+		if !ok {
+			panic("no turn to re-encode came in time")
+		}
+		return done
+	}
+}
+
 // BetweenChecksAndSignIn has f run between the checks of every password sign-in s answers, and of
 // every password or TOTP generator it sets or removes, and the transaction that acts on them, which
 // is where what was checked can change.
