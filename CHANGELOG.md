@@ -79,6 +79,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A workflow's runs loaded past the first page with Load 25 more are read again at a live change back to the oldest run shown, by when it was created, a page of 500 at a time, where they were read again by their count, at most 500, so that a list loaded to 550 lost 50 rows from under its reader; a list shown whole is read again whole.
 - Two runs read side by side open the step chosen in either by Open in the first run and Open in the second run, the step named by the pane above them, where each link named the step in its words and grew with it; `tests/labels.test.ts` reads every link and button that is no entry of a list for words beside a value, where it read only those drawn as a control.
 - `console/README.md` records `yaml`, ISC, and `@cfworker/json-schema`, MIT, among what the build ships, each with its reason, as the documentation says of every dependency of the console, and a test fails on a dependency of `package.json` with no row there or no permissive licence named in it.
+- `console/README.md` says the account menu at the foot of the sidebar shows the version a build names, where it named the key line the console no longer draws; the sharing panel's styles say it sets its two columns one above the other under 1600px, where they called 1280px the narrowest window the console is drawn for; and the runners' routes quote what sharing does not expose as the documentation now says it, a task's runner named by its identifier alone.
 
 ### Command line
 

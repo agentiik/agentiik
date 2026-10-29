@@ -16,7 +16,7 @@ node tests/serve.js tests/fixtures/alice.json 4173   # against a recorded scenar
 
 The development server forwards the API's paths, the live connection's WebSocket among them, and names the installation's origin on what it forwards, since the installation takes a sign-in, a change and the handshake from the pages of its public URL alone. A password signs in through it; a passkey cannot, since the browser binds its ceremony to the installation's host whatever a header says.
 
-`AGK_VERSION` names the release a build is part of, which the key line shows; a build nobody named says `(devel)`, as `agk` does.
+`AGK_VERSION` names the release a build is part of, which the account menu at the foot of the sidebar shows; a build nobody named says `(devel)`, as `agk` does.
 
 ## What it is held to
 
