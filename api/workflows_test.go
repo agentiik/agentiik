@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -160,6 +161,111 @@ func TestAWorkflowIsReadWithItsHeadItsGraphAndItsHistory(t *testing.T) {
 		if w, _ := call(t, g.h, "GET", at+query, "bob", nil); w.Code != want {
 			t.Errorf("%s answered %d, not %d: %s", query, w.Code, want, w.Body)
 		}
+	}
+}
+
+// "ref names another version to answer, with the graph it resolves to: a branch or a tag, by its
+// short name or in full, or a whole commit that is a version, resolved as a run asked for by that ref
+// resolves it ... a ref naming nothing, a commit a push only carried on the way and a branch nothing
+// was pushed to yet are 404, and a name a branch and a tag both hold is 400 rather than guessed at.
+// It chooses the version alone: the repository and the history stay the default branch's whatever
+// it names, so that from and limit page the same history."
+func TestARefChoosesTheVersionAWorkflowIsReadAtAndNothingElse(t *testing.T) {
+	g := servingGit(t, holdingRepositories())
+	work := g.newClone("alice")
+	labelled := func(team string) string {
+		return strings.Replace(workflowDocument, "namespace: finance }", "namespace: finance, labels: { team: "+team+" } }", 1)
+	}
+	work.write("agentiik.yaml", labelled("billing"))
+	first := work.commit("first")
+	work.must("tag", "release")
+	work.must("branch", "both")
+	work.must("tag", "both")
+	work.write("scripts/a.sh", "true\n")
+	head := work.commit("the head of main")
+	work.must("checkout", "-q", "-b", "feature")
+	work.write("scripts/b.sh", "true\n")
+	carried := work.commit("carried on the way, which no ref is left at")
+	work.write("agentiik.yaml", labelled("tax"))
+	feature := work.commit("the head of feature")
+	work.must("push", "-q", "origin", "main", "feature", "release", "refs/heads/both", "refs/tags/both")
+
+	const at = "/api/v1/finance/workflows/monthly-invoicing"
+	w, unasked := call(t, g.h, "GET", at, "bob", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("reading the workflow naming no ref answered %d: %s", w.Code, w.Body)
+	}
+	if v, _ := unasked["version"].(map[string]any); v["commit"] != head {
+		t.Fatalf("the version naming no ref is %v, where main is %s", unasked["version"], head)
+	}
+	for ref, want := range map[string]string{
+		"feature": feature, "refs/heads/feature": feature, "main": head, "release": first, "refs/tags/release": first,
+		first: first, feature: feature, "refs/heads/both": first, "refs/tags/both": first,
+	} {
+		w, answer := call(t, g.h, "GET", at+"?ref="+url.QueryEscape(ref), "bob", nil)
+		if w.Code != http.StatusOK {
+			t.Errorf("reading the workflow at %s answered %d: %s", ref, w.Code, w.Body)
+			continue
+		}
+		if v, _ := answer["version"].(map[string]any); v["commit"] != want || v["source"] != "git" {
+			t.Errorf("the version at %s is %v, not %s", ref, answer["version"], want)
+		}
+		if graph, _ := answer["graph"].(map[string]any); graph["commit"] != want {
+			t.Errorf("the graph at %s is of %v, not of %s", ref, graph["commit"], want)
+		}
+		// The labels among the repository are the default branch's, team: billing, where
+		// feature writes team: tax.
+		if !reflect.DeepEqual(answer["repository"], unasked["repository"]) || !reflect.DeepEqual(answer["history"], unasked["history"]) {
+			t.Errorf("at %s the repository is %v and the history %v, where naming no ref they are %v and %v",
+				ref, answer["repository"], answer["history"], unasked["repository"], unasked["history"])
+		}
+	}
+
+	// from and limit page main's history whatever ref names.
+	w, answer := call(t, g.h, "GET", at+"?ref=feature&limit=1", "bob", nil)
+	if history, _ := answer["history"].([]any); w.Code != http.StatusOK || len(history) != 1 || history[0].(map[string]any)["commit"] != head || answer["next"] != first {
+		t.Errorf("a page of one at feature answered %d: %v, next %v", w.Code, answer["history"], answer["next"])
+	}
+	w, answer = call(t, g.h, "GET", at+"?ref=feature&limit=1&from="+first, "bob", nil)
+	if history, _ := answer["history"].([]any); w.Code != http.StatusOK || len(history) != 1 || history[0].(map[string]any)["commit"] != first || answer["next"] != nil {
+		t.Errorf("the next page at feature answered %d: %v, next %v", w.Code, answer["history"], answer["next"])
+	}
+	if w, _ := call(t, g.h, "GET", at+"?ref=feature&from="+carried, "bob", nil); w.Code != http.StatusNotFound {
+		t.Errorf("a page from a commit of feature, off main's history, answered %d: %s", w.Code, w.Body)
+	}
+
+	for ref, want := range map[string]int{
+		"both":                  http.StatusBadRequest,
+		"nothing":               http.StatusNotFound,
+		"refs/heads/release":    http.StatusNotFound,
+		"refs/tags/feature":     http.StatusNotFound,
+		carried:                 http.StatusNotFound,
+		strings.Repeat("1", 40): http.StatusNotFound,
+	} {
+		if w, _ := call(t, g.h, "GET", at+"?ref="+url.QueryEscape(ref), "bob", nil); w.Code != want {
+			t.Errorf("reading the workflow at %s answered %d, not %d: %s", ref, w.Code, want, w.Body)
+		}
+	}
+
+	// A branch nothing was pushed to yet: an empty repository's default branch, which names no
+	// version, where naming no ref reads the repository with none.
+	if w, _ := call(t, g.h, "POST", "/api/v1/finance/workflows", "alice", map[string]any{"name": "vat-reconciliation"}); w.Code != http.StatusCreated {
+		t.Fatalf("creating a repository answered %d: %s", w.Code, w.Body)
+	}
+	const empty = "/api/v1/finance/workflows/vat-reconciliation"
+	if w, answer := call(t, g.h, "GET", empty, "bob", nil); w.Code != http.StatusOK || answer["version"] != nil {
+		t.Errorf("an empty repository naming no ref answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, g.h, "GET", empty+"?ref=main", "bob", nil); w.Code != http.StatusNotFound {
+		t.Errorf("an empty repository at its unborn default branch answered %d: %s", w.Code, w.Body)
+	}
+
+	// A workflow that does not exist and one the caller cannot read are answered alike, whatever
+	// the ref.
+	wHidden, hidden := call(t, g.h, "GET", at+"?ref=main", "carol", nil)
+	wAbsent, absent := call(t, g.h, "GET", "/api/v1/finance/workflows/nothing?ref=main", "bob", nil)
+	if wHidden.Code != http.StatusNotFound || wAbsent.Code != http.StatusNotFound || !reflect.DeepEqual(hidden, absent) {
+		t.Errorf("a workflow the caller cannot read is answered %d %v, and one that does not exist %d %v", wHidden.Code, hidden, wAbsent.Code, absent)
 	}
 }
 

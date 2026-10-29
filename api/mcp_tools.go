@@ -42,9 +42,14 @@ type routed struct {
 	// request is the route the arguments make, its query and its body, nil for none.
 	request func(args map[string]any) (method, path string, query url.Values, body any)
 
-	// read, where set, reads the route's answer itself rather than answering it as it came.
-	read func(a *toolAnswer) (*mcp.CallResult, error)
+	// read, where set, reads the route's answer itself rather than answering it as it came, with
+	// the arguments of the call, and more for what else it has to ask of the API.
+	read func(args map[string]any, a *toolAnswer, more requester) (*mcp.CallResult, error)
 }
+
+// requester makes one more request of the API for a tool, as its first was made: as the caller,
+// through the router, so that whatever that route checks is checked the same way.
+type requester func(method, path string, query url.Values) (*toolAnswer, error)
 
 // holds says whether a caller holds a permission at any scope, a namespace or a workflow of one.
 func holds(p Permission) func(Effective) bool {
@@ -256,11 +261,18 @@ func userTools() []routed {
 		},
 		{
 			name: "workflow.get", title: "Get a workflow",
-			description: "A workflow's repository and the version its default branch's head is: the commit, its clone URL, and the graph it resolves to, includes resolved and images by digest. The head's commit is the parent a workflow.commit names.",
-			input:       object([]string{"namespace", "workflow"}, argNamespace, argWorkflow), annotations: reads(), offered: holds(WorkflowRead),
+			description: "A workflow's entry point and the graph it resolves to at ref, a branch, a tag or a commit that is a version, the default branch's head where left out: files holds the text of agentiik.yaml, keyed by its path as workflow.validate and workflow.commit take files; graph the graph, includes resolved and images by digest; and version the version both are of, whose commit is the parent a workflow.commit of an edit names. Beside them, whatever ref names, the repository with its clone URL and a page of the default branch's history.",
+			input: object([]string{"namespace", "workflow"}, argNamespace, argWorkflow,
+				`"ref":{"type":"string","minLength":1,"description":"The branch, the tag or the version read: a branch or a tag by its short name or in full, refs/heads/NAME or refs/tags/NAME, or a commit of forty hexadecimal digits that is a version. The default branch's head where left out. A name a branch and a tag both hold is refused: write the one meant in full."}`),
+			annotations: reads(), offered: holds(WorkflowRead),
 			request: func(a map[string]any) (string, string, url.Values, any) {
-				return "GET", "/api/v1/" + segment(str(a, "namespace")) + "/workflows/" + segment(str(a, "workflow")), nil, nil
+				var q url.Values
+				if ref := str(a, "ref"); ref != "" {
+					q = url.Values{"ref": {ref}}
+				}
+				return "GET", workflowPath(a), q, nil
 			},
+			read: entryPointAt,
 		},
 		{
 			name: "workflow.create", title: "Create a workflow",
@@ -452,6 +464,47 @@ func userTools() []routed {
 	}
 }
 
+// workflowPath is the workflow the arguments name, as the API's path to it.
+func workflowPath(a map[string]any) string {
+	return "/api/v1/" + segment(str(a, "namespace")) + "/workflows/" + segment(str(a, "workflow"))
+}
+
+// entryPoint is the file workflow.get answers the text of, at the root of the tree.
+const entryPoint = "agentiik.yaml"
+
+// entryPointAt is workflow.get's answer: the route's, with the entry point's text beside the graph.
+// The text is read through the tree route, which is the one answering a file's bytes, at the commit
+// the route answered as the version rather than at the ref asked, so that the text and the graph are
+// one version's even where the ref moved between the two requests. A repository with no version yet
+// has no entry point to read, and is answered as the route answered it; and a refusal of either
+// request is answered in its route's words.
+func entryPointAt(args map[string]any, a *toolAnswer, more requester) (*mcp.CallResult, error) {
+	if a.status != http.StatusOK {
+		return result(a)
+	}
+	var answer struct {
+		WorkflowDetail
+		Files map[string]string `json:"files,omitempty"`
+	}
+	if err := json.Unmarshal(a.body.Bytes(), &answer); err != nil {
+		return nil, err
+	}
+	if answer.Version == nil {
+		return result(a)
+	}
+	file, err := more("GET", workflowPath(args)+"/tree/"+segment(answer.Version.Commit), url.Values{"path": {entryPoint}})
+	if err != nil {
+		return nil, err
+	}
+	if file.status != http.StatusOK {
+		return result(file)
+	}
+	answer.Files = map[string]string{entryPoint: file.body.String()}
+	joined := &toolAnswer{header: http.Header{}}
+	write(joined, http.StatusOK, answer)
+	return result(joined)
+}
+
 // grantsPath is the grants of a namespace, or of one of its workflows where the arguments name one.
 func grantsPath(a map[string]any) string {
 	p := "/api/v1/" + segment(str(a, "namespace"))
@@ -491,7 +544,9 @@ func (m *MCP) tool(r *http.Request, t routed) mcp.Tool {
 				return nil, err
 			}
 			if t.read != nil {
-				return t.read(a)
+				return t.read(args, a, func(method, path string, query url.Values) (*toolAnswer, error) {
+					return m.dispatch(r, t.name, method, path, query, nil)
+				})
 			}
 			return result(a)
 		},

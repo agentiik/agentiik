@@ -283,3 +283,87 @@ func TestTheUsersServersToolsAreTheirRoutes(t *testing.T) {
 		t.Errorf("a call naming no workflow is answered %v", rpcErr)
 	}
 }
+
+// "workflow.get: the entry point's text and the resolved graph at a ref, a branch, a tag or a commit
+// that is a version, the default branch's head where none is named: GET /api/v1/{ns}/workflows/{name}
+// with ref, and the entry point read through the tree route at the commit it answers."
+func TestWorkflowGetReadsTheEntryPointAndTheGraphAtARef(t *testing.T) {
+	g := servingGit(t, owningGrants{granted: everyone().(granted)})
+	rt := g.h.(*api.Router)
+	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	labelled := func(team string) string {
+		return strings.Replace(workflowDocument, "namespace: finance }", "namespace: finance, labels: { team: "+team+" } }", 1)
+	}
+	released, onMain, onFeature := labelled("release"), labelled("billing"), labelled("tax")
+	commitOf := func(body map[string]any) string {
+		t.Helper()
+		status, made := g.committed("alice", body)
+		if status != http.StatusCreated {
+			t.Fatalf("a commit is answered %d %v", status, made)
+		}
+		return made["commit"].(string)
+	}
+	tagged := commitOf(map[string]any{"message": "released", "files": map[string]any{"agentiik.yaml": released}})
+	clone := g.cloned("alice")
+	clone.must("tag", "v1.0.0", tagged)
+	clone.must("push", "-q", "origin", "v1.0.0")
+	head := commitOf(map[string]any{"parent": tagged, "message": "main moves on", "files": map[string]any{"agentiik.yaml": onMain}})
+	feature := commitOf(map[string]any{"branch": "feature", "parent": tagged, "message": "a branch", "files": map[string]any{"agentiik.yaml": onFeature}})
+
+	get := func(arguments map[string]any) map[string]any {
+		t.Helper()
+		arguments["namespace"], arguments["workflow"] = "finance", "monthly-invoicing"
+		_, res, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": arguments})
+		if rpcErr != nil {
+			t.Fatalf("workflow.get %v is answered %v", arguments, rpcErr)
+		}
+		return res
+	}
+	for ref, want := range map[string]struct{ commit, text string }{
+		"":                   {head, onMain},
+		"v1.0.0":             {tagged, released},
+		"refs/tags/v1.0.0":   {tagged, released},
+		"feature":            {feature, onFeature},
+		"refs/heads/feature": {feature, onFeature},
+		tagged:               {tagged, released},
+	} {
+		arguments := map[string]any{}
+		if ref != "" {
+			arguments["ref"] = ref
+		}
+		res := get(arguments)
+		if res["isError"] == true {
+			t.Errorf("workflow.get at %q is refused: %v", ref, res["content"])
+			continue
+		}
+		got := res["structuredContent"].(map[string]any)
+		if files, _ := got["files"].(map[string]any); files["agentiik.yaml"] != want.text || len(files) != 1 {
+			t.Errorf("workflow.get at %q answers the files %v, where agentiik.yaml is %q there", ref, got["files"], want.text)
+		}
+		if v, _ := got["version"].(map[string]any); v["commit"] != want.commit {
+			t.Errorf("workflow.get at %q answers the version %v, not %s", ref, got["version"], want.commit)
+		}
+		if graph, _ := got["graph"].(map[string]any); graph["commit"] != want.commit {
+			t.Errorf("workflow.get at %q answers the graph of %v, not of %s", ref, graph["commit"], want.commit)
+		}
+		if repository, _ := got["repository"].(map[string]any); repository["head"] != head {
+			t.Errorf("workflow.get at %q answers the repository %v, where main is %s", ref, repository, head)
+		}
+		// The text a model reads is the structured content, as every tool of the server answers
+		// it.
+		var said map[string]any
+		if err := json.Unmarshal([]byte(res["content"].([]any)[0].(map[string]any)["text"].(string)), &said); err != nil || said["files"].(map[string]any)["agentiik.yaml"] != want.text {
+			t.Errorf("workflow.get at %q says %v: %v", ref, res["content"], err)
+		}
+	}
+
+	// A ref the route refuses is refused in its words, and an empty one by the tool's schema.
+	if res := get(map[string]any{"ref": "nothing"}); res["isError"] != true || !strings.Contains(res["content"].([]any)[0].(map[string]any)["text"].(string), "names no branch, no tag and no version") {
+		t.Errorf("workflow.get at a ref naming nothing is answered %v", res)
+	}
+	if _, _, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing", "ref": ""}}); rpcErr == nil || rpcErr.Code != -32602 {
+		t.Errorf("workflow.get at an empty ref is answered %v", rpcErr)
+	}
+}
