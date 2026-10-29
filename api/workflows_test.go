@@ -253,6 +253,11 @@ func TestTheTreeAtARefIsListedAndAFileOfItRead(t *testing.T) {
 	if res.StatusCode != http.StatusOK || string(got) != "print('normalize')\n" {
 		t.Errorf("a file of the tree answered %d: %q", res.StatusCode, got)
 	}
+	// Served on the console's origin, a file whoever can push wrote is bytes a browser neither
+	// sniffs nor renders, saved under its own name.
+	if res.Header.Get("X-Content-Type-Options") != "nosniff" || res.Header.Get("Content-Disposition") != `attachment; filename=normalize.py` {
+		t.Errorf("a file of the tree is served with nosniff %q and disposition %q", res.Header.Get("X-Content-Type-Options"), res.Header.Get("Content-Disposition"))
+	}
 	for path, want := range map[string]int{
 		"scripts": http.StatusNotFound, "nothing.py": http.StatusNotFound,
 		"../agentiik.yaml": http.StatusBadRequest, "/agentiik.yaml": http.StatusBadRequest, "scripts//normalize.py": http.StatusBadRequest,

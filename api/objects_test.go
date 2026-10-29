@@ -79,6 +79,10 @@ func TestAnObjectRouteIsAuthorisedByItsURLAndByNothingElse(t *testing.T) {
 	if w.Code != http.StatusOK || w.Body.String() != content {
 		t.Fatalf("fetching answered %d: %q", w.Code, w.Body)
 	}
+	// Served on the console's origin, an object is bytes a browser neither sniffs nor renders.
+	if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Disposition") != "attachment" {
+		t.Errorf("an object is served with nosniff %q and disposition %q", w.Header().Get("X-Content-Type-Options"), w.Header().Get("Content-Disposition"))
+	}
 
 	// And without one there is nothing: the route is public and the signature is what
 	// authorises it, so an unsigned request reaches the handler and is refused there.
