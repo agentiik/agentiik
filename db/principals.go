@@ -194,10 +194,11 @@ func (w *Wide) Users(ctx context.Context) ([]User, error) {
 }
 
 // UpdateUser writes what an administrator and the authentication policy change of a user: whether
-// they administer, and whether they are suspended, and why. The login never changes, since it is
-// also the name of their personal namespace; the email address is written on its own (SetEmail);
-// and the profile and the photo are left as they are, being the user's own to write (UpdateProfile,
-// SetAvatar).
+// they administer, and whether they are suspended, and why. The login is not among it, since it is
+// also the name of their personal namespace, and changes only where a later release made it a
+// reserved word, with everything naming it (RenameUser); the email address is written on its own
+// (SetEmail); and the profile and the photo are left as they are, being the user's own to write
+// (UpdateProfile, SetAvatar).
 func (w *Wide) UpdateUser(ctx context.Context, u User) error {
 	tag, err := w.tx.Exec(ctx,
 		`update users set admin = $2, suspended = $3, suspended_for = $4 where login = $1`,

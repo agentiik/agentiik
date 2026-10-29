@@ -174,3 +174,18 @@ func TestThePaletteDismissesNoRecoveryCodesNotification(t *testing.T) {
 		}
 	}
 }
+
+// A new login's notification is listed in the web console's words and dismissed when chosen, as the
+// other kinds but a recovery code's are.
+func TestThePaletteDismissesANewLoginsNotification(t *testing.T) {
+	changed := notice{ID: "01M2AK5V7X9Z1B3D5F7H9K1M3P", Kind: "login_changed", From: "mcp", To: "mc-petit", By: "alice"}
+	in := &installation{runs: someRuns(), me: withNotices(changed)}
+	m := press(t, typed(t, press(t, opened(t, in, Options{}, 120, 30), colon), "notif"), enter)
+	if lines := paletteLines(m); m.palette == nil || len(lines) < 2 || !strings.Contains(lines[1], "alice gave you the login mc-petit in place of mcp") {
+		t.Fatalf("Notifications does not list the new login:\n%s", screen(m))
+	}
+	m = press(t, m, enter)
+	if len(in.sent) != 1 || in.sent[0] != "DELETE /api/v1/me/notifications/"+changed.ID+" null" {
+		t.Errorf("choosing the new login's notification sent %v", in.sent)
+	}
+}

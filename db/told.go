@@ -30,7 +30,9 @@ import (
 // recovery code an administrator issued a user and that code spent, are told to that user alone, who
 // knows whether they asked for it and holds the way to undo it: the code lets whoever holds it sign
 // in as them while their passkeys keep working, which nothing else would tell them of. Those two are
-// kept their 90 days, since whoever spent the code could otherwise dismiss them (undismissed).
+// kept their 90 days, since whoever spent the code could otherwise dismiss them (undismissed). The
+// sixth, a new login an administrator gave a user whose login a later release made a reserved word,
+// is told to that user, since it is what they sign in as and what every grant names them by.
 
 // The kinds of notification, as the wire's $defs/notification names them.
 const (
@@ -55,6 +57,11 @@ const (
 	// RecoveryCodeUsed is such a code spent on the enrolment page, told to its user with who
 	// issued it and the credential it enrolled, which they may remove if it was not them.
 	RecoveryCodeUsed = "recovery_code_used"
+
+	// LoginChanged is a new login an administrator, or the bootstrap token, gave a user in place
+	// of one a later release made a reserved word, told to that user with the login they had, the
+	// one they were given and who gave it, unless they gave it themselves.
+	LoginChanged = "login_changed"
 )
 
 // The acts an AdminAccessWidened notification tells, as the wire's $defs/notification names them.
@@ -142,9 +149,9 @@ type Notification struct {
 	At time.Time
 
 	// Namespace, Grant and Act are where an administrator widened access, the grant as Widening
-	// keeps it and what they did, on AdminAccessWidened alone. By is who they are there, and who
-	// issued the recovery code on RecoveryCodeIssued and RecoveryCodeUsed: a login, or operator for
-	// the bootstrap token.
+	// keeps it and what they did, on AdminAccessWidened alone. By is who they are there, who
+	// issued the recovery code on RecoveryCodeIssued and RecoveryCodeUsed, and who gave the new
+	// login on LoginChanged: a login, or operator for the bootstrap token.
 	Namespace string
 	Grant     *access.Grant
 	Act       string
@@ -159,6 +166,11 @@ type Notification struct {
 	// BreakGlassRecovery, and the user put in a group, on AdminAccessWidened by ActJoinedGroup,
 	// named rather than referred to, so that removing the account leaves what the others were told.
 	Login string
+
+	// From and To are the login the reader had and the one they were given, on LoginChanged, with
+	// By who gave it: kept as they were told, as Login and By are, whatever is renamed after.
+	From string
+	To   string
 }
 
 // TellOwners writes AdminAccessWidened, about what an administrator did in this namespace, to each
@@ -343,6 +355,21 @@ func (w *Wide) TellRecoveryUsed(ctx context.Context, login, by, credential strin
 	return nil
 }
 
+// TellLoginChanged writes LoginChanged, about the login to by gave the user who had the login from at
+// at, to that user, who reads it under to, and nobody else.
+//
+// It is written in the transaction that gives the login, after the user's rows are written under it
+// and before the audit entry, so that no login changes untold; its caller leaves it out where the
+// user gave it themselves.
+func (w *Wide) TellLoginChanged(ctx context.Context, from, to, by string, at time.Time) error {
+	if _, err := w.tx.Exec(ctx,
+		`insert into notifications (id, recipient, kind, at, acted_by, from_login, to_login) values ($1, $2, $3, $4, $5, $6, $7)`,
+		ulid.New(), to, LoginChanged, at, by, from, to); err != nil {
+		return fmt.Errorf("db: %s could not be told of the login %s gave them in place of %s: %w", to, by, from, err)
+	}
+	return nil
+}
+
 // NotificationsOf answers what recipient is told as of now, newest first, and removes what it was
 // told more than NotificationKept before now, which is kept no longer. Removed where it is read
 // rather than by a sweep of its own: a notification nobody reads costs a row until its reader asks,
@@ -354,7 +381,8 @@ func (w *Wide) NotificationsOf(ctx context.Context, recipient string, now time.T
 	}
 	rows, err := w.tx.Query(ctx, `
 		select id, recipient, kind, at, coalesce(namespace, ''), access_grant, coalesce(act, ''),
-		       coalesce(acted_by, ''), coalesce(credential, ''), coalesce(login, '')
+		       coalesce(acted_by, ''), coalesce(credential, ''), coalesce(login, ''),
+		       coalesce(from_login, ''), coalesce(to_login, '')
 		  from notifications where recipient = $1
 		 order by at desc, id desc`, recipient)
 	if err != nil {
@@ -363,7 +391,7 @@ func (w *Wide) NotificationsOf(ctx context.Context, recipient string, now time.T
 	told, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Notification, error) {
 		var t Notification
 		var grant []byte
-		if err := row.Scan(&t.ID, &t.Recipient, &t.Kind, &t.At, &t.Namespace, &grant, &t.Act, &t.By, &t.Credential, &t.Login); err != nil {
+		if err := row.Scan(&t.ID, &t.Recipient, &t.Kind, &t.At, &t.Namespace, &grant, &t.Act, &t.By, &t.Credential, &t.Login, &t.From, &t.To); err != nil {
 			return Notification{}, err
 		}
 		if grant != nil {

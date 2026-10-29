@@ -172,8 +172,9 @@ func builtInIdentities(ctx context.Context, pool *db.Pool, stdout io.Writer) err
 // nothing, and the route the word was reserved for is served at its own path alone, which no route
 // of a namespace takes: under stats there is nothing to do, and under a word the web console needs
 // reserved, api, hooks, mcp or objects, the console opens none of its pages, which are the API's
-// addresses, until it is renamed. A login or a group under one of those is named too, since the
-// rows from before the word was reserved may be any of the three. init and migrate say it at every
+// addresses, until it is renamed, a personal namespace with its user's login, which an administrator
+// gives anew with PATCH /api/v1/users/{login}. A login or a group under one of those is named too,
+// since the rows from before the word was reserved may be any of the three. init and migrate say it at every
 // run while it lasts, since one of the two runs wherever an installation is upgraded, so that
 // whoever reads either knows why that name is refused to anything new.
 //
@@ -193,7 +194,7 @@ func reservedLater(ctx context.Context, pool *db.Pool, verb string, stdout io.Wr
 			case !r.Console:
 				lines = append(lines, fmt.Sprintf("namespace %s keeps its name and is served as before, with nothing to do: %s", r.Word, reserved))
 			case n.Kind == db.NamespacePersonal:
-				lines = append(lines, fmt.Sprintf("namespace %s, the personal namespace of the user %s, is served by the API as before, every route of it, and the web console opens none of its pages: %s", r.Word, r.Word, reserved))
+				lines = append(lines, fmt.Sprintf("namespace %s, the personal namespace of the user %s, is served by the API as before, every route of it, and the web console opens none of its pages until an administrator gives its user a new login with PATCH /api/v1/users/{login}, which it follows: %s", r.Word, r.Word, reserved))
 			default:
 				lines = append(lines, fmt.Sprintf("namespace %s keeps its name and is served by the API as before, every route of it, and the web console opens none of its pages until its owner or an administrator renames it with PATCH /api/v1/namespaces/{ns}: %s", r.Word, reserved))
 			}
@@ -203,7 +204,7 @@ func reservedLater(ctx context.Context, pool *db.Pool, verb string, stdout io.Wr
 			case err != nil:
 				return err
 			default:
-				lines = append(lines, fmt.Sprintf("login %s is kept, and its user signs in with it as before: %s", r.Word, reserved))
+				lines = append(lines, fmt.Sprintf("login %s is kept, and its user signs in with it as before, until an administrator gives them a new login with PATCH /api/v1/users/{login}, which their personal namespace follows: %s", r.Word, reserved))
 			}
 			_, err = w.Group(ctx, r.Word)
 			switch {

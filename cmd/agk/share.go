@@ -313,6 +313,10 @@ func noticeLine(n api.Notification) string {
 		return fmt.Sprintf("told %s at %s: %s issued you a recovery code, which enrols a passkey or sets a password on your account for whoever holds it, within the hour; if you did not ask for one, tell another administrator", n.ID, when, n.By)
 	case n.Kind == "recovery_code_used" && n.By != "" && n.Credential != "":
 		return fmt.Sprintf("told %s at %s: a recovery code %s issued you enrolled %s on your account; if that was not you, remove it from your sign-in methods and tell another administrator", n.ID, when, n.By, n.Credential)
+	case n.Kind == "login_changed" && n.By != "" && n.From != "" && n.To != "":
+		// Read under the new login, through the token agk holds, which keeps working as every
+		// session and token of the user does, since they are the user's rather than the login's.
+		return fmt.Sprintf("told %s at %s: %s gave you the login %s in place of %s, a word a later release reserved; you sign in as %s from now on, and your sessions and tokens keep working", n.ID, when, n.By, n.To, n.From, n.To)
 	}
 	return fmt.Sprintf("told %s at %s: %s", n.ID, when, n.Kind)
 }

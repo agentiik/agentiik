@@ -28,6 +28,8 @@ type notice struct {
 	Namespace  string `json:"namespace"`
 	Login      string `json:"login"`
 	Credential string `json:"credential"`
+	From       string `json:"from"`
+	To         string `json:"to"`
 }
 
 // acts are what an administrator did that widened their own access, as the web console says them.
@@ -64,6 +66,13 @@ func (n notice) sentence() string {
 	case "recovery_code_used":
 		return "A recovery code " + or(n.By, "an administrator") + " issued enrolled " + or(n.Credential, "a new sign-in method") +
 			" on your account. If that was not you, remove it from your sign-in methods and tell another administrator."
+	case "login_changed":
+		// Both logins or neither, since one without the other names nothing a person signs in as.
+		if n.From != "" && n.To != "" {
+			return or(n.By, "An administrator") + " gave you the login " + n.To + " in place of " + n.From +
+				", a word a later release reserved. You sign in as " + n.To + " from now on."
+		}
+		return or(n.By, "An administrator") + " gave you a new login in place of one a later release reserved."
 	}
 	return n.Kind
 }

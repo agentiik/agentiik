@@ -110,6 +110,9 @@ func TestANotificationSaysWhatTheWebConsoleSays(t *testing.T) {
 		{Kind: "recovery_code_issued", By: "carol"}:                             "carol issued you a recovery code.",
 		{Kind: "recovery_code_used", By: "carol", Credential: "bmV3UGFzc2tleQ"}: "A recovery code carol issued enrolled bmV3UGFzc2tleQ on your account. If that was not you, remove it from your sign-in methods and tell another administrator.",
 		{Kind: "recovery_code_used"}:                                            "A recovery code an administrator issued enrolled a new sign-in method on your account. If that was not you, remove it from your sign-in methods and tell another administrator.",
+		{Kind: "login_changed", From: "mcp", To: "mc-petit", By: "alice"}:       "alice gave you the login mc-petit in place of mcp, a word a later release reserved. You sign in as mc-petit from now on.",
+		{Kind: "login_changed", From: "mcp", To: "mc-petit", By: "operator"}:    "operator gave you the login mc-petit in place of mcp, a word a later release reserved. You sign in as mc-petit from now on.",
+		{Kind: "login_changed", By: "alice"}:                                    "alice gave you a new login in place of one a later release reserved.",
 	} {
 		if got := n.sentence(); got != want {
 			t.Errorf("%s says %q, where the web console says %q", n.Kind, got, want)

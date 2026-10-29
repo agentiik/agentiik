@@ -228,8 +228,9 @@ func TestMigrateSaysWhereANamespaceIsNamedAfterAWordReservedSince(t *testing.T) 
 // objects, which v0.7.0 reserved for the addresses the API answers at the root, where the web
 // console would read a namespace's pages. migrate keeps each, and says at every run, in one line
 // each, that such a namespace is served by the API as before and opened by the console nowhere,
-// naming the route that renames a shared one, that a login is kept, and that a group keeps its
-// name with nothing to do; it says nothing of a word nothing is named after.
+// naming the route that renames a shared one, that a login is kept, naming the route that gives its
+// user a new login, which their personal namespace follows, and that a group keeps its name with
+// nothing to do; it says nothing of a word nothing is named after.
 func TestMigrateNamesWhatIsNamedAfterAWordTheConsoleNeedsReserved(t *testing.T) {
 	b := aBootstrapState(t)
 	if err := migrate(t.Context(), b.database, io.Discard); err != nil {
@@ -250,8 +251,8 @@ func TestMigrateNamesWhatIsNamedAfterAWordTheConsoleNeedsReserved(t *testing.T) 
 		out := b.migrated(theToken, "")
 		for _, line := range []string{
 			"namespace hooks keeps its name and is served by the API as before, every route of it, and the web console opens none of its pages until its owner or an administrator renames it with PATCH /api/v1/namespaces/{ns}: hooks is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
-			"namespace mcp, the personal namespace of the user mcp, is served by the API as before, every route of it, and the web console opens none of its pages: mcp is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
-			"login mcp is kept, and its user signs in with it as before: mcp is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
+			"namespace mcp, the personal namespace of the user mcp, is served by the API as before, every route of it, and the web console opens none of its pages until an administrator gives its user a new login with PATCH /api/v1/users/{login}, which it follows: mcp is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
+			"login mcp is kept, and its user signs in with it as before, until an administrator gives them a new login with PATCH /api/v1/users/{login}, which their personal namespace follows: mcp is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
 			"group objects keeps its name, with nothing to do, since the web console names no page after a group: objects is reserved from v0.7.0, so no new namespace, login, group or service account takes it\n",
 		} {
 			if !strings.Contains(out, line) {

@@ -297,9 +297,9 @@ func (s *scenario) code(link any) string {
 // exchange among them, refused as well as let in; credentials enrolled and removed; API tokens; the
 // policy at both scopes, one forbidding passwords taking one; namespaces, their quotas and service
 // accounts; groups and their members; grants and denies at both scopes; secrets, runs, pools, join
-// tokens and runners' orders; and a user removed with their personal namespace. A run the
-// controller cancels at its admission is the controller's act, which its own tests hold to its one
-// entry.
+// tokens and runners' orders; a user removed with their personal namespace, and one given a new
+// login with theirs. A run the controller cancels at its admission is the controller's act, which
+// its own tests hold to its one entry.
 func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -641,6 +641,20 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"policy.change carol finance finance done", "credential.remove carol "+erinsPassword+" - done")
 	s.act("DELETE /api/v1/users/{login}", "/api/v1/users/erin", carol, nil, http.StatusNoContent,
 		"namespace.delete carol erin - done", "user.delete carol erin - done")
+
+	// mcp, a user v0.6.0 made and gave a personal namespace before v0.7.0 reserved the word, is
+	// given a new login by carol, the namespace renamed with it.
+	for _, stmt := range []string{
+		`insert into principals (id, kind) values ('mcp', 'user')`,
+		`insert into users (login, given_name) values ('mcp', 'Marie')`,
+		`insert into namespaces (name, kind, owner) values ('mcp', 'personal', 'mcp')`,
+	} {
+		if _, err := admin.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	s.act("PATCH /api/v1/users/{login}", "/api/v1/users/mcp", carol, `{"login":"mc-petit"}`, http.StatusOK,
+		"namespace.rename carol mc-petit - done", "user.rename carol mc-petit - done")
 
 	// A pool, a join token, a machine joining with it, and the runner drained and revoked.
 	s.act("POST /api/v1/runner-pools", "/api/v1/runner-pools", carol, aPool(), http.StatusCreated,

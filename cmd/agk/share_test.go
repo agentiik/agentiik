@@ -11,8 +11,8 @@ import (
 // What agk whoami says of each thing the installation tells: each act by which an administrator
 // widened access, with who did it, a grant written, a deny lifted from their own access, somebody or
 // themselves put in a group holding a role, and themselves taken out of a group or removing one whose
-// deny applied; a passkey refused; the break-glass path used; and a recovery code issued the caller
-// and spent, a notice missing what it names said by its kind alone.
+// deny applied; a passkey refused; the break-glass path used; a recovery code issued the caller and
+// spent; and a new login given the caller, a notice missing what it names said by its kind alone.
 func TestWhoamiSaysWhatItIsTold(t *testing.T) {
 	at := time.Date(2026, 9, 27, 14, 0, 0, 0, time.UTC)
 	ends := at.Add(24 * time.Hour)
@@ -58,6 +58,12 @@ func TestWhoamiSaysWhatItIsTold(t *testing.T) {
 			"told 01N at 2026-09-27T14:00:00Z: a recovery code carol issued you enrolled bmV3UGFzc2tleQ on your account; if that was not you, remove it from your sign-in methods and tell another administrator"},
 		{api.Notification{ID: "01P", Kind: "recovery_code_used", At: at, By: "carol"},
 			"told 01P at 2026-09-27T14:00:00Z: recovery_code_used"},
+		{api.Notification{ID: "01Q", Kind: "login_changed", At: at, From: "mcp", To: "mc-petit", By: "carol"},
+			"told 01Q at 2026-09-27T14:00:00Z: carol gave you the login mc-petit in place of mcp, a word a later release reserved; you sign in as mc-petit from now on, and your sessions and tokens keep working"},
+		{api.Notification{ID: "01R", Kind: "login_changed", At: at, From: "mcp", To: "mc-petit", By: "operator"},
+			"told 01R at 2026-09-27T14:00:00Z: operator gave you the login mc-petit in place of mcp, a word a later release reserved; you sign in as mc-petit from now on, and your sessions and tokens keep working"},
+		{api.Notification{ID: "01S", Kind: "login_changed", At: at, To: "mc-petit", By: "carol"},
+			"told 01S at 2026-09-27T14:00:00Z: login_changed"},
 	} {
 		if got := noticeLine(c.told); got != c.want {
 			t.Errorf("agk whoami says\n%s\nwant\n%s", got, c.want)

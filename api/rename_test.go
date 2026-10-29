@@ -200,7 +200,7 @@ func TestARenameIsRefusedWhatItCannotMake(t *testing.T) {
 		want              int
 		says              string
 	}{
-		{"/api/v1/namespaces/frank", in.frank, `{"name":"francis"}`, http.StatusConflict, "never renamed"},
+		{"/api/v1/namespaces/frank", in.frank, `{"name":"francis"}`, http.StatusConflict, "is renamed only with it, where a later release made that login a reserved word"},
 		{"/api/v1/namespaces/finance", in.dave, `{"name":"alice"}`, http.StatusConflict, "is a user's login"},
 		{"/api/v1/namespaces/finance", in.dave, `{"name":"people"}`, http.StatusConflict, "is already a namespace"},
 		{"/api/v1/namespaces/finance", in.dave, `{"name":"hr"}`, http.StatusConflict, "is a name namespace people held before it was renamed"},

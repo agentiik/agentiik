@@ -278,8 +278,14 @@ func (u NewUser) otherwise(existing db.User) bool {
 // email address is the other way round, the administrator's to give and not the user's to change
 // (profile.go), since nothing proves an address and one the installation shows beside a name comes
 // from whoever answers for its accounts.
+//
+// From v0.7.0 the login too, for a user whose login a later release made a reserved word and for no
+// other: a login is also the name of its user's personal namespace, so it never changes otherwise,
+// and a user whose login became a word the API answers the address of keeps a personal namespace
+// whose console pages never open.
 type UserChange struct {
 	Email *string `json:"email,omitempty"`
+	Login *string `json:"login,omitempty"`
 }
 
 func (c *UserChange) field(b *body, name string) error {
@@ -293,6 +299,16 @@ func (c *UserChange) field(b *body, name string) error {
 			return err
 		}
 		c.Email = &value
+		return nil
+	case "login":
+		if b.d.PeekKind() == jsontext.KindNull {
+			return fmt.Errorf("%s: null names no login, and a user always has one: the field names the new login, and is left out to keep the one they have", name)
+		}
+		var value string
+		if err := text(b, &value); err != nil {
+			return err
+		}
+		c.Login = &value
 		return nil
 	case "display_name":
 		return displayNameMade
@@ -723,12 +739,23 @@ func (s *UserAPI) credentials(w http.ResponseWriter, r *http.Request, _ Principa
 }
 
 // updateUser is PATCH /api/v1/users/{login}: what an administrator gives a user after creating them,
-// as the body names it (UserChange), answered as GET /api/v1/users/{login} answers the user.
+// as the body names it (UserChange), answered as GET /api/v1/users/{login} answers the user, under
+// the new login where it changed.
 //
 // The user's row is held while the change is merged into it, as PATCH /api/v1/me holds it, so that
-// the answer is the row as written. The change is recorded as user.update with the names of the
-// fields that changed and never what they hold, as user.profile records a profile, and as
-// unchanged where none did.
+// the answer is the row as written. The change is recorded as user.update where the body names email,
+// with the names of the fields that changed and never what they hold, as user.profile records a
+// profile, and as unchanged where none did.
+//
+// A new login is given by db.Wide.RenameUser, in the same transaction, to a user whose login a later
+// release reserved (agk.LateReservations), the path naming them by it, and refused with 409 to any
+// other, since a login never changes otherwise. It is held as a login is at the creation, LoginName's
+// refusals with 400, and refused with 409 where a user, a namespace or a namespace's former name holds
+// it, or where their personal namespace could not be renamed now, as PATCH /api/v1/namespaces/{ns}
+// refuses a rename. Recorded as user.rename on the installation, the new login as its target and from
+// and to as its detail, beside the rename of their personal namespace as namespace.rename, personal,
+// as a removal records namespace.delete beside user.delete; and told to the user as login_changed,
+// unless they gave it themselves, since telling somebody what they have just done tells them nothing.
 func (s *UserAPI) updateUser(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	var change UserChange
 	if err := readAtMost(r, &change, smallMaxBytes); err != nil {
@@ -741,7 +768,7 @@ func (s *UserAPI) updateUser(w http.ResponseWriter, r *http.Request, who Princip
 		return
 	}
 	if change == (UserChange{}) {
-		fail(w, http.StatusBadRequest, "the request names nothing to change: email")
+		fail(w, http.StatusBadRequest, "the request names nothing to change: email, or login for a user whose login a later release reserved")
 		return
 	}
 	if change.Email != nil {
@@ -750,36 +777,94 @@ func (s *UserAPI) updateUser(w http.ResponseWriter, r *http.Request, who Princip
 			return
 		}
 	}
+	if change.Login != nil {
+		if err := LoginName(*change.Login); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	// To the microsecond the database keeps, so that the notification reads back as it was told.
+	now := s.now().Truncate(time.Microsecond)
 	var answered db.User
+	var renamed bool
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
-		user, err := wide.HoldUser(ctx, login)
+		current := login
+		var personal bool
+		if change.Login != nil {
+			if _, late := agk.ReservedLate(login); !late {
+				// The user is looked for first, so that a login nobody holds is the 404 it is
+				// everywhere else rather than a refusal about a user who does not exist.
+				if _, err := wide.User(ctx, login); err != nil {
+					return err
+				}
+				return errLoginKept
+			}
+			var err error
+			if personal, err = wide.RenameUser(ctx, login, *change.Login); err != nil {
+				return err
+			}
+			current, renamed = *change.Login, true
+		}
+		user, err := wide.HoldUser(ctx, current)
 		if err != nil {
 			return err
 		}
 		changed := []string{}
 		if change.Email != nil && *change.Email != user.Email {
-			if err := wide.SetEmail(ctx, login, *change.Email); err != nil {
+			if err := wide.SetEmail(ctx, current, *change.Email); err != nil {
 				return err
 			}
 			user.Email = *change.Email
 			changed = append(changed, "email")
 		}
+		if renamed && string(who) != login {
+			if err := wide.TellLoginChanged(ctx, login, current, string(who), now); err != nil {
+				return err
+			}
+		}
 		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
+		}
+		answered = user
+		if personal {
+			if err := wide.Audit(ctx, audit.Record{
+				Actor: string(who), Action: audit.NamespaceRename, Target: current, Result: audit.Done,
+				Detail: map[string]any{"from": login, "to": current, "personal": true},
+			}); err != nil {
+				return err
+			}
+		}
+		if renamed {
+			if err := wide.Audit(ctx, audit.Record{
+				Actor: string(who), Action: audit.UserRename, Target: current, Result: audit.Done,
+				Detail: map[string]any{"from": login, "to": current},
+			}); err != nil {
+				return err
+			}
+		}
+		if change.Email == nil {
+			return nil
 		}
 		result := audit.Done
 		if len(changed) == 0 {
 			result = audit.Unchanged
 		}
-		answered = user
 		return wide.Audit(ctx, audit.Record{
-			Actor: string(who), Action: audit.UserUpdate, Target: login, Result: result,
+			Actor: string(who), Action: audit.UserUpdate, Target: current, Result: result,
 			Detail: map[string]any{"fields": changed},
 		})
 	})
+	var held *db.NameHeld
+	var waits *db.RenameWaits
 	switch {
 	case errors.Is(err, db.ErrNoPrincipal):
 		fail(w, http.StatusNotFound, noUser)
+	case errors.Is(err, errLoginKept):
+		fail(w, http.StatusConflict, fmt.Sprintf("%s keeps their login: it is no word a later release reserved, and a login never changes otherwise, since it is also the name of its user's personal namespace", login))
+	case errors.As(err, &held):
+		fail(w, http.StatusConflict, loginHeldRefusal(held))
+	case errors.As(err, &waits):
+		fail(w, http.StatusConflict, fmt.Sprintf("%s keeps their login for now, since their personal namespace is renamed with it: %s", login, waits.Held()))
 	case errors.Is(err, db.ErrBootstrapEnded):
 		bootstrapEnded(w)
 	case err != nil:
@@ -787,6 +872,25 @@ func (s *UserAPI) updateUser(w http.ResponseWriter, r *http.Request, who Princip
 	default:
 		write(w, http.StatusOK, userOf(answered))
 	}
+}
+
+// errLoginKept is a new login asked for a user whose login no release reserved after it was given,
+// a 409: a login is also the name of its user's personal namespace, and never changes otherwise.
+var errLoginKept = errors.New("api: that user's login is no word a later release reserved")
+
+// loginHeldRefusal is the refusal of a new login somebody holds: a user, as their login, which is
+// also their personal namespace's name; a namespace, as its name; or a namespace, as a name it held
+// before it was renamed, which stays its own so that an address written with it reaches nobody else.
+func loginHeldRefusal(held *db.NameHeld) string {
+	switch {
+	case held.Login:
+		return held.Name + " is another user's login"
+	case held.Former && held.Namespace != "":
+		return held.Name + " is a name namespace " + held.Namespace + " held before it was renamed, and a name a namespace held stays its own until that namespace is removed, so that an address written with it reaches nobody else"
+	case held.Former:
+		return held.Name + " is a name a namespace held before it was renamed, and a name a namespace held stays its own until that namespace is removed, so that an address written with it reaches nobody else"
+	}
+	return held.Name + " is a namespace's name, and logins and namespaces share one name space, since a user's personal namespace is named after their login"
 }
 
 // removeUser is DELETE /api/v1/users/{login}: the user, with their credentials, tokens, sessions,

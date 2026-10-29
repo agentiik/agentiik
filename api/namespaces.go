@@ -840,7 +840,7 @@ func (s *NamespaceAPI) update(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, http.StatusNotFound, "there is no namespace of that name")
 		return
 	case errors.Is(err, db.ErrPersonalRename):
-		fail(w, http.StatusConflict, "namespace "+name+" is the personal namespace of the user "+name+", named after their login, which never changes, and is never renamed")
+		fail(w, http.StatusConflict, "namespace "+name+" is the personal namespace of the user "+name+", named after their login, and is renamed only with it, where a later release made that login a reserved word and an administrator gives its user a new login with PATCH /api/v1/users/{login}")
 		return
 	case errors.As(err, &held):
 		fail(w, http.StatusConflict, heldRefusal(held))
