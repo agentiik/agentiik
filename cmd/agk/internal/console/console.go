@@ -76,6 +76,10 @@ const (
 	leastHeight = 24
 )
 
+// tooSmall says whether the window is under the least size, where nothing is drawn but the size it
+// needs.
+func (m Model) tooSmall() bool { return m.width < leastWidth || m.height < leastHeight }
+
 type view int
 
 const (
@@ -382,6 +386,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.tooSmall() {
+			// A prompt the window no longer shows is answered no, as any key but y answers it, so
+			// that one shrunk out of sight is not found waiting for a y once the window grows back.
+			m.asking = notAsking
+		}
 	case tea.BackgroundColorMsg:
 		// An answer after the tenth of a second is left: the screen is drawn on the dark ground
 		// by then, and turning it light would flash.
@@ -579,6 +588,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return m.mouse(msg)
 	case tea.KeyPressMsg:
+		if m.tooSmall() {
+			// Nothing is drawn but the size the window needs, so a key would act on what nobody can
+			// see: c then y cancelled a run whose prompt never showed. q quits, as the window says.
+			if k := msg.String(); k == "q" || k == "ctrl+c" {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		if m.palette != nil && m.asking == notAsking {
 			return m.typingCommand(msg)
 		}

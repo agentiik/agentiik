@@ -75,7 +75,7 @@ func (m Model) paneAt(x, y int) (pane, bool) {
 // mouse does what a mouse message names, where the screen is drawn and nothing waits on an answer:
 // a prompt is answered with a key, and the wheel or a click never answers it for somebody.
 func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.asking != notAsking || m.listing || m.width < leastWidth || m.height < leastHeight {
+	if m.asking != notAsking || m.listing || m.tooSmall() {
 		return m, nil
 	}
 	e := msg.Mouse()
