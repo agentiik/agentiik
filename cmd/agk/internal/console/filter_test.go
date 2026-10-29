@@ -41,7 +41,7 @@ func manyRuns() []db.ListedRun {
 func TestWordsNarrowTheRunsAsTheyAreTyped(t *testing.T) {
 	in := &installation{runs: manyRuns()}
 	m := press(t, opened(t, in, Options{}, 120, 24), slash)
-	if !m.filtering || !strings.Contains(screen(m), "/ filter as you type, or state=failed since=24h") || lastLine(m) != "type Filter   ↑↓ Move   enter Keep   esc Clear" {
+	if !m.filtering || !strings.Contains(screen(m), "/ Filter▏") || lastLine(m) != "type Filter   ↑↓ Move   enter Keep   esc Clear" {
 		t.Fatalf("/ does not open the filter:\n%s", screen(m))
 	}
 	m = typed(t, m, "inv fail")

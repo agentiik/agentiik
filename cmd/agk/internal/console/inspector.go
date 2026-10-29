@@ -333,7 +333,7 @@ func (m Model) stepLines(step string, now time.Time, width int) (lines [][]part,
 		lines = append(lines, append([]part{{muted, "shards  "}}, doneBar(tasks, of)...))
 	}
 	if len(tasks) > 0 {
-		lines = append(lines, nil, []part{{quiet, "SHARD  STATE      ATTEMPT  EXIT                          RUNNER"}})
+		lines = append(lines, nil, []part{{quiet, "Shard  State      Attempt  Exit                          Runner"}})
 	}
 	for _, t := range tasks {
 		shard := "-"
@@ -372,7 +372,7 @@ func (m Model) stepLines(step string, now time.Time, width int) (lines [][]part,
 	ports := portsOf(s)
 	if len(ports) > 0 {
 		portsFrom = len(lines) + 1
-		lines = append(lines, nil, []part{{quiet, "  PORT         ITEMS   SIZE      DIGEST"}})
+		lines = append(lines, nil, []part{{quiet, "  Port         Items   Size      Digest"}})
 	}
 	for i, p := range ports {
 		e := s.Ports[agk.Port(p)]
@@ -472,7 +472,7 @@ func (m Model) runLines(t theme, height int) []string {
 	// The steps start on the line the header leaves them, beside the step chosen or above it.
 	at := t.at(0, len(lines))
 	var steps []string
-	steps = append(steps, t.line(false, left, part{quiet, fmt.Sprintf("STEPS %d", len(m.run.Steps))}))
+	steps = append(steps, t.line(false, left, part{quiet, fmt.Sprintf("Steps %d", len(m.run.Steps))}))
 	for _, s := range m.run.Steps {
 		at.pick(len(steps), left, "step", string(s.Step))
 		steps = append(steps, t.line(string(s.Step) == step, left, within(m.stepRow(s, now, left), left)...))

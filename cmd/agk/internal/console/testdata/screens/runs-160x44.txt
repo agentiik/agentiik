@@ -5,7 +5,7 @@ agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   
 │ ● failed    01JMZ8T7B2M0QK2N4D6F8H0A2C finance/dunning-reminders                 schedule  05:30:00     22s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
 │ ● timed_out 01JMZ8G4X6D2QK2N4D6F8H0A2N finance/vat-reconcile                     event     01:18:39  9m 51s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
 │                                                                                                                                                              │
-│ STATE       RUN                        WORKFLOW                                  TRIGGER   STARTED     TOOK BY             STEPS        LAST 20              │
+│ State       Run                        Workflow                                  Trigger   Started     Took By             Steps        Last 20              │
 │ ⠋ running   01JMZ8W4K2R7QX6T1N3P5V7Y9A finance/monthly-invoicing                 schedule  06:00:12  1m 48s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │
 │ ● failed    01JMZ8V1P9C4XQ7K2N4D6F8H0A finance/monthly-invoicing                 manual    05:41:03  1m 52s alice          ■■□          ▃▁▁▁▁▁▁█▁▁▁          │
 │ ● failed    01JMZ8T7B2M0QK2N4D6F8H0A2C finance/dunning-reminders                 schedule  05:30:00     22s finance/agent… ■            ▃▁▁▁▁▁▁█▁▁▁          │

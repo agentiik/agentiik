@@ -78,7 +78,7 @@ func TestAToastStacksAboveAPrompt(t *testing.T) {
 	if len(m.toasts) != 1 || !strings.Contains(s, "carol wrote a grant") || m.asking != askingCancel {
 		t.Fatalf("a notification arriving during a prompt is not toasted, the prompt %d:\n%s", m.asking, s)
 	}
-	if prompt := strings.Split(s, "\n")[22]; !strings.HasPrefix(prompt, "Cancel run "+failedRun+" of finance/monthly-invoicing? Its tasks") {
+	if prompt := strings.Split(s, "\n")[22]; !strings.HasPrefix(prompt, "Cancel run "+failedRun+" of finance/monthly-invoicing?") {
 		t.Errorf("a toast covers the prompt, which reads %q:\n%s", prompt, s)
 	}
 }

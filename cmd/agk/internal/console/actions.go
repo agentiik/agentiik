@@ -62,9 +62,9 @@ func (m Model) question() string {
 	r := m.run
 	switch m.asking {
 	case askingCancel:
-		return "Cancel run " + string(r.Run) + " of " + r.Namespace + "/" + r.Workflow + "? Its tasks in flight are stopped, and it ends cancelled."
+		return "Cancel run " + string(r.Run) + " of " + r.Namespace + "/" + r.Workflow + "?"
 	case askingReplay:
-		return "Replay run " + string(r.Run) + " from " + stepOf(r, m.step) + "? A new run of " + short(r.Commit) + " starts there, the steps above it reused."
+		return "Replay run " + string(r.Run) + " from " + stepOf(r, m.step) + "?"
 	}
 	return ""
 }
@@ -106,7 +106,7 @@ func (m Model) cancelledRun(msg cancelled) (tea.Model, tea.Cmd) {
 		m.problem = "The run could not be cancelled: " + m.reason(msg.err, "workflow:run")
 		return m, nil
 	}
-	m.acted = "Cancelling was asked: the controller stops the tasks in flight, and the run ends cancelled."
+	m.acted = "Cancel asked."
 	return m, m.readShown()
 }
 

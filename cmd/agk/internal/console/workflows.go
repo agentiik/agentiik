@@ -261,7 +261,7 @@ func triggersOf(d *flowDetail) string {
 		said = append(said, "event "+strings.TrimSpace(e.Source+" "+e.Type))
 	}
 	if len(said) == 0 {
-		return "none, it is run by hand, by agk or the API"
+		return "none"
 	}
 	return strings.Join(said, " · ")
 }
@@ -283,7 +283,7 @@ func (m Model) workflowsLines(t theme, height int) []string {
 	columns := func(name, latest, at, last []part) []part {
 		return laid([]cell{{name, 0, false}, {latest, stateWidth, false}, {at, 16, false}, {last, 20, false}}, 0, m.width)
 	}
-	lines = append(lines, line(columns(h("WORKFLOW"), h("LATEST"), h("RUN AT"), h("LAST 20"))...))
+	lines = append(lines, line(columns(h("Workflow"), h("Latest"), h("Run at"), h("Last 20"))...))
 	chosen, _ := m.chosenFlow()
 	room := max(1, height/2-2)
 	at := slices.IndexFunc(m.flows, func(f flowRow) bool { return f.key() == chosen.key() })
@@ -346,7 +346,7 @@ func (m Model) workflowsLines(t theme, height int) []string {
 		lines = append(lines, line(append([]part{label("30 days")}, histogram(s.stats)...)...))
 	}
 	if read && detail.detail != nil && len(detail.detail.History) > 0 {
-		lines = append(lines, line(), line(part{quiet, "VERSIONS"}))
+		lines = append(lines, line(), line(part{quiet, "Versions"}))
 		for _, c := range detail.detail.History {
 			who := ""
 			if c.Author != nil {
@@ -358,7 +358,7 @@ func (m Model) workflowsLines(t theme, height int) []string {
 			}
 			lines = append(lines, line(part{runningText, mark}, part{plain, short(c.Commit) + "  "}, part{muted, cellOf(clock(c.AuthoredAt, now), 16) + "  " + cellOf(who, 16) + "  "}, part{plain, c.Subject}))
 		}
-		lines = append(lines, line(part{quiet, "● a version: a commit agentiik resolved, which a run can run"}))
+		lines = append(lines, line(part{quiet, "● version"}))
 	}
 	return lines
 }

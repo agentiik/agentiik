@@ -8,7 +8,7 @@ agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   
 │ ● timed_out vat-reconcile             9m 51s ││                                                                                                              │
 │             01JMZ8G4X6D2 · event · finance/… ││            ╭────────────────╮                ┏━━━━━━━━━━━━━━━━┓              ╭────────────────╮              │
 │                                              ││       ╭───▸│ ● normalize    │─ok 214────────▸┃ ● invoice      ┃─out 211─────▸│ ● archive      │─ok──╮        │
-│ STATE       WORKFLOW                    TOOK ││ rs )──╯╭──▸│ succeeded  1s  │┄rejected 0┄╮   ┃ failed  1m 50s ┃─error 3─╮╭┄┄▸│ pending        │    ╭┼───▸( e │
+│ State       Workflow                    Took ││ rs )──╯╭──▸│ succeeded  1s  │┄rejected 0┄╮   ┃ failed  1m 50s ┃─error 3─╮╭┄┄▸│ pending        │    ╭┼───▸( e │
 │ ⠋ running   monthly-invoicing         1m 48s ││        │   │                │            ┆   ┃ ■■■■■■■■ 8/8   ┃         │┆   │                │    ││        │
 │             01JMZ8W4K2R7 · schedule · finan… ││        │   ╰────────────────╯            ┆   ┗━━━━━━━━━━━━━━━━┛         │┆   ╰────────────────╯    ││        │
 │ ● failed    monthly-invoicing         1m 52s ││        │                                 ┆                              │┆                         ││        │
@@ -26,7 +26,7 @@ agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   
 │ ● cancelled vat-reconcile             2m 16s ││ image   ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc     │
 │             01JMZ8N9J3W1 · manual · alice ·… ││ shards  ██████████ 8/8 done                                                                                  │
 │ ● succeeded dunning-reminders            41s ││                                                                                                              │
-│             01JMZ8M5Z7Q3 · schedule · finan… ││ SHARD  STATE      ATTEMPT  EXIT                          RUNNER                                              │
+│             01JMZ8M5Z7Q3 · schedule · finan… ││ Shard  State      Attempt  Exit                          Runner                                              │
 │ ● succeeded ledger-export             1m 03s ││ 1/8    ● succeeded 1        exit 0, success               runner-dmz-02                                      │
 │             01JMZ8K1V4R9 · webhook · financ… ││ 2/8    ● succeeded 1        exit 0, success               runner-dmz-01                                      │
 │ ● succeeded monthly-invoicing         4m 22s ││ 3/8    ● failed    2        exit 108, transient failure   runner-dmz-02                                      │
@@ -36,7 +36,7 @@ agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   
 │                                              ││ 7/8    ● succeeded 1        exit 0, success               runner-dmz-02                                      │
 │                                              ││ 8/8    ● succeeded 1        exit 0, success               runner-dmz-01                                      │
 │                                              ││                                                                                                              │
-│                                              ││   PORT         ITEMS   SIZE      DIGEST                                                                      │
+│                                              ││   Port         Items   Size      Digest                                                                      │
 │                                              ││ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c     │
 │                                              ││   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5     │
 │                                              ││                                                                                                              │

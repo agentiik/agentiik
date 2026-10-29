@@ -42,7 +42,7 @@ func TestARunGoingOnIsCancelledOnceAskedY(t *testing.T) {
 	}
 	m = press(t, m, keyC)
 	s := screen(m)
-	if !strings.Contains(s, "Cancel run "+failedRun+" of finance/monthly-invoicing? Its tasks in flight are stopped, and it ends cancelled.") || lastLine(m) != "y Cancel run   any other key Keep it" {
+	if !strings.Contains(s, "Cancel run "+failedRun+" of finance/monthly-invoicing?") || strings.Contains(s, "Its tasks in flight") || lastLine(m) != "y Cancel run   any other key Keep it" {
 		t.Fatalf("c does not ask, naming the run:\n%s", s)
 	}
 	m = press(t, m, no)
@@ -58,7 +58,7 @@ func TestARunGoingOnIsCancelledOnceAskedY(t *testing.T) {
 	if len(in.sent) != 1 || in.sent[0] != "POST /api/v1/runs/"+failedRun+"/cancel null" {
 		t.Fatalf("y sent %v", in.sent)
 	}
-	if !strings.Contains(screen(m), "Cancelling was asked: the controller stops the tasks in flight, and the run ends cancelled.") {
+	if !strings.Contains(screen(m), "Cancel asked.") {
 		t.Errorf("the cancel asked is not said:\n%s", screen(m))
 	}
 	if !slices.Contains(in.asked[reads:], "/api/v1/runs/"+failedRun) {
@@ -80,7 +80,7 @@ func TestARunOverIsReplayedFromTheStepChosen(t *testing.T) {
 		t.Errorf("a run over offers %q", last)
 	}
 	m = press(t, m, keyP)
-	if s := screen(m); !strings.Contains(s, "Replay run "+failedRun+" from invoice? A new run of a3f9c1e starts there, the steps above it reused.") || lastLine(m) != "y Replay from invoice   any other key Keep it" {
+	if s := screen(m); !strings.Contains(s, "Replay run "+failedRun+" from invoice?") || strings.Contains(s, "the steps above it reused") || lastLine(m) != "y Replay from invoice   any other key Keep it" {
 		t.Fatalf("p does not ask, naming the run and the step:\n%s", s)
 	}
 	m = press(t, m, yes)
@@ -145,7 +145,7 @@ func TestATokensScopeNarrowsTheConsole(t *testing.T) {
 		}
 	}
 	m = press(t, m, keyC, keyP, tea.KeyPressMsg{Code: '3', Text: "3"})
-	if len(in.sent) != 0 || !strings.Contains(screen(m), "you hold it nowhere") {
+	if len(in.sent) != 0 || !strings.Contains(screen(m), "No scope whose grants you may list.") {
 		t.Errorf("a narrowed token sent %v, and its sharing shows:\n%s", in.sent, screen(m))
 	}
 }

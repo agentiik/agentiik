@@ -49,12 +49,12 @@ func TestGDrawsTheGraphInTheRunWhereTheRowsAllow(t *testing.T) {
 	in.run = aFailedRun()
 	m := opened(t, in, Options{Run: failedRun, Follow: invoiceLogs().follow}, 160, 44)
 	defer m.unfollow()
-	if s := screen(m); !strings.Contains(s, "Steps   Graph   Ports") || !strings.Contains(s, "STEPS 3") {
+	if s := screen(m); !strings.Contains(s, "Steps   Graph   Ports") || !strings.Contains(s, "Steps 3") {
 		t.Fatalf("a run does not open on its steps:\n%s", s)
 	}
 	m = press(t, m, keyG)
 	s := screen(m)
-	if m.view != runView || m.runTabShown() != "graph" || !strings.Contains(s, "▾") || strings.Contains(s, "STEPS 3") || !strings.Contains(lastLine(m), "g Full screen") || !strings.Contains(lastLine(m), "esc Steps") {
+	if m.view != runView || m.runTabShown() != "graph" || !strings.Contains(s, "▾") || strings.Contains(s, "Steps 3") || !strings.Contains(lastLine(m), "g Full screen") || !strings.Contains(lastLine(m), "esc Steps") {
 		t.Fatalf("g in a run of 160 by 44 shows view %d, its key line %q:\n%s", m.view, lastLine(m), s)
 	}
 	if lines := strings.Split(s, "\n"); strings.Index(strings.Join(lines, "\n"), "● normalize") > strings.Index(strings.Join(lines, "\n"), "● invoice") {
@@ -84,7 +84,7 @@ func TestThePortsAreATabOfTheRun(t *testing.T) {
 	in.run = aFailedRun()
 	m := press(t, opened(t, in, Options{Run: failedRun}, 100, 30), up, tabKey)
 	s := screen(m)
-	if m.runTabShown() != "ports" || strings.Contains(s, "STEPS 3") || !strings.Contains(s, "PORT         ITEMS") || !strings.Contains(s, "▸ ok") {
+	if m.runTabShown() != "ports" || strings.Contains(s, "Steps 3") || !strings.Contains(s, "Port         Items") || !strings.Contains(s, "▸ ok") {
 		t.Errorf("tab to the ports of normalize shows:\n%s", s)
 	}
 }
