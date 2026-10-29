@@ -125,6 +125,35 @@ describe("a workflow's MCP tab", () => {
     expect(asked.find((a) => a.key.startsWith("PUT"))?.body).toEqual({});
   });
 
+  it("offers no Add to a principal without workflow:run, which adding a member takes", async () => {
+    const me = structuredClone(scenario("alice")["GET /api/v1/me"]!) as { status: number; body: { permissions: Record<string, string[]> } };
+    me.body.permissions["finance"] = me.body.permissions["finance"]!.filter((p) => p !== "workflow:run");
+    open("/finance/workflows/monthly-invoicing/mcp", { "GET /api/v1/me": me });
+    const yours = within(await screen.findByRole("region", { name: "Your collections" }));
+    const supportDesk = (await yours.findByText("support_desk")).closest("tr")!;
+    expect(within(supportDesk).queryByRole("button", { name: "Add" })).toBeNull();
+    expect(yours.queryAllByRole("button", { name: "Add" })).toEqual([]);
+  });
+
+  it("is no tab of a version that publishes no tool, and its address is a page that does not exist", async () => {
+    open("/team-ops/workflows/nightly/mcp");
+    expect(await screen.findByText("This page does not exist, or is not shared with you.")).toBeTruthy();
+    const tabs = within(screen.getByRole("navigation", { name: "nightly, what is shown" }));
+    expect(tabs.queryByRole("link", { name: "MCP" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Your collections" })).toBeNull();
+  });
+
+  it("is no tab of a version whose block lists the tools of before v0.7.0, which publishes none", async () => {
+    const detail = structuredClone(scenario("alice")["GET /api/v1/finance/workflows/monthly-invoicing"]!) as { status: number; body: { graph: { mcp: unknown } } };
+    detail.body.graph.mcp = { tools: [{ name: "create_invoices", description: "Invoices the orders given." }] };
+    open("/finance/workflows/monthly-invoicing", { "GET /api/v1/finance/workflows/monthly-invoicing": detail });
+    // The graph drawn is the version read, whose block the tabs were decided on.
+    await screen.findByRole("button", { name: /^Step normalize/ });
+    const tabs = within(screen.getByRole("navigation", { name: "monthly-invoicing, what is shown" }));
+    expect(tabs.getByRole("link", { name: "Runs" })).toBeTruthy();
+    expect(tabs.queryByRole("link", { name: "MCP" })).toBeNull();
+  });
+
   it("says why Add was refused at the foot of the screen, leaving the collections where they were", async () => {
     open("/finance/workflows/monthly-invoicing/mcp", {
       "PUT /api/v1/me/collections/01JR8T5Y7A9C1E3G5J7M9P1R3T/members/finance/monthly-invoicing": { status: 409, body: { error: "support_desk already offers a tool named create_invoices" } },

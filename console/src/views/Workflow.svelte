@@ -27,6 +27,7 @@
   import { runAt, runsOf } from "../lib/route";
   import { RunReader } from "../lib/run.svelte";
   import { settles as settlesOn, workflowTabs } from "../lib/page";
+  import { toolOf } from "../lib/tool";
   import { blocks } from "../lib/yaml-blocks";
 
   // A workflow: the version a run naming no ref runs, the head of its default branch, with what
@@ -217,7 +218,10 @@
   const runRoute = $derived(run ? runAt(namespace, workflow, run.run) : undefined);
   // Its settings, to a caller who may change any of them.
   const settles = $derived(settlesOn(me, namespace, workflow));
-  const tabs = $derived(workflowTabs(namespace, workflow, tab, { mcp: !!graph?.mcp, settles }));
+  // Its MCP tab, where the version publishes a tool, the tab's address answered as one that does not
+  // exist where it publishes none, a block written as the list of tools of before v0.7.0 among them.
+  const publishes = $derived(graph ? toolOf(graph, workflow) !== null : false);
+  const tabs = $derived(workflowTabs(namespace, workflow, tab, { mcp: publishes, settles }));
   const now = Date.now();
 </script>
 
@@ -325,10 +329,12 @@
     <WorkflowSettings {api} {place} {me} {namespace} {workflow} repository={detail.repository} {namespaces} />
   {:else if tab === "settings"}
     <Refused />
-  {:else if tab === "mcp" && graph}
+  {:else if tab === "mcp" && graph && publishes}
     <Pane title="MCP">
-      <McpPanel {api} {graph} {namespace} {workflow} />
+      <McpPanel {api} {graph} {namespace} {workflow} adds={mayRun} />
     </Pane>
+  {:else if tab === "mcp"}
+    <Refused />
   {:else if editing && graph && detail.version && text !== null}
     {#await import("../components/Editor.svelte") then { default: Editor }}
       <Editor {api} {place} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={closeEditor} oncommitted={committed} />
