@@ -33,12 +33,21 @@ func (m Model) mark(going bool) string {
 	return "●"
 }
 
-// live says whether anything shown is going on, which is what the spinner turns for.
+// live says whether anything shown is going on, which is what the spinner turns for: in a run, the
+// run, and the runs beside it too where their pane is drawn rather than folded to its line.
 func (m Model) live() bool {
+	going := func() bool {
+		return slices.ContainsFunc(m.shownRuns(), func(r db.ListedRun) bool { return r.State == agk.Running })
+	}
 	switch m.view {
 	case runsView:
-		return slices.ContainsFunc(m.shownRuns(), func(r db.ListedRun) bool { return r.State == agk.Running })
-	case runView, graphView:
+		return going()
+	case runView:
+		if m.run != nil && m.run.State == agk.Running {
+			return true
+		}
+		return slices.ContainsFunc(m.laidOut(m.height-2), func(b box) bool { return b.pane == runsPane && !b.folded }) && going()
+	case graphView:
 		return m.run != nil && m.run.State == agk.Running
 	}
 	return false

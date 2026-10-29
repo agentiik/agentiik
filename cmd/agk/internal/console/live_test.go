@@ -51,6 +51,27 @@ func TestTheSpinnerTurnsWhileARunGoesOnAlone(t *testing.T) {
 	}
 }
 
+// Beside a run that is settled, the spinner still turns for a run going on in the runs' pane, and
+// stops where the pane is folded to its line, which draws no spinner.
+func TestTheRunsBesideASettledRunKeepTurning(t *testing.T) {
+	in := &installation{runs: someRuns()}
+	in.run = aFailedRun()
+	m := opened(t, in, Options{Run: failedRun}, 160, 40)
+	if !m.spinning || !strings.Contains(screen(m), "⠋ running") {
+		t.Fatalf("no spinner turns beside the run going on in the runs' pane:\n%s", screen(m))
+	}
+	f := &frames{}
+	m.tick = f.tick
+	next, _ := m.Update(spinner.TickMsg{ID: m.spinner.ID()})
+	if m = next.(Model); !strings.Contains(screen(m), "⠙ running") || len(f.asked) != 1 {
+		t.Errorf("a frame does not turn the spinner beside the runs' pane, and asked %v:\n%s", f.asked, screen(m))
+	}
+	folded := opened(t, in, Options{Run: failedRun}, 100, 30)
+	if folded.spinning {
+		t.Errorf("the spinner turns over runs folded to their line:\n%s", screen(folded))
+	}
+}
+
 // A fan-out is drawn one cell per shard in its state beside its step, and a bar of those done in
 // the step chosen, a shard not dispatched yet an empty cell.
 func TestAFanOutIsDrawnShardByShard(t *testing.T) {

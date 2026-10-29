@@ -61,6 +61,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk console` draws whether the installation answers whole on its top line, leaving out the installation and then the tabs from the last, each whole, before it cuts anything else: at 80 columns an administrator's fourth tab took the state off the line, and anybody else's was cut to `not answer…` without its reason. The head of the graph view, and of a run's pane beside its log, cut what names the run before its state, which read `● fail…`.
 - `agk console` stacks a toast that arrives while a prompt is open above the prompt rather than over it, so that the question is read whole before its `y` is pressed: the lowest toast's frame took the prompt's row for up to eight seconds, hiding the workflow a cancel names and the step a replay starts from.
 - `agk console` scrolls the list `?` opens with the arrows where the window is too short for it, the key line saying `↑↓ Scroll`, where a run's list was cut to the 22 rows of a window of 80 by 24, and `c` and the mouse were never listed; and a key line too wide for the window leaves out the keys before `? Every key`, from the last, each whole, where it was cut from its end and lost `?` first.
+- `agk console` turns the spinner beside a run going on in the runs' pane while the run open beside it is settled, where it asked for the next frame only while the run open was running, so that a failed run open froze the spinners of the runs going on beside it; folded to its line, the pane draws no spinner and asks for none.
 
 ### MCP
 
