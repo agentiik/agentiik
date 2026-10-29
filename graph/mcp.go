@@ -25,7 +25,7 @@ const toolTimeoutCeiling = 120 * time.Second
 //
 // The documentation's other refusals are the reader's, because they are about the tool alone:
 // no description, an invalid name, an output that is not a name, an input with no schema, and
-// the two rules about how long a call waits. What is left needs the workflow's boundary, which
+// the rules about how long a call waits. What is left needs the workflow's boundary, which
 // is what this sees: the output the tool returns has to be one the workflow declares.
 func checkMCP(wf *Workflow) error {
 	if wf.MCP == nil {
@@ -38,17 +38,21 @@ func checkMCP(wf *Workflow) error {
 			return refuse(RuleMCPOutputNotDeclared, "", "", fmt.Sprintf("the tool %s returns the output %s, which the workflow does not declare: a tool is a view of the workflow's own boundary, so its result is one of the workflow's outputs, never a step or a port, which is what keeps the graph free to change beneath it", wf.MCP.Name, out))
 		}
 	}
-	// The two rules about how long a call waits are the reader's, because they are about the
+	// The rules about how long a call waits are the reader's, because they are about the
 	// tool alone. They are asked again here so that a workflow reaching Check by any other
 	// route is held to them too, and asking twice costs a comparison.
 	return toolTimeout(wf.MCP)
 }
 
-// toolTimeout holds a published tool to the two rules about how long a call waits.
+// toolTimeout holds a published tool to the rules about how long a call waits. A timeout written
+// is one whatever it says: 0s on an async tool is a timeout the released schema refuses there as it
+// refuses 60s, and on a sync one a wait for nothing, which the schema's grammar does not write.
 func toolTimeout(tool *MCP) error {
 	switch {
-	case tool.Mode == ToolAsync && tool.Timeout != 0:
+	case tool.Mode == ToolAsync && tool.Timed:
 		return refuse(RuleMCPTimeoutOnAsyncTool, "", "", fmt.Sprintf("the tool %s is async and waits %s: an async call returns the run identifier at once, to be followed with the user's server's run.get, so a timeout on it would mean nothing", tool.Name, tool.Timeout))
+	case tool.Mode == ToolSync && tool.Timed && tool.Timeout == 0:
+		return refuse(RuleMCPSyncTimeoutZero, "", "", fmt.Sprintf("the tool %s is sync and waits %s: a sync call waits for its run to return its output, and one waiting for nothing would answer before any run could end. Leave timeout out to wait the 120 seconds a sync call waits at most, or publish the tool as async, which returns the run identifier at once", tool.Name, tool.Timeout))
 	case tool.Mode == ToolSync && time.Duration(tool.Timeout) > toolTimeoutCeiling:
 		return refuse(RuleMCPSyncTimeoutAboveCeiling, "", "", fmt.Sprintf("the tool %s is sync and waits %s: a sync call is capped at 120 seconds, because clients time out, and a workflow that cannot finish inside it must be async. The cap is on the value and not on the unit, so 120s, 2m and 120000ms are the longest forms it accepts", tool.Name, tool.Timeout))
 	}

@@ -37,6 +37,20 @@ func TestACompoundAndABareNumberAreRefused(t *testing.T) {
 	}
 }
 
+// TestADurationIsWrittenInASCIIDigits holds the number to the grammar the released schema writes
+// a duration on, ^[0-9]+(ms|s|m|h|d)$: digits and nothing else, so no sign, which a server took
+// while workflow.schema refused it, and leading zeros, which the schema takes too.
+func TestADurationIsWrittenInASCIIDigits(t *testing.T) {
+	for _, text := range []string{"+5m", "+5s", "-0s", "+0s", "\u0665s", "5_0s", "0x10s"} {
+		if _, err := ParseDuration(text); err == nil {
+			t.Errorf("%q was read as a duration, and the schema refuses it", text)
+		}
+	}
+	if d, err := ParseDuration("0120s"); err != nil || time.Duration(d) != 120*time.Second {
+		t.Errorf("0120s, which the schema takes, was read as %s: %v", time.Duration(d), err)
+	}
+}
+
 // TestADurationIsWrittenBackTheWayItWasWritten keeps a file readable after a round trip:
 // 90d comes back as 90d and not as 2160h.
 func TestADurationIsWrittenBackTheWayItWasWritten(t *testing.T) {

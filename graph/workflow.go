@@ -245,6 +245,10 @@ type MCP struct {
 	Mode        ToolMode
 	Timeout     Duration
 	Annotations Annotations
+	// Timed says the file wrote Timeout, which a zero Timeout alone cannot say: 0s written
+	// is refused on a tool of either mode, and leaving it out is a sync call waiting the
+	// ceiling.
+	Timed bool
 }
 
 // ToolMode is how a call waits. "sync waits for the run and returns the output; async

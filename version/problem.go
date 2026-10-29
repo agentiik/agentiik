@@ -125,6 +125,7 @@ var expected = map[graph.Rule]string{
 	graph.RuleZipLength:                       "envelopes of one length on every edge a zip merges",
 	graph.RuleMCPSyncTimeoutAboveCeiling:      "a timeout of 120 seconds at most, or mode: async",
 	graph.RuleMCPTimeoutOnAsyncTool:           "no timeout on an async tool",
+	graph.RuleMCPSyncTimeoutZero:              "a timeout of more than nothing, or none, which waits the 120 seconds a sync call waits at most",
 	graph.RuleExpressionSecretInText:          "a secret filling the whole value, never part of a string",
 	graph.RuleExpressionDoesNotCompile:        "a CEL expression that compiles: closed, parsed, and comparing values that can be compared",
 	graph.RuleIncludeLeavesTree:               "a path inside the repository's tree",
@@ -181,4 +182,9 @@ var topics = map[graph.Rule]string{
 	graph.RuleAPIVersionInIncludedFile: "includes",
 	graph.RuleKindInIncludedFile:       "includes",
 	graph.RuleMetadataInIncludedFile:   "includes",
+	// Placed at the timeout where a version is read, and by their rule where Check meets them on a
+	// workflow read some other way, which names no node.
+	graph.RuleMCPTimeoutOnAsyncTool:      "mcp",
+	graph.RuleMCPSyncTimeoutZero:         "mcp",
+	graph.RuleMCPSyncTimeoutAboveCeiling: "mcp",
 }

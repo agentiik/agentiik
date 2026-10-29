@@ -759,12 +759,20 @@ func mcpOf(root map[string]any, workflow string, inputs map[string]Input) (*MCP,
 	if m.Timeout, err = durationAt(b, "timeout", "mcp"); err != nil {
 		return nil, err
 	}
-	// The two rules about how long a call waits are read here, with the document, and not
-	// with the graph: both are about the tool alone, and the released schema carries them in
-	// the grammar of the timeout itself. They are refusals of the language all the same, and
-	// they name their rule.
+	_, m.Timed = b["timeout"]
+	// The rules about how long a call waits are read here, with the document, and not with the
+	// graph: they are about the tool alone, and the released schema carries them in the grammar
+	// of the timeout itself. They are refusals of the language all the same, and they name their
+	// rule.
 	if err := toolTimeout(m); err != nil {
 		return nil, err
+	}
+	// That grammar, $defs/mcpTimeout, also writes the number with no leading zero, where a
+	// duration elsewhere may carry one: 0120s is two minutes to a step and no timeout of a
+	// tool's, and a server taking it was one the schema called invalid. Refused as shape, which
+	// the schema places, since it is the spelling that is wrong and not the wait.
+	if s, _ := b["timeout"].(string); m.Timed && strings.HasPrefix(s, "0") {
+		return nil, fmt.Errorf("mcp.timeout is %q: a tool's timeout is written with no leading zero, so 120s, 2m and 120000ms are the longest forms it takes", s)
 	}
 	if raw, ok := b["annotations"]; ok {
 		a, err := mapping(raw, "mcp.annotations")

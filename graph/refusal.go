@@ -99,6 +99,10 @@ const (
 	// nothing: the call returns the run identifier at once". The value is the corpus's
 	// own name for the fixture that pins it.
 	RuleMCPTimeoutOnAsyncTool Rule = "mcp-async-tool-with-timeout"
+	// RuleMCPSyncTimeoutZero is a sync tool waiting for nothing, which answers before any run
+	// can end and was read as the ceiling it is the opposite of. The released schema writes the
+	// timeout's number from 1, in the same pattern that carries the ceiling.
+	RuleMCPSyncTimeoutZero Rule = "mcp-sync-timeout-zero"
 	// RuleExpressionSecretInText is a secret in a position inside a string. "An
 	// expression that fills the whole value keeps its type; an expression embedded in
 	// a string is converted to text", and a secret has no text: it is an opaque
