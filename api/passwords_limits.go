@@ -230,7 +230,8 @@ const hashingWait = 5 * time.Second
 // leaving the rest to everything else the API serves at the same moment.
 const hashingShare = 4
 
-// hashing bounds how many passwords are hashed at once, one turn for each.
+// hashing bounds how many passwords are hashed at once, one turn for each, and how many pictures
+// are re-encoded at once (reencoding).
 type hashing struct {
 	turns chan struct{}
 	wait  time.Duration
@@ -262,13 +263,20 @@ func (h *hashing) turn(ctx context.Context) (func(), bool) {
 // whichever is less, and where neither is set the processors alone say, which is 19 MiB for each of
 // them.
 func hashingTurns() int {
+	return turnsFor(password.MemoryBytes)
+}
+
+// turnsFor is how many of a piece of work taking each bytes of memory may run at once, by the rule
+// hashingTurns gives: a turn for each processor, and no more than hashingShare of the memory limit
+// holds, one at least.
+func turnsFor(each int64) int {
 	turns := runtime.GOMAXPROCS(0)
 	limit := debug.SetMemoryLimit(-1)
 	if container := containerMemory(); container > 0 && container < limit {
 		limit = container
 	}
 	if limit < math.MaxInt64 {
-		turns = min(turns, int(limit/hashingShare/password.MemoryBytes))
+		turns = min(turns, int(limit/hashingShare/each))
 	}
 	return max(turns, 1)
 }

@@ -150,6 +150,11 @@ func TestHashingTurnsAreSizedFromTheProcessorsAndTheMemory(t *testing.T) {
 	if got := hashingTurns(); got != 1 {
 		t.Errorf("with room for no hash, hashing takes %d turns", got)
 	}
+	// Pictures are counted the same way, at what re-encoding one takes.
+	debug.SetMemoryLimit(4 * reencodeBytes * 2)
+	if got := turnsFor(reencodeBytes); got != min(procs, 2) {
+		t.Errorf("with room for two pictures, re-encoding takes %d turns", got)
+	}
 }
 
 // A turn is waited for, for the wait at most, a request that ended stops waiting, and a hashing

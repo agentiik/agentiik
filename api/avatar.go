@@ -45,6 +45,25 @@ const avatarMaxBytes = 1 << 20
 // of pixels, sixteen bits a channel, whatever its file weighs.
 const avatarMaxSide = 2048
 
+// reencodeBytes is the memory re-encoding one picture takes at most, which its turn is counted at: a
+// 16-bit PNG of avatarMaxSide by avatarMaxSide decodes into 32 MiB and its copy into RGBA takes 16
+// MiB more, rounded up to 64 MiB.
+const reencodeBytes = 64 << 20
+
+// reencodingWait is how long a picture waits for its turn to be re-encoded: one takes half a second
+// at the most, so five seconds is a queue ten deep behind each turn, and short enough to answer a
+// person before they give up on the page.
+const reencodingWait = 5 * time.Second
+
+// reencoding bounds how many pictures are re-encoded at once in this process, a user's photo and a
+// namespace's picture alike, one turn each, as hashing bounds passwords. A request is bounded by its
+// weight and its size in pixels; this bounds how many run together, so that a hundred sent at once
+// by anybody who may set a photo, which is anybody, do not take the memory every other request needs.
+var reencoding = newHashing(turnsFor(reencodeBytes), reencodingWait)
+
+// reencodingBusy is a picture that waited too long for its turn to be re-encoded.
+const reencodingBusy = "this installation is re-encoding too many pictures at once to take this one in time: try again in a moment"
+
 // avatarSide is the most pixels a side of a stored photo has: 512, sharp wherever a profile
 // picture is drawn, on a screen of two or three pixels to the point among them, and small enough
 // that every photo of an installation fits in its database without anybody counting them.
@@ -239,7 +258,8 @@ func (s *UserAPI) removeAvatar(w http.ResponseWriter, r *http.Request, who Princ
 //
 // The Content-Type is judged before a byte is read, and only says the body is one of the two: the
 // bytes say which, since a browser names a file's type by its extension, and they are decoded and
-// encoded again whatever they claim.
+// encoded again whatever they claim, in a turn of reencoding, 503 with Retry-After where none comes
+// within reencodingWait.
 func pictureSent(w http.ResponseWriter, r *http.Request, noun string) ([]byte, int, int, bool) {
 	if media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || (media != "image/png" && media != "image/jpeg") {
 		fail(w, http.StatusUnsupportedMediaType, fmt.Sprintf("a %s is sent as image/png or image/jpeg, and this request's Content-Type is %.64q", noun, r.Header.Get("Content-Type")))
@@ -257,7 +277,14 @@ func pictureSent(w http.ResponseWriter, r *http.Request, noun string) ([]byte, i
 		fail(w, http.StatusBadRequest, fmt.Sprintf("the request body is empty, and this route reads a %s, a PNG or a JPEG", noun))
 		return nil, 0, 0, false
 	}
+	done, turned := reencoding.turn(r.Context())
+	if !turned {
+		w.Header().Set("Retry-After", "1")
+		fail(w, http.StatusServiceUnavailable, reencodingBusy)
+		return nil, 0, 0, false
+	}
 	stored, width, height, err := reencode(raw, noun)
+	done()
 	if err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return nil, 0, 0, false
