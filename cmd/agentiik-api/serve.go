@@ -42,6 +42,11 @@ type settings struct {
 	// skipped the console's stage, and then no console is served. A test sets a build of its own,
 	// since the one this binary carries is whatever the machine running it last built.
 	console fs.FS
+
+	// clients is what the MCP clients' metadata documents are fetched with, and nil the guarded
+	// fetch serve uses, which refuses every special-use address. A test sets one reaching a server
+	// of its own on the loopback.
+	clients *http.Client
 }
 
 // readSettings reads the API's configuration, then the master key and the env prefixes, which
@@ -388,14 +393,32 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	// generator beside it. The two share where a sign-in comes from, the proxy's X-Forwarded-For
 	// behind AGK_PROXY_URL, and the bound on the failures they record.
 	signIns := api.NewSignIns(s.Proxied)
+	// The installation's own OAuth 2.1 authorisation server, for /mcp and each collection, where MCP
+	// is served: its metadata and its token endpoint here, its authorisation page beside the sign-in
+	// page, and the code it mints by the sign-ins below. Its tokens are accepted at the surface each
+	// was issued for and nowhere else.
+	var oauth *api.OAuth
+	if s.MCP {
+		if oauth, err = api.NewOAuth(rt, api.OAuthOptions{
+			Pool: pool, PublicURL: s.PublicURL, SignIns: signIns, Fetch: s.clients, Now: s.now,
+			Trouble: func(err error) {
+				log.Warn("a refused authorisation code could not be recorded in the audit log", "error", err)
+			},
+		}); err != nil {
+			return nil, err
+		}
+		if err := principals.AcceptOAuth(s.PublicURL); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := api.NewPasskeys(rt, api.PasskeyOptions{
-		Pool: pool, PublicURL: s.PublicURL, Identify: principals.Identify, SignIns: signIns, Now: s.now,
+		Pool: pool, PublicURL: s.PublicURL, Identify: principals.Identify, SignIns: signIns, Now: s.now, OAuth: oauth,
 		Trouble: func(err error) { log.Warn("a failed sign-in could not be recorded in the audit log", "error", err) },
 	}); err != nil {
 		return nil, err
 	}
 	passwords := api.PasswordOptions{
-		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns, Identify: principals.Identify, Now: s.now,
+		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns, Identify: principals.Identify, Now: s.now, OAuth: oauth,
 		Trouble: func(err error) { log.Warn("a password sign-in was answered with trouble", "error", err) },
 	}
 	// A nil keyring is not reachable, since the master key is required, and would open no TOTP
@@ -429,7 +452,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 	// The sign-in and enrolment page the ceremonies run on, and the sign-out it offers, with the
 	// password forms where the policy lets passwords in, now that the password routes are served.
-	if _, err := api.NewSignIn(rt, api.SignInOptions{Pool: pool, PublicURL: s.PublicURL, Sessions: principals, Passwords: true, Now: s.now}); err != nil {
+	if _, err := api.NewSignIn(rt, api.SignInOptions{Pool: pool, PublicURL: s.PublicURL, Sessions: principals, Passwords: true, Now: s.now, OAuth: oauth}); err != nil {
 		return nil, err
 	}
 	// The web console, at every address outside the API's roots, where there is one to serve.
@@ -447,7 +470,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	// The user's server at /mcp and every collection at /mcp/collections/{id}, unless AGK_MCP is
 	// off, from this process: "MCP deploys no new component and opens no new port."
 	if s.MCP {
-		if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: s.PublicURL, Version: moduleVersion(), Collections: collections}); err != nil {
+		if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: s.PublicURL, Version: moduleVersion(), Collections: collections, OAuth: oauth}); err != nil {
 			return nil, err
 		}
 	}

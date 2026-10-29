@@ -71,6 +71,14 @@ var Cases = []Case{
 	public("POST", "/api/v1/auth/login"),
 	public("POST", "/api/v1/auth/password/enrol"),
 	public("PUT", "/api/v1/me/password"),
+	// The installation's own OAuth authorisation server, where MCP is served: the metadata a client
+	// reads before it holds anything, the page its person allows it on, and the token endpoint,
+	// authenticated by the code and the verifier, or the refresh token, it carries.
+	public("GET", "/.well-known/oauth-authorization-server"),
+	public("GET", "/.well-known/oauth-protected-resource/mcp"),
+	public("GET", "/.well-known/oauth-protected-resource/mcp/collections/{id}"),
+	public("GET", "/auth/authorize"),
+	public("POST", "/api/v1/auth/oauth/token"),
 
 	// About the caller itself, which any caller reaches and is answered about alone.
 	own("GET", "/api/v1/auth/policy"),
@@ -89,6 +97,10 @@ var Cases = []Case{
 	// The caller's collections, "the principal that made it alone lists it, changes it and calls
 	// through it": answered about the caller alone, another's collection being one that does not
 	// exist, and a body the route reads refused with 400 before anything changes.
+	// The user's server and a collection's endpoint, where MCP is served: "each call runs as the
+	// presenting principal", every tool a route asked as the caller, and a collection its owner's.
+	own("POST", "/mcp"),
+	own("POST", "/mcp/collections/{id}"),
 	own("GET", "/api/v1/me/collections"),
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/me/collections", Own: true}, Refused: true},
 	own("GET", "/api/v1/me/collections/{id}"),
