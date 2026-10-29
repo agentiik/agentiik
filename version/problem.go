@@ -126,6 +126,7 @@ var expected = map[graph.Rule]string{
 	graph.RuleMCPSyncTimeoutAboveCeiling:      "a timeout of 120 seconds at most, or mode: async",
 	graph.RuleMCPTimeoutOnAsyncTool:           "no timeout on an async tool",
 	graph.RuleMCPSyncTimeoutZero:              "a timeout of more than nothing, or none, which waits the 120 seconds a sync call waits at most",
+	graph.RuleMCPToolDescriptionBlank:         "a description holding a character that is not white space: what the tool does, when to reach for it and what it refuses",
 	graph.RuleExpressionSecretInText:          "a secret filling the whole value, never part of a string",
 	graph.RuleExpressionDoesNotCompile:        "a CEL expression that compiles: closed, parsed, and comparing values that can be compared",
 	graph.RuleIncludeLeavesTree:               "a path inside the repository's tree",

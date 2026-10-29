@@ -736,8 +736,16 @@ func mcpOf(root map[string]any, workflow string, inputs map[string]Input) (*MCP,
 	if m.Description, written, err = textAt(b, "description", "mcp"); err != nil {
 		return nil, err
 	}
-	if !written || strings.TrimSpace(m.Description) == "" {
+	if !written {
 		return nil, fmt.Errorf("the tool %s declares no description: it is the field a model actually acts on, and a tool published without one is exactly the tool a model has no way to decide to call", m.Name)
+	}
+	// One of white space alone is refused by a rule, where the description left out is shape the
+	// schema places as a key required. TrimSpace trims what Unicode counts as white space, which
+	// is the class the schema's pattern spells out, so that the two refuse one set; a schema that
+	// took it, as the one released before that pattern does, could place nothing, and the hook
+	// answered a refusal with no pointer, no expectation and no topic.
+	if strings.TrimSpace(m.Description) == "" {
+		return nil, refuse(RuleMCPToolDescriptionBlank, "", "", fmt.Sprintf("the tool %s declares a description of white space alone, which tells a model as little as none: it is the field a model actually acts on, and a tool without one is exactly the tool a model has no way to decide to call", m.Name))
 	}
 	if raw, ok := b["output"]; ok {
 		name, ok := raw.(string)

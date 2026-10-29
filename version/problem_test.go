@@ -4,11 +4,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
+	"path"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/fixtures"
 	"github.com/agentiik/agentiik/language"
 )
 
@@ -99,3 +102,58 @@ var errStore = &storeError{}
 type storeError struct{}
 
 func (*storeError) Error() string { return "the store could not be reached" }
+
+// TestEveryRefusalTheCorpusPinsIsPlaced walks every document the released corpus refuses, the
+// entry points and the included files, through the reader and the checks a document alone reaches,
+// and fails on a refusal Explain cannot place: one the hook would answer with no pointer, no
+// expectation and no topic. It reaches what the corpus pins and nothing past it, so a refusal the
+// corpus has no fixture for, as a blank description had none at the commit vendored, is held by a
+// test of its own.
+func TestEveryRefusalTheCorpusPinsIsPlaced(t *testing.T) {
+	walked := 0
+	for _, group := range []struct {
+		cases func() ([]fixtures.Case, error)
+		read  func(doc []byte) error
+		name  func(file string) string
+	}{
+		{fixtures.Workflows, func(doc []byte) error {
+			wf, err := graph.Parse(doc)
+			if err != nil {
+				return err
+			}
+			return graph.Check(wf)
+		}, func(string) string { return "agentiik.yaml" }},
+		{fixtures.Fragments, func(doc []byte) error {
+			_, err := graph.ParseFragment(doc)
+			return err
+		}, func(file string) string { return "fragments/" + path.Base(file) }},
+	} {
+		cases, err := group.cases()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cases {
+			if c.Valid {
+				continue
+			}
+			doc, err := fs.ReadFile(fixtures.FS, c.File)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = group.read(doc)
+			if err == nil {
+				// Refused past what one document reaches, by the brick manifest it is checked
+				// against, which TestTheWorkflowCorpus holds to its rule.
+				continue
+			}
+			walked++
+			p, ok := Explain(placeShape(err, []readFile{{name: group.name(c.File), doc: doc}}, "agentiik.yaml"))
+			if !ok || p.Expected == "" || p.Topic == "" {
+				t.Errorf("%s is refused by %v, which is placed as %+v", c.File, err, p)
+			}
+		}
+	}
+	if walked < 80 {
+		t.Fatalf("walked %d refusals, and the corpus pins more: the reading is wrong", walked)
+	}
+}
