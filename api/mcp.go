@@ -189,7 +189,7 @@ func workflowLanguage() mcp.Tool {
 			}
 			page, ok := language.Page(*in.Topic)
 			if !ok {
-				return nil, mcp.InvalidParams("there is no topic called %q: the topics are %s", *in.Topic, strings.Join(language.Names(), ", "))
+				return nil, mcp.InvalidParams("%s", language.Unknown(*in.Topic))
 			}
 			return &mcp.CallResult{Content: []mcp.Content{mcp.Text(page)}}, nil
 		},
