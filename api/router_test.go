@@ -342,6 +342,45 @@ func TestTheAPIsOwnWordsAreServedBesideTheNamespacedRoutes(t *testing.T) {
 	}
 }
 
+// A namespace named stats, which an installation of v0.2 may hold, keeps every route of it once
+// GET /api/v1/stats/pools is served, as Scopes and resolution says: the word's routes are served at
+// their own paths alone, and every other path under /api/v1/stats/ is the namespace's.
+func TestANamespaceNamedAfterAWordReservedLateKeepsItsRoutes(t *testing.T) {
+	rt := router(t, everything{who: "alice"})
+	answering := func(what string) api.Handler {
+		return func(w http.ResponseWriter, _ *http.Request, _ api.Principal, _ api.Target) {
+			w.Write([]byte(what))
+		}
+	}
+	for _, r := range []struct{ method, pattern, what string }{
+		{"GET", "/api/v1/{namespace}/workflows/{workflow}", "workflow"},
+		{"DELETE", "/api/v1/{namespace}/grants/{id}", "revoked"},
+		{"GET", "/api/v1/stats/pools", "pools"},
+	} {
+		g := api.Guard(api.Needs{Permission: api.RunRead, Scope: api.Namespace})
+		if !strings.Contains(r.pattern, "{namespace}") {
+			g = api.Needs{Permission: api.RunRead, Scope: api.Installation}
+		}
+		if err := rt.Handle(r.method, r.pattern, g, answering(r.what)); err != nil {
+			t.Fatalf("%s %s could not be served: %v", r.method, r.pattern, err)
+		}
+	}
+	for _, c := range []struct{ method, path, want string }{
+		{"GET", "/api/v1/stats/workflows/nightly", "workflow"},
+		{"DELETE", "/api/v1/stats/grants/01M2Z8V1P9C4XQ7K2N4D6F8H0C", "revoked"},
+		{"GET", "/api/v1/stats/pools", "pools"},
+		{"GET", "/api/v1/finance/workflows/nightly", "workflow"},
+	} {
+		if code, body := reached(t, rt, c.method, c.path, "alice"); code != http.StatusOK || body != c.want {
+			t.Errorf("%s %s answered %d %q, want the %s route", c.method, c.path, code, body, c.want)
+		}
+	}
+	// A path neither holds is the word's to answer, as any other: here, a method the route does not take.
+	if code, _ := reached(t, rt, "POST", "/api/v1/stats/pools", "alice"); code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /api/v1/stats/pools answered %d, want 405", code)
+	}
+}
+
 // A word the API routes on is a namespace nobody can reach, so a route is registered under a
 // word only once the word is reserved, and the reserved list is fixed rather than read off the
 // routes: otherwise a new route would quietly take an existing namespace's paths.
