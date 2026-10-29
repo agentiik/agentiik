@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -545,8 +544,15 @@ func argumentsOf(t routed, arguments json.RawMessage) (map[string]any, error) {
 	return args, nil
 }
 
+// logTailWait is how long run.logs reads a step still running: what its runner shipped is sent at
+// once, so the wait only lets a chunk on its way arrive, and a model asking for a log does not
+// wait on a step that may run for an hour.
+const logTailWait = 2 * time.Second
+
 // logTail reads a step's log stream for what it holds now, and answers its last lines: the stream
-// goes on while the step runs, so it is read for what it delivers at once and then let go.
+// goes on while the step runs, so it is read for what it delivers within logTailWait and then let
+// go, and a step that is over ends it at once. It is read as it is written, keeping only the lines
+// asked for (tailAnswer).
 func (m *MCP) logTail(r *http.Request, path string, args map[string]any) (*mcp.CallResult, error) {
 	most := 200
 	if n, ok := args["lines"].(json.Number); ok {
@@ -554,38 +560,19 @@ func (m *MCP) logTail(r *http.Request, path string, args map[string]any) (*mcp.C
 			most = int(v)
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), logTailWait)
 	defer cancel()
-	a, err := m.dispatch(r.WithContext(ctx), "run.logs", "GET", path, nil, nil)
-	if err != nil {
+	a := &tailAnswer{toolAnswer: toolAnswer{header: http.Header{}}, most: most}
+	if err := m.serveTo(a, r.WithContext(ctx), "run.logs", "GET", path, nil, nil); err != nil {
 		return nil, err
 	}
-	if a.status != http.StatusOK {
-		return result(a)
+	if a.status == 0 {
+		a.status = http.StatusOK
 	}
-	var lines []string
-	var event string
-	scan := bufio.NewScanner(bytes.NewReader(a.body.Bytes()))
-	scan.Buffer(make([]byte, 0, 64<<10), 4<<20)
-	for scan.Scan() {
-		line := scan.Text()
-		switch {
-		case strings.HasPrefix(line, "event: "):
-			event = strings.TrimPrefix(line, "event: ")
-		case strings.HasPrefix(line, "data: ") && event == "line":
-			var l struct {
-				Text string `json:"text"`
-			}
-			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &l) == nil {
-				lines = append(lines, l.Text)
-			}
-		case strings.HasPrefix(line, "data: ") && event == "gap":
-			lines = append(lines, "(lines written and not kept)")
-		}
+	if !a.streaming {
+		return result(&a.toolAnswer)
 	}
-	if len(lines) > most {
-		lines = lines[len(lines)-most:]
-	}
+	lines := a.tail()
 	text := strings.Join(lines, "\n")
 	if text == "" {
 		text = "The step has written nothing yet."
