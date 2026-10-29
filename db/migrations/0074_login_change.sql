@@ -11,7 +11,10 @@
 -- credential, session, link, code, challenge or membership is left naming the old one: a session and
 -- a token stay valid, since they are the user's rather than the login's. Found by what they
 -- reference, as 0069 finds them, and each made again with ON UPDATE CASCADE beside what it already
--- carried.
+-- carried. They are made again in the order they were first made: PostgreSQL checks a row's keys in
+-- the order of their triggers' names, which follow the order they were made in, and where a row
+-- breaks two keys at once, a session or an agk login code of a login that is no user's, the one
+-- checked first is the refusal the code names (ErrNoPrincipal rather than ErrNoCredential).
 --
 -- The keys onto principals are left as they are. A user's principal is written anew under the new
 -- login and the old one deleted once nothing refers to it, as a renamed namespace's service accounts
@@ -27,6 +30,7 @@ begin
     where c.contype = 'f'
       and c.confrelid in ('users'::regclass, 'credentials'::regclass, 'enrolment_codes'::regclass)
       and pg_get_constraintdef(c.oid) not like '%ON UPDATE%'
+    order by c.oid
   loop
     execute format('alter table %s drop constraint %I', k.tbl, k.conname);
     execute format('alter table %s add constraint %I %s ON UPDATE CASCADE', k.tbl, k.conname, k.def);
