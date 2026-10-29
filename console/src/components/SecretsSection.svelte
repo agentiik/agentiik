@@ -127,52 +127,54 @@
 {#if problem && !writing}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
 {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
 
-<Pane title="Secrets" aside={secrets ? String(secrets.length) : ""}>
-  {#snippet actions()}
-    {#if reads && writes}
-      <button class="control" onclick={() => { reset(); store = "builtin"; problem = null; declaring = true; }}><Icon name="control-add" size={14} />New secret</button>
-    {/if}
-  {/snippet}
-  {#if !reads}
-    <p class="muted">Hidden (needs <span class="term">workflow:read</span>)</p>
-  {:else if unread}
-    <Problem explained={unread} onretry={read} />
-  {:else if secrets === null}
-    <p class="muted">Loading</p>
-  {:else}
-    <table>
-      <thead><tr><th>Name</th><th>Kept in</th><th>Given to a step at</th><th>Declared</th><th class="end"></th></tr></thead>
-      <tbody>
-        {#each secrets as d (d.name)}
-          <tr>
-            <td class="term">{d.name}</td>
-            <td>
-              <span class="term">{d.provider}</span>
-              {#if d.path}<span class="term muted path">{d.path}</span>{:else if d.provider === "builtin"}<span class="muted path">stored by Agentiik</span>{/if}
-            </td>
-            <td class="term muted">{d.mount}</td>
-            <td class="muted nowrap"><span class="term">{d.declared_by}</span> <time class="term" datetime={d.declared_at} title={d.declared_at}>{d.declared_at.slice(0, 10)}</time></td>
-            <td class="end">
-              {#if writes}
-                {#if asking === d.name}
-                  <span class="confirm">
-                    <button class="control" onclick={() => (asking = "")}>Keep</button>
-                    <button class="control danger" disabled={working} onclick={() => remove(d)}><Icon name="control-remove" size={14} />Remove</button>
-                  </span>
-                {:else}
-                  {#if d.provider === "builtin"}<button class="control" onclick={() => rotate(d)}><Icon name="control-replay" size={14} />Rotate</button>{/if}
-                  <button class="control" onclick={() => (asking = d.name)}><Icon name="control-remove" size={14} />Remove</button>
+<!-- The section is left out, without a word, for a caller who does not read the namespace's
+     workflows, whose declarations they are. -->
+{#if reads}
+  <Pane title="Secrets" aside={secrets ? String(secrets.length) : ""}>
+    {#snippet actions()}
+      {#if reads && writes}
+        <button class="control" onclick={() => { reset(); store = "builtin"; problem = null; declaring = true; }}><Icon name="control-add" size={14} />New secret</button>
+      {/if}
+    {/snippet}
+    {#if unread}
+      <Problem explained={unread} onretry={read} />
+    {:else if secrets === null}
+      <p class="muted">Loading</p>
+    {:else}
+      <table>
+        <thead><tr><th>Name</th><th>Kept in</th><th>Given to a step at</th><th>Declared</th><th class="end"></th></tr></thead>
+        <tbody>
+          {#each secrets as d (d.name)}
+            <tr>
+              <td class="term">{d.name}</td>
+              <td>
+                <span class="term">{d.provider}</span>
+                {#if d.path}<span class="term muted path">{d.path}</span>{:else if d.provider === "builtin"}<span class="muted path">stored by Agentiik</span>{/if}
+              </td>
+              <td class="term muted">{d.mount}</td>
+              <td class="muted nowrap"><span class="term">{d.declared_by}</span> <time class="term" datetime={d.declared_at} title={d.declared_at}>{d.declared_at.slice(0, 10)}</time></td>
+              <td class="end">
+                {#if writes}
+                  {#if asking === d.name}
+                    <span class="confirm">
+                      <button class="control" onclick={() => (asking = "")}>Keep</button>
+                      <button class="control danger" disabled={working} onclick={() => remove(d)}><Icon name="control-remove" size={14} />Remove</button>
+                    </span>
+                  {:else}
+                    {#if d.provider === "builtin"}<button class="control" onclick={() => rotate(d)}><Icon name="control-replay" size={14} />Rotate</button>{/if}
+                    <button class="control" onclick={() => (asking = d.name)}><Icon name="control-remove" size={14} />Remove</button>
+                  {/if}
                 {/if}
-              {/if}
-            </td>
-          </tr>
-        {:else}
-          <tr><td colspan="5" class="muted">{namespace} declares no secret.</td></tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-</Pane>
+              </td>
+            </tr>
+          {:else}
+            <tr><td colspan="5" class="muted">{namespace} declares no secret.</td></tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  </Pane>
+{/if}
 
 {#if reads && writes}
   <Dialog title={rotating ? `Rotate ${rotating}` : "Declare a secret"} open={writing} onclose={() => ((declaring = false), (rotating = ""))}>

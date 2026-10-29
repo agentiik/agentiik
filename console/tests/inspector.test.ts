@@ -217,10 +217,12 @@ describe("an envelope", () => {
     expect(await screen.findByText(/This envelope was purged with the run's retention/)).toBeTruthy();
   });
 
-  it("is never asked for by a principal without run:read_data", async () => {
+  it("is never asked for by a principal without run:read_data, and its pane left out without a word", async () => {
     const { asked } = open(`/finance/runs/${failed}?step=invoice&port=error`, withPermissions(["workflow:read", "run:read"]));
-    expect(await screen.findByText(/Data hidden/)).toBeTruthy();
+    expect(await screen.findByText("error", { selector: "td.port" })).toBeTruthy();
     expect(asked.some((a) => a.key.includes("/outputs/") || a.key.includes("/inputs/"))).toBe(false);
+    expect(screen.queryByText(/hidden/i)).toBeNull();
+    expect(document.body.textContent).not.toContain("run:read_data");
   });
 });
 
@@ -353,7 +355,8 @@ describe("the files of a step and the outputs of a run", () => {
     open(`/finance/runs/${failed}?step=invoice&pane=files`, withPermissions(["workflow:read", "run:read"]));
     expect(await screen.findByText("request.json")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
-    expect(screen.getByText(/Download hidden/)).toBeTruthy();
+    expect(screen.queryByText(/hidden/i)).toBeNull();
+    expect(document.body.textContent).not.toContain("run:read_data");
   });
 
   it("opens a workflow output's envelope through the run's outputs route", async () => {
@@ -396,8 +399,9 @@ describe("the step header and its ports", () => {
 
   it("shows no parameters to a principal without run:read_data, whatever it is answered", async () => {
     open(`/finance/runs/${failed}?step=invoice`, withPermissions(["workflow:read", "run:read"]));
-    expect(await screen.findByText(/Parameters hidden/)).toBeTruthy();
+    expect(await screen.findByText("attempt 2 · shard 3 of 8")).toBeTruthy();
     expect(screen.queryByText("Parameters it was dispatched with")).toBeNull();
+    expect(screen.queryByText(/hidden/i)).toBeNull();
   });
 
   it("lists every port the step declares, those nothing was published on yet included", async () => {

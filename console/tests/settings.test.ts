@@ -47,11 +47,14 @@ describe("a namespace's secrets", () => {
     expect(screen.getByRole("link", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
   });
 
-  it("says why it shows none to a caller who does not read the namespace's workflows", async () => {
+  it("are left out, without a word, for a caller who does not read the namespace's workflows", async () => {
     const s = scenario("alice");
     (s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> }).permissions["finance"] = ["run:read"];
     const { asked } = open("/finance/settings", s);
-    expect(await screen.findByText(/^Hidden/)).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "General" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Secrets" })).toBeNull();
+    expect(screen.queryByText(/hidden/i)).toBeNull();
+    expect(document.body.textContent).not.toContain("workflow:read");
     expect(asked.some((a) => a.key.endsWith("/secrets"))).toBe(false);
   });
 

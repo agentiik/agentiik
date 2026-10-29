@@ -52,12 +52,14 @@ describe("the run inspector", () => {
     expect(screen.getByText("transient failure: retried as the step's policy says")).toBeTruthy();
   });
 
-  it("says what it does not show a principal without run:read_data", async () => {
+  it("leaves out what a principal without run:read_data may not see, without a word of it", async () => {
     const s = scenario("alice");
     const me = s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> };
     me.permissions["finance/monthly-invoicing"] = ["workflow:read", "run:read"];
     open(`/finance/runs/${failed}`, s);
-    expect(await screen.findByText(/Data hidden/)).toBeTruthy();
+    expect(await screen.findByText("invoice · shard 3/8 · attempt 2")).toBeTruthy();
+    expect(screen.queryByText(/hidden/i)).toBeNull();
+    expect(document.body.textContent).not.toContain("run:read_data");
   });
 
   it("answers a run read under another namespace's address as one that does not exist", async () => {

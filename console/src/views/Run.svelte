@@ -29,7 +29,7 @@
   // chosen, its tasks, the exit code of the one chosen and what it means, the envelopes its ports
   // published and were handed, by digest, size and item count, and the log of the task chosen. What
   // an envelope holds is envelope contents, which run:read_data guards, and a principal without it
-  // is shown no pane of it at all. Cancelling the run and replaying it are workflow:run's, and a
+  // is shown no pane of it at all, nor a word of what is left out. Cancelling the run and replaying it are workflow:run's, and a
   // principal without it is shown neither.
   let { api, place, me, namespace, id }: { api: API; place: Place; me: Me; namespace: string; id: string } = $props();
 
@@ -382,8 +382,6 @@
               <summary>Parameters it was dispatched with</summary>
               <pre class="json"><code>{#each tokens(task.params) as t, i (i)}<span class="t-{t.kind}">{t.text}</span>{/each}</code></pre>
             </details>
-          {:else if task && !readsData && task.state !== "pending"}
-            <p class="faint">Parameters hidden (needs <span class="term">run:read_data</span>)</p>
           {/if}
 
           <div class="scroll">
@@ -445,9 +443,6 @@
                   </table>
                 </div>
                 {#if unfetched}<Problem explained={unfetched} />{/if}
-                {#if !readsData}
-                  <p class="faint">Download hidden (needs <span class="term">run:read_data</span>)</p>
-                {/if}
               {/if}
             {:else if tab === "logs"}
               {#if task}
@@ -487,9 +482,6 @@
               {#if readsData && port}
                 <EnvelopePane {api} run={run.run} step={step.step} {port} side={tab} task={tab === "input" ? task : undefined} />
               {/if}
-            {/if}
-            {#if !readsData && (tab === "output" || tab === "input")}
-              <p class="faint">Data hidden (needs <span class="term">run:read_data</span>)</p>
             {/if}
           </div>
         </Pane>

@@ -129,8 +129,6 @@
             {/each}
           </div>
         {/if}
-      {:else}
-        <p class="faint">Inputs hidden (needs <span class="term">run:read_data</span>)</p>
       {/if}
     </Pane>
 

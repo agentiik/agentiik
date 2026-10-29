@@ -64,6 +64,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - What an act answers no longer moves the page under the pointer: what cancelling a run did, why an act on a run was refused and why a workflow was not added to a collection are said at the foot of the screen, where they pushed the steps down, what Save did to a workflow's default branch or a namespace's sign-in policy is said there too, and a refusal is drawn under the button that was refused, in a form under its Save, in a dialog under its form, where it was drawn above them and pushed the button down.
 - A workflow's MCP tab offers Add only to a caller who holds `workflow:run` on the workflow, which adding a member takes, where it offered it to anybody and said the API's 404 of the workflow being looked at, and the tab is drawn only where the version publishes a tool, its address answered as a page that does not exist where it publishes none.
 - A token minted in the account is forgotten as soon as its tab is left, as on Done, where leaving for another tab and coming back showed its value again to whoever sat at the screen.
+- What the principal does not hold is left out without a word: a principal without `run:read_data` is shown no line where a step's parameters, a file's download, a port's data or two runs' inputs would be, and one without `workflow:read` no Secrets section in a namespace's settings, where each said it was hidden and named the permission it took.
 
 ### Command line
 

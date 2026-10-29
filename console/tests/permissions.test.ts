@@ -1,4 +1,18 @@
 import { describe, expect, it } from "vitest";
+
+// What the principal does not hold is left out without a word: no component says what it leaves
+// out, nor which permission would show it, since a screen that names what it hides explains itself.
+const sources = import.meta.glob("../src/**/*.svelte", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+
+describe("what the principal does not hold", () => {
+  it("is left out of every screen without a word naming it", () => {
+    const said = Object.entries(sources).flatMap(([file, source]) =>
+      source.split("\n").flatMap((line, i) => (/hidden \(needs|\(needs <span/i.test(line) ? [`${file.replace("../src/", "")}:${i + 1}`] : [])),
+    );
+    expect(Object.keys(sources).length).toBeGreaterThan(40);
+    expect(said).toEqual([]);
+  });
+});
 import type { Me, Namespace } from "../src/api/client";
 import { holds, holdsSomewhereIn, inNamespace, ordered } from "../src/lib/permissions";
 
