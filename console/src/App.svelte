@@ -152,6 +152,11 @@
   // Built so far: the views the console draws in this release. The others arrive with theirs.
   const built = new Set<View>(["workflows", "statistics", "sharing", "variables", "settings"]);
 
+  // Each view's digit is its place among the views the console draws, which it keeps in every
+  // namespace: a view the caller cannot use there is left out with its digit, rather than passing it
+  // to the view after it, so that a digit a hand has learnt opens the same view wherever it is pressed.
+  const digits = new Map(all.filter((v) => built.has(v.view)).map((v, i) => [v.view, String(i + 1)]));
+
   const known = $derived(namespace !== undefined && session.namespaces.some((n) => n.name === namespace));
   const shown = $derived(namespace && known ? all.filter((v) => built.has(v.view) && v.shows(namespace)) : []);
   const listed = $derived(context ? all.filter((v) => built.has(v.view) && v.shows(context)) : []);
@@ -174,17 +179,17 @@
     route.kind === "namespace" && route.view === "workflows" && route.workflow !== undefined && route.run === undefined && route.tab === undefined && known && !!session.me && !holds(session.me, "workflow:read", route.namespace, route.workflow) && holdsSomewhereIn(session.me, "run:read", route.namespace),
   );
 
-  // The console's own keys, beside those of the view drawn: a digit for each view of the top bar,
-  // in its order there, as agk console numbers its views, and ? for every key of the view.
+  // The console's own keys, beside those of the view drawn: a digit for each view of the sidebar
+  // shown, each its own in every namespace (digits), and ? for every key of the view.
   const keys = provide(
     new Keys(() => [
       ...(namespace && shown.length > 0
         ? [
             {
-              keys: shown.map((_, i) => String(i + 1)),
+              keys: shown.map((v) => digits.get(v.view)!),
               effect: shown.map((v, i) => (i === 0 ? v.label : v.label.toLowerCase())).join(", "),
               does: (key: string) => {
-                const v = shown[Number(key) - 1];
+                const v = shown.find((s) => digits.get(s.view) === key);
                 if (v) place.go({ kind: "namespace", namespace, view: v.view });
               },
             },

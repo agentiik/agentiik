@@ -31,7 +31,7 @@ describe("the key line", () => {
   it("names the keys of a workflow's runs by their effect, and the console's own", async () => {
     open("/finance/workflows/monthly-invoicing/runs");
     await screen.findAllByText("01JMZ8W4K2R7QX6T1N3P5V7Y9A");
-    expect(line()).toEqual(["↑↓ Move", "enter Open", "1234 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Move", "enter Open", "1245 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
   });
 
   it("moves the selection over the runs and opens the one selected", async () => {
@@ -66,11 +66,28 @@ describe("the key line", () => {
     expect(place.route.kind === "namespace" && place.route.run).toBeFalsy();
   });
 
-  it("opens a view of the top bar by its number", async () => {
+  it("opens a view of the sidebar by its number", async () => {
     const { place } = open(`/finance/runs/${failed}`);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
     await press("1");
     expect(place.route).toEqual({ kind: "namespace", namespace: "finance", view: "workflows", workflow: undefined, tab: undefined });
+  });
+
+  it("keeps each view's digit in every namespace, a view left out taking its digit with it", async () => {
+    const { place } = open("/alice/workflows");
+    await screen.findByRole("list", { name: "Views of alice" });
+    expect(line()).toContain("12345 Workflows, statistics, sharing, variables, settings");
+    await press("3");
+    expect(place.route).toMatchObject({ kind: "namespace", namespace: "alice", view: "sharing" });
+
+    place.go({ kind: "namespace", namespace: "finance", view: "workflows" });
+    await screen.findByRole("list", { name: "Views of finance" });
+    expect(within(screen.getByRole("list", { name: "Views of finance" })).queryByRole("link", { name: "Sharing" })).toBeNull();
+    expect(line()).toContain("1245 Workflows, statistics, variables, settings");
+    await press("3");
+    expect(place.route).toMatchObject({ namespace: "finance", view: "workflows" });
+    await press("4");
+    expect(place.route).toMatchObject({ namespace: "finance", view: "variables" });
   });
 
   it("lists every key of the view with ?, and closes the list with esc", async () => {
@@ -89,7 +106,7 @@ describe("the inspector's keys", () => {
   it("moves between the steps and goes back to the workflow's runs", async () => {
     const { place, asked } = open(`/finance/runs/${failed}`);
     await screen.findByText("invoice · shard 3/8 · attempt 2");
-    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from this step", "esc Runs of the workflow", "1234 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "[] Port", "p Replay from this step", "esc Runs of the workflow", "1245 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
     await press("ArrowUp");
     expect(place.query.get("step")).toBe("normalize");
     await press("Escape");
@@ -184,7 +201,7 @@ describe("the workflow page's keys", () => {
   it("move between the steps as the graph draws them, and go back to the workflow's runs", async () => {
     const { place } = open("/finance/workflows/monthly-invoicing");
     await screen.findByRole("button", { name: /^Step normalize/ });
-    expect(line()).toEqual(["↑↓ Step", "esc Its runs", "1234 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
+    expect(line()).toEqual(["↑↓ Step", "esc Its runs", "1245 Workflows, statistics, variables, settings", ": Search", "? Every key"]);
     await press("j");
     expect(place.query.get("step")).toBe("invoice");
     await press("ArrowDown");
