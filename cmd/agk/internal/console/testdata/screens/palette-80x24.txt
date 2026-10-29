@@ -1,4 +1,4 @@
-agentiik  every namespace  alice   1 Runs   2 Workflows   3 Sharing  1 notifica…
+agentiik  every namespace  alice   1 Runs   2 Workflows   1 notification  ● live
 ╭─╭──────────────────────────────────────────────────────────────────────────╮─╮
 │ │ : ▏                                                                      │ │
 │ │ Open the run selected                                              enter │ │

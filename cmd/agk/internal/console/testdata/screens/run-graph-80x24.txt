@@ -1,5 +1,5 @@
-agentiik  every namespace  alice   1 Runs   2 Workflows   3 Sharing  1 notifica…
-Graph finance/monthly-invoicing@a3f9c1e  run 01JMZ8V1P9C4XQ7K2N4D6F8H0A  ● fail…
+agentiik  every namespace  alice   1 Runs   2 Workflows   1 notification  ● live
+Graph finance/monthly-invoicing@a3f9c1e  run 01JMZ8V1P9C4XQ7K2N4D6F8H…  ● failed
 
 
 ──────────────╮                ┏━━━━━━━━━━━━━━━━┓              ╭────────────────

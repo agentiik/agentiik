@@ -430,6 +430,45 @@ func TestAnInstallationThatStopsAnsweringIsSaidSo(t *testing.T) {
 	}
 }
 
+// At 80 columns the top line keeps whether the installation answers whole, and leaves out of its
+// left what there is no room for: the installation, then the tabs from the last, which are clicked
+// nowhere once left out. An administrator's fourth tab took the state off the line, and a reason
+// was cut to "not answer…".
+func TestTheTopLineKeepsTheStateWhole(t *testing.T) {
+	in := aFleet()
+	m := opened(t, in, Options{}, 80, 24)
+	top := strings.TrimRight(strings.Split(screen(m), "\n")[0], " ")
+	if top != "agentiik  every namespace  dana   1 Runs   2 Workflows   3 Sharing        ● live" {
+		t.Errorf("an administrator's top line at 80 columns is %q", top)
+	}
+	if m = click(t, m, "● live"); m.view != runsView {
+		t.Errorf("a click on the state turns to view %d", m.view)
+	}
+	in.failing = errors.New("the installation could not be reached")
+	m = readAgain(t, m, again{view: runsView, shown: m.shown})
+	top = strings.TrimRight(strings.Split(screen(m), "\n")[0], " ")
+	if top != "agentiik  ev…  not answering, asked again: the installation could not be reached" {
+		t.Errorf("a top line at 80 columns says %q", top)
+	}
+	// A reason too long for the line is cut, and the product's name kept whole beside it.
+	in.failing = errors.New(`Get "https://agentiik.example.com/api/v1/runs?limit=100": dial tcp: lookup agentiik.example.com: no such host`)
+	m = readAgain(t, m, again{view: runsView, shown: m.shown})
+	if top = strings.TrimRight(strings.Split(screen(m), "\n")[0], " "); !strings.HasPrefix(top, `agentiik  not answering, asked again: Get "https://`) || !strings.HasSuffix(top, "…") || len([]rune(top)) != 80 {
+		t.Errorf("a top line at 80 columns says %q", top)
+	}
+	// In a run's graph, the run's identifier is cut before its state, and in the run's pane beside
+	// its log, what the run is.
+	g, _ := graphOf(t, 80, 24)
+	if head := strings.TrimRight(strings.Split(screen(g), "\n")[1], " "); !strings.HasSuffix(head, "…  ● failed") {
+		t.Errorf("the graph's head at 80 columns is %q", head)
+	}
+	p := paned(t, invoiceLogs(), 160, 40)
+	p.unfollow()
+	if s := screen(p); !strings.Contains(s, "│ Run "+failedRun+"  finance/monthly-invoicing@a…  ● failed │") {
+		t.Errorf("the run's header beside its log at 160 columns is cut through its state:\n%s", s)
+	}
+}
+
 // A narrow window shows the first twelve characters of a run, which still tell two apart, and
 // cuts what is too long with an ellipsis rather than wrapping it.
 func TestANarrowWindowCutsRatherThanWraps(t *testing.T) {

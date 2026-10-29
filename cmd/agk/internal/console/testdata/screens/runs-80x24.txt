@@ -1,4 +1,4 @@
-agentiik  every namespace  alice   1 Runs   2 Workflows   3 Sharing  1 notifica…
+agentiik  every namespace  alice   1 Runs   2 Workflows   1 notification  ● live
 ╭─ Runs every namespace · 12 runs ─────────────────────────────────────────────╮
 │ Failed, 3 of the last 12                                                     │
 │ ● failed    01JMZ8V1P9C… finance/monthly-invoic… 05:41:03  1m 52s alice      │

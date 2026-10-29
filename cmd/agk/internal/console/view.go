@@ -80,9 +80,11 @@ func (m Model) theme() theme { return theme{depth: m.depth, light: m.light} }
 
 // topLine names the installation, the namespace shown, the principal, the views a digit turns
 // to, and whether the installation answers: a green dot and the word while it does, and in words,
-// asked again, once it stops, since somebody is watching. Where the window is too narrow for all
-// of it, the installation is left out first, since it is the one thing on the line that does not
-// change while the console is open.
+// asked again, once it stops, since somebody is watching. That state is drawn whole, and what the
+// window has no room for beside it is left out of the left: the installation first, since it is the
+// one thing on the line that does not change while the console is open; then the tabs from the
+// last, each whole, since its digit still turns to its view and ? lists it; and the rest is cut
+// last. The state is cut only where it leaves no room for the product's name.
 func (m Model) topLine(t theme) string {
 	where := m.o.Namespace
 	if where == "" {
@@ -95,32 +97,54 @@ func (m Model) topLine(t theme) string {
 	if m.unanswered != "" {
 		right = []part{{failedText, "not answering, asked again: " + m.unanswered}}
 	}
+	brand := []part{{strong, "agentiik"}}
+	if room := m.width - widthOf(brand) - 2; widthOf(right) > room {
+		right = within(right, max(0, room))
+	}
+	tabs := m.tabs()
+	type kept struct {
+		installation string
+		tabs         int
+	}
+	tried := []kept{{m.o.Installation, len(m.tabList())}}
+	for n := len(m.tabList()); n >= 0; n-- {
+		tried = append(tried, kept{"", n})
+	}
 	var left []part
-	for _, installation := range []string{m.o.Installation, ""} {
+	shown := 0
+	for _, k := range tried {
 		rest := "  " + where
-		if installation != "" {
-			rest = "  " + installation + rest
+		if k.installation != "" {
+			rest = "  " + k.installation + rest
 		}
 		if m.me.Principal != "" {
 			rest += "  " + m.me.Principal
 		}
-		left = append([]part{{strong, "agentiik"}, {muted, rest}}, m.tabs()...)
+		left, shown = append([]part{brand[0], {muted, rest}}, tabs[:2*k.tabs]...), k.tabs
 		if widthOf(left)+2+widthOf(right) <= m.width {
 			break
 		}
 	}
+	if room := m.width - 2 - widthOf(right); widthOf(left) > room {
+		// Where the state leaves the product's name and no more, the name is drawn whole rather
+		// than cut to make room for an ellipsis.
+		if room > widthOf(brand) {
+			left = within(left, room)
+		} else {
+			left = brand
+		}
+	}
 	// Each tab is clicked where the line writes it, after the installation, the namespace and the
-	// principal, three spaces before each.
-	x := widthOf(left) - widthOf(m.tabs())
-	for _, v := range m.tabList() {
+	// principal, three spaces before each; a tab left out is not clicked where the state is written.
+	x := widthOf(left) - widthOf(tabs[:2*shown])
+	for _, v := range m.tabList()[:shown] {
 		x += 3
 		w := lipgloss.Width(v.key + " " + v.name)
-		if x+w <= m.width {
-			t.pickAt(0, x, x+w, "tab", v.key)
-		}
+		t.pickAt(0, x, x+w, "tab", v.key)
 		x += w
 	}
-	return t.line(false, m.width, fitted(left, right, m.width)...)
+	gap := part{plain, strings.Repeat(" ", max(2, m.width-widthOf(left)-widthOf(right)))}
+	return t.line(false, m.width, within(append(append(left, gap), right...), m.width)...)
 }
 
 // tab is a view a digit turns to.
@@ -551,6 +575,12 @@ func cut(text string, room int) string {
 		i += len(c)
 	}
 	return text
+}
+
+// ending is parts cut to leave room for last, then last whole: for a line that ends on a state,
+// which is what the line is read for, and which a cut from the end would take first.
+func ending(parts, last []part, width int) []part {
+	return append(within(parts, max(0, width-widthOf(last))), last...)
 }
 
 // fitted puts left and right on one line as wide as the window, the right cut first where both
