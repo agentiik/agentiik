@@ -132,6 +132,10 @@
   const viewport = new Viewport();
   const folded = $derived(!viewport.narrow && (viewport.compact || sidebarFolded));
   let drawer = $state(false);
+  // banner is the height of the line saying the console was opened elsewhere, which stays at the top
+  // of the window: the frame is laid out in the room below it, its sidebar and its drawer starting
+  // under it, so that the sidebar's foot is in the window however the page scrolls.
+  let banner = $state(0);
   $effect(() => {
     void route;
     drawer = false;
@@ -239,11 +243,11 @@
 />
 
 {#if elsewhere}
-  <Elsewhere href={elsewhere} />
+  <Elsewhere href={elsewhere} bind:height={banner} />
 {/if}
 {#if session.standing === "reading"}
   <!-- The frame is drawn while the session is read, empty, so that nothing moves when it fills. -->
-  <div class="frame" class:folded class:narrow={viewport.narrow}>
+  <div class="frame" class:folded class:narrow={viewport.narrow} style:--elsewhere="{banner}px">
     <div class="side blank" aria-hidden="true"></div>
     <main class="screen" aria-busy="true"></main>
   </div>
@@ -262,7 +266,7 @@
     </Pane>
   </main>
 {:else if session.me}
-  <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer}>
+  <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer} style:--elsewhere="{banner}px">
     <div class="side" inert={viewport.narrow && !drawer}>
       <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} oncreate={session.me.user ? () => (creating = true) : undefined} onsearch={() => (searching = true)} />
     </div>
@@ -333,20 +337,21 @@
     display: grid;
     grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
     grid-template-areas: "side screen";
-    min-height: 100dvh;
+    min-height: calc(100dvh - var(--elsewhere, 0px));
   }
 
   .frame.folded {
     grid-template-columns: var(--sidebar-collapsed) minmax(0, 1fr);
   }
 
-  /* The sidebar stays in the window as the page scrolls under it, and scrolls on its own where the
-     window is shorter than its list. */
+  /* The sidebar stays in the window as the page scrolls under it, below the line saying the console
+     was opened elsewhere where one is drawn, and scrolls on its own where the window is shorter than
+     its list. */
   .side {
     position: sticky;
-    top: 0;
+    top: var(--elsewhere, 0px);
     grid-area: side;
-    height: 100dvh;
+    height: calc(100dvh - var(--elsewhere, 0px));
   }
 
   .frame > .screen {
@@ -395,7 +400,7 @@
 
   .frame.narrow .side {
     position: fixed;
-    top: 0;
+    top: var(--elsewhere, 0px);
     bottom: 0;
     left: 0;
     z-index: 60;
@@ -410,7 +415,7 @@
 
   .scrim {
     position: fixed;
-    inset: 0;
+    inset: var(--elsewhere, 0px) 0 0;
     z-index: 55;
     background: color-mix(in srgb, var(--bg) 55%, transparent);
   }

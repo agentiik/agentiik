@@ -82,7 +82,7 @@
   @media (max-width: 759px) {
     .bar {
       position: sticky;
-      top: 0;
+      top: var(--elsewhere, 0px);
       z-index: 30;
       height: 48px;
       margin: -16px -16px 16px;

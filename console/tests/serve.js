@@ -70,11 +70,14 @@ export function scenarioNamed(name) {
 }
 
 // serve starts the stand-in and answers with its address once it listens. scenario may be changed
-// between requests by the caller, which is how a test moves the installation along.
-export function serve({ scenario, port = 0, prefix = "/" }) {
+// between requests by the caller, which is how a test moves the installation along. origin, where it
+// is given, is written into the page as the public URL's, as the API writes it, so that the console
+// is drawn as it is when opened at another address than the one it works at.
+export function serve({ scenario, port = 0, prefix = "/", origin }) {
   const policy = consolePolicy();
   const root = prefix.endsWith("/") ? prefix : prefix + "/";
-  const page = readFileSync(join(dist, "index.html"), "utf8").replace('<base href="/">', `<base href="${root}">`);
+  const declared = origin ? `<meta name="agentiik-origin" content="${origin}">` : "";
+  const page = readFileSync(join(dist, "index.html"), "utf8").replace('<base href="/">', `<base href="${root}">${declared}`);
   const state = { scenario, asked: [] };
 
   const server = createServer((req, res) => {

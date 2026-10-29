@@ -101,3 +101,69 @@ test.describe("the design system, as drawn", () => {
     expect(pills.filter((p) => p.ground !== sunken || p.outline !== lineStrong)).toEqual([]);
   });
 });
+
+// Opened at an address other than the public URL, the console says so on a line at the top of the
+// window, and the sidebar stands below it: "the sidebar stays in the window" as the page scrolls,
+// its foot included, and on a phone the top bar and the drawer stand below it too.
+test.describe("a console opened elsewhere", () => {
+  let elsewhere: Awaited<ReturnType<typeof serve>>;
+  test.beforeAll(async () => {
+    elsewhere = await serve({ scenario, prefix: "/", origin: "https://agentiik.example.com" });
+  });
+  test.afterAll(async () => {
+    await elsewhere.close();
+  });
+
+  // placed is where the line, the sidebar, its last entry and a phone's top bar are drawn.
+  const placed = (page: Page) =>
+    page.evaluate(() => {
+      const bottom = (selector: string) => document.querySelector(selector)?.getBoundingClientRect();
+      return {
+        line: bottom(".elsewhere")!.bottom,
+        side: bottom(".side")!,
+        last: bottom(".sidebar > :last-child")!.bottom,
+        bar: bottom("header.bar")?.top,
+        window: window.innerHeight,
+      };
+    });
+
+  for (const width of [1440, 1099]) {
+    test(`keeps the sidebar's foot in the window at ${width}px`, async ({ browser }) => {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "light", deviceScaleFactor: 1, locale: "en-GB", timezoneId: "UTC" });
+      const found: string[] = [];
+      for (const path of ["/", "/alice/variables"]) {
+        const page = await context.newPage();
+        await page.clock.install({ time: new Date("2026-10-01T06:02:30Z") });
+        await page.goto(elsewhere.url.replace(/\/$/, "") + path);
+        await page.locator(".sidebar").waitFor();
+        await page.waitForFunction(() => getComputedStyle(document.querySelector(".frame")!).getPropertyValue("--elsewhere") !== "0px");
+        for (const at of ["top", "end"]) {
+          if (at === "end") await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+          const p = await placed(page);
+          if (p.side.top < p.line - 0.5) found.push(`${path} at its ${at}: the sidebar starts at ${p.side.top}, under the line ending at ${p.line}`);
+          if (p.side.bottom > p.window + 0.5 || p.last > p.window + 0.5) found.push(`${path} at its ${at}: the sidebar ends at ${p.side.bottom}, its last entry at ${p.last}, the window at ${p.window}`);
+        }
+        await page.close();
+      }
+      await context.close();
+      expect(found).toEqual([]);
+    });
+  }
+
+  test("keeps a phone's top bar and drawer below the line", async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: "light", deviceScaleFactor: 1, locale: "en-GB", timezoneId: "UTC" });
+    const page = await context.newPage();
+    await page.clock.install({ time: new Date("2026-10-01T06:02:30Z") });
+    await page.goto(elsewhere.url.replace(/\/$/, "") + "/");
+    await page.locator("header.bar").waitFor();
+    await page.waitForFunction(() => getComputedStyle(document.querySelector(".frame")!).getPropertyValue("--elsewhere") !== "0px");
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    const scrolled = await placed(page);
+    expect(scrolled.bar).toBeGreaterThanOrEqual(scrolled.line - 0.5);
+    await page.locator("header.bar button.menu-button").click();
+    const drawn = await placed(page);
+    expect(drawn.side.top).toBeGreaterThanOrEqual(drawn.line - 0.5);
+    expect(drawn.side.bottom).toBeLessThanOrEqual(drawn.window + 0.5);
+    await context.close();
+  });
+});
