@@ -4282,6 +4282,22 @@
           "examples": [
             "2026-09-27T12:30:00Z"
           ]
+        },
+        "audience": {
+          "type": "string",
+          "format": "uri",
+          "description": "An OAuth grant's: the MCP surface its tokens are accepted at and nowhere else. Left out of any other token.",
+          "examples": [
+            "https://agentiik.example.com/mcp"
+          ]
+        },
+        "client_id": {
+          "type": "string",
+          "format": "uri",
+          "description": "An OAuth grant's: the client its tokens were issued to, whose client_name is the device_label. Left out of any other token.",
+          "examples": [
+            "https://client.example.com/oauth/client.json"
+          ]
         }
       },
       "examples": [

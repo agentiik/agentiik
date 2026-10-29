@@ -102,7 +102,7 @@ The steps of the workflow, named. The order they appear in has no bearing on sch
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}(@\\S+)?$",
           "not": {
-            "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/"
+            "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats|api|hooks|mcp|objects)/"
           }
         },
         {

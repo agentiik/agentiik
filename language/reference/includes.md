@@ -78,7 +78,7 @@ Files and repositories merged into this one before anything else is resolved, in
   "type": "string",
   "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$",
   "not": {
-    "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/"
+    "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats|api|hooks|mcp|objects)/"
   }
 }
 ```

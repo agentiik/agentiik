@@ -30,10 +30,10 @@ func TestThePaletteIsWhatTheTokenFileMakes(t *testing.T) {
 func TestTheNearestOfTheTwoHundredAndFiftySixAreTheDocumentations(t *testing.T) {
 	for hex, want := range map[string]int{
 		"#68AEF5": 75, "#015DA2": 25, // running
-		"#5FA773": 72, "#2E7D4F": 29, // succeeded
-		"#D9A441": 179, "#96660A": 94, // waiting
+		"#5FA773": 72, "#2B754A": 29, // succeeded
+		"#D9A441": 179, "#8F610A": 94, // waiting
 		"#E0705A": 167, "#B23C1E": 88, // failed, timed_out
-		"#777777": 243, "#888888": 102, // queued, skipped, cancelled
+		"#898989": 245, "#696969": 242, // queued, skipped, cancelled
 	} {
 		rgb, err := parse(hex)
 		if err != nil {

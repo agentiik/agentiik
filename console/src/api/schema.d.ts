@@ -1960,6 +1960,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/oauth-authorization-server": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the authorisation server's metadata
+         * @description RFC 8414's document of the installation's own OAuth 2.1 authorisation server, which issues the tokens of /mcp and each collection, to anybody. Where the public URL has a path, it follows the suffix, as RFC 8414 inserts it. Answered 404 under AGK_MCP=off, as every route of the authorisation server, which serves the MCP surfaces alone. Not audited.
+         */
+        get: operations["oauthServerMetadata"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read /mcp's Protected Resource Metadata
+         * @description RFC 9728's document of /mcp, to anybody: its resource identifier, the authorisation server, the nine permissions as its scopes, and header as the one bearer method. Where the public URL has a path, it comes between the suffix and /mcp. Answered 404 under AGK_MCP=off. Not audited.
+         */
+        get: operations["mcpResourceMetadata"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource/mcp/collections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a collection's Protected Resource Metadata
+         * @description RFC 9728's document of /mcp/collections/{id}, to anybody, its one scope workflow:run. Answered for any identifier written as one, whether a collection holds it or not, so that the metadata tells nobody which exist; 404 for one that is not written as an identifier, and under AGK_MCP=off. Not audited.
+         */
+        get: operations["collectionResourceMetadata"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ask a person to allow an MCP client
+         * @description The authorisation endpoint: the client's Client ID Metadata Document fetched, the request held to OAuth 2.1, and the sign-in page naming the client, the hosts of its client_id and its redirect URI, the resource and the permissions asked, which allows by a sign-in carrying authorization and denies by a link back with error=access_denied. A client_id, a redirect_uri or a document that does not hold is a page saying so, 400, sending the browser nowhere; any other refusal is a 400 page with a link back carrying OAuth's error, error_description, state and iss, which the person follows. Under the page's Content-Security-Policy, never cached. Not audited.
+         */
+        get: operations["authorizeClient"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oauth/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trade an authorisation code or a refresh token for tokens
+         * @description The token endpoint, to anybody, authenticated by what it carries. A code is single use, good for a minute and spent by the first request its form accepts, and answers an access token, good for an hour, and a refresh token, of the account that allowed the client, for the resource and the scopes it allowed, its grant one of that account's API tokens, labelled with the client's name and ending 90 days later, audited as api_token.create with the credential that signed in, the client_id and the audience. A refresh token answers a new pair and spends itself, not audited; one presented after it was spent ends the grant, recorded as api_token.revoke by installation with reason refresh_token_reused. A refused code is recorded as signin.fail, about the account it was minted for or an unknown authorisation code, within the bound on failed sign-ins. Answered 404 under AGK_MCP=off.
+         */
+        post: operations["oauthToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2799,6 +2899,16 @@ export interface components {
              *     }
              */
             terminal?: components["schemas"]["terminalSignIn"];
+            /**
+             * @description What an MCP client opened /auth/authorize with, for an assertion that allows it. Never beside terminal, and never on a registration.
+             * @example {
+             *       "client_id": "https://client.example.com/oauth/client.json",
+             *       "redirect_uri": "http://127.0.0.1:4711/callback",
+             *       "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk",
+             *       "resource": "https://agentiik.example.com/mcp"
+             *     }
+             */
+            authorization?: components["schemas"]["oauthAuthorization"];
         } & (unknown & unknown);
         /**
          * Redirect to agk login
@@ -2858,10 +2968,11 @@ export interface components {
              */
             credential?: components["schemas"]["passkey"];
             /**
-             * @description Where the page sends the browser next. Present only for an assertion that carried terminal.
+             * @description Where the page sends the browser next, for a sign-in agk login started or one allowing an MCP client. Never beside a session that may only enrol.
              * @example http://127.0.0.1:53682/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0
+             * @example http://127.0.0.1:4711/callback?code=agkcode_hETdtl86N8K0gq2v9xW3bQ7yRzPnL5mF&state=af0ifjsldkj&iss=https%3A%2F%2Fagentiik.example.com
              */
-            redirect_to?: components["schemas"]["redirectTo"];
+            redirect_to?: components["schemas"]["redirectTo"] | components["schemas"]["oauthRedirectTo"];
         } & (unknown & unknown);
         /**
          * Password sign-in request
@@ -2900,6 +3011,16 @@ export interface components {
              *     }
              */
             terminal?: components["schemas"]["terminalSignIn"];
+            /**
+             * @description What an MCP client opened /auth/authorize with, for a sign-in that allows it. Never beside terminal.
+             * @example {
+             *       "client_id": "https://client.example.com/oauth/client.json",
+             *       "redirect_uri": "http://127.0.0.1:4711/callback",
+             *       "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk",
+             *       "resource": "https://agentiik.example.com/mcp"
+             *     }
+             */
+            authorization?: components["schemas"]["oauthAuthorization"];
         };
         /**
          * Signed in
@@ -2931,10 +3052,11 @@ export interface components {
              */
             session: components["schemas"]["sessionKind"];
             /**
-             * @description Where the page sends the browser next, for a sign-in agk login started. Never beside a session that may only enrol, which mints no token.
+             * @description Where the page sends the browser next, for a sign-in agk login started or one allowing an MCP client. Never beside a session that may only enrol.
              * @example http://127.0.0.1:53682/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0
+             * @example http://127.0.0.1:4711/callback?code=agkcode_hETdtl86N8K0gq2v9xW3bQ7yRzPnL5mF&state=af0ifjsldkj&iss=https%3A%2F%2Fagentiik.example.com
              */
-            redirect_to?: components["schemas"]["redirectTo"];
+            redirect_to?: components["schemas"]["redirectTo"] | components["schemas"]["oauthRedirectTo"];
         };
         /**
          * Code exchange request
@@ -10299,6 +10421,399 @@ export interface components {
             workflows: components["schemas"]["listedWorkflow"][];
         };
         /**
+         * OAuth scope
+         * @description The permissions a token keeps, separated by spaces: the nine, written as everywhere else. A token keeps them wherever its person holds them, and nothing else.
+         * @example workflow:read run:read
+         * @example workflow:run
+         */
+        oauthScope: string;
+        /**
+         * Client identifier URL
+         * Format: uri
+         * @description An MCP client's client_id: the https URL of its Client ID Metadata Document, with a path and no user, query, fragment or dot segment, outside the public URL's origin.
+         * @example https://client.example.com/oauth/client.json
+         */
+        clientIdentifierUrl: string;
+        /**
+         * Refresh token
+         * @description An OAuth grant's refresh token: single use, a refresh spending it and answering the next.
+         * @example agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0
+         */
+        refreshToken: string;
+        /**
+         * MCP client's authorisation
+         * @description What an MCP client opened /auth/authorize with, handed on by the page with the sign-in that allows it, held to its rules again there.
+         * @example {
+         *       "client_id": "https://client.example.com/oauth/client.json",
+         *       "redirect_uri": "http://127.0.0.1:4711/callback",
+         *       "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk",
+         *       "resource": "https://agentiik.example.com/mcp",
+         *       "scope": "workflow:read run:read",
+         *       "state": "af0ifjsldkj"
+         *     }
+         */
+        oauthAuthorization: {
+            /**
+             * @description The client.
+             * @example https://client.example.com/oauth/client.json
+             */
+            client_id: components["schemas"]["clientIdentifierUrl"];
+            /**
+             * Format: uri
+             * @description Where the browser goes back with the code.
+             * @example http://127.0.0.1:4711/callback
+             */
+            redirect_uri: string;
+            /**
+             * @description The SHA-256 of the client's verifier.
+             * @example Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk
+             */
+            code_challenge: components["schemas"]["codeChallenge"];
+            /**
+             * Format: uri
+             * @description The URL of /mcp or of a collection.
+             * @example https://agentiik.example.com/mcp
+             */
+            resource: string;
+            /**
+             * @description The permissions asked.
+             * @example workflow:read run:read
+             */
+            scope?: components["schemas"]["oauthScope"];
+            /**
+             * @description The client's state, handed back as it came.
+             * @example af0ifjsldkj
+             */
+            state?: string;
+        };
+        /**
+         * Redirect to an MCP client
+         * Format: uri
+         * @description Where the page sends the browser once a sign-in allowing an MCP client has succeeded: the client's redirect URI with code, iss and the client's state, or with error, error_description and iss where the collection it names is not the account's.
+         * @example http://127.0.0.1:4711/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0&iss=https%3A%2F%2Fagentiik.example.com&state=af0ifjsldkj
+         */
+        oauthRedirectTo: string;
+        /**
+         * Authorisation server metadata
+         * @description RFC 8414's document, as the installation writes it.
+         * @example {
+         *       "issuer": "https://agentiik.example.com",
+         *       "authorization_endpoint": "https://agentiik.example.com/auth/authorize",
+         *       "token_endpoint": "https://agentiik.example.com/api/v1/auth/oauth/token",
+         *       "scopes_supported": [
+         *         "workflow:read",
+         *         "workflow:run",
+         *         "workflow:write",
+         *         "workflow:delete",
+         *         "run:read",
+         *         "run:read_data",
+         *         "secret:use",
+         *         "secret:write",
+         *         "grant:manage"
+         *       ],
+         *       "response_types_supported": [
+         *         "code"
+         *       ],
+         *       "response_modes_supported": [
+         *         "query"
+         *       ],
+         *       "grant_types_supported": [
+         *         "authorization_code",
+         *         "refresh_token"
+         *       ],
+         *       "token_endpoint_auth_methods_supported": [
+         *         "none"
+         *       ],
+         *       "code_challenge_methods_supported": [
+         *         "S256"
+         *       ],
+         *       "authorization_response_iss_parameter_supported": true,
+         *       "client_id_metadata_document_supported": true
+         *     }
+         */
+        oauthServerMetadata: {
+            /**
+             * Format: uri
+             * @description The public URL.
+             * @example https://agentiik.example.com
+             */
+            issuer: string;
+            /**
+             * Format: uri
+             * @description /auth/authorize under the public URL.
+             * @example https://agentiik.example.com/auth/authorize
+             */
+            authorization_endpoint: string;
+            /**
+             * Format: uri
+             * @description /api/v1/auth/oauth/token under the public URL.
+             * @example https://agentiik.example.com/api/v1/auth/oauth/token
+             */
+            token_endpoint: string;
+            /**
+             * @description The nine permissions.
+             * @example [
+             *       "workflow:read",
+             *       "workflow:run",
+             *       "workflow:write",
+             *       "workflow:delete",
+             *       "run:read",
+             *       "run:read_data",
+             *       "secret:use",
+             *       "secret:write",
+             *       "grant:manage"
+             *     ]
+             */
+            scopes_supported: components["schemas"]["permission"][];
+            /**
+             * @description code alone.
+             * @example [
+             *       "code"
+             *     ]
+             * @constant
+             */
+            response_types_supported: [
+                "code"
+            ];
+            /**
+             * @description query alone.
+             * @example [
+             *       "query"
+             *     ]
+             * @constant
+             */
+            response_modes_supported?: [
+                "query"
+            ];
+            /**
+             * @description The two grants served.
+             * @example [
+             *       "authorization_code",
+             *       "refresh_token"
+             *     ]
+             * @constant
+             */
+            grant_types_supported: [
+                "authorization_code",
+                "refresh_token"
+            ];
+            /**
+             * @description No client is authenticated: every client is a public one.
+             * @example [
+             *       "none"
+             *     ]
+             * @constant
+             */
+            token_endpoint_auth_methods_supported: [
+                "none"
+            ];
+            /**
+             * @description S256 alone.
+             * @example [
+             *       "S256"
+             *     ]
+             * @constant
+             */
+            code_challenge_methods_supported: [
+                "S256"
+            ];
+            /**
+             * @description Every authorisation response carries iss (RFC 9207).
+             * @example true
+             * @constant
+             */
+            authorization_response_iss_parameter_supported: true;
+            /**
+             * @description A client is taken by its Client ID Metadata Document.
+             * @example true
+             * @constant
+             */
+            client_id_metadata_document_supported: true;
+        };
+        /**
+         * Protected Resource Metadata
+         * @description RFC 9728's document of an MCP surface.
+         * @example {
+         *       "resource": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+         *       "authorization_servers": [
+         *         "https://agentiik.example.com"
+         *       ],
+         *       "scopes_supported": [
+         *         "workflow:run"
+         *       ],
+         *       "bearer_methods_supported": [
+         *         "header"
+         *       ]
+         *     }
+         */
+        protectedResourceMetadata: {
+            /**
+             * Format: uri
+             * @description The surface's URL under the public URL.
+             * @example https://agentiik.example.com/mcp
+             */
+            resource: string;
+            /**
+             * @description The public URL alone.
+             * @example [
+             *       "https://agentiik.example.com"
+             *     ]
+             */
+            authorization_servers: string[];
+            /**
+             * @description The nine for /mcp, workflow:run for a collection.
+             * @example [
+             *       "workflow:run"
+             *     ]
+             */
+            scopes_supported: components["schemas"]["permission"][];
+            /**
+             * @description The Authorization header alone.
+             * @example [
+             *       "header"
+             *     ]
+             * @constant
+             */
+            bearer_methods_supported: [
+                "header"
+            ];
+        };
+        /**
+         * Token request
+         * @description OAuth's token request, as a form: a code with its verifier, its client and its redirect URI, or a refresh token with its client. A parameter written twice is refused.
+         * @example {
+         *       "grant_type": "authorization_code",
+         *       "code": "agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+         *       "code_verifier": "cZ8hZxDEvfLznd4Ardqn6A1NxuCFaoluRfS-47oehmE",
+         *       "client_id": "https://client.example.com/oauth/client.json",
+         *       "redirect_uri": "http://127.0.0.1:4711/callback",
+         *       "resource": "https://agentiik.example.com/mcp"
+         *     }
+         */
+        oauthTokenRequest: {
+            /**
+             * @description authorization_code, trading a code.
+             * @example authorization_code
+             * @constant
+             */
+            grant_type: "authorization_code";
+            /**
+             * @description The code /auth/authorize handed back, single use and good for a minute.
+             * @example agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0
+             */
+            code: components["schemas"]["exchangeCode"];
+            /**
+             * @description The verifier whose SHA-256 the challenge was.
+             * @example cZ8hZxDEvfLznd4Ardqn6A1NxuCFaoluRfS-47oehmE
+             */
+            code_verifier: components["schemas"]["codeVerifier"];
+            /**
+             * @description The client the code was minted for.
+             * @example https://client.example.com/oauth/client.json
+             */
+            client_id: components["schemas"]["clientIdentifierUrl"];
+            /**
+             * Format: uri
+             * @description The redirect URI the code was handed back at, to the character.
+             * @example http://127.0.0.1:4711/callback
+             */
+            redirect_uri: string;
+            /**
+             * Format: uri
+             * @description The resource the code was minted for, checked where it is sent.
+             * @example https://agentiik.example.com/mcp
+             */
+            resource?: string;
+        } | {
+            /**
+             * @description refresh_token, trading a refresh token.
+             * @example refresh_token
+             * @constant
+             */
+            grant_type: "refresh_token";
+            /**
+             * @description The refresh token, spent by this request.
+             * @example agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0
+             */
+            refresh_token: components["schemas"]["refreshToken"];
+            /**
+             * @description The client the grant was issued to.
+             * @example https://client.example.com/oauth/client.json
+             */
+            client_id: components["schemas"]["clientIdentifierUrl"];
+            /**
+             * @description Fewer permissions than the grant holds, narrowing it for good; left out, the grant's own.
+             * @example workflow:read
+             */
+            scope?: components["schemas"]["oauthScope"];
+            /**
+             * Format: uri
+             * @description The grant's audience, checked where it is sent.
+             * @example https://agentiik.example.com/mcp
+             */
+            resource?: string;
+        };
+        /**
+         * Token response
+         * @description OAuth's token response: an access token, written as an API token is, and the refresh token beside it.
+         * @example {
+         *       "access_token": "agktoken_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+         *       "token_type": "Bearer",
+         *       "expires_in": 3600,
+         *       "refresh_token": "agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+         *       "scope": "workflow:read run:read"
+         *     }
+         */
+        oauthToken: {
+            /**
+             * @description The access token, accepted at the grant's audience alone.
+             * @example agktoken_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0
+             */
+            access_token: components["schemas"]["apiTokenValue"];
+            /**
+             * @description Bearer.
+             * @example Bearer
+             * @constant
+             */
+            token_type: "Bearer";
+            /**
+             * @description The access token's seconds left, an hour, less where the grant ends sooner.
+             * @example 3600
+             */
+            expires_in: number;
+            /**
+             * @description The next refresh token.
+             * @example agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0
+             */
+            refresh_token: components["schemas"]["refreshToken"];
+            /**
+             * @description The permissions the token keeps.
+             * @example workflow:read run:read
+             */
+            scope: components["schemas"]["oauthScope"];
+        };
+        /**
+         * OAuth error
+         * @description OAuth's error response.
+         * @example {
+         *       "error": "invalid_grant",
+         *       "error_description": "that code or refresh token opens nothing: used already, past its time, never issued, revoked, or not issued to this client, for this redirect URI or for this verifier"
+         *     }
+         */
+        oauthError: {
+            /**
+             * @description What OAuth names the refusal.
+             * @example invalid_grant
+             * @enum {unknown}
+             */
+            error: "invalid_request" | "invalid_grant" | "invalid_target" | "invalid_scope" | "unsupported_grant_type";
+            /**
+             * @description Why, in a sentence of the characters OAuth allows.
+             * @example that code or refresh token opens nothing: used already, past its time, never issued, revoked, or not issued to this client, for this redirect URI or for this verifier
+             */
+            error_description: string;
+        };
+        /**
          * @description A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.
          * @example work laptop
          * @example phone
@@ -10512,6 +11027,18 @@ export interface components {
              * @example 2026-09-27T12:30:00Z
              */
             last_used_at?: components["schemas"]["timestamp"];
+            /**
+             * Format: uri
+             * @description An OAuth grant's: the MCP surface its tokens are accepted at and nowhere else. Left out of any other token.
+             * @example https://agentiik.example.com/mcp
+             */
+            audience?: string;
+            /**
+             * Format: uri
+             * @description An OAuth grant's: the client its tokens were issued to, whose client_name is the device_label. Left out of any other token.
+             * @example https://client.example.com/oauth/client.json
+             */
+            client_id?: string;
         };
         /**
          * Authentication policy
@@ -14169,7 +14696,7 @@ export interface operations {
             401: components["responses"]["unauthorised"];
             /** @description A synced passkey, at registration or at sign-in, where device_bound_only applies to the account, the error naming the setting; a request whose Origin header is not the public URL's origin; or a registration a session started, that session signed in to longer ago than 10 minutes before its options, answered with RFC 9470's challenge in WWW-Authenticate. */
             403: components["responses"]["signInAgain"];
-            /** @description The installation is addressed by an IP address, which a browser refuses as a Relying Party Identifier. */
+            /** @description The installation is addressed by an IP address, which a browser refuses as a Relying Party Identifier, or an assertion carries authorization on an installation serving no MCP, which allows no client. */
             409: components["responses"]["conflict"];
             413: components["responses"]["tooLarge"];
         };
@@ -14530,6 +15057,8 @@ export interface operations {
             401: components["responses"]["unauthorised"];
             /** @description From another origin than the public URL's; or passwords are forbidden by the policy that applies to the account, the error naming the setting password. */
             403: components["responses"]["forbidden"];
+            /** @description A sign-in carries authorization on an installation serving no MCP, which allows no client. */
+            409: components["responses"]["conflict"];
             413: components["responses"]["tooLarge"];
             429: components["responses"]["tooManyRequests"];
             503: components["responses"]["unavailable"];
@@ -18529,6 +19058,156 @@ export interface operations {
             /** @description No runner pool of that name: the caller is an administrator already, so this names the pool rather than hiding the route. */
             404: components["responses"]["notFound"];
             413: components["responses"]["tooLarge"];
+        };
+    };
+    oauthServerMetadata: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["oauthServerMetadata"];
+                };
+            };
+            404: components["responses"]["notFound"];
+        };
+    };
+    mcpResourceMetadata: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["protectedResourceMetadata"];
+                };
+            };
+            404: components["responses"]["notFound"];
+        };
+    };
+    collectionResourceMetadata: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's identifier, as its URL carries it. */
+                id: components["schemas"]["ulid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["protectedResourceMetadata"];
+                };
+            };
+            404: components["responses"]["notFound"];
+        };
+    };
+    authorizeClient: {
+        parameters: {
+            query: {
+                /** @description code, the one OAuth 2.1 keeps. */
+                response_type: "code";
+                /** @description The https URL of the client's metadata document. */
+                client_id: components["schemas"]["clientIdentifierUrl"];
+                /** @description One of the document's redirect_uris to the character, but for the port of a loopback one. */
+                redirect_uri: string;
+                /** @description The SHA-256 of the client's verifier. */
+                code_challenge: components["schemas"]["codeChallenge"];
+                /** @description S256, the one method served. */
+                code_challenge_method: "S256";
+                /** @description The URL of /mcp or of a collection under the public URL, which the token is issued for and accepted at alone (RFC 8707). */
+                resource: string;
+                /** @description Permissions separated by spaces, each one of the nine and none twice; left out, every scope the resource uses. */
+                scope?: components["schemas"]["oauthScope"];
+                /** @description Handed back as it came. */
+                state?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The page asking the person. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description The page saying why the request is refused, with a link back to the client where its client_id and redirect_uri hold. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            404: components["responses"]["notFound"];
+        };
+    };
+    oauthToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The grant, as a form, OAuth's own encoding: an authorisation code with its verifier, or a refresh token. */
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["oauthTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The tokens, shown this once. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["oauthToken"];
+                };
+            };
+            /** @description OAuth's error response: invalid_grant for a code or a refresh token that opens nothing, whatever the reason, or a principal holding 100 live tokens; invalid_target, invalid_scope, invalid_request or unsupported_grant_type. */
+            400: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["oauthError"];
+                };
+            };
+            404: components["responses"]["notFound"];
         };
     };
 }

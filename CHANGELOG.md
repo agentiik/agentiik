@@ -2,7 +2,9 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
-## Unreleased
+## v0.7.0, 2026-10-30
+
+An agent can use it: the installation serves the Model Context Protocol, revision `2026-07-28`, from the API process itself, with no new component and no new port. At `/mcp` each principal has a server of their own, whose tools are the API's routes under the caller's own permissions: namespaces, grants, secrets, workflows and their versions, runs and their logs and outputs, the caller's collections, and `workflow.language`, `workflow.schema` and `workflow.validate`, which teach a client the language from the reference agentiik/schemas generates and hold a draft to the rules the push enforces, so that a client that has never seen Agentiik writes a valid workflow and commits it as a real git commit by its caller. A collection, at `/mcp/collections/{id}`, is a connector of a person's own: the workflows they choose, each one tool built from the `mcp` block its entry point declares, a call a run of theirs of trigger kind `mcp`, gated on `workflow:run` alone and revealing nothing of the tree. A client signs its person in through the installation, its own OAuth 2.1 authorisation server, or presents an ordinary API token. `agk language` reads the same reference in a terminal, and the web console shows a workflow's tool and the caller's collections. A v0.6.0 installation upgrades with v0.7.0's `compose.yaml` and its own `.env`, and nothing else.
 
 ### Upgrading
 
@@ -138,6 +140,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Project
 
 - `CLAUDE.md` is the copy of `agentiik/.github`'s, which no longer counts the roadmap's tasks, groups or Feature issues: the roadmap counts them in each milestone's tally, and the 685 tasks the copy named were already 696 at the v0.6.0 documentation. This copy also comes back to the source from an older one, which named thirteen repositories, a `console` one among them, and `agentiik` without the web console.
+- The fixture corpus, the language reference, the schema parts and the console's `openapi.json`, `wire.schema.json`, `envelope.schema.json` and `workflow.schema.json` are agentiik/schemas `v0.7.0`, `345c40b`, recorded in `internal/fixtures/testdata/SCHEMAS_VERSION` and `SCHEMAS_COMMIT` and in `language.Source`, with `src/api/schema.d.ts` generated again; the round-trip corpus is that release's, its two refusals of a tool's description of white space alone added. `tokens.css`, `tokens.json`, the icons and the favicon are agentiik/design `v0.7.0`, and `agk console`'s palette is generated again from them: `faint` is `#898989` dark and `#696969` light, 245 and 242 of the 256, and the light `succeeded` and `waiting` inks `#2B754A` and `#8F610A`, so that every word keeps 4.5:1 against what it is drawn on.
 
 ## v0.6.0, 2026-10-02
 

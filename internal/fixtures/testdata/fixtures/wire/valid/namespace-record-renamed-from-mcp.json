@@ -1,0 +1,11 @@
+{
+  "name": "assistants",
+  "kind": "shared",
+  "owner": "bob-martin",
+  "quotas": {
+    "max_concurrent_tasks": 20
+  },
+  "former_names": [
+    "mcp"
+  ]
+}

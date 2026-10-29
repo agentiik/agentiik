@@ -1,0 +1,22 @@
+{
+  "id": "01JR8W4F6H8K0N2Q4S6T8W0Y2A",
+  "name": "support",
+  "description": "Orders and refunds, for the support assistant.",
+  "url": "https://agentiik.example.com/mcp/collections/01JR8W4F6H8K0N2Q4S6T8W0Y2A",
+  "members": [
+    {
+      "workflow": "support/order-status",
+      "tool": null,
+      "reason": "tool_name_taken"
+    },
+    {
+      "workflow": "shop/order-status",
+      "tool": null,
+      "reason": "tool_name_taken"
+    },
+    {
+      "workflow": "support/refund",
+      "tool": "refund"
+    }
+  ]
+}

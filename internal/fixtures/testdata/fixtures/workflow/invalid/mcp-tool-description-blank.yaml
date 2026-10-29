@@ -1,0 +1,28 @@
+# invalid: A published tool whose description is spaces alone. The engine refuses it as a tool with no description, since it tells a model as little, so the schema asks for a character that is not white space.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+
+mcp:
+  name: create_invoice
+  title: Create an invoice
+  description: "   "
+  mode: sync
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]

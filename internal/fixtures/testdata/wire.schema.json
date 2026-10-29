@@ -2980,12 +2980,12 @@
     },
     "namespace": {
       "title": "Namespace",
-      "description": "The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. A namespace made before v0.3.0 under one keeps its name until its owner renames it, and the API still serves it, every route of it, with nothing to do; only its creation, and a rename to one, are refused: a reader validating what such an installation answers meets a refusal the API does not make. A shared namespace is renamed by its owner or an administrator, every row naming it following in one transaction, and the name it leaves stays its own as a former name, which every address naming it still reaches and no other namespace or login takes while it lives. Its objects and sealed values stay under the name it was created with, its storage name, so that a rename copies nothing; that name is the installation's to keep and no record here carries it.",
+      "description": "The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. api, hooks, mcp and objects are reserved from v0.7.0, because an address's first path segment decides who answers it: the API answers /api, /auth, /hooks, /mcp and /objects, and the web console every other one, which it reads as a namespace, so that a namespace named after one of them would be one whose pages the console never opens. A namespace made under one of these words before it was reserved keeps its name until it is renamed, and the API still serves it, every route of it; only its creation, and a rename to one, are refused: a reader validating what such an installation answers meets a refusal the API does not make. Under stats there is nothing to do; under api, hooks, mcp or objects the web console opens none of its pages, which renaming a shared one gives back, as an administrator giving a user a new login gives back their personal one, which follows the login. A shared namespace is renamed by its owner or an administrator, and a personal one with its user's login, every row naming it following in one transaction, and the name it leaves stays its own as a former name, which every address naming it still reaches and no other namespace or login takes while it lives. Its objects and sealed values stay under the name it was created with, its storage name, so that a rename copies nothing; that name is the installation's to keep and no record here carries it.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
       "maxLength": 255,
       "not": {
-        "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)$"
+        "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats|api|hooks|mcp|objects)$"
       },
       "examples": [
         "finance",
@@ -3360,7 +3360,7 @@
     },
     "user": {
       "title": "User",
-      "description": "A local account: a login and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, the display name made of their given and family names, the email address an administrator gave them, and when their photo was last set, null where they hold none: answered wherever a user is, so that every client draws a person the same way.",
+      "description": "A local account: a login and the credentials it signs in with. The credentials are listed on their own, the caller's at GET /api/v1/me/credentials and a user's, to an administrator, at GET /api/v1/users/{login}/credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with. Beside them, what the user says of themself, each field the empty string where they have not said it, the display name made of their given and family names, the email address an administrator gave them, and when their photo was last set, null where they hold none: answered wherever a user is, so that every client draws a person the same way.",
       "type": "object",
       "required": [
         "kind",
@@ -3378,7 +3378,7 @@
         },
         "login": {
           "$ref": "#/$defs/login",
-          "description": "What the user signs in as, and the reference a grant names them by. It cannot change: it is also the name of their personal namespace, which cannot be renamed.",
+          "description": "What the user signs in as, and the reference a grant names them by. It is also the name of their personal namespace, and so changes in one case alone: where a later release made it a reserved word, as v0.7.0 did api, hooks, mcp and objects, an administrator gives the user a new one at PATCH /api/v1/users/{login}, their personal namespace following it and keeping the old one as a former name.",
           "examples": [
             "alice"
           ]
@@ -3726,7 +3726,7 @@
     },
     "credential": {
       "title": "Credential",
-      "description": "One way a user proves who they are, as the caller's credentials list them: a passkey, a password or a TOTP generator. The record describes the credential and never holds it: no public key, no hash, no shared secret, and the objects are closed so that none of them can be written here at all. A reader tells the three apart by type. Two rules need the rest of the user's credentials and are left to the API: a TOTP exists only alongside a password, since with user verification required a passkey assertion already proves two factors, and a removal leaving fewer passkeys than min_passkeys is refused.",
+      "description": "One way a user proves who they are, as a listing of credentials writes it, the caller's own or, to an administrator, a user's: a passkey, a password or a TOTP generator. The record describes the credential and never holds it: no public key, no hash, no shared secret, and the objects are closed so that none of them can be written here at all. A reader tells the three apart by type. Two rules need the rest of the user's credentials and are left to the API: a TOTP exists only alongside a password, since with user verification required a passkey assertion already proves two factors, and a removal leaving fewer passkeys than min_passkeys is refused.",
       "oneOf": [
         {
           "$ref": "#/$defs/passkey"
@@ -4282,6 +4282,22 @@
           "examples": [
             "2026-09-27T12:30:00Z"
           ]
+        },
+        "audience": {
+          "type": "string",
+          "format": "uri",
+          "description": "An OAuth grant's: the MCP surface its tokens are accepted at and nowhere else. Left out of any other token.",
+          "examples": [
+            "https://agentiik.example.com/mcp"
+          ]
+        },
+        "client_id": {
+          "type": "string",
+          "format": "uri",
+          "description": "An OAuth grant's: the client its tokens were issued to, whose client_name is the device_label. Left out of any other token.",
+          "examples": [
+            "https://client.example.com/oauth/client.json"
+          ]
         }
       },
       "examples": [
@@ -4376,7 +4392,7 @@
     },
     "namespaceRecord": {
       "title": "Namespace record",
-      "description": "A namespace as a user or an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.",
+      "description": "A namespace as a user or an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, its quotas, the names it held before a rename and when its picture was set. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename, and which is renamed only with their login, where an administrator gives a user whose login a later release made a reserved word a new one; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.",
       "type": "object",
       "required": [
         "name",
@@ -4896,7 +4912,7 @@
     },
     "notification": {
       "title": "Notification",
-      "description": "Something the installation tells one principal of its own accord, listed in their GET /api/v1/me and kept 90 days from when it was written, or until they dismiss it with DELETE /api/v1/me/notifications/{id}: long enough to reach someone back from leave, and bounded so that the list does not grow for ever. Three kinds, each told to whoever can act on it. admin_access_widened is an administrator having widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, which is how an administrator reads another namespace's payloads, since they hold no run:read_data of their own; it is told to the namespace's owners, because an owner does not read the audit log and the people whose data it is should hear it from the installation itself, and where the act found nobody to tell, to the other administrators as well, so that an act where nobody owns is not told only to the owner it made. passkey_counter_refused is a sign-in refused because a passkey's signature counter did not move forward, which is what a cloned authenticator's does; it is told to the passkey's user, who is the one who knows whether the other copy is theirs. break_glass_recovery is a recovery code agentiik-api recover issued an administrator from the installation's host, the one way to a recovery code no administrator vouches for; it is told to every administrator, the one recovered and suspended ones included, so that an administrator who did not run it learns that whoever holds the host did. Each kind carries what its reader needs and nothing of the others', so the fields one requires the others refuse.",
+      "description": "Something the installation tells one principal of its own accord, listed in their GET /api/v1/me and kept 90 days from when it was written, or until they dismiss it with DELETE /api/v1/me/notifications/{id}, but a recovery code's, which nobody dismisses: long enough to reach someone back from leave, and bounded so that the list does not grow for ever. Six kinds, each told to whoever can act on it. admin_access_widened is an administrator having widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, which is how an administrator reads another namespace's payloads, since they hold no run:read_data of their own; it is told to the namespace's owners, because an owner does not read the audit log and the people whose data it is should hear it from the installation itself, and where the act found nobody to tell, to the other administrators as well, so that an act where nobody owns is not told only to the owner it made. passkey_counter_refused is a sign-in refused because a passkey's signature counter did not move forward, which is what a cloned authenticator's does; it is told to the passkey's user, who is the one who knows whether the other copy is theirs. break_glass_recovery is a recovery code agentiik-api recover issued an administrator from the installation's host, the one way to a recovery code no administrator vouches for; it is told to every administrator, the one recovered and suspended ones included, so that an administrator who did not run it learns that whoever holds the host did. recovery_code_issued is a recovery code an administrator, or the bootstrap token, issued the reader, and recovery_code_used that code spent on the enrolment page; both are told to the reader alone, who is the one who knows whether they asked for it and holds the way to undo it, removing the credential it enrolled, since the code lets whoever holds it sign in as them while their passkeys keep working. Neither carries the code or its link, and neither is dismissed, kept its 90 days, since whoever spent the code signs in as the reader and could otherwise dismiss both before the reader read them. login_changed is a new login an administrator gave the reader, which happens only where a later release made their login a reserved word, as v0.7.0 did api, hooks, mcp and objects; it is told to the user unless they gave it themselves, since a login is what they sign in as and what every grant names them by, and they should hear it changed from the installation rather than find it out at their next sign-in; telling somebody what they have just done would tell them nothing. Each kind carries what its reader needs and nothing of the others', so the fields one requires the others refuse.",
       "type": "object",
       "required": [
         "id",
@@ -4917,18 +4933,24 @@
           "enum": [
             "admin_access_widened",
             "passkey_counter_refused",
-            "break_glass_recovery"
+            "break_glass_recovery",
+            "recovery_code_issued",
+            "recovery_code_used",
+            "login_changed"
           ],
-          "description": "What happened. admin_access_widened: an administrator widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, a role given to it or a deny taken from it; act and by say which act and who did it, namespace and grant where and which. passkey_counter_refused: a sign-in with one of the reader's passkeys was refused because its signature counter was at or below the one stored, one of the two not zero, and credential says which passkey. break_glass_recovery: agentiik-api recover issued the administrator login names a recovery code. The documentation names the three as written here.",
+          "description": "What happened. admin_access_widened: an administrator widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, a role given to it or a deny taken from it; act and by say which act and who did it, namespace and grant where and which. passkey_counter_refused: a sign-in with one of the reader's passkeys was refused because its signature counter was at or below the one stored, one of the two not zero, and credential says which passkey. break_glass_recovery: agentiik-api recover issued the administrator login names a recovery code. recovery_code_issued: by issued the reader a recovery code. recovery_code_used: the recovery code by issued the reader was spent, enrolling credential, and where the policy requires a passkey, each passkey registered from a session the password it set opens is told the same, naming the passkey. login_changed: an administrator gave the reader a new login, in place of one a later release made a reserved word; from and to say which they had and which they were given, and by who gave it. The documentation names the six as written here.",
           "examples": [
             "admin_access_widened",
             "passkey_counter_refused",
-            "break_glass_recovery"
+            "break_glass_recovery",
+            "recovery_code_issued",
+            "recovery_code_used",
+            "login_changed"
           ]
         },
         "at": {
           "$ref": "#/$defs/timestamp",
-          "description": "When it happened: the grant written, the deny taken away or the membership changed, the sign-in refused, or the recovery code issued. The 90 days it is kept are counted from here.",
+          "description": "When it happened: the grant written, the deny taken away or the membership changed, the sign-in refused, the recovery code issued or spent, or the login given. The 90 days it is kept are counted from here.",
           "examples": [
             "2026-09-27T14:00:00Z"
           ]
@@ -4951,13 +4973,13 @@
         "by": {
           "anyOf": [
             {
-              "$ref": "#/$defs/login"
+              "$ref": "#/$defs/namespaceRecord/properties/former_names/items"
             },
             {
               "const": "operator"
             }
           ],
-          "description": "Who did it, on admin_access_widened alone: the administrator's login, or operator for the bootstrap token, which administers the installation until the first administrator has signed in. Named rather than referred to, as login is, so that removing the account leaves what the others were told.",
+          "description": "Who did it, on admin_access_widened and login_changed, and who issued the recovery code, on recovery_code_issued and recovery_code_used: the administrator's login, or operator for the bootstrap token, which administers the installation until the first administrator has signed in. Named rather than referred to, as login is, so that removing the account leaves what the others were told; a new login given it later leaves it too, since a notification keeps the logins it named when it was told, as the audit log keeps the one each entry was recorded under. It is written on the grammar of a namespace's former name rather than on $defs/login, as from is, since the login it kept may be a word a later release reserved.",
           "examples": [
             "alice",
             "operator"
@@ -4995,16 +5017,30 @@
         },
         "credential": {
           "$ref": "#/$defs/passkey/properties/id",
-          "description": "The passkey whose assertion was refused, on passkey_counter_refused alone, by the credential ID GET /api/v1/me/credentials lists it with, so that its user can find it and remove it with DELETE /api/v1/me/credentials/{id} where the other copy is not theirs. The API does not lock it: WebAuthn calls a counter that did not move a signal rather than a proof, and a lock would let a faulty authenticator shut its owner out.",
+          "description": "The passkey whose assertion was refused, on passkey_counter_refused, and the credential a recovery code enrolled, on recovery_code_used, the passkey's credential ID or the password's identifier, which are written alike, by the identifier GET /api/v1/me/credentials lists it with, so that its user can find it and remove it with DELETE /api/v1/me/credentials/{id} where the other copy is not theirs. The API does not lock it: WebAuthn calls a counter that did not move a signal rather than a proof, and a lock would let a faulty authenticator shut its owner out.",
           "examples": [
             "aVBob25lUGFzc2tleQ"
           ]
         },
         "login": {
-          "$ref": "#/$defs/login",
-          "description": "The administrator agentiik-api recover issued a recovery code, on break_glass_recovery; or the user an administrator put in a group, on admin_access_widened whose act is joined_group, and there alone, since the group routes are an administrator's and an owner could not learn otherwise who now holds the role. Named rather than referred to, so that removing the account, which is what the others may do on reading this, leaves what they were told.",
+          "$ref": "#/$defs/namespaceRecord/properties/former_names/items",
+          "description": "The administrator agentiik-api recover issued a recovery code, on break_glass_recovery; or the user an administrator put in a group, on admin_access_widened whose act is joined_group, and there alone, since the group routes are an administrator's and an owner could not learn otherwise who now holds the role. Named rather than referred to, so that removing the account, which is what the others may do on reading this, leaves what they were told, as a new login given it later does. It is written on the grammar of a namespace's former name rather than on $defs/login, as from is, since the login it kept may be a word a later release reserved.",
           "examples": [
             "alice"
+          ]
+        },
+        "from": {
+          "$ref": "#/$defs/namespaceRecord/properties/former_names/items",
+          "description": "The login the reader had, on login_changed alone: a word a release reserved after it was given, which is why it is written on the grammar of a namespace's former name rather than on $defs/login, which refuses it. Their personal namespace, where they have one, keeps it as a former name, so that every address written with it still reaches that namespace and nobody else takes it.",
+          "examples": [
+            "mcp"
+          ]
+        },
+        "to": {
+          "$ref": "#/$defs/login",
+          "description": "The login the reader was given, on login_changed alone, and what they sign in as from then on. Named rather than referred to, as from and by are, so that what they were told reads as it happened.",
+          "examples": [
+            "mc-petit"
           ]
         }
       },
@@ -5025,7 +5061,9 @@
               "by"
             ],
             "properties": {
-              "credential": false
+              "credential": false,
+              "from": false,
+              "to": false
             },
             "if": {
               "required": [
@@ -5066,7 +5104,9 @@
               "grant": false,
               "act": false,
               "by": false,
-              "login": false
+              "login": false,
+              "from": false,
+              "to": false
             }
           }
         },
@@ -5087,7 +5127,78 @@
               "grant": false,
               "act": false,
               "by": false,
-              "credential": false
+              "credential": false,
+              "from": false,
+              "to": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "recovery_code_issued"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "by"
+            ],
+            "properties": {
+              "namespace": false,
+              "grant": false,
+              "act": false,
+              "credential": false,
+              "login": false,
+              "from": false,
+              "to": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "recovery_code_used"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "by",
+              "credential"
+            ],
+            "properties": {
+              "namespace": false,
+              "grant": false,
+              "act": false,
+              "login": false,
+              "from": false,
+              "to": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "login_changed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "from",
+              "to",
+              "by"
+            ],
+            "properties": {
+              "namespace": false,
+              "grant": false,
+              "act": false,
+              "credential": false,
+              "login": false
             }
           }
         }
@@ -5138,6 +5249,27 @@
           "kind": "break_glass_recovery",
           "at": "2026-09-27T16:40:00Z",
           "login": "alice"
+        },
+        {
+          "id": "01M2AK7T9W1Y3A5C7E9G1J3K5N",
+          "kind": "recovery_code_issued",
+          "at": "2026-09-27T18:00:00Z",
+          "by": "carol"
+        },
+        {
+          "id": "01M2AK9W1Y3A5C7E9G1J3K5N7Q",
+          "kind": "recovery_code_used",
+          "at": "2026-09-27T18:20:00Z",
+          "by": "carol",
+          "credential": "bmV3UGFzc2tleQ"
+        },
+        {
+          "id": "01M2AK5V7X9Z1B3D5F7H9K1M3P",
+          "kind": "login_changed",
+          "at": "2026-10-06T09:00:00Z",
+          "from": "mcp",
+          "to": "mc-petit",
+          "by": "alice"
         }
       ]
     },
@@ -5505,7 +5637,7 @@
                 "type": "string",
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$",
                 "not": {
-                  "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/"
+                  "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats|api|hooks|mcp|objects)/"
                 },
                 "description": "Another workflow repository, as <namespace>/<name>, whose root agentiik.yaml was read as a fragment.",
                 "examples": [
@@ -5989,7 +6121,7 @@
                     "type": "string",
                     "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$",
                     "not": {
-                      "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/"
+                      "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats|api|hooks|mcp|objects)/"
                     },
                     "description": "The workflow called, as <namespace>/<name>.",
                     "examples": [
@@ -7102,7 +7234,7 @@
             [
               {
                 "workflow": "finance/monthly-invoicing",
-                "tool": "create_invoice"
+                "tool": "create_invoices"
               },
               {
                 "workflow": "support/order-status",
@@ -7129,7 +7261,7 @@
           "members": [
             {
               "workflow": "finance/monthly-invoicing",
-              "tool": "create_invoice"
+              "tool": "create_invoices"
             },
             {
               "workflow": "support/order-status",
@@ -7196,9 +7328,9 @@
               "type": "null"
             }
           ],
-          "description": "The name the member is offered under in tools/list: as where it is written, and otherwise the name the mcp block at the head of its ref gives. null where it offers nothing, reason beside it saying why: such a member is left out of tools/list, and a call naming it is answered as one naming a tool that does not exist. A member is refused when it is written with a name another member already gives, since clients hold the name and a model told of two tools of one name cannot choose between them; as resolves it.",
+          "description": "The name the member is offered under in tools/list: as where it is written, and otherwise the name the mcp block at the head of its ref gives. null where it offers nothing, reason beside it saying why: such a member is left out of tools/list, and a call naming it is answered as one naming a tool that does not exist. A member is refused when it is written with a name another member already gives, since clients hold the name and a model told of two tools of one name cannot choose between them; as resolves it. Two members whose names come to be one after both were written, a commit moving the head of a ref or a grant given back, are both null beside tool_name_taken, so that a call meant for one never runs the other.",
           "examples": [
-            "create_invoice",
+            "create_invoices",
             "order_lookup",
             null
           ]
@@ -7207,12 +7339,14 @@
           "type": "string",
           "enum": [
             "no_mcp_block",
-            "not_runnable"
+            "not_runnable",
+            "tool_name_taken"
           ],
-          "description": "Why a member offers nothing, beside a null tool and nowhere else. no_mcp_block: the entry point at the head of its ref declares no mcp block, which is also what a ref that no longer names anything reads as, since there is no entry point there to declare one. not_runnable: its owner may no longer run the workflow, a deleted one included, one reason for both since a workflow one may not run is one whose fate a collection does not tell. A grant revoked takes the tool away from the next list, as the protocol lets a tool set vary by the authorization presented, and the member comes back when the grant does.",
+          "description": "Why a member offers nothing, beside a null tool and nowhere else. no_mcp_block: the entry point at the head of its ref declares no mcp block, which is also what a ref that no longer names anything reads as, since there is no entry point there to declare one. not_runnable: its owner may no longer run the workflow, a deleted one included, one reason for both since a workflow one may not run is one whose fate a collection does not tell. A grant revoked takes the tool away from the next list, as the protocol lets a tool set vary by the authorization presented, and the member comes back when the grant does. tool_name_taken: another member's tool goes by the name this one's goes by, both left out until as or a commit tells them apart, since a tool's name is unique in its collection at every tools/list and every tools/call, and a name comes from the head of a ref somebody may commit to after the member was written.",
           "examples": [
             "no_mcp_block",
-            "not_runnable"
+            "not_runnable",
+            "tool_name_taken"
           ]
         }
       },
@@ -7238,7 +7372,7 @@
       "examples": [
         {
           "workflow": "finance/monthly-invoicing",
-          "tool": "create_invoice"
+          "tool": "create_invoices"
         },
         {
           "workflow": "support/order-status",
@@ -7470,7 +7604,7 @@
               "description": "The name the tool was called as, which tools/list offered it under: the member's as where written, and otherwise the name its mcp block gave.",
               "examples": [
                 "order_lookup",
-                "create_invoice"
+                "create_invoices"
               ]
             }
           }

@@ -6,7 +6,7 @@
   "members": [
     {
       "workflow": "finance/monthly-invoicing",
-      "tool": "create_invoice"
+      "tool": "create_invoices"
     },
     {
       "workflow": "support/order-status",

@@ -184,13 +184,15 @@
           "examples": ["Order status"]
         },
         "description": {
-          "description": "What the tool does, when to reach for it and what it refuses. This is the field a model actually acts on, and the one worth spending sentences on: a tool published without one is exactly the tool a model has no way to decide to call.",
+          "description": "What the tool does, when to reach for it and what it refuses. This is the field a model actually acts on, and the one worth spending sentences on: a tool published without one is exactly the tool a model has no way to decide to call, and one of white space alone, as Unicode counts it, line breaks and the spaces of every script included, is refused as none, since it tells a model as little.",
+          "$comment": "The class is Unicode's White_Space property, which Go's strings.TrimSpace trims before the engine asks whether a description says anything, so that the schema refuses exactly what the engine refuses, and refuses it with a place: \\S would be a different set in each engine, ASCII blanks alone in RE2, and in ECMA-262 one without U+0085 and with U+FEFF, which TrimSpace keeps. The Latin-1 characters are \\x escapes, which every engine reads alike, and the others JSON escapes, so that each engine is handed the characters themselves: above \\xff RE2 writes \\x{...} where ECMA-262 and Python write \\u, which RE2 refuses.",
           "type": "string",
           "minLength": 1,
+          "pattern": "[^\\x09-\\x0d\\x20\\x85\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]",
           "examples": ["Return the state of one order and, once shipped, its tracking link. Takes an order number such as ORD-004211 and nothing else."]
         },
         "output": {
-          "description": "The name of one workflow output declared in this file, optional. Its envelope becomes the result, carried as structuredContent with a text rendering beside it, and its schema, where it declares one, the tool's outputSchema. Leaving it out publishes a tool that has an effect and returns only that it succeeded. It names an output and never a step or a port, so that the graph stays free to change beneath a published tool.",
+          "description": "The name of one workflow output declared in this file, optional. Its envelope becomes the result, carried as structuredContent with a text rendering beside it. Where the output declares a schema and the tool is sync, the tool's outputSchema describes that envelope, { meta, items } with each item's data held to the output's schema, since the protocol holds a structured result to its outputSchema and the result is the envelope; an async tool publishes none, since its call answers the run it started and never the output. Leaving it out publishes a tool that has an effect and returns only that it succeeded. It names an output and never a step or a port, so that the graph stays free to change beneath a published tool.",
           "$ref": "#/$defs/portName",
           "examples": ["status", "invoices"]
         },
@@ -327,10 +329,10 @@
     },
     "namespace": {
       "title": "Namespace",
-      "description": "The name of a namespace, an identifier other than a reserved word, at most 255 characters, the most a directory holds a name to. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. Nothing renames a namespace, so one made before v0.3.0 under it keeps its name and the API still serves it, every route of it, with nothing to do; only its creation is refused, which is why the engine still reads a workflow naming it.",
+      "description": "The name of a namespace, an identifier other than a reserved word, at most 255 characters, the most a directory holds a name to. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. api, hooks, mcp and objects are reserved from v0.7.0, because an address's first path segment decides who answers it: the API answers /api, /auth, /hooks, /mcp and /objects, and the web console every other one, which it reads as a namespace, so that a namespace named after one of them would be one whose pages the console never opens. A namespace made under one of these words before it was reserved keeps its name until it is renamed, and the API still serves it, every route of it; only its creation, and a rename to one, are refused, which is why the engine still reads a workflow naming it, though this pattern, which cannot tell such a namespace from one asked for now, refuses one. From v0.6.0 a shared namespace is renamed by its owner or an administrator, and from v0.7.0 a user's personal namespace with their login, where an administrator gives a user whose login a later release reserved a new one; the name either leaves stays its own as a former name, which no other namespace or login takes while it lives, so that a workflow naming it in metadata.namespace, a call, an include or an event trigger keeps working. Its objects stay under the name it was created with, its storage name, so that a rename copies nothing.",
       "$ref": "#/$defs/identifier",
       "maxLength": 255,
-      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)$" },
+      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats|api|hooks|mcp|objects)$" },
       "examples": ["finance", "platform"]
     },
     "duration": {
@@ -433,7 +435,7 @@
           "examples": ["90d", { "for": "24h", "fetches": 1 }]
         },
         "schema": {
-          "description": "What the items of this output carry, written as a JSON Schema 2020-12 document. It is what a tool published from this output advertises as its outputSchema, so a client is told the shape of a result and not only its text. It is the mirror of a tool input, which has to have a schema because a tool has to advertise an inputSchema; here it stays optional, and an output declaring none is published as a tool with no outputSchema beside it.",
+          "description": "What the data of each item of this output carries, written as a JSON Schema 2020-12 document. A sync tool published from this output advertises it inside its outputSchema, which describes the output's envelope with each item's data held to this schema, so a client is told the shape of a result and not only its text. It is the mirror of a tool input, which has to have a schema because a tool has to advertise an inputSchema; here it stays optional, and an output declaring none is published as a tool with no outputSchema beside it.",
           "$ref": "#/$defs/jsonSchema",
           "examples": [
             { "$ref": "./schemas/invoice.json" },
@@ -649,7 +651,7 @@
       "description": "A workflow addressed as <namespace>/<name>, the same identity a grant and a git remote use. The namespace is never a reserved word, as $defs/namespace lists them, and each half is at most 255 characters, as $defs/identifier is: a maxLength would bound the whole string, so the pattern counts each half.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$",
-      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/" },
+      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats|api|hooks|mcp|objects)/" },
       "examples": ["finance/common", "finance/monthly-invoicing"]
     },
     "scheduleTrigger": {
@@ -1179,7 +1181,7 @@
               "description": "The workflow to call, as <namespace>/<name>, optionally at a ref after an @, each half at most 255 characters, as $defs/workflowPath counts them.",
               "type": "string",
               "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,254}/[A-Za-z0-9][A-Za-z0-9_-]{0,254}(@\\S+)?$",
-              "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)/" }
+              "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats|api|hooks|mcp|objects)/" }
             },
             {
               "description": "The workflow to call and the ref it is read at, written apart.",
