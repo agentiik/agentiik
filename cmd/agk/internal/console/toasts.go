@@ -98,7 +98,8 @@ const (
 )
 
 // noticed takes GET /api/v1/me as read again: the first time, every notification it holds is
-// counted and none toasted; after it, each one not seen before is toasted.
+// counted and none toasted; after it, each one not seen before is toasted. The next read is the
+// chain's to ask for, and not this, since a dismissal reads /me too.
 func (m Model) noticed(me principal) (Model, []tea.Cmd) {
 	first := m.seen == nil
 	if first {
@@ -116,7 +117,7 @@ func (m Model) noticed(me principal) (Model, []tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
-	return m, append(cmds, m.tick(meEvery, func(time.Time) tea.Msg { return meAgain{} }))
+	return m, cmds
 }
 
 // toasted shows a toast and asks for it to go eight seconds later.
