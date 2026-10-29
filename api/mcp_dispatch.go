@@ -53,10 +53,23 @@ func (a *toolAnswer) WriteHeader(status int) {
 // answers what the route answered. The body is sent as JSON where there is one. Only the caller's
 // credential is carried, a bearer token, which is the one credential the MCP endpoint takes.
 func (m *MCP) dispatch(r *http.Request, tool, method, path string, query url.Values, body any) (*toolAnswer, error) {
+	a := &toolAnswer{header: http.Header{}}
+	if err := m.serveTo(a, r, tool, method, path, query, body); err != nil {
+		return nil, err
+	}
+	if a.status == 0 {
+		a.status = http.StatusOK
+	}
+	return a, nil
+}
+
+// serveTo is dispatch answering into w, for a tool that reads what the route writes as it is
+// written rather than once it is all held.
+func (m *MCP) serveTo(w http.ResponseWriter, r *http.Request, tool, method, path string, query url.Values, body any) error {
 	var payload bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&payload).Encode(body); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	target := path
@@ -66,7 +79,7 @@ func (m *MCP) dispatch(r *http.Request, tool, method, path string, query url.Val
 	ctx := audit.Through(r.Context(), tool)
 	req, err := http.NewRequestWithContext(ctx, method, target, &payload)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	req.Header.Set("Authorization", r.Header.Get("Authorization"))
 	if body != nil {
@@ -74,12 +87,99 @@ func (m *MCP) dispatch(r *http.Request, tool, method, path string, query url.Val
 	}
 	req.RemoteAddr = r.RemoteAddr
 	req.Host = r.Host
-	a := &toolAnswer{header: http.Header{}}
-	m.rt.ServeHTTP(a, req)
+	m.rt.ServeHTTP(w, req)
+	return nil
+}
+
+// tailAnswer is what the log stream route answers run.logs: its events read as they are written,
+// keeping the last lines asked for and nothing else, so that a log of any size is read in the room
+// of those lines. It flushes as a connection would, doing nothing, since the stream route sends
+// nothing past its headers to a writer that cannot, and run.logs then read every log as empty.
+// Anything but a stream, a refusal, is held whole as toolAnswer holds it.
+type tailAnswer struct {
+	toolAnswer
+	most int
+
+	streaming bool
+	partial   []byte
+	event     string
+
+	// ring holds the last lines read, most of them at most, the oldest at next once it is full.
+	ring []string
+	next int
+}
+
+// tailLineMost is the longest line of a stream tailAnswer reads, the longest a log line's event
+// is once written as JSON; a longer one is skipped rather than held.
+const tailLineMost = 4 << 20
+
+func (a *tailAnswer) WriteHeader(status int) {
+	a.toolAnswer.WriteHeader(status)
+	a.streaming = a.status == http.StatusOK && strings.HasPrefix(a.header.Get("Content-Type"), "text/event-stream")
+}
+
+func (a *tailAnswer) Write(b []byte) (int, error) {
 	if a.status == 0 {
-		a.status = http.StatusOK
+		a.WriteHeader(http.StatusOK)
 	}
-	return a, nil
+	if !a.streaming {
+		return a.toolAnswer.Write(b)
+	}
+	rest := b
+	for len(rest) > 0 {
+		i := bytes.IndexByte(rest, '\n')
+		if i < 0 {
+			if len(a.partial)+len(rest) <= tailLineMost {
+				a.partial = append(a.partial, rest...)
+			} else {
+				a.partial = a.partial[:0]
+			}
+			break
+		}
+		line := rest[:i]
+		if len(a.partial) > 0 {
+			line = append(a.partial, line...)
+			a.partial = a.partial[:0]
+		}
+		a.read(string(line))
+		rest = rest[i+1:]
+	}
+	return len(b), nil
+}
+
+// Flush is a connection's, which sends what was written: everything is read as it is written here.
+func (a *tailAnswer) Flush() {}
+
+// read takes one line of the stream: an event's kind, and a line's or a gap's data under it.
+func (a *tailAnswer) read(line string) {
+	switch {
+	case strings.HasPrefix(line, "event: "):
+		a.event = strings.TrimPrefix(line, "event: ")
+	case strings.HasPrefix(line, "data: ") && a.event == "line":
+		var l struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &l) == nil {
+			a.keep(l.Text)
+		}
+	case strings.HasPrefix(line, "data: ") && a.event == "gap":
+		a.keep("(lines written and not kept)")
+	}
+}
+
+// keep holds a line, in place of the oldest once most are held.
+func (a *tailAnswer) keep(text string) {
+	if len(a.ring) < a.most {
+		a.ring = append(a.ring, text)
+		return
+	}
+	a.ring[a.next] = text
+	a.next = (a.next + 1) % a.most
+}
+
+// tail is the lines held, oldest first.
+func (a *tailAnswer) tail() []string {
+	return append(append([]string{}, a.ring[a.next:]...), a.ring[:a.next]...)
 }
 
 // segment is a name as one segment of a path, escaped.

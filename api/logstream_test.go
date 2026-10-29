@@ -42,6 +42,10 @@ func (s *switchable) Allow(_ context.Context, who api.Principal, _ api.Permissio
 	return who == "alice" && !s.off.Load(), nil
 }
 
+// Owned says alice owns no namespace: run.logs, which mounting the user's server asks for, reads
+// none.
+func (s *switchable) Owned(context.Context, api.Principal) ([]string, error) { return nil, nil }
+
 func (s *switchable) identify(r *http.Request) (api.Identity, error) {
 	if s.revoked.Load() {
 		return api.Identity{}, nil
@@ -758,4 +762,58 @@ func TestAChunkThatCannotBeReadBackIsAGap(t *testing.T) {
 		t.Errorf("the gap of a chunk whose object is gone is %v", gap)
 	}
 	rd.expect(t, "dispatch_end", "")
+}
+
+// run.logs reads a step's log through the stream route, as every tool reads its route: every
+// dispatch's lines in order, the last of them where fewer are asked for, a gap said where it was,
+// and a step still running answered with what it has written so far within a couple of seconds.
+// Its answer had no Flush, so the stream sent nothing past its headers and every log read as empty.
+func TestRunLogsAnswersTheLinesAStepWrote(t *testing.T) {
+	s := withStreams(t, quiet)
+	if _, err := api.NewMCP(s.handler.(*api.Router), api.MCPOptions{PublicURL: "https://agentiik.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	first, firstGrant := s.dispatched(t, firstRow, 1, agk.Shard{}, 0, "failed")
+	s.ship(t, first, firstGrant, 1, 1, false, "one", "two")
+	s.ship(t, first, firstGrant, 2, 3, true, "three")
+	second, secondGrant := s.dispatched(t, secondRow, 2, agk.Shard{}, 0, "running")
+	s.ship(t, second, secondGrant, 1, 1, false, "again")
+
+	logs := func(arguments map[string]any) ([]string, string) {
+		t.Helper()
+		arguments["run"], arguments["step"] = string(streamRun), "render"
+		_, result, err := called(t, s.handler.(*api.Router), "alice", "tools/call", map[string]any{"name": "run.logs", "arguments": arguments})
+		if err != nil || result["isError"] == true {
+			t.Fatalf("run.logs answered %v %v", err, result)
+		}
+		structured, _ := result["structuredContent"].(map[string]any)
+		var lines []string
+		items, _ := structured["lines"].([]any)
+		for _, l := range items {
+			lines = append(lines, l.(string))
+		}
+		return lines, textOf(result)
+	}
+
+	began := time.Now()
+	if lines, text := logs(map[string]any{}); strings.Join(lines, "|") != "one|two|three|again" || text != "one\ntwo\nthree\nagain" {
+		t.Errorf("a step still running reads as %q: %q", lines, text)
+	}
+	if took := time.Since(began); took > 10*time.Second {
+		t.Errorf("reading a step still running took %s", took)
+	}
+	if lines, _ := logs(map[string]any{"lines": 2}); strings.Join(lines, "|") != "three|again" {
+		t.Errorf("the last two lines read as %q", lines)
+	}
+
+	// Over: the stream ends at once, with the dispatch's last lines.
+	s.ship(t, second, secondGrant, 2, 2, true, "done")
+	s.ended(t, "succeeded")
+	began = time.Now()
+	if lines, _ := logs(map[string]any{"lines": 3}); strings.Join(lines, "|") != "three|again|done" {
+		t.Errorf("a step that is over reads as %q", lines)
+	}
+	if took := time.Since(began); took > time.Second {
+		t.Errorf("reading a step that is over took %s, where its stream ends at once", took)
+	}
 }
