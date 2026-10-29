@@ -50,7 +50,8 @@ func status(ctx context.Context, e Env, args []string) int {
 
 	var raw json.RawMessage
 	if err := at.getJSON(ctx, "/api/v1/runs/"+url.PathEscape(run), &raw); err != nil {
-		fmt.Fprintf(e.Err, "%s\n", at.aboutRun(run, err))
+		// The refusal is the installation's sentence, written as agk console draws it.
+		fmt.Fprintf(e.screened(e.Err), "%s\n", at.aboutRun(run, err))
 		if errors.Is(err, errUnreachable) {
 			return exitNoOutcome
 		}
@@ -62,7 +63,7 @@ func status(ctx context.Context, e Env, args []string) int {
 			fmt.Fprintf(e.Err, "the installation's answer about run %s is not JSON: %s\n", run, err)
 			return exitNoOutcome
 		}
-		fmt.Fprintln(e.Out, indented.String())
+		fmt.Fprintln(e.Out, string(e.jsonShown(e.Out, indented.Bytes())))
 		return exitSucceeded
 	}
 	var d db.RunDetail
@@ -70,7 +71,10 @@ func status(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintf(e.Err, "the installation's answer about run %s could not be read: %s\n", run, err)
 		return exitNoOutcome
 	}
-	describe(e.Out, d, e.now(), *verbose)
+	// A run's reason, who started it and the runners it names are the installation's to say, and
+	// written by whoever pushed the workflow or whatever a brick read: on a terminal, as agk console
+	// draws them.
+	describe(e.screened(e.Out), d, e.now(), *verbose)
 	return exitSucceeded
 }
 

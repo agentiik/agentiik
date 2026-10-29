@@ -99,6 +99,49 @@ func TestAStatusInJSONIsTheAnswerAsGiven(t *testing.T) {
 	}
 }
 
+// On a terminal, a run is written as agk console draws text, its reason and who started it written
+// by whoever pushed the workflow; -o json writes the answer with every C1 control escaped, the same
+// document to whatever reads it; and a refusal's sentence is screened too. To a pipe, -o json is
+// the answer as it gave it, byte for byte.
+func TestAStatusOnATerminalIsWrittenAsTheConsoleDrawsIt(t *testing.T) {
+	d := runReading(agk.Cancelled, agk.VerdictPending)
+	d.StartedAt, d.FinishedAt = time.Time{}, runStart.Add(40*time.Millisecond)
+	d.Reason = "refused\r\x1b]0;pwned\a at creation\u009b2J"
+	d.TriggeredBy = "op\x1b[31m"
+	answer, _ := json.Marshal(d)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/runs/"+aRun {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"error":"not now\u001b]52;c;SGFja2Vk\u0007"}`))
+			return
+		}
+		w.Write(answer)
+	}))
+	t.Cleanup(srv.Close)
+
+	code, out, errs := onATerminal(t.Context(), t.TempDir(), srv.URL, "status", aRun)
+	if code != exitSucceeded || !strings.Contains(out, `cancelled: refused\r at creation\u009b2J`+"\n") || !strings.Contains(out, "manual by op at") || strings.ContainsAny(out, "\r\x1b\a\u009b") {
+		t.Errorf("agk status answered %d on a terminal, writing %q: %s", code, out, errs)
+	}
+	code, out, errs = onATerminal(t.Context(), t.TempDir(), srv.URL, "status", aRun, "-o", "json")
+	var got db.RunDetail
+	if code != exitSucceeded || json.Unmarshal([]byte(out), &got) != nil || got.Reason != d.Reason || strings.Contains(out, "\u009b") || !strings.Contains(out, `creation\u009b2J`) {
+		t.Errorf("agk status -o json answered %d on a terminal, writing %q: %s", code, out, errs)
+	}
+	if _, out, _ := against(t.Context(), t.TempDir(), srv.URL, "status", aRun, "-o", "json"); !strings.Contains(out, "creation\u009b2J") {
+		t.Errorf("agk status -o json to a pipe wrote %q", out)
+	}
+	code, _, errs = onATerminal(t.Context(), t.TempDir(), srv.URL, "status", "01M3RUNBBBBBBBBBBBBBBBBBBB")
+	if code != exitRefused || !strings.Contains(errs, "not now") || strings.ContainsAny(errs, "\x1b\a") {
+		t.Errorf("a refusal answered %d on a terminal: %q", code, errs)
+	}
+	// agk logs says a refusal before any stream opens the same way.
+	code, _, errs = onATerminal(t.Context(), t.TempDir(), srv.URL, "logs", "01M3RUNBBBBBBBBBBBBBBBBBBB")
+	if code != exitRefused || !strings.Contains(errs, "not now") || strings.ContainsAny(errs, "\x1b\a") {
+		t.Errorf("agk logs refused answered %d on a terminal: %q", code, errs)
+	}
+}
+
 // A run that is not there, or not the caller's, is refused as one.
 func TestAStatusOfARunNotThereIsRefused(t *testing.T) {
 	code, _, errs := askStatus(t, "", "01M3RUNBBBBBBBBBBBBBBBBBBB")

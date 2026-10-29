@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -124,9 +125,20 @@ func quickly(t *testing.T) {
 
 // against runs the command line in dir against the installation at url, and answers what it said.
 func against(ctx context.Context, dir, url string, args ...string) (int, string, string) {
+	return reached(ctx, dir, url, nil, args...)
+}
+
+// onATerminal is against with standard output and standard error a terminal.
+func onATerminal(ctx context.Context, dir, url string, args ...string) (int, string, string) {
+	return reached(ctx, dir, url, func(io.Writer) bool { return true }, args...)
+}
+
+// reached runs the command line in dir against the installation at url, its ends a terminal where
+// shows says so, and answers what it said.
+func reached(ctx context.Context, dir, url string, shows func(io.Writer) bool, args ...string) (int, string, string) {
 	out, errs := &strings.Builder{}, &strings.Builder{}
 	e := Env{
-		Out: out, Err: &serial{w: errs}, Dir: dir,
+		Out: out, Err: &serial{w: errs}, Dir: dir, Shows: shows,
 		Getenv: func(k string) string {
 			switch k {
 			case tokenVariable:
@@ -315,6 +327,43 @@ func TestARunRefusedAtCreationIsReportedWithItsReason(t *testing.T) {
 	}
 	if !strings.Contains(errs, "monthly-invoicing cancelled: "+refused.Reason) || strings.Contains(errs, "no step failed") {
 		t.Errorf("the report of a run refused at creation is:\n%s", errs)
+	}
+}
+
+// On a terminal, what the installation says is written as agk console draws it: a run's reason, a
+// refusal's sentence and the envelopes -o json writes, which a brick's data fills. To a pipe the
+// envelopes are the bytes encoded, for whatever reads them next.
+func TestARunOnATerminalIsWrittenAsTheConsoleDrawsIt(t *testing.T) {
+	dir := repository(t)
+	refused := runReading(agk.Cancelled, agk.VerdictPending)
+	refused.Reason = "alice no longer holds workflow:run\r\x1b]0;pwned\a here\u009b2J"
+	url := installationAt(t, &standIn{readings: []db.RunDetail{refused}})
+	code, _, errs := onATerminal(t.Context(), dir, url, "run", "--namespace", "finance")
+	if code != exitNotSucceeded || !strings.Contains(errs, `monthly-invoicing cancelled: alice no longer holds workflow:run\r here\u009b2J`) || strings.ContainsAny(errs, "\r\x1b\a\u009b") {
+		t.Errorf("a run refused at creation answered %d on a terminal:\n%q", code, errs)
+	}
+
+	url = installationAt(t, &standIn{start: http.StatusConflict, refusal: `{"error":"the namespace is full\u001b]52;c;SGFja2Vk\u0007"}`})
+	if code, _, errs := onATerminal(t.Context(), dir, url, "run", "--namespace", "finance"); code != exitRefused || !strings.Contains(errs, "the namespace is full") || strings.ContainsAny(errs, "\x1b\a") {
+		t.Errorf("a run refused at its start answered %d on a terminal:\n%q", code, errs)
+	}
+
+	envelope := `{"meta":{"run_id":"` + aRun + `","step":"normalize","port":"ok","attempt":1,"count":1,"produced_at":"2026-09-25T10:00:01Z"},"items":[{"id":"a","data":{"note":"clear\u009b2J"},"files":[]}]}`
+	s := &standIn{
+		readings: []db.RunDetail{runReading(agk.Succeeded, agk.VerdictSucceeded, aTask(agk.TaskSucceeded, new(0)))},
+		outputs:  map[string]string{"invoices": strings.Replace(envelope, `\u009b`, "\u009b", 1)},
+	}
+	url = installationAt(t, s)
+	code, out, errs := onATerminal(t.Context(), dir, url, "run", "--namespace", "finance", "-o", "json")
+	var written map[string]agk.Envelope
+	if code != exitSucceeded || json.Unmarshal([]byte(out), &written) != nil || strings.Contains(out, "\u009b") || !strings.Contains(out, `clear\u009b2J`) {
+		t.Fatalf("agk run -o json answered %d on a terminal, writing %q: %s", code, out, errs)
+	}
+	if got := written["invoices"].Items[0].Data["note"]; got != "clear\u009b2J" {
+		t.Errorf("the envelope written on a terminal reads %q", got)
+	}
+	if _, out, _ := against(t.Context(), dir, url, "run", "--namespace", "finance", "-o", "json"); !strings.Contains(out, "clear\u009b2J") {
+		t.Errorf("agk run -o json to a pipe wrote %q", out)
 	}
 }
 
