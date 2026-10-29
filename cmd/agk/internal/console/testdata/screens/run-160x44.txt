@@ -28,7 +28,7 @@ agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   
 │ ● succeeded dunning-reminders            41s ││ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c     │
 │             01JMZ8M5Z7Q3 · schedule · finan… ││   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5     │
 │ ● succeeded ledger-export             1m 03s ││                                                                                                              │
-│             01JMZ8K1V4R9 · webhook · financ… ││ The envelope could not be read: no such thing, or not yours                                                  │
+│             01JMZ8K1V4R9 · webhook · financ… ││ The envelope could not be read: not found, or not yours (404 no such thing, or not yours)                    │
 │ ● succeeded monthly-invoicing         4m 22s ││                                                                                                              │
 │             01JMZ8H8C0K6 · schedule · finan… ││                                                                                                              │
 │ ● timed_out vat-reconcile             9m 51s ││                                                                                                              │

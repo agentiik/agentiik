@@ -95,8 +95,11 @@ func (m Model) topLine(t theme) string {
 	if n := len(m.me.Notifications); n > 0 {
 		right = append([]part{{muted, counting(n, "notification") + "  "}}, right...)
 	}
-	if m.unanswered != "" {
-		right = []part{{failedText, "not answering, asked again: " + m.unanswered}}
+	switch {
+	case m.unaccepted:
+		right = []part{{failedText, m.unacceptedSaid()}}
+	case m.unanswered != "":
+		right = []part{{failedText, m.unanswered}}
 	}
 	brand := []part{{strong, "agentiik"}}
 	if room := m.width - widthOf(brand) - 2; widthOf(right) > room {
@@ -367,8 +370,8 @@ func (m Model) runsLines(t theme, height int) []string {
 		lines = append(lines, m.filterLine(t))
 	}
 	if !m.read {
-		if m.unanswered != "" {
-			return append(lines, t.line(false, m.width, part{failedText, "The runs could not be read: " + m.unanswered}))
+		if m.runsFailed != "" {
+			return append(lines, t.line(false, m.width, part{failedText, "The runs could not be read: " + m.runsFailed}))
 		}
 		return append(lines, t.line(false, m.width, part{quiet, "Reading the runs."}))
 	}

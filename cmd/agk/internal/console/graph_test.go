@@ -174,7 +174,7 @@ func TestAGraphOfAnotherVersionIsSaidSo(t *testing.T) {
 	in = &installation{}
 	in.run = aFailedRun()
 	m = press(t, opened(t, in, Options{Run: failedRun}, 160, 36), keyG)
-	if s := screen(m); !strings.Contains(s, "The graph could not be read: no route /api/v1/finance/workflows/monthly-invoicing?limit=1") {
+	if s := screen(m); !strings.Contains(s, "The graph could not be read: not found, or not yours (404 no route /api/v1/finance/workflows/monthly-invoicing?limit=1)") {
 		t.Errorf("a graph that cannot be read is not said:\n%s", s)
 	}
 }

@@ -215,6 +215,10 @@ type refused struct {
 
 func (r *refused) Error() string { return r.said }
 
+// Status is the status the installation refused with, which agk console decides the reason it
+// gives by, as statusOf does here, knowing nothing of this type.
+func (r *refused) Status() int { return r.status }
+
 // getJSON reads one answer into out.
 func (r remote) getJSON(ctx context.Context, path string, out any) error {
 	req, err := r.request(ctx, http.MethodGet, path, nil)

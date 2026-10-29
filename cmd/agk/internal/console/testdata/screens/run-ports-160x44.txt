@@ -11,7 +11,7 @@ agentiik  agentiik.example.com  every namespace  alice   1 Runs   2 Workflows   
 │ STATE       WORKFLOW                    TOOK ││ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c     │
 │ ⠋ running   monthly-invoicing         1m 48s ││   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5     │
 │             01JMZ8W4K2R7 · schedule · finan… ││                                                                                                              │
-│ ● failed    monthly-invoicing         1m 52s ││ The envelope could not be read: no such thing, or not yours                                                  │
+│ ● failed    monthly-invoicing         1m 52s ││ The envelope could not be read: not found, or not yours (404 no such thing, or not yours)                    │
 │             01JMZ8V1P9C4 · manual · alice ·… ││                                                                                                              │
 │ ● failed    dunning-reminders            22s ││                                                                                                              │
 │             01JMZ8T7B2M0 · schedule · finan… ││                                                                                                              │

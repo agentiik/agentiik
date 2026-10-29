@@ -87,6 +87,7 @@ func consoleVerb(ctx context.Context, e Env, args []string) int {
 		Now:          e.now,
 		Getenv:       e.getenv,
 		Theme:        theme,
+		Unaccepted:   at.refusedCredential(),
 	})
 	if err != nil {
 		fmt.Fprintf(e.Err, "the console stopped: %s\n", err)
