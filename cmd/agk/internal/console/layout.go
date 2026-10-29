@@ -242,7 +242,7 @@ func (m Model) foldedRuns() []part {
 	if running > 0 {
 		parts = append(parts, part{muted, " · "}, part{runningText, fmt.Sprintf("%d running", running)})
 	}
-	return append(parts, part{quiet, "   folded · tab"})
+	return append(parts, part{quiet, "   folded"})
 }
 
 // focused moves the focus by one, forward or back: the runs, then in a run its steps, its ports

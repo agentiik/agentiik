@@ -60,7 +60,7 @@ func TestThePanesAreLaidOutFromTheWindow(t *testing.T) {
 	stacked := paned(t, invoiceLogs(), 100, 30)
 	s = screen(stacked)
 	lines = strings.Split(s, "\n")
-	if !strings.HasPrefix(lines[1], "▸ Runs  3 runs · 1 failed · 1 running   folded · tab") || !strings.HasPrefix(lines[2], "╭─ Run ") {
+	if !strings.HasPrefix(lines[1], "▸ Runs  3 runs · 1 failed · 1 running   folded ") || !strings.HasPrefix(lines[2], "╭─ Run ") {
 		t.Errorf("under 120 columns the runs are not folded above the run:\n%s", s)
 	}
 	run, log := heightOf(stacked, runPane), heightOf(stacked, logPane)

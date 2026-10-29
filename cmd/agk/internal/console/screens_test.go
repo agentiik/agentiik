@@ -284,6 +284,39 @@ func TestEveryViewOnTheRecordedAnswers(t *testing.T) {
 	}
 }
 
+// No view explains the console, and every heading is in sentence case, as Voice has it for both
+// consoles: a column head was written in capitals, and a note, a hint or an aside said what a pane
+// was for or how a key worked, read once and skipped on every visit after.
+func TestNoViewExplainsTheConsole(t *testing.T) {
+	scenarios := map[string]scenario{"": loadScenario(t), "dana": loadScenario(t, "dana")}
+	explained := []string{
+		"STATE", "WORKFLOW", "TOOK", "STARTED", "LAST 20", "LATEST", "STEPS", "SHARD", "PORT ", "LOG ", "VERSIONS",
+		"PRINCIPAL", "POOL", "RUNNER",
+		"never the host it runs on", "· tab", "filter as you type", "the queries inside stay out of reach",
+		"then each deny taken away", "a deny is the only subtraction", "agk share and the web console change grants",
+		"a commit agentiik resolved", "Its tasks in flight", "with no run laid over it",
+	}
+	for _, v := range views {
+		for _, size := range [][2]int{{80, 24}, {160, 44}} {
+			m := onScenario(t, scenarios[v.of], v.o, size[0], size[1], noColour)
+			for range 2 {
+				// The graph full screen, as the screens kept are reached.
+				if strings.HasPrefix(v.name, "graph") && m.view != graphView {
+					m = press(t, m, keyG)
+				}
+			}
+			m = press(t, m, v.keys...)
+			s := screen(m)
+			m.unfollow()
+			for _, e := range explained {
+				if strings.Contains(s, e) {
+					t.Errorf("%s at %d by %d draws %q:\n%s", v.name, size[0], size[1], e, s)
+				}
+			}
+		}
+	}
+}
+
 // Where there is no terminal, the runs are the lines kept for them: one a run, newest first.
 func TestTheRunsAsPlainLinesOnTheRecordedAnswers(t *testing.T) {
 	s := loadScenario(t)

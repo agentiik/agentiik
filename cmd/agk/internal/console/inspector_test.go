@@ -57,7 +57,7 @@ func TestTheInspectorOpensOnWhereTheRunFailed(t *testing.T) {
 		"Run 01RUNBBBBBBBBBBBBBBBBBBBBB  finance/monthly-invoicing@a3f9c1e  ● failed",
 		"manual · by alice · started 11:50:00 · took 1m 52s",
 		"failed at invoice, shard 2/3: exit 108, transient failure, attempt 4",
-		"STEPS 3",
+		"Steps 3",
 		"● succeeded  normalize",
 		"● failed     invoice",
 		"3 shards · 1 failed",

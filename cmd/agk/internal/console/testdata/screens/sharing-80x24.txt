@@ -1,19 +1,15 @@
 agentiik  every namespace  alice   1 Runs   2 Workflows   1 notification  ● live
 Grants as written on alice                                     5 grants · 1 deny
-PRINCIPAL              ROLE OR DENY        SCOPE                      EXPIRES
+Principal              Role or deny        Scope                      Expires
 alice                  owner               alice                      never
 group:team-finance     viewer              alice                      never
 bruno                  editor              alice                      2026-12-31
 bruno                  deny secret:write   alice                      never
-and 1 more grant: ↑↓ moves over them
-A namespace grant reaches every workflow inside; a deny names one permission,
-never a role.
+alice/ci               operator            alice                      never
 
-read only: agk share and the web console change grants
+read only
 
 Resolved for alice (you)                     user · member of group:team-finance
-Every grant that applies, its own and its groups', at the namespace: their
-union, then each deny taken away.
 
 + workflow:read     alice: owner; alice: group:team-finance, viewer
 + workflow:run      alice: owner
@@ -21,4 +17,8 @@ union, then each deny taken away.
 + workflow:delete   alice: owner
 + run:read          alice: owner; alice: group:team-finance, viewer
 + run:read_data     alice: owner
++ secret:use        alice: owner
++ secret:write      alice: owner
++ grant:manage      alice: owner
+
 ↑↓ Grant   enter Resolve for…   s Scope   / Filter   : Commands   ? Every key

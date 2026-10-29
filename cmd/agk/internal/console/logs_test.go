@@ -108,7 +108,7 @@ func TestTheInspectorFollowsTheLogOfTheStepChosen(t *testing.T) {
 	logs := invoiceLogs()
 	m := followingLogs(t, &installation{}, logs, 100, 40)
 	s := screen(m)
-	for _, want := range []string{"LOG invoice  ● live", "invoice 2/3, attempt 4 | posting ORD-0002", "invoice 2/3, attempt 4 | the ledger answered 503"} {
+	for _, want := range []string{"Log invoice  ● live", "invoice 2/3, attempt 4 | posting ORD-0002", "invoice 2/3, attempt 4 | the ledger answered 503"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the inspector does not show %q:\n%s", want, s)
 		}
@@ -127,7 +127,7 @@ func TestTheInspectorFollowsTheLogOfTheStepChosen(t *testing.T) {
 	m = press(t, m, up)
 	logs.stopped(t, "invoice")
 	s = screen(m)
-	if !strings.Contains(s, "LOG normalize  read to its end") || !strings.Contains(s, "normalize | wrote 3 items to ok") || strings.Contains(s, "ORD-0002") {
+	if !strings.Contains(s, "Log normalize  read to its end") || !strings.Contains(s, "normalize | wrote 3 items to ok") || strings.Contains(s, "ORD-0002") {
 		t.Errorf("choosing normalize does not show its log alone:\n%s", s)
 	}
 	m = press(t, m, down, up)
@@ -150,11 +150,11 @@ func TestWhatIsSaidAboutALogIsDrawn(t *testing.T) {
 	}
 	m := followingLogs(t, &installation{}, logs, 100, 40)
 	s := screen(m)
-	if !strings.Contains(s, "has no such step, or is not there, or not yours") || strings.Contains(s, "LOG invoice  ● live") || strings.Contains(s, "read to its end") {
+	if !strings.Contains(s, "has no such step, or is not there, or not yours") || strings.Contains(s, "Log invoice  ● live") || strings.Contains(s, "read to its end") {
 		t.Errorf("a refused log is not said so:\n%s", s)
 	}
 	m = press(t, m, j)
-	if s := screen(m); !strings.Contains(s, "LOG archive  read to its end") || !strings.Contains(s, "This step wrote no log.") {
+	if s := screen(m); !strings.Contains(s, "Log archive  read to its end") || !strings.Contains(s, "This step wrote no log.") {
 		t.Errorf("a step that wrote nothing does not say so:\n%s", s)
 	}
 }
@@ -172,7 +172,7 @@ func TestTheLogTakesWhatTheRunLeaves(t *testing.T) {
 		m := followingLogs(t, &installation{}, logs, size[0], size[1])
 		s := screen(m)
 		lines := strings.Split(s, "\n")
-		if len(lines) != size[1] || !strings.Contains(s, "line 100") || strings.Contains(s, "line 001") || !strings.Contains(s, "LOG invoice") {
+		if len(lines) != size[1] || !strings.Contains(s, "line 100") || strings.Contains(s, "line 001") || !strings.Contains(s, "Log invoice") {
 			t.Errorf("at %dx%d the log's last lines are not shown under the run:\n%s", size[0], size[1], s)
 		}
 		if !strings.Contains(s, "failed at invoice") {
@@ -235,7 +235,7 @@ func TestLeavingTheRunStopsFollowingItsLog(t *testing.T) {
 	logs := invoiceLogs()
 	m := press(t, followingLogs(t, &installation{runs: someRuns()}, logs, 160, 40), esc)
 	logs.stopped(t, "invoice")
-	if m.follow != nil || strings.Contains(screen(m), "LOG") {
+	if m.follow != nil || strings.Contains(screen(m), "Log ") {
 		t.Errorf("the runs view still follows a log:\n%s", screen(m))
 	}
 }

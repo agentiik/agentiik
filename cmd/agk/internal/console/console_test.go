@@ -317,7 +317,7 @@ func TestTheRunsViewListsTheRunsWithTheFailedAbove(t *testing.T) {
 	if !strings.HasPrefix(inside(lines[2]), "Failed, 1 of the last 3") || !strings.HasPrefix(inside(lines[3]), "● failed    01RUNBBBBBBBBBBBBBBBBBBBBB") {
 		t.Errorf("the failed run is not lifted above the list:\n%s", s)
 	}
-	if !strings.HasPrefix(inside(lines[5]), "STATE       RUN") {
+	if !strings.HasPrefix(inside(lines[5]), "State       Run") {
 		t.Errorf("the list has no header where it starts:\n%s", s)
 	}
 	for _, w := range []string{"⠋ running   01RUNAAAAAAAAAAAAAAAAAAAAA finance/monthly-invoicing", "1m 52s", "● succeeded 01RUNCCCCCCCCCCCCCCCCCCCCC finance/nightly-export"} {

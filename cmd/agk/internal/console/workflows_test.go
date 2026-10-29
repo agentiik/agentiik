@@ -158,7 +158,7 @@ func TestAWorkflowsGraphIsDrawnWithNoRun(t *testing.T) {
 	in := &installation{runs: someRuns(), detail: monthlyInvoicing, stats: thirtyDays}
 	m := press(t, opened(t, in, Options{}, 160, 40), two, enter)
 	s := screen(m)
-	if m.view != graphView || !strings.Contains(s, "Graph finance/monthly-invoicing@a3f9c1e  the version the default branch's head resolves to") || !strings.Contains(s, "○ normalize") {
+	if m.view != graphView || !strings.Contains(s, "Graph finance/monthly-invoicing@a3f9c1e  the default branch's head") || !strings.Contains(s, "○ normalize") {
 		t.Fatalf("enter does not draw the workflow's graph with no run:\n%s", s)
 	}
 	if lastLine(m) != "↑↓ Step   ←→ Along an edge   g List   esc Workflows   q Quit   ? Every key" {

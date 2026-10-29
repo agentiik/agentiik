@@ -72,7 +72,7 @@ func TestTheSharingViewListsTheGrantsAsWrittenAndResolvesThem(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Grants as written on finance/monthly-invoicing", "7 grants · 3 from the namespace · 1 deny",
-		"PRINCIPAL", "ROLE OR DENY", "SCOPE", "EXPIRES",
+		"Principal", "Role or deny", "Scope", "Expires",
 		"group:team-finance     viewer              finance inherited",
 		"finance/deploy-bot     operator            finance inherited",
 		"alice                  editor              finance/monthly-invoicing",
@@ -81,7 +81,7 @@ func TestTheSharingViewListsTheGrantsAsWrittenAndResolvesThem(t *testing.T) {
 		"What each role carries",
 		"owner     ●       ●       ●       ●       ●       ●       ●",
 		"operator  ·       ●       ·       ·       ·       ·       ·",
-		"read only: agk share and the web console change grants",
+		"read only",
 		"Resolved for chloe (you)", "user",
 		"+ workflow:read     finance: owner",
 		"+ secret:write      finance: owner",
@@ -153,7 +153,6 @@ func TestAGroupsGrantsAreSaidToGiveToAMember(t *testing.T) {
 		"Resolved for erin",
 		"  workflow:read     to a member: finance: group:team-finance, viewer",
 		"− workflow:run      denied at finance/monthly-invoicing",
-		"Who is in a group is an administrator's to read",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the grants resolved for erin do not show %q:\n%s", want, s)
@@ -249,7 +248,7 @@ func TestSChoosesTheScope(t *testing.T) {
 func TestSharingSaysWhyNothingIsListedWithoutGrantManage(t *testing.T) {
 	in := sharedFinance(&principal{Principal: "alice", Permissions: map[string][]string{"finance": {"run:read"}}})
 	m := press(t, opened(t, in, Options{}, 100, 30), three)
-	if s := screen(m); m.view != sharingView || !strings.Contains(s, "you hold it nowhere") {
+	if s := screen(m); m.view != sharingView || !strings.Contains(s, "No scope whose grants you may list.") {
 		t.Errorf("a principal managing nothing sees:\n%s", s)
 	}
 	for _, path := range in.asked {

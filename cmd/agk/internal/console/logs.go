@@ -214,7 +214,7 @@ func (m Model) logLines(t theme, step string, height int) []string {
 	}
 	key := string(m.run.Run) + "/" + step
 	b := m.logs[key]
-	header := []part{{quiet, "LOG"}, {plain, " " + step}}
+	header := []part{{quiet, "Log"}, {plain, " " + step}}
 	switch {
 	case m.follow != nil && m.follow.key == key:
 		header = append(header, part{plain, "  "}, part{succeededText, "●"}, part{plain, " live"})

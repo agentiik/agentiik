@@ -263,7 +263,7 @@ func (m Model) runnersLines(t theme, height int) []string {
 	if len(m.pools) == 0 {
 		lines = append(lines, line(part{quiet, "No pool yet."}))
 	} else {
-		lines = append(lines, line(m.poolColumns(h("POOL"), h("LABELS"), h("ACCEPTS"), h("CEILINGS"), h("CONTAINMENT"), h("RUNNERS"), h("TAKES AT ONCE"))...))
+		lines = append(lines, line(m.poolColumns(h("Pool"), h("Labels"), h("Accepts"), h("Ceilings"), h("Containment"), h("Runners"), h("Takes at once"))...))
 		// A pool list longer than a third of the window is cut, its count still said above it,
 		// so that the runners keep the room they are opened for.
 		for _, pool := range m.pools[:min(len(m.pools), max(1, height/3))] {
@@ -279,7 +279,7 @@ func (m Model) runnersLines(t theme, height int) []string {
 	if len(m.fleet) == 0 {
 		return append(lines, line(part{quiet, "No runner has joined yet."}))
 	}
-	lines = append(lines, line(m.runnerColumns(h("RUNNER"), h("POOL"), h("LABELS"), h("STATE"), h("CONCURRENCY"), h("LAST HEARTBEAT"), h("AGENT"), h("DRAINED OR REVOKED"))...))
+	lines = append(lines, line(m.runnerColumns(h("Runner"), h("Pool"), h("Labels"), h("State"), h("Concurrency"), h("Last heartbeat"), h("Agent"), h("Drained or revoked"))...))
 
 	chosen := m.fleet[0]
 	at := 0
@@ -289,7 +289,6 @@ func (m Model) runnersLines(t theme, height int) []string {
 		}
 	}
 	detail := m.runnerDetail(chosen, now)
-	note := line(part{quiet, "A runner is its identifier, pool and labels here, never the host it runs on: GET /api/v1/runners names none."})
 	room := max(1, height-len(lines)-1-len(detail)-2)
 	first := min(max(0, at-room+1), max(0, len(m.fleet)-room))
 	for i := first; i < len(m.fleet) && i < first+room; i++ {
@@ -308,7 +307,7 @@ func (m Model) runnersLines(t theme, height int) []string {
 	for _, d := range detail {
 		lines = append(lines, line(d...))
 	}
-	return append(lines, line(), note)
+	return lines
 }
 
 // runnerDetail is what is said of the runner chosen beyond its row: what its condition does to
