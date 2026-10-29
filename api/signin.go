@@ -90,6 +90,9 @@ type SignInAPI struct {
 	// ceremony and the policy the API applies lets passwords in.
 	ipAddressed bool
 
+	// hsts is the Strict-Transport-Security the page is served with, hstsFor the public URL.
+	hsts string
+
 	pages  *template.Template
 	assets map[string]asset
 }
@@ -155,6 +158,7 @@ func NewSignIn(rt *Router, o SignInOptions) (*SignInAPI, error) {
 	s := &SignInAPI{
 		pool: o.Pool, sessions: o.Sessions, passwords: o.Passwords, now: o.Now,
 		ipAddressed: net.ParseIP(u.Hostname()) != nil,
+		hsts:        hstsFor(u),
 		pages:       pages, assets: assets,
 	}
 
@@ -254,7 +258,7 @@ func (s *SignInAPI) enrolPage(w http.ResponseWriter, r *http.Request, _ Principa
 func (s *SignInAPI) page(w http.ResponseWriter, status int, name string, data pageData) {
 	var b bytes.Buffer
 	h := w.Header()
-	pageHeaders(h)
+	pageHeaders(h, s.hsts)
 	if err := s.pages.ExecuteTemplate(&b, name, data); err != nil {
 		fail(w, http.StatusInternalServerError, "the page could not be written")
 		return
@@ -269,7 +273,7 @@ func (s *SignInAPI) page(w http.ResponseWriter, status int, name string, data pa
 // browser may keep and asks after again at every load, by its ETag.
 func (s *SignInAPI) asset(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
 	h := w.Header()
-	pageHeaders(h)
+	pageHeaders(h, s.hsts)
 	a, ok := s.assets[r.PathValue("name")]
 	if !ok {
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
@@ -282,12 +286,16 @@ func (s *SignInAPI) asset(w http.ResponseWriter, r *http.Request, _ Principal, _
 }
 
 // pageHeaders are what every answer of the page carries: its Content-Security-Policy; no Referer
-// sent from it, since the address of the sign-in page carries agk login's; and nosniff, so that a
-// file is only ever what its type says.
-func pageHeaders(h http.Header) {
+// sent from it, since the address of the sign-in page carries agk login's; nosniff, so that a file
+// is only ever what its type says; and hsts, where hstsFor gives one, since the page is where the
+// password is typed.
+func pageHeaders(h http.Header, hsts string) {
 	h.Set("Content-Security-Policy", pagePolicy)
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Content-Type-Options", "nosniff")
+	if hsts != "" {
+		h.Set("Strict-Transport-Security", hsts)
+	}
 }
 
 // passwordOffered says whether the page offers the password forms, to whoever opens it and to the
