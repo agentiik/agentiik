@@ -5,6 +5,7 @@
   import { includedPaths, resolve } from "../lib/editor/resolve";
   import { layout, type Graph } from "../lib/graph";
   import { explain, refused, Told, type Explained } from "../lib/problem";
+  import type { Place } from "../lib/place.svelte";
   import { lineDiff } from "../lib/tree";
   import { check, type Problem as FileProblem } from "../lib/workflow-check";
   import { Refused, YamlTree } from "../lib/yaml-tree";
@@ -27,6 +28,7 @@
   // would push it.
   let {
     api,
+    place,
     namespace,
     workflow,
     commit,
@@ -41,6 +43,8 @@
     oncommitted,
   }: {
     api: API;
+    // place is where the console is, which the editor asks before it leaves for another screen.
+    place: Place;
     namespace: string;
     workflow: string;
     // the version the file was opened at, which the commit follows, and null for an empty
@@ -234,6 +238,7 @@
         throw refusal(answer.response, answer.error);
       }
       committing = false;
+      free = true;
       oncommitted(onto, answer.data.commit);
     } catch (err) {
       commitProblem = explain(`commit to ${onto}`, err);
@@ -242,13 +247,55 @@
     }
   }
 
-  // Leaving with changes asks first, since nothing keeps them.
+  // Leaving with changes asks first, since nothing keeps them: closing the page, which the browser
+  // asks about; Stop editing, which turns red beside Keep; and another screen, by a link or by back,
+  // which the console holds until Keep or Leave is chosen. free is set once there is nothing to
+  // lose, the changes committed or discarded, so that the close or the move that follows is not
+  // asked about again.
+  let free = false;
+  let asking = $state<"" | "stop" | "leave">("");
+  let proceed: (() => void) | null = null;
   $effect(() => {
     if (changes === 0) return;
     const ask = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener("beforeunload", ask);
     return () => window.removeEventListener("beforeunload", ask);
   });
+  $effect(() => {
+    const guard = (go: () => void) => {
+      if (free || untrack(() => changes) === 0) return false;
+      proceed = go;
+      asking = "leave";
+      return true;
+    };
+    place.leaving = guard;
+    return () => {
+      if (place.leaving === guard) place.leaving = null;
+    };
+  });
+  // Every change undone while asking leaves nothing to ask about.
+  $effect(() => {
+    if (changes === 0 && untrack(() => asking) !== "") keep();
+  });
+  function stop() {
+    if (changes === 0) {
+      onclose();
+      return;
+    }
+    asking = "stop";
+  }
+  function keep() {
+    asking = "";
+    proceed = null;
+  }
+  function discard() {
+    free = true;
+    asking = "";
+    const go = proceed;
+    proceed = null;
+    if (go) go();
+    else onclose();
+  }
 </script>
 
 {#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
@@ -266,7 +313,15 @@
   <span class="right">
     <button class="control" disabled={changes === 0} onclick={download}><Icon name="control-download" size={14} />Download agentiik.yaml</button>
     <button class="control primary" disabled={changes === 0} onclick={() => { commitProblem = null; committing = true; }}>Commit</button>
-    <button class="control" onclick={onclose}>Stop editing</button>
+    {#if asking === "stop"}
+      <button class="control" onclick={keep}>Keep</button>
+      <button class="control danger" onclick={discard}>Stop editing</button>
+    {:else if asking === "leave"}
+      <button class="control" onclick={keep}>Keep</button>
+      <button class="control danger" onclick={discard}>Leave</button>
+    {:else}
+      <button class="control" onclick={stop}>Stop editing</button>
+    {/if}
   </span>
 </div>
 
