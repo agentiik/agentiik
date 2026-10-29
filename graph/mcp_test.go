@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 // published writes a workflow whose boundary a tool can be a view of, with the mcp block the
@@ -124,16 +125,40 @@ func TestASyncCallIsCappedAtTwoMinutes(t *testing.T) {
 }
 
 // TestATimeoutOnAnAsyncToolMeansNothing holds the bullet: an async call "returns the run
-// identifier at once", so there is nothing for a timeout to bound.
+// identifier at once", so there is nothing for a timeout to bound, whatever it says: 0s is a
+// timeout written, which the released schema refuses on an async tool as it refuses 60s.
 func TestATimeoutOnAnAsyncToolMeansNothing(t *testing.T) {
-	_, err := Parse([]byte(published(`  description: Reconcile a whole month.
+	for _, timeout := range []string{"60s", "0s", "0ms"} {
+		_, err := Parse([]byte(published(`  description: Reconcile a whole month.
   mode: async
-  timeout: 60s`)))
-	held(t, err, RuleMCPTimeoutOnAsyncTool)
+  timeout: ` + timeout)))
+		held(t, err, RuleMCPTimeoutOnAsyncTool)
+	}
 
 	if _, err := Parse([]byte(published(`  description: Reconcile a whole month.
   mode: async`))); err != nil {
 		t.Fatalf("an async tool with no timeout was refused: %v", err)
+	}
+}
+
+// TestASyncCallWaitsForSomething holds a sync tool's timeout to the grammar the released schema
+// writes it on, $defs/mcpTimeout, which counts from 1: a call that waits for nothing answers before
+// any run can end, and 0s was read as the ceiling, two minutes, the opposite of what it says. The
+// number is written as that grammar writes it, with no sign and no leading zero.
+func TestASyncCallWaitsForSomething(t *testing.T) {
+	for _, timeout := range []string{"0s", "0ms", "00m"} {
+		_, err := Parse([]byte(published(`  description: Issue one invoice.
+  timeout: ` + timeout)))
+		held(t, err, RuleMCPSyncTimeoutZero)
+	}
+	for _, timeout := range []string{"0120s", "060s", "+5s"} {
+		refused(t, published(`  description: Issue one invoice.
+  timeout: `+timeout))
+	}
+	wf := parsed(t, published(`  description: Issue one invoice.
+  timeout: 1ms`))
+	if time.Duration(wf.MCP.Timeout) != time.Millisecond || !wf.MCP.Timed {
+		t.Fatalf("a sync tool waiting 1ms was read as %+v", wf.MCP)
 	}
 }
 

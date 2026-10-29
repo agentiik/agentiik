@@ -335,3 +335,46 @@ func TestARefusalOfShapeIsPlacedByTheSchema(t *testing.T) {
 		})
 	}
 }
+
+// A timeout is refused where it is written, told with what was expected there and the topic that
+// covers it: on an async tool whatever it says, 0s included, and 0s on a sync one, each by its rule;
+// a number off the grammar the released schema writes it on, a sign in any duration or a leading
+// zero in a tool's, by the schema. Each was a file a server accepted and workflow.schema refused.
+func TestATimeoutOffItsGrammarIsRefusedWhereItIsWritten(t *testing.T) {
+	for _, c := range []struct {
+		name, block, step string
+		rule, pointer     string
+	}{
+		{"a timeout of nothing on an async tool", "  mode: async\n  timeout: 0s\n", "", "mcp-async-tool-with-timeout", "/mcp/timeout"},
+		{"a sync tool waiting for nothing", "  timeout: 0s\n", "", "mcp-sync-timeout-zero", "/mcp/timeout"},
+		{"a sync tool's timeout with a leading zero", "  timeout: 0120s\n", "", "schema", "/mcp/timeout"},
+		{"a sync tool's timeout with a sign", "  timeout: +5s\n", "", "schema", "/mcp/timeout"},
+		{"a step's timeout with a sign", "", "    timeout: +5m\n", "schema", "/steps/invoice/timeout"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree := aRepository()
+			doc := string(tree["agentiik.yaml"].Data)
+			doc = strings.Replace(doc, "steps:\n", "mcp:\n  description: Issue one invoice per order.\n"+c.block+"steps:\n", 1)
+			doc = strings.Replace(doc, "    outputs: [ok]\n", "    outputs: [ok]\n"+c.step, 1)
+			tree["agentiik.yaml"].Data = []byte(doc)
+			_, err := version.Check(t.Context(), tree, everything())
+			p, ok := version.Explain(err)
+			if !ok {
+				t.Fatalf("the refusal %v is not explained", err)
+			}
+			if p.Rule != c.rule || p.Pointer != c.pointer || p.File != "agentiik.yaml" || p.Line == 0 {
+				t.Errorf("the refusal is %+v, and it is %s at %s", p, c.rule, c.pointer)
+			}
+			if p.Expected == "" || p.Topic == "" || (c.block != "" && p.Topic != "mcp") {
+				t.Errorf("the refusal says it expected %q, under the topic %q", p.Expected, p.Topic)
+			}
+		})
+	}
+
+	// And a tool waiting what the grammar writes is the version it would be.
+	tree := aRepository()
+	tree["agentiik.yaml"].Data = []byte(strings.Replace(string(tree["agentiik.yaml"].Data), "steps:\n", "mcp:\n  description: Issue one invoice per order.\n  timeout: 30s\nsteps:\n", 1))
+	if _, err := version.Check(t.Context(), tree, everything()); err != nil {
+		t.Fatalf("a sync tool waiting 30s was refused: %v", err)
+	}
+}

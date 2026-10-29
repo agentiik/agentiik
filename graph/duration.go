@@ -34,14 +34,22 @@ var durationUnits = []struct {
 // A day is twenty-four hours here, which is what a retention of 90d and a run timeout of
 // 4h mean beside each other. No calendar is involved: the engine is measuring how long
 // something may take or stay, not what the date will be.
+//
+// The number is ASCII digits and nothing else, as the released schema writes a duration,
+// ^[0-9]+(ms|s|m|h|d)$, which takes leading zeros and no sign. strconv.ParseInt alone also
+// takes a sign, so +5m and -0s were durations to a server and invalid to workflow.schema and
+// to agk validate against it.
 func ParseDuration(s string) (Duration, error) {
 	for _, u := range durationUnits {
 		digits, ok := strings.CutSuffix(s, u.suffix)
 		if !ok || digits == "" {
 			continue
 		}
+		if strings.Trim(digits, "0123456789") != "" {
+			return 0, durationRefusal(s)
+		}
 		n, err := strconv.ParseInt(digits, 10, 64)
-		if err != nil || n < 0 {
+		if err != nil {
 			return 0, durationRefusal(s)
 		}
 		return Duration(time.Duration(n) * u.unit), nil
