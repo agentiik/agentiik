@@ -123,7 +123,6 @@
           <span class="term">min_passkeys</span>
           <input type="number" min="1" step="1" bind:value={minimum} required />
         </label>
-        {#if problem}<Problem explained={problem} />{/if}
         <div class="field">
           <span></span>
           <span class="buttons">
@@ -131,13 +130,15 @@
             <button class="control primary" class:danger={asking} disabled={working || !changed}>Save</button>
           </span>
         </div>
-        <!-- What goes is said under the buttons, so that Save stays where the first click found it. -->
+        <!-- What goes, and why Save was refused, are said under the buttons, so that Save stays where
+             the first click found it. -->
         {#if asking}
           <p class="takes" role="alert">
             {#if password === "forbidden" && stored.password === "allowed"}Every stored password and one-time code generator is deleted, and every account left with no passkey the policy accepts is suspended.{/if}
             {#if deviceBound && !stored.device_bound_only}Synced passkeys sign nobody in from the next request.{/if}
           </p>
         {/if}
+        {#if problem}<Problem explained={problem} />{/if}
       </form>
     {/if}
   </Pane>

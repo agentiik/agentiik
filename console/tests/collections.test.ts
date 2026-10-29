@@ -124,4 +124,15 @@ describe("a workflow's MCP tab", () => {
     await waitFor(() => expect(within(supportDesk).getByText("create_invoices")).toBeTruthy());
     expect(asked.find((a) => a.key.startsWith("PUT"))?.body).toEqual({});
   });
+
+  it("says why Add was refused at the foot of the screen, leaving the collections where they were", async () => {
+    open("/finance/workflows/monthly-invoicing/mcp", {
+      "PUT /api/v1/me/collections/01JR8T5Y7A9C1E3G5J7M9P1R3T/members/finance/monthly-invoicing": { status: 409, body: { error: "support_desk already offers a tool named create_invoices" } },
+    });
+    const yours = within(await screen.findByRole("region", { name: "Your collections" }));
+    await fireEvent.click(within((await yours.findByText("support_desk")).closest("tr")!).getByRole("button", { name: "Add" }));
+    expect(await screen.findByText("support_desk already offers a tool named create_invoices.")).toBeTruthy();
+    expect(screen.getByText("support_desk already offers a tool named create_invoices.").closest(".notice")).toBeTruthy();
+    expect(yours.queryByRole("alert")).toBeNull();
+  });
 });

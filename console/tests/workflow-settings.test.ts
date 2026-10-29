@@ -79,6 +79,7 @@ describe("a workflow's settings", () => {
     await fireEvent.click(within(form).getByRole("checkbox"));
     await fireEvent.submit(form);
     expect(await screen.findByText("Saved.")).toBeTruthy();
+    expect(screen.getByText("Saved.").closest(".notice")).toBeTruthy();
     expect(asked).toEqual([{ key: "PATCH /api/v1/alice/workflows/report", body: { protected: true } }]);
   });
 
@@ -90,6 +91,9 @@ describe("a workflow's settings", () => {
     await fireEvent.input(within(form).getByRole("textbox"), { target: { value: "release" } });
     await fireEvent.submit(form);
     expect(await screen.findByText(/^the repository holds no branch release\.$/)).toBeTruthy();
+    // Under Save, which stays where it was.
+    const save = within(form).getByRole("button", { name: "Save" });
+    expect(save.compareDocumentPosition(within(form).getByRole("alert")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("move the workflow to another namespace its caller owns, and link to it there", async () => {

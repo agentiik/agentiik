@@ -1,5 +1,6 @@
 <script lang="ts">
   import { explain, type Explained } from "../lib/problem";
+  import Notice from "./Notice.svelte";
   import Problem from "./Problem.svelte";
   import { refusal, type API } from "../api/client";
   import type { components } from "../api/schema";
@@ -81,12 +82,13 @@
         <span class="label">Protection</span>
         <label class="check"><input type="checkbox" bind:checked={guarded} />Protected</label>
       </div>
-      {#if problem}<Problem explained={problem} />{/if}
-      {#if said}<p class="said" role="status">{said}</p>{/if}
       <div class="field">
         <span></span>
         <span><button class="control primary" disabled={working || !changed}>Save</button></span>
       </div>
+      <!-- What Save did is said under it, never above, where it would push Save down the page. -->
+      {#if problem}<Problem explained={problem} />{/if}
+      {#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
     </form>
   {/if}
 </Pane>
@@ -123,10 +125,6 @@
     background: var(--raised);
     color: var(--text);
     font-size: var(--type-control-size);
-  }
-
-  .said {
-    margin: 0;
   }
 
   @media (max-width: 759px) {

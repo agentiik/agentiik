@@ -63,3 +63,36 @@ describe("a confirmation", () => {
     expect(found).toEqual([]);
   });
 });
+
+// What an act answers is never drawn above the button that asked for it, where it would push the
+// button down under the pointer: a form's refusal is drawn under its buttons, a dialog's under its
+// form, and what an act did is said at the foot of the screen.
+describe("an act's answer", () => {
+  // regions answers each stretch of a component from an opening tag to its closing one.
+  const regions = (source: string, open: string, close: string) => {
+    const out: { line: number; text: string }[] = [];
+    for (let at = source.indexOf(open); at !== -1; at = source.indexOf(open, at + 1)) {
+      const end = source.indexOf(close, at);
+      if (end !== -1) out.push({ line: source.slice(0, at).split("\n").length, text: source.slice(at, end) });
+    }
+    return out;
+  };
+
+  it("is drawn under the button of the form or the dialog it answers", () => {
+    const found = Object.entries(sources).flatMap(([file, source]) => {
+      const where = file.replace("../src/", "");
+      const forms = regions(source, "<form", "</form>").flatMap((r) => {
+        const last = r.text.lastIndexOf("<button");
+        const above = [r.text.indexOf("<Problem"), r.text.indexOf('role="status"')].filter((i) => i !== -1 && i < last);
+        return above.length ? [`${where}:${r.line} form`] : [];
+      });
+      const dialogs = regions(source, "<Dialog", "</Dialog>").flatMap((r) => {
+        const form = r.text.indexOf("<form");
+        const problem = r.text.indexOf("<Problem");
+        return form !== -1 && problem !== -1 && problem < form ? [`${where}:${r.line} dialog`] : [];
+      });
+      return [...forms, ...dialogs];
+    });
+    expect(found).toEqual([]);
+  });
+});

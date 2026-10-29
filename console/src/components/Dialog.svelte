@@ -137,4 +137,10 @@
   .body {
     padding: var(--padding-panel);
   }
+
+  /* A refusal is drawn under the form it refuses, so that the button clicked stays where it was, and
+     is set apart from it. */
+  .body > :global(.problem:not(:first-child)) {
+    margin-top: calc(var(--unit) * 6);
+  }
 </style>

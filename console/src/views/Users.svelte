@@ -294,7 +294,6 @@
 </Dialog>
 
 <Dialog title="Add a user" bind:open={adding}>
-  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={add} aria-label="Add a user">
     <label>
       <span>Login</span>
@@ -317,11 +316,11 @@
     <label class="check"><input type="checkbox" bind:checked={admin} />An administrator of the installation</label>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Add the user</button></p>
   </form>
+  {#if problem}<Problem explained={problem} />{/if}
 </Dialog>
 
 <Dialog title="Email address" open={addressing !== null} onclose={() => (addressing = null)}>
   {#if addressing}
-    {#if problem}<Problem explained={problem} />{/if}
     <form onsubmit={give} aria-label="Email address">
       <p class="term">{addressing.login}</p>
       <label>
@@ -330,6 +329,7 @@
       </label>
       <p><button class="control primary" disabled={working}>Save</button></p>
     </form>
+    {#if problem}<Problem explained={problem} />{/if}
   {/if}
 </Dialog>
 

@@ -39,7 +39,6 @@
   }
 </script>
 
-{#if problem}<Problem explained={problem} />{/if}
 <form onsubmit={create} aria-label="New pool">
   <label>
     <span>Name</span>
@@ -69,6 +68,7 @@
   </fieldset>
   <p class="buttons"><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create</button></p>
 </form>
+{#if problem}<Problem explained={problem} />{/if}
 
 <style>
   form {

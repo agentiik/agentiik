@@ -201,21 +201,21 @@
 </Pane>
 
 <Dialog title="New collection" bind:open={making}>
-  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={make} aria-label="New collection">
     <label><span>Name</span><input class="term" bind:value={name} required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" maxlength="255" autocomplete="off" placeholder="back-office" /></label>
     <label><span>Description</span><input bind:value={description} maxlength="280" autocomplete="off" /></label>
     <p><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Make it</button></p>
   </form>
+  {#if problem}<Problem explained={problem} />{/if}
 </Dialog>
 
 <Dialog title="Edit the collection" open={editing !== null} onclose={() => (editing = null)}>
-  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={save} aria-label="Edit the collection">
     <label><span>Name</span><input class="term" bind:value={newName} required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" maxlength="255" autocomplete="off" /></label>
     <label><span>Description</span><input bind:value={newDescription} maxlength="280" autocomplete="off" /></label>
     <p><button class="control primary" disabled={working}>Save</button></p>
   </form>
+  {#if problem}<Problem explained={problem} />{/if}
 </Dialog>
 
 <style>

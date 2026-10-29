@@ -1,6 +1,7 @@
 <script lang="ts">
   import { explain, refused as refusedHere, type Explained } from "../lib/problem";
   import Problem from "../components/Problem.svelte";
+  import Notice from "../components/Notice.svelte";
   import PageHeader from "../components/PageHeader.svelte";
   import { untrack } from "svelte";
   import type { API, Me } from "../api/client";
@@ -121,8 +122,9 @@
     link.click();
   }
 
-  // What was last asked of the run, and why it was refused where it was. Cancelling asks once more
-  // before it is sent, since it stops the tasks in flight.
+  // What was last asked of the run, and why it was refused where it was, both said at the foot of the
+  // screen rather than in the pane, which they would push down under the pointer. Cancelling asks
+  // once more before it is sent, since it stops the tasks in flight.
   let confirming = $state(false);
   let acting = $state(false);
   let said = $state("");
@@ -237,6 +239,9 @@
   });
 </script>
 
+{#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}
+{#if said}{#key said}<Notice ondismiss={() => (said = "")}>{said}</Notice>{/key}{/if}
+
 <PageHeader title={id} icon="control-runs" code {place}>
   {#snippet subtitle()}
     {#if run && here}
@@ -286,10 +291,6 @@
           </div>
         {/if}
       </div>
-      {#if mayRun || reader.ended}
-        {#if said}<p class="muted" role="status">{said}</p>{/if}
-        {#if problem}<Problem explained={problem} />{/if}
-      {/if}
       {#if run.reason}<p class="reason">{run.reason}</p>{/if}
       {#if run.replay_of}
         <p class="muted">Replays <span class="code">{run.replay_of}</span>{#if run.replay_from}&nbsp;from <span class="term">{run.replay_from}</span>{/if}.</p>

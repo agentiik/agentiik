@@ -41,7 +41,6 @@
 </script>
 
 <Dialog title="New namespace" bind:open>
-  {#if problem}<Problem explained={problem} />{/if}
   <form onsubmit={create} aria-label="New namespace">
     <label>
       <span>Name</span>
@@ -49,6 +48,7 @@
     </label>
     <span class="buttons"><button class="control primary" disabled={working}><Icon name="control-add" size={14} />Create</button></span>
   </form>
+  {#if problem}<Problem explained={problem} />{/if}
 </Dialog>
 
 <style>
