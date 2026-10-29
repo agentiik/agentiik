@@ -13,8 +13,10 @@
   // workflow's inputs, each with its schema as it stands, and its outputSchema the schema of the
   // output it returns, where that output carries one. Read off the version's own mcp block, which
   // a push held together. Beside it, the caller's collections, those holding the workflow named
-  // with what it offers there, and adding it to another a click away, which the API judges.
-  let { api, graph, namespace, workflow }: { api: API; graph: Graph; namespace: string; workflow: string } = $props();
+  // with what it offers there, and adding it to another a click away, which the API judges. Adding
+  // it is workflow:run's, since a member is a workflow its collection's owner may run, and Add is
+  // left out where adds is false rather than answered as a workflow that does not exist.
+  let { api, graph, namespace, workflow, adds }: { api: API; graph: Graph; namespace: string; workflow: string; adds: boolean } = $props();
 
   const tool = $derived(toolOf(graph, workflow));
   const named = $derived(`${namespace}/${workflow}`);
@@ -95,7 +97,7 @@
             <td class="term">{c.name}</td>
             <td class:term={!!member?.tool} class:muted={!member?.tool}>{member ? offered(member) : ""}</td>
             <td class="end">
-              {#if !member}<button class="control" disabled={adding !== ""} onclick={() => add(c)}>Add</button>{/if}
+              {#if !member && adds}<button class="control" disabled={adding !== ""} onclick={() => add(c)}>Add</button>{/if}
             </td>
           </tr>
         {:else}
