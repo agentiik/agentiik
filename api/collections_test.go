@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -993,6 +994,125 @@ func (c *collected) succeeding() <-chan agk.Envelope {
 		}
 	}()
 	return stored
+}
+
+// joined is a runner of the pool dmz, joined to the installation with the runner routes beside the
+// rest, by its identifier and its credential, so that a task's log is shipped as a runner ships it.
+func (c *collected) joined() (runner, credential string) {
+	c.t.Helper()
+	signed, err := artifact.NewSigned(c.objects, artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
+	})
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	if _, err := api.NewRunners(c.rt, api.RunnerOptions{Pool: c.pool, Objects: c.objects, URLs: signed}); err != nil {
+		c.t.Fatal(err)
+	}
+	var token db.JoinToken
+	if err := c.pool.Installation(c.t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+		if err := w.CreateRunnerPool(ctx, db.RunnerPool{Name: "dmz", Labels: []string{"zone=dmz"}, CreatedBy: "admin"}); err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		var err error
+		token, err = w.IssueJoinToken(ctx, "dmz", nil, "admin", now, now.Add(time.Hour))
+		return err
+	}); err != nil {
+		c.t.Fatal(err)
+	}
+	w, answer := call(c.t, c.rt, "POST", "/api/v1/runners", "", aMachine(token.Clear))
+	if w.Code != http.StatusCreated {
+		c.t.Fatalf("joining answered %d: %s", w.Code, w.Body)
+	}
+	return answer["runner"].(string), answer["credential"].(string)
+}
+
+// "The run fails: a tool execution error, isError: true, naming the failing step, its exit code and
+// its message", so that a model can correct itself. The message is the end of the log of the task
+// the step failed by, read as run.logs reads it, through the log stream route as the caller: masked
+// as its runner masked it before shipping it, of that task's dispatch and no other's, and its last
+// lines alone, about 2 KiB of them.
+func TestAFailedRunIsToldWithTheEndOfTheLogItFailedBy(t *testing.T) {
+	c := servingCollections(t)
+	runner, credential := c.joined()
+	id := c.made("alice", "back-office")
+	c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", map[string]any{})
+
+	// The run's first attempt at archive fails by its own lines, and its second by many long ones,
+	// the last of them what the brick said on giving up.
+	long := strings.Repeat("x", 100)
+	var second []string
+	for i := range 60 {
+		second = append(second, fmt.Sprintf("line %02d %s", i, long))
+	}
+	second = append(second, "the key was [masked]", "refused: order ORD-0001 names no customer")
+	super := dbtest.Superuser(t, c.super)
+	failed := make(chan error, 1)
+	go func() {
+		ctx := context.Background()
+		for range 40 {
+			time.Sleep(50 * time.Millisecond)
+			var run, commit string
+			if err := super.QueryRow(ctx, `select id, commit from runs where trigger = 'mcp' and state = 'queued'`).Scan(&run, &commit); err != nil {
+				continue
+			}
+			for attempt, task := range []struct {
+				row   string
+				code  int
+				lines []string
+			}{
+				{"01M3B00000000000000000000A", 3, []string{"first attempt, its own words"}},
+				{"01M3B00000000000000000000B", 7, second},
+			} {
+				key := agk.NewTaskID(agk.RunID(run), "archive", attempt+1, agk.Shard{})
+				if _, err := super.Exec(ctx, `insert into tasks (namespace, id, run_id, step, attempt, state, runner, exit_code)
+					values ('finance', $1, $2, 'archive', $3, 'failed', $4, $5)`, task.row, run, attempt+1, runner, task.code); err != nil {
+					failed <- err
+					return
+				}
+				var granted db.Granted
+				if err := c.pool.Installation(ctx, db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
+					var err error
+					granted, err = w.IssueGrant(ctx, "finance", key, task.row, db.GrantScope{Run: agk.RunID(run), Step: "archive", Workflow: "monthly-invoicing", Commit: commit}, time.Now().UTC().Add(time.Hour))
+					return err
+				}); err != nil {
+					failed <- err
+					return
+				}
+				chunk := api.LogShipment{IdempotencyKey: key, Seq: 1, FirstLine: 1, Final: true}
+				for _, text := range task.lines {
+					chunk.Lines = append(chunk.Lines, api.LogLine{At: time.Now().UTC(), Text: text})
+				}
+				if w, _ := shipped(t, c.rt, credential, granted.Clear, chunk); w.Code != http.StatusOK {
+					failed <- fmt.Errorf("the log of %s was answered %d: %s", key, w.Code, w.Body)
+					return
+				}
+			}
+			_, err := super.Exec(ctx, `with ended as (update runs set state = 'failed', started_at = now(), finished_at = now() where id = $1 returning namespace, id)
+				update steps set state = 'failed' from ended where steps.namespace = ended.namespace and steps.run_id = ended.id and steps.step = 'archive'`, run)
+			failed <- err
+			return
+		}
+		failed <- errors.New("no run was started to fail")
+	}()
+	status, result, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/call", map[string]any{
+		"name": "create_invoices", "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
+	})
+	if err := <-failed; err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK || refusal != nil || result["isError"] != true {
+		t.Fatalf("the call was answered %d %v %v", status, refusal, result)
+	}
+	text := textOf(result)
+	said, message, _ := strings.Cut(text, "Its log ends:\n")
+	if !strings.Contains(said, "Step archive failed with exit code 7") || !strings.HasSuffix(message, "the key was [masked]\nrefused: order ORD-0001 names no customer") {
+		t.Errorf("a failed run was answered %q", text)
+	}
+	if strings.Contains(text, "first attempt") || strings.Contains(text, "line 00 ") || len(message) > 2<<10 || len(message) < 1<<10 || !strings.HasPrefix(message, "line ") {
+		t.Errorf("the message is %d bytes of the log, from %.40q: %q", len(message), message, text)
+	}
 }
 
 // "Only an explicit deny removes, and it wins over any allow at any scope." A sync call returns the
