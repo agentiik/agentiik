@@ -57,6 +57,39 @@ describe("a namespace's runs", () => {
     expect(list.runs.map((r) => r.run)).toEqual(all.runs.slice(0, 4).map((r) => r.run));
   });
 
+  it("are read again back to the oldest shown when they change, however many were loaded", async () => {
+    // An installation holding 600 runs, one a minute, answering GET /api/v1/runs as the API does:
+    // newest first, since and until included, at most limit of them and at most 500.
+    const minute = 60_000;
+    const made = (i: number) => ({ run: `run-${String(i).padStart(4, "0")}`, created_at: new Date(Date.parse("2026-09-30T06:00:00Z") - i * minute).toISOString() });
+    let held = Array.from({ length: 600 }, (_, i) => made(i));
+    const asked: string[] = [];
+    const fetcher: typeof fetch = async (input) => {
+      const q = new URL((input as Request).url).searchParams;
+      asked.push(q.toString());
+      const since = q.get("since");
+      const until = q.get("until");
+      const limit = Math.min(500, Number(q.get("limit") ?? 50));
+      const runs = held.filter((r) => (!since || r.created_at >= since) && (!until || r.created_at <= until)).slice(0, limit);
+      return new Response(JSON.stringify({ runs }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    const list = new RunList(connect("http://stand-in/", fetcher), "finance", { span: "all" }, now);
+    await list.read();
+    while (list.runs.length < 550) await list.more();
+    expect(list.runs).toHaveLength(550);
+    const oldest = list.runs.at(-1)!.run;
+    // Two runs are made, and the live connection says so.
+    held = [{ run: "run-new-2", created_at: "2026-09-30T06:02:00.000Z" }, { run: "run-new-1", created_at: "2026-09-30T06:01:00.000Z" }, ...held];
+    asked.length = 0;
+    await list.read();
+    expect(list.runs).toHaveLength(552);
+    expect(list.runs.slice(0, 2).map((r) => r.run)).toEqual(["run-new-2", "run-new-1"]);
+    expect(list.runs.at(-1)!.run).toBe(oldest);
+    expect(new Set(list.runs.map((r) => r.run)).size).toBe(552);
+    expect(asked.every((q) => new URLSearchParams(q).get("since") === made(549).created_at)).toBe(true);
+    expect(list.exhausted).toBe(false);
+  });
+
   it("say why where the API refused them", async () => {
     const list = new RunList(connect("http://stand-in/", answering({ "GET /api/v1/runs": { status: 400, body: { error: "\"x\" is not a run state" } } })), "finance", { span: "all" }, now);
     await list.read();

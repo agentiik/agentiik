@@ -58,9 +58,10 @@ export function queryOf(filters: Filters): URLSearchParams {
 }
 
 // A first page, then pages of 25 as the reader asks for them, as the documentation writes it: "page
-// it with Load 25 more".
+// it with Load 25 more". pageMost is the most runs GET /api/v1/runs answers at once.
 export const firstPage = 50;
 export const nextPage = 25;
+export const pageMost = 500;
 
 export class RunList {
   runs = $state<Run[]>([]);
@@ -84,9 +85,12 @@ export class RunList {
     this.#now = now;
   }
 
-  #query(limit: number, until?: string) {
+  // #query narrows a page to the filters, and to the runs created at from or after it where from is
+  // given and later than where the filters reach back to.
+  #query(limit: number, until?: string, from?: string) {
     const span = spans[this.#filters.span].ms;
-    const since = this.#filters.since ?? (span === undefined ? undefined : new Date(this.#now() - span).toISOString());
+    let since = this.#filters.since ?? (span === undefined ? undefined : new Date(this.#now() - span).toISOString());
+    if (from !== undefined && (since === undefined || Date.parse(from) > Date.parse(since))) since = from;
     return {
       namespace: this.#namespace,
       workflow: this.#filters.workflow,
@@ -97,8 +101,8 @@ export class RunList {
     };
   }
 
-  async #page(limit: number, until?: string): Promise<Run[] | undefined> {
-    const { data, error, response } = await this.#api.GET("/api/v1/runs", { params: { query: this.#query(limit, until) } });
+  async #page(limit: number, until?: string, from?: string): Promise<Run[] | undefined> {
+    const { data, error, response } = await this.#api.GET("/api/v1/runs", { params: { query: this.#query(limit, until, from) } });
     if (!data) {
       this.refused = explain("load the runs", refusal(response, error));
       return undefined;
@@ -107,19 +111,46 @@ export class RunList {
     return data.runs;
   }
 
-  // read reads the first page, or again as many as are shown, so that a live list keeps its length.
+  // read reads the first page, and reads it again while a page or less is shown. A list loaded
+  // further is read again back to the oldest run shown, by when it was created rather than by a
+  // count, so that a live list keeps what its reader loaded: a count is at most a page of 500, and a
+  // list loaded past it would lose its oldest rows at the next change. A list holding every run its
+  // filters reach is read again whole, so that a run that came to match them is shown wherever it
+  // falls.
   async read(): Promise<void> {
     this.reading = true;
     try {
-      const limit = Math.min(500, Math.max(firstPage, this.runs.length));
-      const runs = await this.#page(limit);
-      if (runs) {
-        this.runs = runs;
-        this.exhausted = runs.length < limit;
+      if (this.runs.length <= firstPage) {
+        const runs = await this.#page(firstPage);
+        if (runs) {
+          this.runs = runs;
+          this.exhausted = runs.length < firstPage;
+        }
+      } else {
+        const runs = await this.#back(this.exhausted ? undefined : this.runs.at(-1)!.created_at);
+        if (runs) this.runs = runs;
       }
     } finally {
       this.reading = false;
       this.settled = true;
+    }
+  }
+
+  // #back reads every run from the newest down to from, which is included, or to where the filters
+  // reach back to, a page of the most the API answers at a time: each page from the oldest the one
+  // before held, which until includes, less the runs already read at that very instant.
+  async #back(from: string | undefined): Promise<Run[] | undefined> {
+    const runs: Run[] = [];
+    const read = new Set<string>();
+    let until: string | undefined;
+    for (;;) {
+      const page = await this.#page(pageMost, until, from);
+      if (!page) return undefined;
+      const fresh = page.filter((r) => !read.has(r.run));
+      for (const r of fresh) read.add(r.run);
+      runs.push(...fresh);
+      if (page.length < pageMost || fresh.length === 0) return runs;
+      until = page.at(-1)!.created_at;
     }
   }
 
