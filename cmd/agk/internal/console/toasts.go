@@ -149,8 +149,9 @@ func (m Model) gone(id string) Model {
 	return m
 }
 
-// withToasts lays the toasts over the screen, in its lower right corner above the key line, the
-// newest lowest, each in a rounded frame no wider than half the window.
+// withToasts lays the toasts over the screen, in its lower right corner above the key line, and
+// above a prompt while one is open, the newest lowest, each in a rounded frame no wider than half
+// the window.
 func (m Model) withToasts(t theme, screen string) string {
 	if len(m.toasts) == 0 {
 		return screen
@@ -163,6 +164,11 @@ func (m Model) withToasts(t theme, screen string) string {
 	}
 	layers := []*lipgloss.Layer{lipgloss.NewLayer(screen)}
 	bottom := m.height - 1
+	if m.asking != notAsking {
+		// The prompt is the row above the keys, and a toast over it would hide the run it names
+		// while the y that answers it is still to be pressed.
+		bottom--
+	}
 	for i := len(m.toasts) - 1; i >= 0 && bottom > 1; i-- {
 		// A toast is wrapped into its frame by Lip Gloss rather than drawn by theme.line, and says
 		// what a notification's fields and a run's name hold, so it is made safe to draw here.

@@ -59,6 +59,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk console` takes no key but `q` and `ctrl+c` in a window under 80 by 24, where it draws nothing but the size it needs, and answers no to a prompt the window shrinks out of sight: every key still reached the view behind, so that `c` then `y` cancelled a run whose prompt never showed.
 - `agk console` wraps a log line wider than its pane onto the rows after it, every column kept, where it cut the line at the edge with no way to read the rest, which was often the refusal a failed step ended on; the log scrolls back a row at a time and says how many rows back it is. Only the lines the rows shown need are wrapped, so that a frame costs what it draws rather than the 2000 lines kept.
 - `agk console` draws whether the installation answers whole on its top line, leaving out the installation and then the tabs from the last, each whole, before it cuts anything else: at 80 columns an administrator's fourth tab took the state off the line, and anybody else's was cut to `not answer…` without its reason. The head of the graph view, and of a run's pane beside its log, cut what names the run before its state, which read `● fail…`.
+- `agk console` stacks a toast that arrives while a prompt is open above the prompt rather than over it, so that the question is read whole before its `y` is pressed: the lowest toast's frame took the prompt's row for up to eight seconds, hiding the workflow a cancel names and the step a replay starts from.
 
 ### MCP
 
