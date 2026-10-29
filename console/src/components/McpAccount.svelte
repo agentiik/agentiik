@@ -8,6 +8,7 @@
   import Pane from "./Pane.svelte";
   import Notice from "./Notice.svelte";
   import Dialog from "./Dialog.svelte";
+  import { declaredIn } from "../lib/origin";
 
   // What the caller gives an MCP client: the user's server, one address for every principal, each
   // answered as themselves; and their collections, the connectors they assemble from the workflows
@@ -16,7 +17,7 @@
   // member offering nothing says why. Workflows are added from a workflow's MCP tab.
   let { api, place }: { api: API; place: Place } = $props();
 
-  const server = $derived(serverAddress(place.baseURI));
+  const server = $derived(serverAddress(place.baseURI, declaredIn(document)));
   const served = mcpServed(document);
 
   let collections = $state<Collection[] | null>(null);

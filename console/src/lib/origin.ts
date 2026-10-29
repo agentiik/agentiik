@@ -33,5 +33,10 @@ export function elsewhere(opened: Opened): string | null {
 
 // openedIn reads where the console was opened from the browser's document.
 export function openedIn(doc: Document, location: Location): Opened {
-  return { href: location.href, origin: location.origin, declared: doc.querySelector('meta[name="agentiik-origin"]')?.getAttribute("content") ?? null };
+  return { href: location.href, origin: location.origin, declared: declaredIn(doc) };
+}
+
+// declaredIn is the public URL's origin the API wrote into the page, and null where it wrote none.
+export function declaredIn(doc: Document): string | null {
+  return doc.querySelector('meta[name="agentiik-origin"]')?.getAttribute("content") ?? null;
 }

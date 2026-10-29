@@ -71,6 +71,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The MCP panels say what they show with labels and short states, as the voice asks: MCP off where the installation serves none, on a workflow's MCP tab and the account's, and a tool's output among its values, `output: invoices`, with its `outputSchema` or none, where each explained in a sentence what `AGK_MCP` off does and why an async tool publishes no schema.
 - A commit the editor sends onto a default branch that moved since the file was opened is no longer left as a refusal in the dialog: the editor reads the workflow at the branch's head, opens its `agentiik.yaml` there to edit what it now holds, and keeps the change the person made beside it, under Your change, line by line against the version they had opened, to be made again; leaving asks first while it is kept, and the next commit follows the new head.
 - Dialogs, the palette, menus, toasts, the list of keys, the drawer and the sign-in card are lifted by their ground and a hairline, as the design system draws every layer, where each cast a drop shadow.
+- The account's MCP tab gives the user's server at the public URL, on the origin the API writes into the page as `<meta name="agentiik-origin">` and the path of its `<base>`, as each collection's address is made, where it gave `/mcp` on whatever address the console was opened at, which a client then failed the Origin check at or reached another host by.
 
 ### Command line
 
