@@ -111,6 +111,13 @@ func Page(topic string) (string, bool) {
 	return "", false
 }
 
+// Unknown is what a client is told of a name that is no topic: the name, and every topic it could
+// have asked for, so that the next request can be right. workflow.language answers it and agk
+// language prints it, so that a model and a person are refused in one sentence.
+func Unknown(topic string) string {
+	return fmt.Sprintf("there is no topic called %q: the topics are %s", topic, strings.Join(Names(), ", "))
+}
+
 // Parts are the schema parts, in the order topics.json lists them.
 func Parts() []Part { return slices.Clone(read.Parts) }
 

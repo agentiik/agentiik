@@ -112,6 +112,7 @@ var commands = []command{
 	{"namespace rename", "Renames a namespace you own, its old name kept as a former name every address still reaches.", namespaceRename},
 	{"namespace delete", "Removes a namespace that holds nothing but its built-in identity, by its owner or an administrator.", namespaceDelete},
 	{"namespace quotas", "Shows a namespace's quotas, and with quotas given, sets them as the whole set. Administrator only to set.", namespaceQuotas},
+	{"language", "Prints what workflow.language answers, from the reference the binary carries, with no installation and no network: with no topic, the orientation, a minimal workflow and the list of topics; with a topic, that topic's page.", languageVerb},
 	{"validate", "Validates the YAML, resolves includes and inheritance, detects cycles, checks ports against the manifests of the referenced images.", validate},
 	{"graph", "Writes the resolved graph as DOT or Mermaid, for review inside a merge request.", drawing},
 	{"push", "Registers the workflow in a namespace on a server.", push},

@@ -44,6 +44,16 @@ func TestEveryTopicHasItsPage(t *testing.T) {
 	}
 }
 
+// A name that is no topic is refused naming it and every topic there is, in topics.json's order, so
+// that whoever asked can ask again rightly without reading anything else.
+func TestANameThatIsNoTopicIsToldTheTopics(t *testing.T) {
+	said := language.Unknown("loops")
+	want := `there is no topic called "loops": the topics are ` + strings.Join(language.Names(), ", ")
+	if said != want {
+		t.Errorf("a name that is no topic is told %q, want %q", said, want)
+	}
+}
+
 // The orientation says what the language is, shows one complete workflow and lists every topic
 // and every part, which is everything a client asking with no topic needs to ask the next thing.
 func TestTheOrientationNamesEveryTopicAndPart(t *testing.T) {
