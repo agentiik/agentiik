@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -253,7 +252,7 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 
 	reportSuccess(e.screened(report), e.Dir, layout, out)
 	if *output == "json" {
-		if err := writeOutputs(e.Out, out.Outputs); err != nil {
+		if err := e.writeOutputs(out.Outputs); err != nil {
 			refusal(e.Err, err)
 			return exitNoOutcome
 		}
@@ -279,12 +278,13 @@ func workingDir(e Env, flag, tree string) string {
 
 // writeOutputs puts the output envelopes on standard output as one object keyed by name, so
 // that a pipe into jq works.
-func writeOutputs(w io.Writer, outputs map[string]agk.Envelope) error {
+func (e Env) writeOutputs(outputs map[string]agk.Envelope) error {
 	doc, err := json.MarshalIndent(outputs, "", "  ")
 	if err != nil {
 		return fmt.Errorf("the output envelopes could not be written: %w", err)
 	}
-	_, err = fmt.Fprintln(w, string(doc))
+	// What a brick wrote, on a terminal, with no control a terminal acts on, and still the document.
+	_, err = fmt.Fprintln(e.Out, string(e.jsonShown(e.Out, doc)))
 	return err
 }
 

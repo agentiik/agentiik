@@ -139,13 +139,17 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 	if o.ref != "" {
 		ask = api.Start{Ref: o.ref, Inputs: supplied}
 	}
+	// What the installation says, a refusal's sentence, a run's reason or the names in its report,
+	// reaches a terminal as agk console draws it, since whoever pushed the workflow or whatever a
+	// brick read wrote it.
+	said := e.screened(e.Err)
 	run, pinned, err := start(ctx, at, o.namespace, workflow, ask)
 	switch {
 	case errors.Is(err, errUnreachable):
-		fmt.Fprintf(e.Err, "%s\n", err)
+		fmt.Fprintf(said, "%s\n", err)
 		return exitNoOutcome
 	case err != nil:
-		fmt.Fprintf(e.Err, "%s\n", err)
+		fmt.Fprintf(said, "%s\n", err)
 		return exitRefused
 	}
 	switch {
@@ -170,17 +174,17 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 		report = e.Err
 	}
 	if detail.State != agk.Succeeded {
-		reportEnded(e.Err, detail)
+		reportEnded(said, detail)
 		return exitNotSucceeded
 	}
-	reportSucceeded(report, at, detail)
+	reportSucceeded(e.screened(report), at, detail)
 	if o.json {
 		outputs, err := outputsOf(ctx, at, detail)
 		if err != nil {
-			fmt.Fprintf(e.Err, "run %s succeeded and its outputs could not be read: %s\n", run, err)
+			fmt.Fprintf(said, "run %s succeeded and its outputs could not be read: %s\n", run, err)
 			return exitNoOutcome
 		}
-		if err := writeOutputs(e.Out, outputs); err != nil {
+		if err := e.writeOutputs(outputs); err != nil {
 			refusal(e.Err, err)
 			return exitNoOutcome
 		}
@@ -293,13 +297,13 @@ func (f *following) follow(ctx context.Context) (db.RunDetail, int) {
 				failing = f.e.now()
 			}
 			if f.e.now().Sub(failing) >= followGiveUp {
-				fmt.Fprintf(f.e.Err, "%s, and has not answered for %s: run %s goes on there, and agk status %s reads it once it answers\n", err, followGiveUp, f.run, f.run)
+				fmt.Fprintf(f.e.screened(f.e.Err), "%s, and has not answered for %s: run %s goes on there, and agk status %s reads it once it answers\n", err, followGiveUp, f.run, f.run)
 				return d, exitNoOutcome
 			}
 		case err != nil:
 			// The run was started, so a refusal now is not the workflow's: a credential
 			// revoked meanwhile, or a run deleted with its workflow.
-			fmt.Fprintf(f.e.Err, "run %s could not be read: %s\n", f.run, f.at.aboutRun(f.run, err))
+			fmt.Fprintf(f.e.screened(f.e.Err), "run %s could not be read: %s\n", f.run, f.at.aboutRun(f.run, err))
 			return d, exitNoOutcome
 		default:
 			failing = time.Time{}

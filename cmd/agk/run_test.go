@@ -496,6 +496,30 @@ func TestContainerOutputOnATerminalIsWrittenAsTheConsoleDrawsIt(t *testing.T) {
 	}
 }
 
+// -o json writes the envelopes to a terminal with DEL and every C1 control a brick wrote escaped,
+// which encoding/json leaves as they are, and the document reads the same; to a pipe, as encoded.
+func TestOutputsOnATerminalHoldNoControl(t *testing.T) {
+	var e agk.Envelope
+	if err := json.Unmarshal([]byte(`{"meta":{"run_id":"01M3KR0GNGCVCXNMA3JEA74T4V","step":"total","port":"ok","attempt":1,"count":1,"produced_at":"2026-09-25T10:00:01Z"},"items":[{"id":"a","data":{"note":"clear\u009b2J \u007f done"},"files":[]}]}`), &e); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := (Env{Out: &b, Shows: func(io.Writer) bool { return true }}).writeOutputs(map[string]agk.Envelope{"out": e}); err != nil {
+		t.Fatal(err)
+	}
+	var read map[string]agk.Envelope
+	if err := json.Unmarshal([]byte(b.String()), &read); err != nil || strings.ContainsAny(b.String(), "\u009b\x7f") || !strings.Contains(b.String(), `clear\u009b2J \u007f done`) {
+		t.Fatalf("a terminal is written %q", b.String())
+	}
+	if got := read["out"].Items[0].Data["note"]; got != "clear\u009b2J \x7f done" {
+		t.Errorf("the envelope read back says %q", got)
+	}
+	b.Reset()
+	if err := (Env{Out: &b}).writeOutputs(map[string]agk.Envelope{"out": e}); err != nil || !strings.Contains(b.String(), "clear\u009b2J \x7f done") {
+		t.Errorf("a pipe is written %q, %v", b.String(), err)
+	}
+}
+
 // A terminal is a character device, and a buffer, a pipe or a file is none.
 func TestOnlyACharacterDeviceShows(t *testing.T) {
 	r, w, err := os.Pipe()

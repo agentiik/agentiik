@@ -86,7 +86,7 @@ func logs(ctx context.Context, e Env, args []string) int {
 	if len(steps) == 0 {
 		var d db.RunDetail
 		if err := at.getJSON(ctx, "/api/v1/runs/"+url.PathEscape(run), &d); err != nil {
-			fmt.Fprintf(e.Err, "%s\n", at.aboutRun(run, err))
+			fmt.Fprintf(e.screened(e.Err), "%s\n", at.aboutRun(run, err))
 			if errors.Is(err, errUnreachable) {
 				return exitNoOutcome
 			}
