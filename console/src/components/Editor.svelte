@@ -6,12 +6,13 @@
   import { layout, type Graph } from "../lib/graph";
   import { explain, refused, Told, type Explained } from "../lib/problem";
   import type { Place } from "../lib/place.svelte";
-  import { lineDiff } from "../lib/tree";
+  import { hunks, lineDiff, type Line } from "../lib/tree";
   import { check, type Problem as FileProblem } from "../lib/workflow-check";
   import { Refused, YamlTree } from "../lib/yaml-tree";
   import Dialog from "./Dialog.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
   import Icon from "./Icon.svelte";
+  import LineDiff from "./LineDiff.svelte";
   import Notice from "./Notice.svelte";
   import Pane from "./Pane.svelte";
   import Problem from "./Problem.svelte";
@@ -63,6 +64,10 @@
     oncommitted: (branch: string, commit: string) => void;
   } = $props();
 
+  // The version edited: the one the editor was opened on, its commit, its file and its graph, until
+  // a commit is refused because the branch moved since, when it is the one the branch now holds.
+  let opened = $state(untrack(() => ({ commit, entry, base })));
+
   // The file as it is now, which the YAML editor holds with the history Undo walks back.
   let text = $state(untrack(() => entry));
   const tree = $derived(new YamlTree(text));
@@ -83,33 +88,38 @@
   // The files the entry point includes, read at the version edited, before anything is resolved.
   let files = $state<Map<string, string>>(new Map());
   let reading = $state(true);
-  $effect(() => {
-    untrack(async () => {
-      const read = new Map<string, string>();
-      // An empty repository has no tree to read an include out of.
-      if (commit === null) {
-        files = read;
-        reading = false;
-        return;
-      }
-      const fetchOne = async (path: string) => {
-        const { data } = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: commit! }, query: { path } }, parseAs: "text" });
-        if (typeof data === "string") read.set(path, data);
-      };
-      // Each round reads what the files read so far include, until nothing new is named.
-      let asked = new Set<string>();
-      for (;;) {
-        const wanted = includedPaths(entry, (p) => read.get(p)).filter((p) => !asked.has(p));
-        if (wanted.length === 0) break;
-        asked = new Set([...asked, ...wanted]);
-        await Promise.all(wanted.map(fetchOne));
-      }
+  async function readIncludes() {
+    const { commit: at, entry: from } = opened;
+    reading = true;
+    const read = new Map<string, string>();
+    // An empty repository has no tree to read an include out of.
+    if (at === null) {
       files = read;
       reading = false;
-    });
+      return;
+    }
+    const fetchOne = async (path: string) => {
+      const { data } = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: at }, query: { path } }, parseAs: "text" });
+      if (typeof data === "string") read.set(path, data);
+    };
+    // Each round reads what the files read so far include, until nothing new is named.
+    let asked = new Set<string>();
+    for (;;) {
+      const wanted = includedPaths(from, (p) => read.get(p)).filter((p) => !asked.has(p));
+      if (wanted.length === 0) break;
+      asked = new Set([...asked, ...wanted]);
+      await Promise.all(wanted.map(fetchOne));
+    }
+    // A version opened again while these were read has its own read under way.
+    if (opened.commit !== at) return;
+    files = read;
+    reading = false;
+  }
+  $effect(() => {
+    untrack(() => readIncludes());
   });
 
-  const resolved = $derived(resolve(good.text, (p) => files.get(p), base));
+  const resolved = $derived(resolve(good.text, (p) => files.get(p), opened.base));
   const graph = $derived(resolved.graph);
   const laid = $derived(layout(graph));
   const problems = $derived<FileProblem[]>(check(tree));
@@ -117,12 +127,15 @@
   // What the edits come to, as a review counts it: the lines added and the lines removed, a line
   // changed being one of each. They are counted against what the repository holds, which for an
   // empty one is nothing, so that its first file is a change to commit as it opens.
-  const diff = $derived(lineDiff(commit === null ? "" : entry, tree.text));
-  const added = $derived(diff.filter((l) => l.kind === "added").length);
-  const removed = $derived(diff.filter((l) => l.kind === "removed").length);
-  const changes = $derived(added + removed);
+  const diff = $derived(lineDiff(opened.commit === null ? "" : opened.entry, tree.text));
+  const changes = $derived(diff.filter((l) => l.kind !== "same").length);
   const lines = (n: number) => `${n} ${n === 1 ? "line" : "lines"}`;
-  const counted = $derived(changes === 0 ? "No change" : added && removed ? `${lines(added)} added, ${removed} removed` : added ? `${lines(added)} added` : `${lines(removed)} removed`);
+  const countOf = (d: Line[]) => {
+    const added = d.filter((l) => l.kind === "added").length;
+    const removed = d.filter((l) => l.kind === "removed").length;
+    return added + removed === 0 ? "No change" : added && removed ? `${lines(added)} added, ${removed} removed` : added ? `${lines(added)} added` : `${lines(removed)} removed`;
+  };
+  const counted = $derived(countOf(diff));
   const step = $derived(selected && graph.steps[selected] ? selected : undefined);
   const here = $derived(step !== undefined && resolved.written.get(step) === "entry");
 
@@ -149,9 +162,9 @@
   }
 
   function undoAll() {
-    if (text === entry && undoable === 0) return;
-    text = entry;
-    yamlEditor?.reset(entry);
+    if (text === opened.entry && undoable === 0) return;
+    text = opened.entry;
+    yamlEditor?.reset(opened.entry);
   }
 
   function typed(next: string, history: { undo: number }) {
@@ -217,6 +230,27 @@
   let pushing = $state(false);
   let commitProblem = $state<Explained | null>(null);
 
+  // A commit refused because the branch the file was opened at moved since, a 409, opens the file
+  // again at what the branch now holds, read with the workflow at its head, and keeps the change the
+  // person made beside it, against the version they had opened, to be made again there: the file as
+  // they left it, committed onto the new head, would undo whatever landed since.
+  let kept = $state<{ change: Line[] } | null>(null);
+  async function reopen(): Promise<string | null> {
+    const read = await api.GET("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: namespace, name: workflow } } });
+    const head = read.data?.version?.commit;
+    const graph = read.data?.graph;
+    if (!head || !graph) return null;
+    const file = await api.GET("/api/v1/{ns}/workflows/{name}/tree/{ref}", { params: { path: { ns: namespace, name: workflow, ref: head }, query: { path: "agentiik.yaml" } }, parseAs: "text" });
+    if (typeof file.data !== "string") return null;
+    kept = { change: lineDiff(opened.entry, text) };
+    opened = { commit: head, entry: file.data, base: graph };
+    good = new YamlTree(file.data);
+    text = file.data;
+    yamlEditor?.reset(file.data);
+    void readIncludes();
+    return head;
+  }
+
   async function send(e: SubmitEvent) {
     e.preventDefault();
     if (pushing) return;
@@ -226,8 +260,16 @@
     try {
       const answer = await api.POST("/api/v1/{ns}/workflows/{name}/commits", {
         params: { path: { ns: namespace, name: workflow } },
-        body: { branch: onto, ...(commit === null ? {} : { parent: commit }), message: message.trim(), files: { "agentiik.yaml": text } },
+        body: { branch: onto, ...(opened.commit === null ? {} : { parent: opened.commit }), message: message.trim(), files: { "agentiik.yaml": text } },
       });
+      if (!answer.data && answer.response.status === 409 && onto === branch && opened.commit !== null) {
+        const head = await reopen();
+        if (head) {
+          committing = false;
+          said = `${onto} had moved: opened again at ${head.slice(0, 7)}.`;
+          return;
+        }
+      }
       if (!answer.data) {
         // What the hook refused is placed where it was written, the line it names marked in the file.
         const at = answer.error as { file?: string; line?: number; column?: number; detail?: string; error?: string; expected?: string } | undefined;
@@ -253,17 +295,19 @@
   // lose, the changes committed or discarded, so that the close or the move that follows is not
   // asked about again.
   let free = false;
+  // A change kept beside the file, a moved branch having refused it, is as much to lose as one in it.
+  const unsaved = $derived(changes > 0 || kept !== null);
   let asking = $state<"" | "stop" | "leave">("");
   let proceed: (() => void) | null = null;
   $effect(() => {
-    if (changes === 0) return;
+    if (!unsaved) return;
     const ask = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener("beforeunload", ask);
     return () => window.removeEventListener("beforeunload", ask);
   });
   $effect(() => {
     const guard = (go: () => void) => {
-      if (free || untrack(() => changes) === 0) return false;
+      if (free || !untrack(() => unsaved)) return false;
       proceed = go;
       asking = "leave";
       return true;
@@ -275,10 +319,10 @@
   });
   // Every change undone while asking leaves nothing to ask about.
   $effect(() => {
-    if (changes === 0 && untrack(() => asking) !== "") keep();
+    if (!unsaved && untrack(() => asking) !== "") keep();
   });
   function stop() {
-    if (changes === 0) {
+    if (!unsaved) {
       onclose();
       return;
     }
@@ -405,13 +449,18 @@
         </ul>
       {/if}
     </Pane>
+    {#if kept}
+      <Pane title="Your change" aside={countOf(kept.change)}>
+        <LineDiff hunks={hunks(kept.change)} />
+      </Pane>
+    {/if}
   </div>
 </div>
 
 <Dialog title="Commit" bind:open={committing}>
   <form class="form" onsubmit={send} aria-label="Commit">
     <label><span>Message</span><textarea bind:value={message} class="message" rows="3" required></textarea></label>
-    {#if commit === null}
+    {#if opened.commit === null}
       <p class="muted">The repository's first commit, onto <span class="term">{branch}</span>.</p>
     {:else if ontoDefault}
       <fieldset>
@@ -473,9 +522,13 @@
     align-items: start;
   }
 
+  /* One column the width the page gives it, never that of a change's longest line, which scrolls
+     inside its pane. */
   .side {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: calc(var(--unit) * 6);
+    min-width: 0;
   }
 
   .sub {
