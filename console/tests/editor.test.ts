@@ -200,7 +200,7 @@ describe("committing from the editor", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Commit" }));
     await fireEvent.submit(screen.getByRole("form", { name: "Commit" }));
     expect(await screen.findByText(/Could not commit to main\./)).toBeTruthy();
-    expect(screen.getAllByText(/main has moved since/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/main has moved since/).length).toBeGreaterThan(0);
     expect(screen.getByRole("form", { name: "Commit" })).toBeTruthy();
   });
 

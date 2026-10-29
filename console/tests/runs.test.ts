@@ -1,6 +1,10 @@
+import { render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
+import App from "../src/App.svelte";
+import { Place } from "../src/lib/place.svelte";
 import { filtersOf, queryOf, RunList } from "../src/lib/runs.svelte";
+import { Session } from "../src/lib/session.svelte";
 import { answering, scenario } from "./scenario";
 
 describe("the runs view's filters", () => {
@@ -9,6 +13,16 @@ describe("the runs view's filters", () => {
     expect(f).toEqual({ state: "failed", workflow: "monthly-invoicing", span: "7d" });
     expect(queryOf(f).toString()).toBe("state=failed&workflow=monthly-invoicing&span=7d");
     expect(queryOf(filtersOf(new URLSearchParams("state=bogus&span=forever"))).toString()).toBe("");
+  });
+});
+
+describe("a workflow's runs, drawn", () => {
+  it("narrow to a state by the state as the API spells it, never prettified", async () => {
+    const api = connect("http://stand-in/", answering(scenario("alice")));
+    const place = new Place({ pathname: "/finance/workflows/monthly-invoicing/runs", baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
+    render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
+    const chips = await screen.findByRole("group", { name: "State" });
+    expect(within(chips).getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "failed", "running", "queued", "succeeded", "cancelled", "timed_out"]);
   });
 });
 

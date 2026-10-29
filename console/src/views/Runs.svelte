@@ -76,12 +76,12 @@
 
   const chips: { state: RunState | undefined; label: string }[] = [
     { state: undefined, label: "All" },
-    { state: "failed", label: "Failed" },
-    { state: "running", label: "Running" },
-    { state: "queued", label: "Queued" },
-    { state: "succeeded", label: "Succeeded" },
-    { state: "cancelled", label: "Cancelled" },
-    { state: "timed_out", label: "Timed out" },
+    { state: "failed", label: "failed" },
+    { state: "running", label: "running" },
+    { state: "queued", label: "queued" },
+    { state: "succeeded", label: "succeeded" },
+    { state: "cancelled", label: "cancelled" },
+    { state: "timed_out", label: "timed_out" },
   ];
 
   const retention = $derived(record?.quotas?.max_retention_days);

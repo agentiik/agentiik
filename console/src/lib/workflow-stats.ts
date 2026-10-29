@@ -72,7 +72,7 @@ export function figures(runs: RunsSeries, step: StepSeries | undefined, compare:
   const others = (
     [
       ["failed", now.runs.failed],
-      ["timed out", now.runs.timed_out],
+      ["timed_out", now.runs.timed_out],
       ["cancelled", now.runs.cancelled],
     ] as const
   )

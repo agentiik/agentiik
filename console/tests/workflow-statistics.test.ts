@@ -38,7 +38,7 @@ describe("a workflow's figures", () => {
     const [count, share, duration, wait] = figures(runs, undefined, true);
     expect(count).toEqual({ label: "Runs", value: "313", change: "+8%", aside: "290 in the span before" });
     // 296 of the 310 that ended, against 268 of 290: a running run is no failure yet.
-    expect(share).toMatchObject({ value: "95.5%", change: "+3.1 pts", aside: "296 of 310 that ended; 12 failed, 2 timed out" });
+    expect(share).toMatchObject({ value: "95.5%", change: "+3.1 pts", aside: "296 of 310 that ended; 12 failed, 2 timed_out" });
     expect(duration).toMatchObject({ value: "6m 12s", change: "−49s", aside: "p50 3m 47s · p99 7m 38s" });
     expect(wait).toMatchObject({ value: "3s", change: "+600ms" });
   });

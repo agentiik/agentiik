@@ -59,7 +59,7 @@
     <ul class="now" aria-label="Now">
       <li><span class="label">Runs running</span><span class="value term">{shown(now?.runs.running)}</span></li>
       <li><span class="label">Runs queued</span><span class="value term">{shown(now?.runs.queued)}</span></li>
-      <li><span class="label">Runs awaiting approval</span><span class="value term">{shown(now?.runs.waiting)}</span></li>
+      <li><span class="label">Runs waiting</span><span class="value term">{shown(now?.runs.waiting)}</span></li>
       <li><span class="label">Tasks running</span><span class="value term" class:full={now !== undefined && now.slots > 0 && now.tasks_in_flight >= now.slots}>{now ? `${now.tasks_in_flight} / ${now.slots}` : "\u00a0"}</span></li>
       <li><span class="label">Runners ready</span><span class="value term" class:failed={now !== undefined && now.runners > 0 && now.runners_ready === 0}>{now ? `${now.runners_ready} / ${now.runners}` : "\u00a0"}</span></li>
     </ul>

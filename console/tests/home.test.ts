@@ -113,13 +113,16 @@ describe("the home", () => {
     expect(asked).toContain("GET /api/v1/runs?limit=50");
   });
 
-  it("counts what runs and awaits approval now, and lists what needs the caller", async () => {
+  it("counts what runs and waits now, by the states as the API spells them, and lists what needs the caller", async () => {
     const { asked } = open();
     const cards = await screen.findByRole("list", { name: "Counts" });
-    await waitFor(() => expect(within(cards).getByText("Running").closest("li")!.textContent!.replace(/\s+/g, "")).toMatch(/^Running\d+now$/));
+    await waitFor(() => expect(within(cards).getByText("running").closest("li")!.textContent!.replace(/\s+/g, "")).toMatch(/^running\d+now$/));
+    // waiting is any wait step's, a duration's and a signal's as well as an approval's.
+    expect(within(cards).getByText("waiting").closest("li")!.textContent!.replace(/\s+/g, "")).toMatch(/^waiting\d+now$/);
     expect(asked.some((a) => a.startsWith("GET /api/v1/runs?state=waiting"))).toBe(true);
     const attention = screen.getByRole("region", { name: "Needs your attention" });
     const show = within(attention).getByRole("group", { name: "Show" });
+    expect(within(show).getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "Failed", "waiting"]);
     await fireEvent.click(within(show).getByRole("button", { name: "Failed" }));
     expect(within(show).getByRole("button", { name: "Failed" }).getAttribute("aria-pressed")).toBe("true");
   });
@@ -160,6 +163,7 @@ describe("the home", () => {
     const now = within(installation).getByRole("list", { name: "Now" });
     const figure = (label: string) => within(now).getByText(label).parentElement!.textContent;
     expect(figure("Runs running")).toBe("Runs running7");
+    expect(figure("Runs waiting")).toMatch(/^Runs waiting\d+$/);
     expect(figure("Tasks running")).toBe("Tasks running17 / 24");
     expect(figure("Runners ready")).toBe("Runners ready3 / 4");
     expect(within(installation).getByRole("figure")).toBeTruthy();

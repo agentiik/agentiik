@@ -63,8 +63,8 @@
     reading = false;
   }
 
-  // The runs that need the caller: those that failed or timed out in the last day, and those waiting
-  // for an approval; and those running now. Each listing is narrowed again here by its state and day,
+  // The runs that need the caller: those that failed or timed out in the last day, and those waiting,
+  // whatever their wait step waits for, a duration, a signal or an approval; and those running now. Each listing is narrowed again here by its state and day,
   // whatever the answer holds.
   let failing = $state<Run[]>([]);
   let waiting = $state<Run[]>([]);
@@ -77,7 +77,7 @@
   }
 
   async function readRecent() {
-    const [last, failed, timedOut, approval, under] = await Promise.all([
+    const [last, failed, timedOut, held, under] = await Promise.all([
       api.GET("/api/v1/runs", { params: { query: { limit: 50 } } }).then(({ data }) => data?.runs ?? []),
       listed("failed", dayAgo),
       listed("timed_out", dayAgo),
@@ -86,7 +86,7 @@
     ]);
     recent = last;
     failing = [...failed, ...timedOut].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-    waiting = approval;
+    waiting = held;
     running = under;
   }
 
@@ -264,12 +264,12 @@
             <span class="caption">last 7 days</span>
           </li>
           <li>
-            <span class="label">Running</span>
+            <span class="label">running</span>
             <span class="value term">{running.length}</span>
             <span class="caption">now</span>
           </li>
           <li>
-            <span class="label">Awaiting approval</span>
+            <span class="label">waiting</span>
             <span class="value term" class:waiting={waiting.length > 0}>{waiting.length}</span>
             <span class="caption">now</span>
           </li>
@@ -281,7 +281,7 @@
               <div class="by" role="group" aria-label="Show">
                 <button class="tab" aria-pressed={needs === "all"} onclick={() => (needs = "all")}>All</button>
                 <button class="tab" aria-pressed={needs === "failed"} onclick={() => (needs = "failed")}>Failed</button>
-                <button class="tab" aria-pressed={needs === "waiting"} onclick={() => (needs = "waiting")}>Awaiting approval</button>
+                <button class="tab" aria-pressed={needs === "waiting"} onclick={() => (needs = "waiting")}>waiting</button>
               </div>
             {/snippet}
             {#if attention.length === 0}
@@ -532,8 +532,8 @@
   }
 
   /* Four counts on one strip, told apart by hairlines rather than by four boxes: a figure is read by
-     its size and its name, and colour is kept for a state that asks for the caller, a failure or an
-     approval waited on. The hairlines are the strip's own ground showing between the counts, so that
+     its size and its name, and colour is kept for a state that asks for the caller, a failure or a
+     run waiting. The hairlines are the strip's own ground showing between the counts, so that
      they follow the counts however they wrap. */
   .cards {
     display: grid;
