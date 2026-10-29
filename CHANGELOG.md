@@ -73,6 +73,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Dialogs, the palette, menus, toasts, the list of keys, the drawer and the sign-in card are lifted by their ground and a hairline, as the design system draws every layer, where each cast a drop shadow.
 - The account's MCP tab gives the user's server at the public URL, on the origin the API writes into the page as `<meta name="agentiik-origin">` and the path of its `<base>`, as each collection's address is made, where it gave `/mcp` on whatever address the console was opened at, which a client then failed the Origin check at or reached another host by.
 - A field in focus is bordered at the design system's 2.5px, `border.focus`, in the accent, drawn over its hairline, where it took a 1px outline; and the filter of a list and the log's Find, whose field is the box drawn around it, take the same border where they only turned their hairline to the accent.
+- The pill of `queued`, `skipped` and `cancelled` is sunken inside a `lineStrong` outline, as the design system's specimen draws it, where it was drawn on `surface` inside `line`.
 
 ### Command line
 

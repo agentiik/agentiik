@@ -85,4 +85,19 @@ test.describe("the design system, as drawn", () => {
     }
     expect(found).toEqual([]);
   });
+
+  // The lineStrong token: "the pill of a faint state, queued, skipped or cancelled, which is sunken
+  // inside", as design/specimen.html draws it for every client to check itself against.
+  test("a faint state's pill is sunken inside a lineStrong outline", async ({ page }) => {
+    await opened(page, "/finance/workflows/monthly-invoicing/runs?span=all");
+    const sunken = await token(page, "sunken", "background-color");
+    const lineStrong = await token(page, "lineStrong", "border-top-color");
+    const pills = await page.locator(".pill").evaluateAll((all) =>
+      all
+        .filter((p) => ["queued", "skipped", "cancelled"].includes(p.textContent?.trim() ?? ""))
+        .map((p) => ({ state: p.textContent?.trim(), ground: getComputedStyle(p).backgroundColor, outline: getComputedStyle(p).borderTopColor })),
+    );
+    expect(pills.map((p) => p.state)).toEqual(expect.arrayContaining(["queued", "cancelled"]));
+    expect(pills.filter((p) => p.ground !== sunken || p.outline !== lineStrong)).toEqual([]);
+  });
 });
