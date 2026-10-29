@@ -3,14 +3,14 @@ import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
-import { Place } from "../src/lib/place.svelte";
+import { Place, type History } from "../src/lib/place.svelte";
 import { Session } from "../src/lib/session.svelte";
 import { answering, scenario } from "./scenario";
 
 // What the editor asked the API, method and path, with the body it sent.
 let asked: { key: string; body: unknown }[] = [];
 
-function open(search = "", s = scenario("alice")) {
+function open(search = "", s = scenario("alice"), history: History = { pushState() {}, replaceState() {} }) {
   asked = [];
   const answer = answering(s);
   const api = connect("http://stand-in/", async (input, init) => {
@@ -18,7 +18,7 @@ function open(search = "", s = scenario("alice")) {
     asked.push({ key: `${request.method} ${new URL(request.url).pathname}`, body: request.method === "GET" ? undefined : await request.clone().json().catch(() => undefined) });
     return answer(request);
   });
-  const place = new Place({ pathname: "/finance/workflows/monthly-invoicing", search, baseURI: "http://stand-in/" }, { pushState() {}, replaceState() {} });
+  const place = new Place({ pathname: "/finance/workflows/monthly-invoicing", search, baseURI: "http://stand-in/" }, history);
   render(App, { api, session: new Session(api), place, version: "v0.6.0", passkeys: { unavailable: "" } });
   return place;
 }
@@ -261,5 +261,93 @@ describe("committing from the editor", () => {
     expect(await screen.findByText("Committed to main.")).toBeTruthy();
     expect(sent()).toEqual({ branch: "main", message: "Write agentiik.yaml", files: { "agentiik.yaml": first } });
     expect(asked.filter((a) => a.key.includes("/tree/"))).toEqual([]);
+  });
+});
+
+// A history standing in for the browser's, which records what the console asks of it.
+function recorded() {
+  const asked: string[] = [];
+  const history = {
+    state: null as unknown,
+    pushState(data: unknown, _: string, url: string) {
+      asked.push(`push ${url}`);
+      history.state = data;
+    },
+    replaceState(data: unknown, _: string, url: string) {
+      asked.push(`replace ${url}`);
+      history.state = data;
+    },
+    back() {
+      asked.push("back");
+    },
+  };
+  return { history, asked };
+}
+
+// One line more, typed at the end of the file.
+const changeALine = async () => {
+  await type(`${await text()}# a note\n`);
+  expect(await screen.findByText("1 line added")).toBeTruthy();
+};
+
+describe("leaving the editor", () => {
+  it("opens as an entry of the history, so that back closes it, and Stop editing goes back to the page", async () => {
+    const { history, asked } = recorded();
+    const place = open("", scenario("alice"), history);
+    await fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(asked).toEqual(["push /finance/workflows/monthly-invoicing?edit=1"]);
+    expect(await screen.findByText("No change", {}, { timeout: 5000 })).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Stop editing" }));
+    expect(asked.at(-1)).toBe("back");
+    place.moved("/finance/workflows/monthly-invoicing", "");
+    expect(place.query.get("edit")).toBeNull();
+  });
+
+  it("asks before Stop editing drops changes: Keep goes on editing, and Stop editing turned red closes", async () => {
+    const place = open("?edit=1");
+    await changeALine();
+    await fireEvent.click(screen.getByRole("button", { name: "Stop editing" }));
+    const red = screen.getByRole("button", { name: "Stop editing" });
+    expect(red.classList.contains("danger")).toBe(true);
+    expect(place.query.get("edit")).toBe("1");
+    await fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+    expect(screen.getByText("1 line added")).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Stop editing" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Stop editing" }));
+    expect(place.query.get("edit")).toBeNull();
+  });
+
+  it("holds a link or back that would drop changes until Leave, and lets it go with nothing to lose", async () => {
+    const { history, asked } = recorded();
+    const place = open("?edit=1", scenario("alice"), history);
+    await changeALine();
+
+    // A link, as the sidebar's: the screen stays until Leave, and Keep stays for good.
+    place.go({ kind: "namespace", namespace: "finance", view: "workflows" });
+    expect(place.route).toMatchObject({ workflow: "monthly-invoicing" });
+    expect(asked).toEqual([]);
+    await fireEvent.click(await screen.findByRole("button", { name: "Keep" }));
+    expect(place.route).toMatchObject({ workflow: "monthly-invoicing" });
+
+    // Back: the entry is put back, and Leave goes back again.
+    place.moved("/finance/workflows", "");
+    expect(asked).toEqual(["push /finance/workflows/monthly-invoicing?edit=1"]);
+    expect(place.route).toMatchObject({ workflow: "monthly-invoicing" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Leave" }));
+    expect(asked.at(-1)).toBe("back");
+    place.moved("/finance/workflows", "");
+    expect(place.route).toMatchObject({ kind: "namespace", view: "workflows" });
+    expect((place.route as { workflow?: string }).workflow).toBeUndefined();
+  });
+
+  it("asks nothing once every change is undone", async () => {
+    const place = open("?edit=1");
+    await changeALine();
+    await fireEvent.click(screen.getByRole("button", { name: "Undo every change" }));
+    expect(await screen.findByText("No change")).toBeTruthy();
+    place.go({ kind: "namespace", namespace: "finance", view: "workflows" });
+    expect((place.route as { workflow?: string }).workflow).toBeUndefined();
   });
 });

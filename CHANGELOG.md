@@ -42,6 +42,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Minting a token from a session signed in to more than 10 minutes ago asks for a sign-in again in the dialog, with a passkey or the password where the account holds one, and mints the token straight after, as adding a passkey does.
 - `recovery_code_issued` and `recovery_code_used` are said in words among the notifications, who issued the code and the credential it enrolled, to remove if it was not the reader, and offer no Dismiss, which the API refuses them.
 - A download the API refuses because the browser did not say which page it comes from, which a file with a download limit requires of a session, says so and points to a current browser.
+- The editor opens as an entry of the history, so that Back closes it, and asks before its changes are lost: Stop editing turns red beside Keep, and a link or Back to another screen waits for Keep or Leave, where all three dropped the changes with nothing asked, the page reloaded or closed being the one case the browser asked about.
 
 ### Command line
 

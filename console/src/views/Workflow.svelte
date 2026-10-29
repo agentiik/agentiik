@@ -147,12 +147,26 @@
     place.narrow(q);
   }
 
+  // The editor is opened as an entry of the history, so that back closes it, and closed by going
+  // back to the entry it was opened from, which the editor asks first where it holds changes.
+  function openEditor() {
+    const q = new URLSearchParams(place.query);
+    q.set("edit", "1");
+    place.open(q);
+  }
+  function closeEditor() {
+    const q = new URLSearchParams(place.query);
+    q.delete("edit");
+    q.delete("view");
+    place.close(q);
+  }
+
   // A commit from the editor: on the default branch, the page reads the workflow again at its new
   // head; on a new branch, its files are opened at that branch, where Run tries it.
   let said = $state("");
   async function committed(branch: string, _commit: string) {
     if (detail && branch === detail.repository.default_branch) {
-      narrow({ edit: null, view: null });
+      closeEditor();
       await read();
       said = `Committed to ${branch}.`;
       return;
@@ -161,7 +175,7 @@
   }
 
   // The visual editor, under workflow:write, over the file at the head of the default branch: the
-  // address says it is open, so that Back leaves it.
+  // address says it is open, as an entry of its own, so that Back closes it.
   const mayEdit = $derived(holds(me, "workflow:write", namespace, workflow));
   const editing = $derived(place.query.get("edit") === "1" && mayEdit && (tab === undefined || tab === "graph" || tab === "files"));
 
@@ -217,7 +231,7 @@
     {#if detail}
       <button class="control" aria-pressed={showHistory} onclick={() => (showHistory = !showHistory)}><Icon name="control-history" size={14} />History</button>
       {#if mayEdit && graph && detail.version && text !== null && !editing && (tab === undefined || tab === "graph")}
-        <button class="control" onclick={() => { editSelected = selected; narrow({ edit: "1" }); }}><Icon name="control-edit" size={14} />Edit</button>
+        <button class="control" onclick={() => { editSelected = selected; openEditor(); }}><Icon name="control-edit" size={14} />Edit</button>
       {/if}
       {#if mayRun && graph && detail.version}
         <button class="control primary" aria-pressed={running} onclick={() => { runRef = ""; running = !running; }}><Icon name="control-run" size={14} />Run</button>
@@ -295,13 +309,13 @@
 
   {#if editing && empty}
     {#await import("../components/Editor.svelte") then { default: Editor }}
-      <Editor {api} {namespace} {workflow} commit={null} entry={first} base={nothing} branch={detail.repository.default_branch} ontoDefault={true} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
+      <Editor {api} {place} {namespace} {workflow} commit={null} entry={first} base={nothing} branch={detail.repository.default_branch} ontoDefault={true} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={closeEditor} oncommitted={committed} />
     {/await}
   {:else if (tab === "files" || tab === undefined || tab === "graph") && empty}
     <Pane title="Files">
       <p class="muted">Empty repository</p>
       {#if mayEdit}
-        <p><button class="control primary" onclick={() => narrow({ edit: "1" })}><Icon name="control-edit" size={14} />Write agentiik.yaml</button></p>
+        <p><button class="control primary" onclick={openEditor}><Icon name="control-edit" size={14} />Write agentiik.yaml</button></p>
       {/if}
       <pre class="clone term">git clone {detail.repository.clone_url}</pre>
     </Pane>
@@ -317,7 +331,7 @@
     </Pane>
   {:else if editing && graph && detail.version && text !== null}
     {#await import("../components/Editor.svelte") then { default: Editor }}
-      <Editor {api} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={() => narrow({ edit: null, view: null })} oncommitted={committed} />
+      <Editor {api} {place} {namespace} {workflow} commit={detail.version.commit} entry={text} base={graph} branch={detail.repository.default_branch} ontoDefault={!detail.repository.protected || shares} layout={place.query.get("view") === "yaml" ? "yaml" : "graph"} bind:selected={editSelected} onlayout={(l) => narrow({ view: l === "yaml" ? "yaml" : null })} onclose={closeEditor} oncommitted={committed} />
     {/await}
   {:else if graph && laid}
     <div class="columns fills">
