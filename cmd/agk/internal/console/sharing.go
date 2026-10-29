@@ -310,14 +310,6 @@ func carried(r access.Role, permissions []access.Permission) bool {
 	return true
 }
 
-// neverShown is what no grant shows anybody, as the web console's sharing panel says it.
-var neverShown = []string{
-	"Secret values, at any role: a declaration is shown, never what it holds, which exists inside a container alone.",
-	"Another namespace's artifacts: a presigned address covers one artifact of one run, for 5 minutes.",
-	"The host that ran a task: a run names each task's runner by its identifier, and nothing of the machine.",
-	"Workflows somebody cannot read, in any listing, search or error, or in how long a refusal takes.",
-}
-
 // grantColumns are the grants' columns: the principal, what it gives, where it was written, when it
 // ends, and at full width who wrote it and when.
 func (m Model) grantColumns(width int, principal, gives, scope, expires, granted []part) []part {
@@ -329,7 +321,9 @@ func (m Model) grantColumns(width int, principal, gives, scope, expires, granted
 }
 
 // grantsLines are the grants as written, the one chosen drawn as the selection, then what each
-// role carries and what sharing never exposes, as many as room holds.
+// role carries where room holds it. What sharing never exposes is not drawn, as the web console's
+// sharing panel stopped drawing it: a list of what no grant shows explains sharing rather than
+// showing it (Voice).
 func (m Model) grantsLines(t theme, width, room int) []string {
 	line := func(parts ...part) string { return t.line(false, width, within(parts, width)...) }
 	at := scopeOf(m.scope)
@@ -432,18 +426,6 @@ func (m Model) grantsLines(t theme, width, room int) []string {
 		lines = append(lines, line(part{muted, l}))
 	}
 	lines = append(lines, t.said(muted, "operator runs and follows runs without workflow:read: the queries inside stay out of reach.", width)...)
-	if len(lines)+len(neverShown)+4 <= room {
-		lines = append(lines, line(), line(part{strong, "Never shown, to anyone"}))
-		for _, s := range neverShown {
-			for i, l := range folded(s, width-2) {
-				mark := "  "
-				if i == 0 {
-					mark = "· "
-				}
-				lines = append(lines, line(part{quiet, mark}, part{plain, l}))
-			}
-		}
-	}
 	return append(lines, line(), line(part{quiet, "read only: agk share and the web console change grants"}))
 }
 

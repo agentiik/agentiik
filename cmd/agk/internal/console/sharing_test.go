@@ -57,7 +57,8 @@ func sharedFinance(me *principal) *installation {
 // 3 opens the sharing of the workflow in front of the principal, the run's selected, as written:
 // each grant with its principal, what it gives, where it was written, those the workflow inherits
 // said to be, and its expiry; then what each role carries; and resolved for the caller, every
-// permission an owner's namespace grant gives, secret:use and secret:write among them.
+// permission an owner's namespace grant gives, secret:use and secret:write among them. What sharing
+// never exposes is not drawn, as the web console's sharing panel no longer draws it.
 func TestTheSharingViewListsTheGrantsAsWrittenAndResolvesThem(t *testing.T) {
 	in := sharedFinance(chloe)
 	m := press(t, opened(t, in, Options{}, 160, 44), three)
@@ -80,7 +81,6 @@ func TestTheSharingViewListsTheGrantsAsWrittenAndResolvesThem(t *testing.T) {
 		"What each role carries",
 		"owner     ●       ●       ●       ●       ●       ●       ●",
 		"operator  ·       ●       ·       ·       ·       ·       ·",
-		"Never shown, to anyone",
 		"read only: agk share and the web console change grants",
 		"Resolved for chloe (you)", "user",
 		"+ workflow:read     finance: owner",
@@ -90,6 +90,9 @@ func TestTheSharingViewListsTheGrantsAsWrittenAndResolvesThem(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("the sharing view does not show %q:\n%s", want, s)
 		}
+	}
+	if strings.Contains(s, "Never shown") || strings.Contains(s, "Secret values, at any role") {
+		t.Errorf("the sharing view draws what sharing never exposes:\n%s", s)
 	}
 	if last := strings.TrimRight(lines[43], " "); last != "↑↓ Grant   enter Resolve for…   s Scope   / Filter   : Commands   esc Runs   q Quit   ? Every key" {
 		t.Errorf("the key line is %q", last)

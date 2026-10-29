@@ -21,17 +21,17 @@ delete workflow:delete · grant grant:manage
 operator runs and follows runs without workflow:read: the queries inside stay out of
 reach.
 
-Never shown, to anyone
-· Secret values, at any role: a declaration is shown, never what it holds, which exists
-  inside a container alone.
-· Another namespace's artifacts: a presigned address covers one artifact of one run, for
-  5 minutes.
-· The host that ran a task: a run names each task's runner by its identifier, and
-  nothing of the machine.
-· Workflows somebody cannot read, in any listing, search or error, or in how long a
-  refusal takes.
-
 read only: agk share and the web console change grants
+
+
+
+
+
+
+
+
+
+
 
 
 
