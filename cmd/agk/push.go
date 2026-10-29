@@ -431,9 +431,25 @@ func repositoryOf(ctx context.Context, repo place, sha string) (*gitTree, error)
 	// sha: is the commit's root, and sha:billing the tree at billing/ inside it. Either is
 	// listed with paths relative to itself, because git runs at the top, where a listing is
 	// not narrowed to the directory it runs in.
-	listed, err := output(fetchingNothing(gitCommand(ctx, repo.top, "ls-tree", "-r", "-z", "-l", sha+":"+strings.TrimSuffix(repo.prefix, "/"))))
+	at := sha + ":" + strings.TrimSuffix(repo.prefix, "/")
+	listed, err := output(fetchingNothing(gitCommand(ctx, repo.top, "ls-tree", "-r", "-z", "-l", at)))
+	// lacked is what the clone lacks of the tree, where git could not list the sizes for it,
+	// and unread what git said then.
+	var lacked map[string]bool
+	var unread error
 	if err != nil {
-		return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), err)
+		// A git told to fetch nothing may die on the first blob it lacks rather than write BAD
+		// for its size, as Ubuntu 24.04's 2.43.0 does, and the person would read git's
+		// sentence in place of the refusal below. So what the clone lacks is asked of rev-list,
+		// which prints an object it lacks rather than fetching it, and the tree is listed again
+		// without sizes, which reads no blob.
+		unread = err
+		if lacked, err = lacking(ctx, repo.top, at); err != nil || len(lacked) == 0 {
+			return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), unread)
+		}
+		if listed, err = output(fetchingNothing(gitCommand(ctx, repo.top, "ls-tree", "-r", "-z", at))); err != nil {
+			return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), err)
+		}
 	}
 
 	type entry struct {
@@ -447,10 +463,15 @@ func repositoryOf(ctx context.Context, repo place, sha string) (*gitTree, error)
 			continue
 		}
 		// "<mode> <type> <object> <size>", a tab, and the path exactly as it was committed:
-		// -z quotes nothing, and a name may begin or end with a space.
+		// -z quotes nothing, and a name may begin or end with a space. Listed again without
+		// sizes, the size is not there.
 		meta, path, found := strings.Cut(record, "\t")
 		fields := strings.Fields(meta)
-		if !found || len(fields) != 4 {
+		want := 4
+		if lacked != nil {
+			want = 3
+		}
+		if !found || len(fields) != want {
 			return nil, fmt.Errorf("the tree of %s could not be read from git: %q is not a line of its listing", short(sha), record)
 		}
 		// Every rule a tree is held to, by the code the installation and a hook hold it by
@@ -479,6 +500,15 @@ func repositoryOf(ctx context.Context, repo place, sha string) (*gitTree, error)
 			return nil, fmt.Errorf("%s holds U+FFFD, which the installation cannot tell apart from what JSON leaves in a name that was not UTF-8: rename the file, commit the rename, then push", path)
 		}
 
+		if lacked != nil {
+			// The tree is refused below for what the clone lacks, so no size is read.
+			if lacked[fields[2]] {
+				missing = append(missing, path)
+			} else {
+				entries = append(entries, entry{path: path, mode: mode, object: fields[2]})
+			}
+			continue
+		}
 		if fields[3] == "BAD" {
 			// What ls-tree writes for a size it could not read, which with fetching turned
 			// off is a blob this clone does not hold.
@@ -493,6 +523,11 @@ func repositoryOf(ctx context.Context, repo place, sha string) (*gitTree, error)
 	}
 	if files := len(entries) + len(missing); files > api.TreeMaxFiles {
 		return nil, fmt.Errorf("the tree of %s has %d files, and a version holds at most %d, as the installation holds it to: every task of a version is sent every file's URL, and a tree of this many is usually carrying dependencies that belong in an image", short(sha), files, api.TreeMaxFiles)
+	}
+	if lacked != nil && len(missing) == 0 {
+		// Nothing the tree names is among what rev-list found lacking, so the listing failed
+		// for another reason, which is git's to say.
+		return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), unread)
 	}
 	if len(missing) > 0 {
 		held := missing[0]
@@ -621,11 +656,29 @@ func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
 
 // fetchingNothing is a git command that answers out of what this clone holds and never fetches
 // what it lacks, which is what repositoryOf needs of a partial clone and says why.
-// GIT_NO_LAZY_FETCH is read by git from 2.45 on. An older git ignores it and fetches as it always
-// has, which is slow and still reads the right bytes.
+// GIT_NO_LAZY_FETCH came with the fix for CVE-2024-32465, in 2.45.1 and the releases of older
+// lines beside it, and a distribution's git may carry it as a patch, as Ubuntu 24.04's 2.43.0
+// does. A git without it ignores it and fetches as it always has, which is slow and still reads
+// the right bytes.
 func fetchingNothing(cmd *exec.Cmd) *exec.Cmd {
 	cmd.Env = append(cmd.Env, "GIT_NO_LAZY_FETCH=1")
 	return cmd
+}
+
+// lacking is what this clone lacks of the tree at, by object name, asked without fetching any of
+// it: rev-list prints an object it lacks with a ? before it, rather than fetching it or failing.
+func lacking(ctx context.Context, top, at string) (map[string]bool, error) {
+	listed, err := output(fetchingNothing(gitCommand(ctx, top, "rev-list", "--objects", "--no-object-names", "--missing=print", at)))
+	if err != nil {
+		return nil, err
+	}
+	lacked := map[string]bool{}
+	for _, line := range strings.Split(string(listed), "\n") {
+		if object, found := strings.CutPrefix(line, "?"); found {
+			lacked[object] = true
+		}
+	}
+	return lacked, nil
 }
 
 // gitOutput is what git wrote, exactly as it wrote it. A -z listing is read through this rather

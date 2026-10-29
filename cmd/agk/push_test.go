@@ -1104,7 +1104,7 @@ func TestAPartialCloneIsRefusedRatherThanFetchedFileByFile(t *testing.T) {
 	clone := filepath.Join(t.TempDir(), "clone")
 	gitIn(t, origin, "clone", "-q", "--filter=blob:none", "file://"+origin, clone)
 	if !lacks(clone, lacking) {
-		t.Skip("this clone holds every blob, which is a git before 2.45 fetching whatever it is asked about, or one that did not filter")
+		t.Skip("this clone holds every blob, which is a git without GIT_NO_LAZY_FETCH fetching whatever it is asked about, or one that did not filter")
 	}
 
 	code, out, errs, got := pushing(t, clone, http.StatusOK, "--commit", earlier, "--branch", "earlier")
@@ -1119,6 +1119,43 @@ func TestAPartialCloneIsRefusedRatherThanFetchedFileByFile(t *testing.T) {
 	}
 	if !lacks(clone, lacking) {
 		t.Error("the blob was fetched on the way to the refusal")
+	}
+}
+
+// What a git that dies on a blob it lacks, rather than listing its size as BAD, leaves the push to
+// find out by other means: every object of the tree the clone lacks, by name, and nothing fetched
+// on the way. A git that writes BAD never asks, so this is held on every git rather than on the
+// one the test above happens to run with.
+func TestWhatAPartialCloneLacksIsFoundWithoutFetchingIt(t *testing.T) {
+	origin := repository(t)
+	write(t, origin, "scripts/render.sh", "#!/bin/sh\necho earlier\n")
+	write(t, origin, "scripts/held.sh", "#!/bin/sh\necho held\n")
+	commitAll(t, origin, "two scripts")
+	earlier := gitIn(t, origin, "rev-parse", "HEAD")
+	absent := gitIn(t, origin, "rev-parse", "HEAD:scripts/render.sh")
+	held := gitIn(t, origin, "rev-parse", "HEAD:scripts/held.sh")
+	write(t, origin, "scripts/render.sh", "#!/bin/sh\necho later\n")
+	commitAll(t, origin, "a later script")
+	gitIn(t, origin, "config", "uploadpack.allowFilter", "true")
+	gitIn(t, origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+
+	clone := filepath.Join(t.TempDir(), "clone")
+	gitIn(t, origin, "clone", "-q", "--filter=blob:none", "file://"+origin, clone)
+	if !lacks(clone, absent) {
+		t.Skip("this clone holds every blob, which is a git without GIT_NO_LAZY_FETCH fetching whatever it is asked about, or one that did not filter")
+	}
+
+	for _, at := range []string{earlier + ":", earlier + ":scripts"} {
+		lacked, err := lacking(context.Background(), clone, at)
+		if err != nil {
+			t.Fatalf("%s: %v", at, err)
+		}
+		if !lacked[absent] || lacked[held] || len(lacked) != 1 {
+			t.Errorf("%s: what the clone lacks reads %v, where it lacks %s alone", at, lacked, absent)
+		}
+	}
+	if !lacks(clone, absent) {
+		t.Error("the blob was fetched on the way to finding it lacking")
 	}
 }
 
