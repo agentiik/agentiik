@@ -1,13 +1,13 @@
 agentiik  every namespace  dana   1 Runs   2 Workflows   3 Sharing        ● live
 Pools                                                                    4 pools
-POOL         LABELS                         RUNNERS                TAKES AT ONCE
+Pool         Labels                         Runners                Takes at once
 default      no label                       2 ready                           12
 dmz          zone=dmz,arch=amd64            2 ready · 1 draining …             8
 gpu          gpu=true                       1 unhealthy                        0
 lab          zone=lab                       1 ready                            2
 
 Runners                                                                8 runners
-RUNNER       POOL         STATE       LAST HEARTBEAT LABELS
+Runner       Pool         State       Last heartbeat Labels
 runner-defa… default      ● ready     2s ago         no label
 runner-defa… default      ● ready     6s ago         no label
 runner-dmz-… dmz          ● revoked   4d 19h ago     zone=dmz,arch=amd64
@@ -20,5 +20,5 @@ agent 0.6.0
 joined 2026-09-20 08:10 · last heartbeat 2s ago
 its credential rotated by 2026-10-20 08:10
 
-A runner is its identifier, pool and labels here, never the host it runs on: GE…
+
 ↑↓ Move   esc Runs   q Quit   ? Every key

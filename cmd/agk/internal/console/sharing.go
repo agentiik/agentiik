@@ -350,7 +350,7 @@ func (m Model) grantsLines(t theme, width, room int) []string {
 	if m.grantsFiltering || m.grantsFilter != "" {
 		left := []part{{strong, "/ "}, {plain, m.grantsFilter}}
 		if m.grantsFilter == "" {
-			left = []part{{strong, "/ "}, {quiet, "filter by principal, role, permission or scope"}}
+			left = []part{{strong, "/ "}, {quiet, "Filter"}}
 		}
 		if m.grantsFiltering {
 			left = append(left, part{strong, "▏"})
@@ -364,7 +364,7 @@ func (m Model) grantsLines(t theme, width, room int) []string {
 		lines = append(lines, line(part{quiet, "No grant matches the filter."}))
 	default:
 		h := func(s string) []part { return []part{{quiet, s}} }
-		lines = append(lines, line(m.grantColumns(width, h("PRINCIPAL"), h("ROLE OR DENY"), h("SCOPE"), h("EXPIRES"), h("GRANTED"))...))
+		lines = append(lines, line(m.grantColumns(width, h("Principal"), h("Role or deny"), h("Scope"), h("Expires"), h("Granted"))...))
 		chosen := m.chosenGrant()
 		// A list longer than half the room is cut around the grant chosen, so that the roles' table
 		// keeps a place beneath it.
@@ -389,12 +389,11 @@ func (m Model) grantsLines(t theme, width, room int) []string {
 			lines = append(lines, t.line(i == chosen, width, m.grantColumns(width, []part{{plain, g.Principal}}, gives, scope, expires, []part{{muted, g.GrantedBy + " " + clock(g.GrantedAt, now)}})...))
 		}
 		if len(shown) > rows {
-			lines = append(lines, line(part{quiet, "and " + counting(len(shown)-rows, "more grant") + ": ↑↓ moves over them"}))
+			lines = append(lines, line(part{quiet, "and " + counting(len(shown)-rows, "more grant")}))
 		}
 	}
-	lines = append(lines, t.said(quiet, "A namespace grant reaches every workflow inside; a deny names one permission, never a role.", width)...)
 	if len(lines)+8 > room {
-		return append(lines, line(), line(part{quiet, "read only: agk share and the web console change grants"}))
+		return append(lines, line(), line(part{quiet, "read only"}))
 	}
 
 	lines = append(lines, line(), line(part{strong, "What each role carries"}))
@@ -425,8 +424,7 @@ func (m Model) grantsLines(t theme, width, room int) []string {
 	for _, l := range packed(legend, width) {
 		lines = append(lines, line(part{muted, l}))
 	}
-	lines = append(lines, t.said(muted, "operator runs and follows runs without workflow:read: the queries inside stay out of reach.", width)...)
-	return append(lines, line(), line(part{quiet, "read only: agk share and the web console change grants"}))
+	return append(lines, line(), line(part{quiet, "read only"}))
 }
 
 // resolvedLines are the grants resolved for one principal: each of the nine permissions held,
@@ -455,12 +453,7 @@ func (m Model) resolvedLines(t theme, width int) []string {
 	if err != nil {
 		return append(lines, line(part{failedText, "The grants could not be resolved: " + err.Error()}))
 	}
-	both := "the namespace"
-	if scopeOf(m.scope).Workflow != "" {
-		both = "both scopes"
-	}
-	lines = append(append(lines, t.said(muted, "Every grant that applies, its own and its groups', at "+both+": their union, then each deny taken away.", width)...), line())
-	maybe := false
+	lines = append(lines, line())
 	for _, l := range resolved {
 		sign, role := " ", quiet
 		var why []string
@@ -483,7 +476,6 @@ func (m Model) resolvedLines(t theme, width int) []string {
 				why = append(why, source(g, whom))
 			}
 		case len(l.members) > 0:
-			maybe = true
 			for _, g := range l.members {
 				why = append(why, "to a member: "+source(g, whom))
 			}
@@ -503,10 +495,6 @@ func (m Model) resolvedLines(t theme, width int) []string {
 			}
 			lines = append(lines, line(part{plain, strings.Repeat(" ", 20)}, part{muted, w}))
 		}
-	}
-	lines = append(append(lines, line()), t.said(quiet, "Grants add up across both scopes; a deny is the only subtraction, and wins over any allow wherever it is set.", width)...)
-	if maybe {
-		lines = append(lines, t.said(quiet, "Who is in a group is an administrator's to read, so whether "+whom+" is in one of them is not said here.", width)...)
 	}
 	return lines
 }
@@ -535,15 +523,6 @@ func folded(sentence string, width int) []string {
 			continue
 		}
 		lines = append(lines, w)
-	}
-	return lines
-}
-
-// said is a sentence as lines of one role, broken between words to the width.
-func (t theme) said(r role, sentence string, width int) []string {
-	var lines []string
-	for _, l := range folded(sentence, width) {
-		lines = append(lines, t.line(false, width, within([]part{{r, l}}, width)...))
 	}
 	return lines
 }
@@ -609,8 +588,7 @@ func (m Model) sharingLines(t theme, height int) []string {
 	line := func(parts ...part) string { return t.line(false, m.width, within(parts, m.width)...) }
 	switch {
 	case m.scope == "":
-		return append([]string{line(part{strong, "Sharing"}), line()},
-			t.said(quiet, "Nothing to list: the grants of a namespace or a workflow are listed to whoever holds grant:manage there, as agk grants lists them, and you hold it nowhere.", m.width)...)
+		return []string{line(part{strong, "Sharing"}), line(), line(part{quiet, "No scope whose grants you may list."})}
 	case m.grantsFor != m.scope && m.grantsFailed != "":
 		return []string{line(part{strong, "Sharing "}, part{plain, m.scope}), line(), line(part{failedText, "The grants could not be read: " + m.grantsFailed})}
 	case m.grantsFor != m.scope:

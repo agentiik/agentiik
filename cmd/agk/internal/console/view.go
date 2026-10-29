@@ -346,7 +346,7 @@ const (
 // today, which leaves the workflow the room a date would take, and a date with its time otherwise.
 func (m Model) startedWidth() int {
 	now := m.o.Now()
-	width := len("STARTED")
+	width := len("Started")
 	for _, r := range m.runs {
 		width = max(width, lipgloss.Width(clock(startOf(r), now)))
 	}
@@ -403,7 +403,7 @@ func (m Model) runsLines(t theme, height int) []string {
 	}
 	if m.compact() {
 		h := func(s string) []part { return []part{{quiet, s}} }
-		lines = append(lines, t.line(false, m.width, compactColumns(m.width, h("STATE"), h("WORKFLOW"), h("TOOK"))...))
+		lines = append(lines, t.line(false, m.width, compactColumns(m.width, h("State"), h("Workflow"), h("Took"))...))
 		room := (height - len(lines)) / 2
 		at := max(0, slices.IndexFunc(runs, func(r db.ListedRun) bool { return string(r.Run) == m.selected }))
 		first := min(max(0, at-room+1), max(0, len(runs)-room))
@@ -480,7 +480,7 @@ type cell struct {
 
 func (m Model) header() []part {
 	h := func(s string) []part { return []part{{quiet, s}} }
-	return m.columns(h("STATE"), h("RUN"), h("WORKFLOW"), h("TRIGGER"), h("STARTED"), h("TOOK"), h("BY"), h("STEPS"), h("LAST 20"))
+	return m.columns(h("State"), h("Run"), h("Workflow"), h("Trigger"), h("Started"), h("Took"), h("By"), h("Steps"), h("Last 20"))
 }
 
 // row is one run as the list draws it: its state a word beside a dot in the state's colour, so

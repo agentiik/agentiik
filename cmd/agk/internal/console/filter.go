@@ -220,7 +220,7 @@ func (m Model) filterLine(t theme) string {
 	left := []part{{strong, "/ "}}
 	switch {
 	case m.filter == "" && m.filtering:
-		left = append(left, part{quiet, "filter as you type, or state=failed since=24h"})
+		left = append(left, part{quiet, "Filter"})
 	default:
 		left = append(left, part{plain, m.filter})
 	}

@@ -19,7 +19,7 @@ func TestAtFullWidthARunCarriesItsStepsAndItsWorkflowsLastRuns(t *testing.T) {
 	in := &installation{runs: runs}
 	m := opened(t, in, Options{}, 160, 24)
 	s := screen(m)
-	if !strings.Contains(s, "STEPS        LAST 20") || !strings.Contains(s, "alice          ■■□          ▁▂█") {
+	if !strings.Contains(s, "Steps        Last 20") || !strings.Contains(s, "alice          ■■□          ▁▂█") {
 		t.Errorf("a run's steps and its workflow's last runs are not drawn at full width:\n%s", s)
 	}
 	for _, wf := range []string{"monthly-invoicing", "nightly-export"} {
@@ -57,7 +57,7 @@ func TestAtFullWidthARunCarriesItsStepsAndItsWorkflowsLastRuns(t *testing.T) {
 	}
 
 	narrow := opened(t, &installation{runs: runs}, Options{}, 159, 24)
-	if strings.Contains(screen(narrow), "LAST 20") {
+	if strings.Contains(screen(narrow), "Last 20") {
 		t.Errorf("under 160 columns the last runs are drawn:\n%s", screen(narrow))
 	}
 }

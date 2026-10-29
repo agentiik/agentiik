@@ -76,7 +76,6 @@ func TestTheRunnersViewListsThePoolsAndTheirRunners(t *testing.T) {
 		"● draining", "drained by dana, 10:00:00: kernel update",
 		"● unhealthy",
 		"● revoked", "revoked by dana, 2026-09-23 12:00: disk replaced",
-		"never the host it runs on",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the runners view does not say %q:\n%s", want, s)
@@ -222,7 +221,7 @@ func TestTheDigitsTurnBetweenTheViews(t *testing.T) {
 		t.Errorf("4 from a run leaves view %d, the run kept: %v", m.view, m.run != nil)
 	}
 	m = press(t, m, one)
-	if m.view != runsView || !strings.Contains(screen(m), "STATE       RUN") {
+	if m.view != runsView || !strings.Contains(screen(m), "State       Run") {
 		t.Errorf("1 from the runners leaves view %d:\n%s", m.view, screen(m))
 	}
 	m = press(t, m, four, esc)

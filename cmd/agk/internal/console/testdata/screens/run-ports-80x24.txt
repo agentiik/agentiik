@@ -1,5 +1,5 @@
 agentiik  every namespace  alice   1 Runs   2 Workflows   1 notification  ● live
-▸ Runs  12 runs · 3 failed · 3 running   folded · tab
+▸ Runs  12 runs · 3 failed · 3 running   folded
 ╭─ Run ────────────────────────────────────────────────────────────────────────╮
 │ Run 01JMZ8V1P9C4XQ7K2N4D6F8H0A  finance/monthly-invoicing@a3f9c1e  ● failed  │
 │ manual · by alice · started 05:41:03 · took 1m 52s  last 11 ▃▁▁▁▁▁▁█▁▁▁  me… │
@@ -8,7 +8,7 @@ agentiik  every namespace  alice   1 Runs   2 Workflows   1 notification  ● li
 │ Steps   Graph   Ports                                                        │
 │ invoice  ● failed  1m 50s                                                    │
 │                                                                              │
-│   PORT         ITEMS   SIZE      DIGEST                                      │
+│   Port         Items   Size      Digest                                      │
 │ ▸ out            211   41.1 KiB  sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7… │
 │   error            3   4.1 KiB   sha256:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e… │
 │                                                                              │

@@ -5,7 +5,7 @@ agentiik  every namespace  alice   1 Runs   2 Workflows   1 notification  ● li
 │ ● failed    01JMZ8T7B2M… finance/dunning-remind… 05:30:00     22s finance/a… │
 │ ● timed_out 01JMZ8G4X6D… finance/vat-reconcile   01:18:39  9m 51s finance/a… │
 │                                                                              │
-│ STATE       RUN          WORKFLOW                STARTED     TOOK BY         │
+│ State       Run          Workflow                Started     Took By         │
 │ ⠋ running   01JMZ8W4K2R… finance/monthly-invoic… 06:00:12  1m 48s finance/a… │
 │ ● failed    01JMZ8V1P9C… finance/monthly-invoic… 05:41:03  1m 52s alice      │
 │ ● failed    01JMZ8T7B2M… finance/dunning-remind… 05:30:00     22s finance/a… │
