@@ -548,6 +548,20 @@ func (c *Collections) call(ctx context.Context, caller Caller, collection string
 	}
 	switch detail.State {
 	case agk.Succeeded:
+		// The output of one's own call is returned under workflow:run alone, "run:read_data not
+		// asked", but "only an explicit deny removes, and it wins over any allow at any scope": a
+		// caller denied run:read_data on the workflow is answered the run as an async call answers
+		// it, asked when the output would be read, since a deny written meanwhile applies from the
+		// next request.
+		if block.Output != "" {
+			denied, err := caller.Denied(ctx, RunReadData, target)
+			if err != nil {
+				return nil, err
+			}
+			if denied {
+				return noOutput(fmt.Sprintf("Run %s of %s/%s succeeded. Its output %s is not returned to you: run:read_data is denied you on %s/%s, and a deny wins over the grant that let you call the tool. Calling it again would start another run, answered alike.", run, target.Namespace, target.Workflow, block.Output, target.Namespace, target.Workflow)), nil
+			}
+		}
 		return c.succeeded(ctx, target.Namespace, detail, block.Output)
 	case agk.Failed, agk.Cancelled, agk.TimedOut:
 		return &mcp.CallResult{Content: []mcp.Content{mcp.Text(ended(detail))}, StructuredContent: map[string]any{"run": string(run), "state": detail.State.String()}, IsError: true}, nil
