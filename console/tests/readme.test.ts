@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 // console/README.md, the place a reader of package.json, which holds no comment, looks for one." A
 // dependency added without its row is one whose reason and licence nobody wrote down.
 
-const files = import.meta.glob(["../README.md", "../package.json"], { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+const files = import.meta.glob(["../README.md", "../package.json", "../src/components/AccountMenu.svelte"], { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 const readme = files["../README.md"]!;
 const manifest = JSON.parse(files["../package.json"]!) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
 
@@ -31,5 +31,15 @@ describe("the console's dependencies", () => {
   it("are each under a permissive licence, named in its row", () => {
     const unnamed = [...rows("Shipped in the build:"), ...rows("Used to build and test it, never shipped:")].filter((r) => !/\b(MIT|ISC|Apache-2\.0|BSD-[23]-Clause|SIL Open Font License 1\.1)\b/.test(r.why));
     expect(unnamed.map((r) => r.names.join(", "))).toEqual([]);
+  });
+});
+
+// The README says what the console draws as it draws it: the version a build names is shown in the
+// account menu, the key line at the foot of the window being gone.
+describe("the README", () => {
+  it("says the version a build names is shown where the console draws it", () => {
+    expect(readme).toContain("which the account menu at the foot of the sidebar shows");
+    expect(files["../src/components/AccountMenu.svelte"]).toContain("agentiik {version}");
+    expect(readme).not.toMatch(/key line/);
   });
 });

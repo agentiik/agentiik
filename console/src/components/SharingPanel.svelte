@@ -292,8 +292,8 @@
     align-items: start;
   }
 
-  /* The grants and the arithmetic side by side where both fit, the one above the other in a
-     window of 1280px, the narrowest the console is drawn for, where a grant's row needs the width. */
+  /* The grants and the arithmetic side by side where both fit, from 1600px, and the one above the
+     other in any narrower window, where a grant's row needs the width. */
   @media (max-width: 1599px) {
     .columns {
       grid-template-columns: minmax(0, 1fr);

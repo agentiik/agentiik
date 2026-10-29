@@ -172,10 +172,12 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 	}
 
 	// And the administrator's half: the inventory, which is the installation's rather than a
-	// runner's ("A user never learns which host executed a task beyond its runner name and
-	// labels"), the pools, the tokens that let a machine into one, and the two orders that take
-	// one out of service; the statistics of the pools and of the installation's activity; and the
-	// audit log, which holds what was done to all of them and to everything else.
+	// runner's ("A user never learns which host executed a task beyond its runner's identifier:
+	// a run names the runner of each task by it, and nothing of its labels, version,
+	// architecture, capacity or key, which the runner inventory shows an administrator alone"),
+	// the pools, the tokens that let a machine into one, and the two orders that take one out of
+	// service; the statistics of the pools and of the installation's activity; and the audit log,
+	// which holds what was done to all of them and to everything else.
 	admin := Needs{Permission: GrantManage, Scope: Installation}
 	for _, r := range []struct {
 		method  string
