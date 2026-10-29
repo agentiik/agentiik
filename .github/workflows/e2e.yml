@@ -23,7 +23,11 @@ concurrency:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 rather than ubuntu-latest, which is 26.04 now: there, the alpine:3.21 the
+    # conformance test carries to its registry is answered 404 when a runner pulls it by the digest
+    # the pushing daemon reported, so the test fails before its script step runs, where on 24.04
+    # it passed. Moved to the newer image with the carrying fixed for it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
