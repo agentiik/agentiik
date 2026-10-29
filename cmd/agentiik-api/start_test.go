@@ -416,7 +416,11 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
 		t.Fatal("bus-init failed")
 	}
-	in, err := open(t.Context(), servingSettings(t, database.Application, dir, natsFrom(t, dir)), slog.New(slog.DiscardHandler))
+	// Serving MCP, as an installation does unless AGK_MCP is off, so that the user's server, every
+	// collection and the authorisation server issuing their tokens are held to the page as well.
+	s := servingSettings(t, database.Application, dir, natsFrom(t, dir))
+	s.MCP = true
+	in, err := open(t.Context(), s, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,16 +2,27 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"html"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/webauthn/webauthntest"
 	"github.com/agentiik/agentiik/mcp"
 )
 
@@ -320,5 +331,342 @@ func TestBothServersSpeakTheRevisionToAConformanceClient(t *testing.T) {
 		if w.StatusCode != http.StatusBadRequest || refused.Error.Code != -32022 || len(refused.Error.Data.Supported) != 1 || refused.Error.Data.Supported[0] != "2026-07-28" {
 			t.Errorf("an older revision at %s answered %d %+v", at, w.StatusCode, refused)
 		}
+	}
+}
+
+// "Act as an OAuth 2.1 resource server and as its own authorisation server": a client that knows the
+// URL of /mcp and nothing else is held to the revision's authorisation from its first request, and
+// holds the installation to it, over HTTP against what serve builds. It is told where to ask by the
+// 401, reads the Protected Resource Metadata and the Authorization Server Metadata the revision
+// names, is registered by nothing but its own Client ID Metadata Document, has its person allow it
+// by a sign-in carrying its PKCE challenge on the sign-in page, trades the code with its verifier,
+// lists the tools with the token, and refreshes it. What the revision refuses is refused as the page
+// says: a code presented with another verifier or a second time, a token at another resource than
+// its audience, one revoked or past its hour, a refresh token presented after it was spent, which
+// ends the grant, and a call needing a scope the token was not allowed, which is told the scope.
+//
+// The installation's public URL is https://agentiik.example.com, and every address it writes is one
+// under it, which the client asks at the test's server in its place, as a client reaching the
+// installation asks it at its own host.
+func TestAClientIsAllowedAndHeldToTheRevisionsAuthorisation(t *testing.T) {
+	const redirect = "http://127.0.0.1:4711/callback"
+	clientID, fetch := anMCPClient(t, "Conformance client", redirect)
+	x := someTenantsWith(t, func(s *settings) { s.clients = fetch })
+	server := httptest.NewServer(x.in.router)
+	t.Cleanup(server.Close)
+	at := func(address string) string {
+		if !strings.HasPrefix(address, tenantsOrigin) {
+			t.Fatalf("the installation wrote %q, which is not under its public URL", address)
+		}
+		return server.URL + strings.TrimPrefix(address, tenantsOrigin)
+	}
+	do := func(r *http.Request) (*http.Response, []byte) {
+		t.Helper()
+		w, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer w.Body.Close()
+		raw, _ := io.ReadAll(w.Body)
+		return w, raw
+	}
+	object := func(raw []byte) map[string]any {
+		t.Helper()
+		var o map[string]any
+		if err := json.Unmarshal(raw, &o); err != nil {
+			t.Fatalf("%q is no JSON object", raw)
+		}
+		return o
+	}
+	challenged := regexp.MustCompile(`(\w+)="([^"]*)"`)
+	params := func(header string) map[string]string {
+		out := map[string]string{}
+		if !strings.HasPrefix(header, "Bearer ") {
+			t.Errorf("WWW-Authenticate is %q, no Bearer challenge", header)
+		}
+		for _, m := range challenged.FindAllStringSubmatch(header, -1) {
+			out[m[1]] = m[2]
+		}
+		return out
+	}
+
+	// The first request carries no token, and is told where to ask for one: the metadata of the URL
+	// it called, the scopes the resource uses, and no error, since no credential came.
+	discover := `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
+	r, _ := http.NewRequestWithContext(t.Context(), "POST", server.URL+"/mcp", strings.NewReader(discover))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Mcp-Method", "server/discover")
+	w, _ := do(r)
+	challenge := params(w.Header.Get("WWW-Authenticate"))
+	if w.StatusCode != http.StatusUnauthorized || challenge["resource_metadata"] != tenantsOrigin+"/.well-known/oauth-protected-resource/mcp" || challenge["error"] != "" {
+		t.Fatalf("/mcp with no token answered %d and the challenge %v", w.StatusCode, challenge)
+	}
+	if scopes := strings.Fields(challenge["scope"]); len(scopes) != 9 || !slices.Contains(scopes, "workflow:write") || slices.Contains(scopes, "offline_access") {
+		t.Errorf("the challenge asks for the scopes %v", scopes)
+	}
+
+	// RFC 9728: the resource is the URL called, and names its authorisation server.
+	r, _ = http.NewRequestWithContext(t.Context(), "GET", at(challenge["resource_metadata"]), nil)
+	w, raw := do(r)
+	resource := object(raw)
+	servers, _ := resource["authorization_servers"].([]any)
+	if w.StatusCode != http.StatusOK || resource["resource"] != tenantsOrigin+"/mcp" || len(servers) != 1 || servers[0] != tenantsOrigin {
+		t.Fatalf("the resource's metadata answered %d %v", w.StatusCode, resource)
+	}
+	// RFC 8414: the issuer the metadata names, at the address its suffix makes, holding PKCE's S256,
+	// iss and Client ID Metadata Documents, and no registration.
+	issuer := servers[0].(string)
+	r, _ = http.NewRequestWithContext(t.Context(), "GET", at(issuer+"/.well-known/oauth-authorization-server"), nil)
+	w, raw = do(r)
+	metadata := object(raw)
+	methods, _ := metadata["code_challenge_methods_supported"].([]any)
+	if w.StatusCode != http.StatusOK || metadata["issuer"] != issuer || !slices.Contains(methods, any("S256")) || len(methods) != 1 ||
+		metadata["client_id_metadata_document_supported"] != true || metadata["authorization_response_iss_parameter_supported"] != true ||
+		metadata["registration_endpoint"] != nil {
+		t.Fatalf("the authorisation server's metadata answered %d %v", w.StatusCode, metadata)
+	}
+	authorize, tokens := metadata["authorization_endpoint"].(string), metadata["token_endpoint"].(string)
+
+	// alice registers a passkey from a session her password opens, as she would on the enrolment
+	// page, which is what she allows a client with.
+	keys := webauthntest.New(tenantsOrigin)
+	var cookie *http.Cookie
+	if err := x.in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		cookie, err = api.OpenSession(ctx, w, "alice", api.OpenedBy{Credential: x.credential}, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := func(path string, body any, cookie *http.Cookie) (int, map[string]any) {
+		t.Helper()
+		encoded, _ := json.Marshal(body)
+		r, _ := http.NewRequestWithContext(t.Context(), "POST", server.URL+path, bytes.NewReader(encoded))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", tenantsOrigin)
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		w, raw := do(r)
+		return w.StatusCode, object(raw)
+	}
+	optionsOf := func(answer map[string]any) []byte { return must(json.Marshal(answer["options"])) }
+	status, options := page("/api/v1/auth/passkey/options", map[string]any{"ceremony": "registration"}, cookie)
+	made, _, err := keys.Create(optionsOf(options))
+	if status != http.StatusOK || err != nil {
+		t.Fatalf("a registration's options answered %d %v: %v", status, options, err)
+	}
+	if status, answer := page("/api/v1/auth/passkey/verify", map[string]any{"ceremony": "registration", "credential": made}, cookie); status != http.StatusOK {
+		t.Fatalf("the registration answered %d %v", status, answer)
+	}
+
+	// allow opens the authorisation page as the client would send the browser there, holds it to
+	// naming the client, its hosts and what it asks, and signs alice in with what the page hands on,
+	// its data attributes, as the page's script does; it answers the address the browser is sent back
+	// to and the client's verifier.
+	attribute := regexp.MustCompile(`data-([a-z-]+)="([^"]*)"`)
+	allow := func(resource, scope, state string) (*url.URL, string) {
+		t.Helper()
+		verifier := randomHex(t) + randomHex(t)
+		sum := sha256.Sum256([]byte(verifier))
+		asked := url.Values{
+			"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {redirect},
+			"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"},
+			"resource": {resource}, "scope": {scope}, "state": {state},
+		}
+		r, _ := http.NewRequestWithContext(t.Context(), "GET", at(authorize)+"?"+asked.Encode(), nil)
+		w, raw := do(r)
+		shown := string(raw)
+		clientHost, _, _ := strings.Cut(strings.TrimPrefix(clientID, "https://"), "/")
+		if w.StatusCode != http.StatusOK || !strings.Contains(shown, "Conformance client") || !strings.Contains(shown, "<code>127.0.0.1:4711</code>") ||
+			!strings.Contains(shown, "<code>"+clientHost+"</code>") {
+			t.Fatalf("the authorisation page answered %d:\n%s", w.StatusCode, shown)
+		}
+		handed := map[string]string{}
+		for _, m := range attribute.FindAllStringSubmatch(shown, -1) {
+			handed[m[1]] = html.UnescapeString(m[2])
+		}
+		authorization := map[string]string{
+			"client_id": handed["client-id"], "redirect_uri": handed["redirect-uri"], "code_challenge": handed["code-challenge"],
+			"resource": handed["resource"], "scope": handed["scope"], "state": handed["state"],
+		}
+		status, options := page("/api/v1/auth/passkey/options", map[string]any{"ceremony": "assertion"}, nil)
+		asserted, err := keys.Get(optionsOf(options))
+		if status != http.StatusOK || err != nil {
+			t.Fatalf("an assertion's options answered %d %v: %v", status, options, err)
+		}
+		status, signedIn := page("/api/v1/auth/passkey/verify", map[string]any{"ceremony": "assertion", "credential": asserted, "authorization": authorization}, nil)
+		back, _ := signedIn["redirect_to"].(string)
+		if status != http.StatusOK || !strings.HasPrefix(back, redirect+"?") {
+			t.Fatalf("the sign-in allowing the client answered %d %v", status, signedIn)
+		}
+		u, err := url.Parse(back)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u, verifier
+	}
+	trade := func(form url.Values) (int, map[string]any) {
+		t.Helper()
+		r, _ := http.NewRequestWithContext(t.Context(), "POST", at(tokens), strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w, raw := do(r)
+		if w.Header.Get("Cache-Control") != "no-store" {
+			t.Errorf("the token endpoint answered Cache-Control %q", w.Header.Get("Cache-Control"))
+		}
+		return w.StatusCode, object(raw)
+	}
+	redeem := func(back *url.URL, verifier, resource string) (int, map[string]any) {
+		return trade(url.Values{
+			"grant_type": {"authorization_code"}, "code": {back.Query().Get("code")}, "code_verifier": {verifier},
+			"client_id": {clientID}, "redirect_uri": {redirect}, "resource": {resource},
+		})
+	}
+
+	// Allowed, the browser goes back with the code, the client's state and iss (RFC 9207), and the code
+	// and the verifier answer a pair, for the scopes the challenge named.
+	back, verifier := allow(tenantsOrigin+"/mcp", challenge["scope"], "state-one")
+	if back.Query().Get("state") != "state-one" || back.Query().Get("iss") != issuer || !strings.HasPrefix(back.Query().Get("code"), "agkcode_") {
+		t.Fatalf("the browser is sent back to %s", back)
+	}
+	status, pair := redeem(back, verifier, tenantsOrigin+"/mcp")
+	access, _ := pair["access_token"].(string)
+	if status != http.StatusOK || !strings.HasPrefix(access, "agktoken_") || pair["token_type"] != "Bearer" || pair["expires_in"] != float64(3600) ||
+		!strings.HasPrefix(pair["refresh_token"].(string), "agkrefresh_") || pair["scope"] != challenge["scope"] {
+		t.Fatalf("the code answered %d %v", status, pair)
+	}
+	user := &conformant{t: t, url: server.URL + "/mcp", token: access}
+	listed := user.listed()
+	if listed["workflow.language"] == nil || listed["workflow.commit"] == nil || listed["collection.list"] != nil || listed["runner.list"] != nil {
+		t.Errorf("the token lists %v", slices.Sorted(maps.Keys(listed)))
+	}
+	if language := user.called(listed["workflow.language"], map[string]any{}); language.result["isError"] == true {
+		t.Errorf("workflow.language answered %v", language.result)
+	}
+
+	// The code is spent: presented again, with its own verifier, it opens nothing.
+	if status, refused := redeem(back, verifier, tenantsOrigin+"/mcp"); status != http.StatusBadRequest || refused["error"] != "invalid_grant" {
+		t.Errorf("a code presented again answered %d %v", status, refused)
+	}
+	// A code presented with another verifier opens nothing, and is spent by it.
+	other, verifier := allow(tenantsOrigin+"/mcp", "", "")
+	if status, refused := redeem(other, strings.Repeat("v", 43), ""); status != http.StatusBadRequest || refused["error"] != "invalid_grant" {
+		t.Errorf("a code presented with another verifier answered %d %v", status, refused)
+	}
+	if status, refused := redeem(other, verifier, ""); status != http.StatusBadRequest || refused["error"] != "invalid_grant" {
+		t.Errorf("a code presented after another verifier spent it answered %d %v", status, refused)
+	}
+
+	// The token is accepted at its audience alone: the API answers it as a token that opens nothing,
+	// and so does a collection, telling the client the token is invalid there.
+	asking := func(method, path, token string, body string) (*http.Response, []byte) {
+		t.Helper()
+		r, _ := http.NewRequestWithContext(t.Context(), method, server.URL+path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Accept", "application/json, text/event-stream")
+		r.Header.Set("MCP-Protocol-Version", "2026-07-28")
+		r.Header.Set("Mcp-Method", "server/discover")
+		return do(r)
+	}
+	if w, raw := asking("GET", "/api/v1/me", access, ""); w.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the token for /mcp at /api/v1/me answered %d %s", w.StatusCode, raw)
+	}
+	w, raw = asking("POST", "/mcp/collections/"+x.collection, access, discover)
+	if c := params(w.Header.Get("WWW-Authenticate")); w.StatusCode != http.StatusUnauthorized || c["error"] != "invalid_token" ||
+		c["resource_metadata"] != tenantsOrigin+"/.well-known/oauth-protected-resource/mcp/collections/"+x.collection {
+		t.Errorf("the token for /mcp at a collection answered %d %v %s", w.StatusCode, c, raw)
+	}
+	// A collection's own token reaches it, and nothing else.
+	back, verifier = allow(tenantsOrigin+"/mcp/collections/"+x.collection, "workflow:run", "")
+	status, ofCollection := redeem(back, verifier, "")
+	if status != http.StatusOK || ofCollection["scope"] != "workflow:run" {
+		t.Fatalf("the collection's code answered %d %v", status, ofCollection)
+	}
+	collection := &conformant{t: t, url: server.URL + "/mcp/collections/" + x.collection, token: ofCollection["access_token"].(string)}
+	if a := collection.send("tools/list", nil); a.status != http.StatusOK || a.err != nil {
+		t.Errorf("the collection's token at its collection answered %d %v", a.status, a.err)
+	}
+	if w, raw := asking("POST", "/mcp", ofCollection["access_token"].(string), discover); w.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a collection's token at /mcp answered %d %s", w.StatusCode, raw)
+	}
+
+	// A token allowed less than its person holds lists what its person may use and, called for a tool
+	// needing what it lacks, is told the scope to ask for.
+	back, verifier = allow(tenantsOrigin+"/mcp", "workflow:read run:read", "")
+	status, reading := redeem(back, verifier, "")
+	if status != http.StatusOK || reading["scope"] != "workflow:read run:read" {
+		t.Fatalf("the narrower code answered %d %v", status, reading)
+	}
+	reader := &conformant{t: t, url: server.URL + "/mcp", token: reading["access_token"].(string)}
+	if listed := reader.listed(); listed["workflow.commit"] == nil {
+		t.Errorf("a token allowed less lists %v, and not what its person may be asked for", slices.Sorted(maps.Keys(listed)))
+	}
+	call := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"workflow.commit","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
+	r, _ = http.NewRequestWithContext(t.Context(), "POST", server.URL+"/mcp", strings.NewReader(call))
+	r.Header.Set("Authorization", "Bearer "+reading["access_token"].(string))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("MCP-Protocol-Version", "2026-07-28")
+	r.Header.Set("Mcp-Method", "tools/call")
+	r.Header.Set("Mcp-Name", "workflow.commit")
+	w, raw = do(r)
+	if c := params(w.Header.Get("WWW-Authenticate")); w.StatusCode != http.StatusForbidden || c["error"] != "insufficient_scope" || c["scope"] != "workflow:write" ||
+		c["resource_metadata"] != tenantsOrigin+"/.well-known/oauth-protected-resource/mcp" {
+		t.Errorf("a call needing workflow:write with a token allowed less answered %d %v %s", w.StatusCode, c, raw)
+	}
+
+	// A refresh answers the next pair; the access token it replaced, and the refresh token it spent,
+	// open nothing, and the second ends the grant, the new pair with it.
+	status, next := trade(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {pair["refresh_token"].(string)}, "client_id": {clientID}})
+	if status != http.StatusOK || next["access_token"] == access || next["scope"] != challenge["scope"] {
+		t.Fatalf("the refresh answered %d %v", status, next)
+	}
+	if w, _ := asking("POST", "/mcp", access, discover); w.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the access token a refresh replaced answered %d", w.StatusCode)
+	}
+	if a := (&conformant{t: t, url: server.URL + "/mcp", token: next["access_token"].(string)}).send("server/discover", nil); a.status != http.StatusOK {
+		t.Errorf("the refreshed access token answered %d", a.status)
+	}
+	status, refused := trade(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {pair["refresh_token"].(string)}, "client_id": {clientID}})
+	if status != http.StatusBadRequest || refused["error"] != "invalid_grant" {
+		t.Errorf("a refresh token presented after it was spent answered %d %v", status, refused)
+	}
+	if w, _ := asking("POST", "/mcp", next["access_token"].(string), discover); w.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the grant whose refresh token was presented twice still opens: %d", w.StatusCode)
+	}
+
+	// The grants are alice's tokens, listed with their audience and their client: the reading one,
+	// revoked there, opens nothing from its next request, and the collection's, its access token
+	// past its hour, opens nothing though the grant goes on.
+	var listing api.TokenList
+	if err := json.Unmarshal(x.must("GET", "/api/v1/auth/tokens", x.as["alice"], nil, http.StatusOK).Body.Bytes(), &listing); err != nil {
+		t.Fatal(err)
+	}
+	grants := map[string]api.APIToken{}
+	for _, tk := range listing.Tokens {
+		if tk.ClientID == clientID {
+			grants[tk.Audience+" "+strings.Join(tk.Scope.Permissions, " ")] = tk
+		}
+	}
+	readingGrant, collectionGrant := grants[tenantsOrigin+"/mcp workflow:read run:read"], grants[tenantsOrigin+"/mcp/collections/"+x.collection+" workflow:run"]
+	if len(grants) != 2 || readingGrant.DeviceLabel != "Conformance client" || collectionGrant.ID == "" {
+		t.Fatalf("alice's tokens list the client's grants as %+v", listing.Tokens)
+	}
+	x.must("DELETE", "/api/v1/auth/tokens/"+readingGrant.ID, x.as["alice"], nil, http.StatusNoContent)
+	if w, _ := asking("POST", "/mcp", reading["access_token"].(string), discover); w.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a revoked grant's access token answered %d", w.StatusCode)
+	}
+	if err := x.in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		held, err := w.Token(ctx, collectionGrant.ID)
+		if err != nil {
+			return err
+		}
+		return w.RotateToken(ctx, held.ID, held.Hash, held.CreatedAt.Add(time.Microsecond), held.Permissions)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w, raw := asking("POST", "/mcp/collections/"+x.collection, ofCollection["access_token"].(string), discover); w.StatusCode != http.StatusUnauthorized ||
+		params(w.Header.Get("WWW-Authenticate"))["error"] != "invalid_token" {
+		t.Errorf("an access token past its hour answered %d %s", w.StatusCode, raw)
 	}
 }

@@ -100,6 +100,12 @@ const ledgerVariable = "AGK_DEV_FINANCE_LEDGER"
 // leave them.
 func someTenants(t *testing.T) *tenants {
 	t.Helper()
+	return someTenantsWith(t, nil)
+}
+
+// someTenantsWith is someTenants on settings adjust changes first, where it is given.
+func someTenantsWith(t *testing.T, adjust func(*settings)) *tenants {
+	t.Helper()
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
 		t.Fatal(err)
@@ -114,6 +120,9 @@ func someTenants(t *testing.T) *tenants {
 	// every collection are asked about with the rest.
 	s.MCP = true
 	s.EnvPrefixes = map[string]string{"finance": "AGK_DEV_FINANCE_"}
+	if adjust != nil {
+		adjust(&s)
+	}
 	ledger := "ledger-" + randomHex(t)
 	t.Setenv(ledgerVariable, ledger)
 	in, err := open(t.Context(), s, slog.New(slog.DiscardHandler))
@@ -391,6 +400,31 @@ func sameAnswer(absence, w *httptest.ResponseRecorder) string {
 	return accesstest.Difference(answerOf(absence), answerOf(w))
 }
 
+// saidBack is an answer with what its path named, the caller's own words, written as absence named
+// it, in its body and its headers: a protected resource's metadata and its challenge name the URL
+// they were asked about, as RFC 9728 has them, and an answer naming its own address is no more told
+// for the thing being there than a refusal saying back what it was asked. Anything else it names
+// that absence's does not still tells them apart.
+func saidBack(w *httptest.ResponseRecorder, named, nothing map[string]string, params []string) *httptest.ResponseRecorder {
+	echo := func(s string) string {
+		for _, p := range params {
+			if named[p] != nothing[p] {
+				s = strings.ReplaceAll(s, named[p], nothing[p])
+			}
+		}
+		return s
+	}
+	out := httptest.NewRecorder()
+	for name, values := range w.Header() {
+		for _, v := range values {
+			out.Header().Add(name, echo(v))
+		}
+	}
+	out.Code = w.Code
+	out.Body.WriteString(echo(w.Body.String()))
+	return out
+}
+
 // answerOf is what a recorder was answered.
 func answerOf(w *httptest.ResponseRecorder) accesstest.Answer {
 	return accesstest.Answer{Status: w.Code, Header: w.Header(), Body: w.Body.Bytes()}
@@ -442,7 +476,7 @@ func TestAnAbsentNameAndAnInvisibleOneAreAnsweredAlike(t *testing.T) {
 					mixed[p] = named[p]
 				}
 				path := fill(route.Pattern, mixed) + query
-				w := x.ask(ctx, route.Method, path, x.as[c.who], "{}")
+				w := saidBack(x.ask(ctx, route.Method, path, x.as[c.who], "{}"), mixed, nothing, varying[:i+1])
 				asked++
 				if diff := sameAnswer(none, w); diff != "" {
 					t.Errorf("%s: as %s, %s answered %s", name, c.who, path, diff)

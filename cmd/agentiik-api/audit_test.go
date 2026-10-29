@@ -62,6 +62,8 @@ var reads = []string{
 	"GET /api/v1/me/collections", "GET /api/v1/me/collections/{id}",
 	"GET /api/v1/auth/policy", "GET /api/v1/{namespace}/auth/policy",
 	"GET /auth/sign-in", "GET /auth/enrol", "GET /auth/assets/{name}", "GET /objects/{key...}",
+	"GET /auth/authorize", "GET /.well-known/oauth-authorization-server",
+	"GET /.well-known/oauth-protected-resource/mcp", "GET /.well-known/oauth-protected-resource/mcp/collections/{id}",
 }
 
 // recordsNothing are the routes that change something the audit log does not record, each with why.
@@ -87,6 +89,11 @@ var recordsNothing = map[string]string{
 	// Git's fetch is a POST only because the protocol sends what the client has in a body.
 	"POST /{namespace}/{repository}/git-upload-pack":         "a fetch reads a repository and changes nothing",
 	"POST /api/v1/{namespace}/workflows/{workflow}/validate": "a draft is judged and committed nowhere, so nothing changes, and a judgement is no act",
+
+	// A tool is a route of the API asked as the caller, which records its act as it records anybody's,
+	// marked through mcp with the tool's name, and a tool that reads records nothing, as no read does.
+	"POST /mcp":                  "every act a tool asks for is its route's, recorded by that route with through and tool, and a read is no act",
+	"POST /mcp/collections/{id}": "a call is a run, which run.trigger records with the collection and the tool it was called as",
 }
 
 // actor is how a step asks: bearing a token, carrying a session from the public URL's origin, or
@@ -162,6 +169,10 @@ func (s *scenario) ask(route, path string, who actor, body any, status int) *htt
 		// A photo, where the route takes one.
 		if route == "PUT /api/v1/me/avatar" || route == "PUT /api/v1/namespaces/{namespace}/avatar" {
 			r.Header.Set("Content-Type", "image/png")
+		}
+		// A form, where the route is OAuth's token endpoint.
+		if route == "POST /api/v1/auth/oauth/token" {
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}
 	}
 	if who.bearer != "" {
@@ -310,7 +321,13 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
 		t.Fatal("bus-init failed")
 	}
-	in, err := open(t.Context(), servingSettings(t, database.Application, dir, natsFrom(t, dir)), slog.New(slog.DiscardHandler))
+	// Serving MCP, and with it the authorisation server issuing its tokens, whose client is one the
+	// test publishes.
+	const clientRedirect = "http://127.0.0.1:4712/callback"
+	client, fetch := anMCPClient(t, "Audit client", clientRedirect)
+	settings := servingSettings(t, database.Application, dir, natsFrom(t, dir))
+	settings.MCP, settings.clients = true, fetch
+	in, err := open(t.Context(), settings, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,6 +441,46 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.holds("POST /api/v1/auth/exchange", "api_token.create dave "+s.answer(w)["api_token"].(map[string]any)["id"].(string)+" - done")
 	s.act("POST /api/v1/auth/exchange", "/api/v1/auth/exchange", actor{}, exchange, http.StatusUnauthorized,
 		"signin.fail 192.0.2.1 an unknown exchange code - done")
+
+	// An MCP client dave allows: the authorisation page names it and records nothing, his passkey's
+	// sign-in carrying its request is a sign-in as any other, and the code it mints, traded once,
+	// is a token of dave's recorded as minted with its client and its audience; presented again it
+	// is refused, about no account. A refresh records nothing, being a use of the grant, and the
+	// refresh token it spent, presented again, ends the grant as the installation's revocation.
+	clientVerifier := strings.Repeat("c", 43)
+	clientChallenge := sha256.Sum256([]byte(clientVerifier))
+	authorization := map[string]string{
+		"client_id": client, "redirect_uri": clientRedirect, "code_challenge": base64.RawURLEncoding.EncodeToString(clientChallenge[:]),
+		"resource": publicOrigin + "/mcp", "scope": "workflow:read",
+	}
+	s.act("GET /auth/authorize", "/auth/authorize?"+url.Values{
+		"response_type": {"code"}, "code_challenge_method": {"S256"}, "client_id": {client}, "redirect_uri": {clientRedirect},
+		"code_challenge": {authorization["code_challenge"]}, "resource": {authorization["resource"]}, "scope": {"workflow:read"},
+	}.Encode(), actor{}, nil, http.StatusOK)
+	w = s.act("POST /api/v1/auth/passkey/options", "/api/v1/auth/passkey/options", actor{}, `{"ceremony":"assertion"}`, http.StatusOK)
+	allowing, err := davesKeys.Get(s.options(w))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = s.act("POST /api/v1/auth/passkey/verify", "/api/v1/auth/passkey/verify", actor{},
+		map[string]any{"ceremony": "assertion", "credential": allowing, "authorization": authorization}, http.StatusOK,
+		"signin.succeed dave dave - done")
+	handed, err = url.Parse(s.answer(w)["redirect_to"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemed := url.Values{
+		"grant_type": {"authorization_code"}, "code": {handed.Query().Get("code")}, "code_verifier": {clientVerifier},
+		"client_id": {client}, "redirect_uri": {clientRedirect},
+	}.Encode()
+	w = s.act("POST /api/v1/auth/oauth/token", "/api/v1/auth/oauth/token", actor{}, redeemed, http.StatusOK,
+		"api_token.create dave * - done")
+	refresh := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {s.answer(w)["refresh_token"].(string)}, "client_id": {client}}.Encode()
+	s.act("POST /api/v1/auth/oauth/token", "/api/v1/auth/oauth/token", actor{}, redeemed, http.StatusBadRequest,
+		"signin.fail 192.0.2.1 an unknown authorisation code - done")
+	s.act("POST /api/v1/auth/oauth/token", "/api/v1/auth/oauth/token", actor{}, refresh, http.StatusOK)
+	s.act("POST /api/v1/auth/oauth/token", "/api/v1/auth/oauth/token", actor{}, refresh, http.StatusBadRequest,
+		"api_token.revoke installation * - done")
 
 	// dave's password signs in, and a wrong one does not.
 	s.act("POST /api/v1/auth/login", "/api/v1/auth/login", actor{},
