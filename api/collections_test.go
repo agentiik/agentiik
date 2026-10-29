@@ -24,6 +24,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/mcp"
 	"github.com/agentiik/agentiik/schema"
 	"github.com/agentiik/agentiik/version"
 )
@@ -517,6 +518,96 @@ func TestTwoMembersGivingOneToolNameOfferNeither(t *testing.T) {
 	if !slices.Equal(names, []string{"create_invoices", "pay_people"}) {
 		t.Errorf("once told apart the collection lists %v", names)
 	}
+}
+
+// "Stable across commits, because clients hold it: renaming it is withdrawing one tool and publishing
+// another, in every collection that does not give the tool a name of its own." monthly-invoicing is a
+// member of three collections: as it is, under a name of its own, and read at release, a branch no
+// commit below moves. A commit changing the block's description and not its name keeps the tool's
+// name. One renaming it withdraws create_invoices and publishes issue_invoices, from the next list
+// and in the collection's record: a call of the old name is answered as a tool that does not exist
+// and starts no run, and the new one runs, the run recording the name it was called by. The member
+// given a name of its own goes on offering it, and the one read at release the old name, until a
+// commit reaches its ref. And a block naming no tool publishes it under the workflow's name, which
+// withdraws the one it had.
+func TestRenamingAToolWithdrawsItAndPublishesAnother(t *testing.T) {
+	c := servingCollections(t)
+	commit := func(branch, document string) {
+		t.Helper()
+		parent := c.head("monthly-invoicing")
+		status, answer := c.ask("POST", "/api/v1/finance/workflows/monthly-invoicing/commits", "alice", map[string]any{
+			"branch": branch, "parent": parent, "message": "change the tool", "files": map[string]any{"agentiik.yaml": document},
+		})
+		if status != http.StatusCreated {
+			t.Fatalf("the commit onto %s was answered %d %v", branch, status, answer)
+		}
+	}
+	commit("release", strings.Replace(toolDocument, "title: Create invoices", "title: Create invoices, as released", 1))
+
+	member := func(name string, body map[string]any) string {
+		t.Helper()
+		id := c.made("alice", name)
+		if status, answer := c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", body); status != http.StatusOK {
+			t.Fatalf("the member of %s was answered %d %v", name, status, answer)
+		}
+		return id
+	}
+	plain, named, pinned := member("plain", map[string]any{}), member("named", map[string]any{"as": "invoicing"}), member("pinned", map[string]any{"ref": "release"})
+	// offers is what a collection lists and what its record says its one member offers.
+	offers := func(id string) (listed []string, described string, recorded any) {
+		t.Helper()
+		_, result, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/list", nil)
+		if refusal != nil {
+			t.Fatalf("the collection listed %v", refusal)
+		}
+		for _, tool := range result["tools"].([]any) {
+			listed = append(listed, tool.(map[string]any)["name"].(string))
+			described, _ = tool.(map[string]any)["description"].(string)
+		}
+		_, answer := c.ask("GET", "/api/v1/me/collections/"+id, "alice", nil)
+		return listed, described, answer["members"].([]any)[0].(map[string]any)["tool"]
+	}
+	offering := func(id string, want string) {
+		t.Helper()
+		if listed, _, recorded := offers(id); !slices.Equal(listed, []string{want}) || recorded != want {
+			t.Errorf("the collection lists %v and records %v, want %s", listed, recorded, want)
+		}
+	}
+	call := func(id, name string) *mcp.Error {
+		t.Helper()
+		_, _, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/call", map[string]any{
+			"name": name, "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
+		})
+		return refusal
+	}
+
+	described := strings.Replace(toolDocument, "description: Issue one invoice per order and return them.", "description: Issue one invoice per order, in the order given, and return them.", 1)
+	commit("main", described)
+	if listed, description, recorded := offers(plain); !slices.Equal(listed, []string{"create_invoices"}) || recorded != "create_invoices" || !strings.Contains(description, "in the order given") {
+		t.Errorf("after a commit keeping the name, the collection lists %v described %q and records %v", listed, description, recorded)
+	}
+
+	commit("main", strings.Replace(described, "name: create_invoices", "name: issue_invoices", 1))
+	offering(plain, "issue_invoices")
+	if refusal := call(plain, "create_invoices"); refusal == nil || refusal.Code != -32602 || !strings.Contains(refusal.Message, "Unknown tool") {
+		t.Errorf("a call of the name withdrawn was answered %v", refusal)
+	}
+	if runs := c.runs(); len(runs) != 0 {
+		t.Fatalf("a call of the name withdrawn started %v", runs)
+	}
+	if refusal := call(plain, "issue_invoices"); refusal != nil {
+		t.Errorf("a call of the name published was answered %v", refusal)
+	}
+	if runs := c.runs(); len(runs) != 1 || runs[0].Collection == nil || runs[0].Collection.ID != plain || runs[0].Collection.Tool != "issue_invoices" {
+		t.Errorf("a call of the name published started %+v", runs)
+	}
+	offering(named, "invoicing")
+	offering(pinned, "create_invoices")
+
+	commit("main", strings.Replace(described, "  name: create_invoices\n", "", 1))
+	offering(plain, "monthly-invoicing")
+	offering(named, "invoicing")
+	offering(pinned, "create_invoices")
 }
 
 // A token narrowed by a scope reaches no collection, even narrowed to the namespace of every member:
