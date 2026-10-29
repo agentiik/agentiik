@@ -274,6 +274,9 @@ type (
 	meRead struct {
 		me  principal
 		err error
+		// chained says the read is one of those every half minute, which asks for the next once it
+		// is back: a dismissal reads GET /api/v1/me once beside them, and asks for none.
+		chained bool
 	}
 	runsRead struct {
 		runs  []db.ListedRun
@@ -300,7 +303,7 @@ type (
 const answerWithin = 100 * time.Millisecond
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.readMe(), m.readShown()}
+	cmds := []tea.Cmd{m.readMe(true), m.readShown()}
 	if !m.settled {
 		// The OSC 11 query Lip Gloss sends, its answer a tea.BackgroundColorMsg.
 		cmds = append(cmds, tea.RequestBackgroundColor, m.tick(answerWithin, func(time.Time) tea.Msg { return silent{} }))
@@ -308,11 +311,12 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m Model) readMe() tea.Cmd {
+// readMe reads GET /api/v1/me, chained where the read is one of those every half minute.
+func (m Model) readMe(chained bool) tea.Cmd {
 	return func() tea.Msg {
 		var me principal
 		err := m.o.Read(m.ctx, "/api/v1/me", &me)
-		return meRead{me: me, err: err}
+		return meRead{me: me, err: err, chained: chained}
 	}
 }
 
@@ -409,13 +413,19 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case silent:
 		m.settled = true
 	case meRead:
+		var next tea.Cmd
+		if msg.chained {
+			// Asked again half a minute later, as the runs are, by the one chain of reads: a read
+			// beside it that asked for the next too would start a second chain, for good.
+			next = m.tick(meEvery, func(time.Time) tea.Msg { return meAgain{} })
+		}
 		if msg.err != nil {
-			// Asked again half a minute later, as the runs are.
-			return m, m.tick(meEvery, func(time.Time) tea.Msg { return meAgain{} })
+			return m, next
 		}
 		m.me = msg.me
 		var cmds []tea.Cmd
 		m, cmds = m.noticed(msg.me)
+		cmds = append(cmds, next)
 		if m.me.Admin && m.view == runView && m.runners == nil {
 			cmds = append(cmds, m.readRunners())
 		}
@@ -427,7 +437,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(append(cmds, m.readChosen())...)
 	case meAgain:
-		return m, m.readMe()
+		return m, m.readMe(true)
+	case dismissed:
+		// What GET /api/v1/me holds once one is gone, read once: the chain every half minute goes
+		// on beside it.
+		return m, m.readMe(false)
 	case dismissRefused:
 		m.refused = "The notification could not be dismissed: " + said(msg.err)
 	case toastGone:
