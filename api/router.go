@@ -661,9 +661,30 @@ func (rt *Router) muxFor(r *http.Request) *http.ServeMux {
 	}
 	first, _, _ := strings.Cut(rest, "/")
 	if word, err := url.PathUnescape(first); err == nil && rt.words[word] {
+		// A word reserved late may name a namespace an installation made before, which keeps
+		// being served: the word's routes are served at their own paths alone, so a path the
+		// word's mux holds no route for, and a namespaced route does, is that namespace's.
+		if late(word) {
+			if _, mine := rt.mux.Handler(r); mine == "" {
+				if _, theirs := rt.namespaced.Handler(r); theirs != "" {
+					return rt.namespaced
+				}
+			}
+		}
 		return rt.mux
 	}
 	return rt.namespaced
+}
+
+// late says whether a word is one agk.LateReservations records: reserved after an installation
+// could already have made a namespace under it.
+func late(word string) bool {
+	for _, l := range agk.LateReservations {
+		if l.Word == word {
+			return true
+		}
+	}
+	return false
 }
 
 // serve is the hook every guarded route passes through.
