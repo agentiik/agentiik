@@ -2,7 +2,7 @@
 
 A multi-user workflow engine: every brick is an ephemeral OCI container, every workflow is a git repository whose `agentiik.yaml` describes a directed acyclic graph, and one installation serves many users through namespaces, sharing and named roles.
 
-This file is the same in all thirteen repositories of the organisation. Its source is `agentiik/.github/CLAUDE.md` and it is distributed from there, so edit it in that repository and never in a copy.
+This file is the same in all twelve repositories of the organisation. Its source is `agentiik/.github/CLAUDE.md` and it is distributed from there, so edit it in that repository and never in a copy.
 
 ## The documentation is the authority
 
@@ -16,9 +16,9 @@ Two rules follow, and they are the ones most often broken:
 
 ## How the work is tracked
 
-<https://agentiik.github.io/docs/roadmap> lists 620 tasks in sixty groups across ten milestones, ordered by dependency and carrying no dates. The milestones are the releases: `v0.4.0` in the roadmap is the tag `v0.4.0` on every repository.
+<https://agentiik.github.io/docs/roadmap> lists the tasks in groups across ten milestones, ordered by dependency and carrying no dates. It counts them itself, in each milestone's tally; a count copied here was wrong within a release, since every edit of the roadmap moves it. The milestones are the releases: `v0.4.0` in the roadmap is the tag `v0.4.0` on every repository.
 
-Each group is an issue of type Feature in the repository it names, 61 of them, because the v1.0.0 group covering disclosure, licensing and the release itself is filed as two. Its tasks become sub-issues of type Task when the group starts, which is what starting a group means: the plan changes by rewriting, and rewriting a paragraph costs nothing while rewriting fifty open issues costs an afternoon.
+Each group is an issue of type Feature in the repository it names, but for the v1.0.0 group covering disclosure, licensing and the release itself, which is filed as two. Its tasks become sub-issues of type Task when the group starts, which is what starting a group means: the plan changes by rewriting, and rewriting a paragraph costs nothing while rewriting fifty open issues costs an afternoon.
 
 Everything sits on the organisation project, <https://github.com/orgs/agentiik/projects/1>, where `Release`, `Starts after`, `Spec` and `Section` answer what a per-repository milestone cannot.
 
@@ -58,10 +58,10 @@ Every repository carries the same version, tagged at the same moment, released t
 
 | | |
 | --- | --- |
-| `agentiik` | The core in Go: graph evaluator, container driver, controller, HTTP API, runner, `agk`. AGPL-3.0-or-later. |
+| `agentiik` | The core in Go: graph evaluator, container driver, controller, HTTP API, runner, `agk`, and the web console in TypeScript, which the API serves. AGPL-3.0-or-later. |
 | `schemas` | The workflow, brick and envelope schemas, and the OpenAPI document. Every keyword carries a `description` and `examples`, and the build fails without them, because the language reference and `workflow.language` are generated from here. |
 | `bricks`, `brick-sdk` | The standard catalog and the optional helpers. A brick is not a derivative work of the engine. |
-| `design`, `console`, `ios`, `android` | The tokens and the four clients. |
+| `design`, `ios`, `android` | The tokens and the two mobile clients. |
 | `deploy`, `terraform-provider-agentiik` | Compose stacks and the provider. |
 | `homebrew-tap` | The Homebrew formulae: `agk` alone, and the server programs with it. |
 | `agentiik.github.io` | This documentation and the roadmap. |
