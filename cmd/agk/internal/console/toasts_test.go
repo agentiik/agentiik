@@ -63,6 +63,26 @@ func TestANotificationArrivingWhileOpenIsToasted(t *testing.T) {
 	}
 }
 
+// A toast arriving while a prompt is open is stacked above it, so that the prompt is read whole
+// before it is answered: the lowest toast's frame took the prompt's row, hiding the workflow a
+// cancel names.
+func TestAToastStacksAboveAPrompt(t *testing.T) {
+	in := &installation{me: mayRunIn()}
+	in.run = aFailedRun()
+	in.run.State = agk.Running
+	m := press(t, opened(t, in, Options{Run: failedRun}, 80, 24), keyC)
+	in.me = mayRunIn()
+	in.me.Notifications = []notice{widened}
+	m = readAgain(t, m, meAgain{})
+	s := screen(m)
+	if len(m.toasts) != 1 || !strings.Contains(s, "carol wrote a grant") || m.asking != askingCancel {
+		t.Fatalf("a notification arriving during a prompt is not toasted, the prompt %d:\n%s", m.asking, s)
+	}
+	if prompt := strings.Split(s, "\n")[22]; !strings.HasPrefix(prompt, "Cancel run "+failedRun+" of finance/monthly-invoicing? Its tasks") {
+		t.Errorf("a toast covers the prompt, which reads %q:\n%s", prompt, s)
+	}
+}
+
 // The end of a run the principal started, seen going and then over in the runs the console reads,
 // is toasted; one somebody else started, or one already over when first read, is not.
 func TestTheEndOfYourRunIsToasted(t *testing.T) {
