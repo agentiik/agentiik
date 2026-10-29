@@ -16,6 +16,7 @@
   import { query, Ranged } from "../lib/range.svelte";
   import { ms, type Range } from "../lib/stats";
   import { chosen, count, exitCodes, figures, heat, notSucceeded, refused, type PortsSeries, type RunsSeries, type StepsSeries } from "../lib/workflow-stats";
+  import { published } from "../lib/tool";
 
   // A workflow's statistics: its runs, as GET /api/v1/{ns}/stats/runs counts them narrowed to it, its
   // steps, as /stats/steps answers them bucket by bucket and by the hour of the week, and what they
@@ -25,7 +26,18 @@
   // graph says whether the caller reads the workflow itself, which its graph takes and its series do
   // not: the tab is left out for one who reads only its runs.
   let { api, place, namespace, workflow, graph = false, settles = false }: { api: API; place: Place; namespace: string; workflow: string; graph?: boolean; settles?: boolean } = $props();
-  const tabs = $derived(workflowTabs(namespace, workflow, "statistics", { mcp: false, settles, reads: graph }));
+  // The MCP tab is reading the workflow's, and is drawn where its version publishes a tool, as on
+  // the workflow's other screens.
+  let mcp = $state(false);
+  $effect(() => {
+    if (!graph) return;
+    let current = true;
+    published(api, namespace, workflow).then((p) => current && (mcp = p));
+    return () => {
+      current = false;
+    };
+  });
+  const tabs = $derived(workflowTabs(namespace, workflow, "statistics", { mcp, settles, reads: graph }));
 
   const ranged = new Ranged(() => place);
   const range = $derived(ranged.range);

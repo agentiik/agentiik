@@ -1,3 +1,4 @@
+import type { API } from "../api/client";
 import type { Graph } from "./graph";
 
 // The tool a workflow is, as a client of a collection holding it is told of it, built as the server
@@ -69,6 +70,14 @@ export function toolOf(graph: Graph, workflow: string): Tool | null {
     inputSchema: bundled(input, names.map((n) => `/properties/${token(n)}`)),
     outputSchema: schema !== undefined && schema !== null && mode === "sync" ? bundled(envelope(schema), ["/properties/items/items/properties/data"]) : undefined,
   };
+}
+
+// published says whether the version a run naming no ref runs publishes a tool, which the MCP tab
+// is drawn for on each of the workflow's screens, so that the tabs after it stay where they are from
+// one screen to the next: read from the workflow, as its own page reads it.
+export async function published(api: API, namespace: string, workflow: string): Promise<boolean> {
+  const { data } = await api.GET("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: namespace, name: workflow } } });
+  return data?.graph ? toolOf(data.graph, workflow) !== null : false;
 }
 
 // envelope is what a sync call's structured result is, the output's envelope, its items' data held

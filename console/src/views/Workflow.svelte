@@ -211,10 +211,6 @@
   );
 
   const shares = $derived(holds(me, "grant:manage", namespace, workflow));
-  const statistics = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "statistics" });
-  const graphTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow });
-  const mcpTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "mcp" });
-  const filesTab = $derived({ kind: "namespace" as const, namespace, view: "workflows" as const, workflow, tab: "files" });
   const runRoute = $derived(run ? runAt(namespace, workflow, run.run) : undefined);
   // Its settings, to a caller who may change any of them.
   const settles = $derived(settlesOn(me, namespace, workflow));

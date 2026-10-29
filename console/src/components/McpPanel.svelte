@@ -82,8 +82,6 @@
       {/if}
     {/if}
   </section>
-{:else}
-  <p class="muted">No tool</p>
 {/if}
 
 {#if problem}<Notice kind="problem" explained={problem} ondismiss={() => (problem = null)} />{/if}

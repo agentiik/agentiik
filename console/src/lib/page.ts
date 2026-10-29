@@ -6,11 +6,11 @@ import type { Route } from "./route";
 export type Tab = { label: string; to?: Route; query?: string; current: boolean; count?: number | string; icon?: string; onclick?: () => void };
 
 // workflowTabs are the tabs of a workflow's screens, in one order on each of them: its graph, its
-// files, its runs, its statistics, its MCP tools where it declares some, and its settings last, where
-// the caller may change any of them, so that a tab one screen lacks moves no other. Who may do what
-// with it is the namespace's sharing panel's, where the workflow is chosen, rather than a tab of the
-// workflow's own. The graph and the files are reading the workflow, which an operator runs and
-// follows without doing, so they are left out where reads is false.
+// files, its runs, its statistics, its MCP tab where its version publishes a tool, and its settings
+// last, where the caller may change any of them, so that a tab one screen lacks moves no other. Who
+// may do what with it is the namespace's sharing panel's, where the workflow is chosen, rather than
+// a tab of the workflow's own. The graph, the files and the MCP tab are reading the workflow, which
+// an operator runs and follows without doing, so they are left out where reads is false.
 export function workflowTabs(
   namespace: string,
   workflow: string,
@@ -28,7 +28,7 @@ export function workflowTabs(
       : []),
     { label: "Runs", icon: "control-runs", to: page("runs"), current: tab === "runs" },
     { label: "Statistics", icon: "control-statistics", to: page("statistics"), current: tab === "statistics" },
-    ...(o.mcp ? [{ label: "MCP", icon: "trigger-mcp", to: page("mcp"), current: tab === "mcp" }] : []),
+    ...(o.mcp && reads ? [{ label: "MCP", icon: "trigger-mcp", to: page("mcp"), current: tab === "mcp" }] : []),
     ...(o.settles ? [{ label: "Settings", icon: "control-settings", to: page("settings"), current: tab === "settings" }] : []),
   ];
 }
