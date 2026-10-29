@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 )
@@ -35,6 +37,34 @@ func (e Env) screened(w io.Writer) io.Writer {
 		return w
 	}
 	return screen{w}
+}
+
+// jsonShown is a JSON document as it is written to w: as it was encoded to a file or a pipe, and
+// to a terminal with DEL and every C1 control written as its \u escape, and a byte that is not
+// UTF-8 as \ufffd. encoding/json escapes every C0 control and leaves these as they are, and a
+// terminal may act on a C1 control as it does on ESC: U+009B is CSI. None can stand anywhere but
+// inside a string, where its escape is the same character to whatever parses the document, so the
+// document read off the screen is the one encoded; a byte that is not UTF-8 is read as U+FFFD by a
+// JSON reader anyway. The document is not passed through shown.Text, which writes DEL as \x7f, an
+// escape JSON does not have.
+func (e Env) jsonShown(w io.Writer, doc []byte) []byte {
+	if e.Shows == nil || !e.Shows(w) {
+		return doc
+	}
+	var b strings.Builder
+	for i := 0; i < len(doc); {
+		r, size := utf8.DecodeRune(doc[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			b.WriteString(`\ufffd`)
+		case r == 0x7f || r >= 0x80 && r <= 0x9f:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.Write(doc[i : i+size])
+		}
+		i += size
+	}
+	return []byte(b.String())
 }
 
 // screen writes each line written to it as shown.Text has it, the newlines between kept. Each line
