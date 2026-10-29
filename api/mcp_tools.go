@@ -13,6 +13,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/mcp"
 )
 
@@ -624,14 +625,9 @@ func (m *MCP) logTail(r *http.Request, path string, args map[string]any) (*mcp.C
 			most = int(v)
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), logTailWait)
-	defer cancel()
-	a := &tailAnswer{toolAnswer: toolAnswer{header: http.Header{}}, most: most}
-	if err := m.serveTo(a, r.WithContext(ctx), "run.logs", "GET", path, nil, nil); err != nil {
+	a, err := m.tailed(r, "run.logs", path, most, "")
+	if err != nil {
 		return nil, err
-	}
-	if a.status == 0 {
-		a.status = http.StatusOK
 	}
 	if !a.streaming {
 		return result(&a.toolAnswer)
@@ -642,4 +638,21 @@ func (m *MCP) logTail(r *http.Request, path string, args map[string]any) (*mcp.C
 		text = "The step has written nothing yet."
 	}
 	return &mcp.CallResult{Content: []mcp.Content{mcp.Text(text)}, StructuredContent: map[string]any{"lines": lines}}, nil
+}
+
+// tailed reads the log stream route at path as the caller of r, for the tool named, keeping the
+// last lines of it, most of them, and of the task of alone where one is given: logTail's reading,
+// which a failed run's message is read with too, so that both are the route's lines, masked as its
+// runner masked them, and refused as the route refuses.
+func (m *MCP) tailed(r *http.Request, tool, path string, most int, of agk.TaskID) (*tailAnswer, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), logTailWait)
+	defer cancel()
+	a := &tailAnswer{toolAnswer: toolAnswer{header: http.Header{}}, most: most, of: of}
+	if err := m.serveTo(a, r.WithContext(ctx), tool, "GET", path, nil, nil); err != nil {
+		return nil, err
+	}
+	if a.status == 0 {
+		a.status = http.StatusOK
+	}
+	return a, nil
 }

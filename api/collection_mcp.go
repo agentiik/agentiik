@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -101,7 +102,7 @@ func (m *MCP) serveCollection(w http.ResponseWriter, r *http.Request, caller Cal
 			// runs neither rather than whichever comes first.
 			continue
 		}
-		t, err := c.tool(r.Context(), caller, col.ID, o)
+		t, err := c.tool(r.Context(), caller, col.ID, o, m.failureLog(r, o.tool))
 		if err != nil {
 			// A tool whose schemas cannot be read is left out rather than the collection answered
 			// with nothing: the version holding it was accepted, so this is the installation's to
@@ -113,8 +114,34 @@ func (m *MCP) serveCollection(w http.ResponseWriter, r *http.Request, caller Cal
 	m.collectionServer.Serve(w, r, mcp.Surface{Tools: tools})
 }
 
-// tool is the tool one member offers, and the call that runs it.
-func (c *Collections) tool(ctx context.Context, caller Caller, collection string, o offer) (mcp.Tool, error) {
+// failureLog reads the end of the log a failed task wrote, for the collection's tool named, through
+// the log stream route as the caller of r, as run.logs reads a step's log (tailed): masked as its
+// runner masked it, as every log is, and none of it to a caller the route refuses, one who may not
+// read the run's logs. A route that answers no stream, or a log that cannot be read, is no message.
+func (m *MCP) failureLog(r *http.Request, tool string) failureLog {
+	return func(run agk.RunID, step agk.Step, task agk.TaskID) []string {
+		a, err := m.tailed(r, tool, "/api/v1/runs/"+segment(string(run))+"/steps/"+segment(string(step))+"/logs", failureLines, task)
+		if err != nil || !a.streaming {
+			return nil
+		}
+		return a.tail()
+	}
+}
+
+// failureLog is the last lines a task of a run wrote, by its step and its key.
+type failureLog func(run agk.RunID, step agk.Step, task agk.TaskID) []string
+
+// failureLines and failureMost are how much of a failed task's log its tool's error carries: its last
+// lines, where a brick says why it gave up, and of them at most about 2 KiB, enough for a model to
+// correct itself and little enough that a failure does not hand it the log, which run.logs reads.
+const (
+	failureLines = 20
+	failureMost  = 2 << 10
+)
+
+// tool is the tool one member offers, and the call that runs it, a failed run's message read with
+// logs.
+func (c *Collections) tool(ctx context.Context, caller Caller, collection string, o offer, logs failureLog) (mcp.Tool, error) {
 	block := o.graph.Workflow().MCP
 	p, err := c.published(ctx, o)
 	if err != nil {
@@ -176,7 +203,7 @@ func (c *Collections) tool(ctx context.Context, caller Caller, collection string
 		t.Annotations = &mcp.Annotations{ReadOnlyHint: a.ReadOnlyHint, IdempotentHint: a.IdempotentHint, DestructiveHint: a.DestructiveHint, OpenWorldHint: a.OpenWorldHint}
 	}
 	t.Call = func(ctx context.Context, arguments json.RawMessage) (*mcp.CallResult, error) {
-		return c.call(ctx, caller, collection, o, arguments)
+		return c.call(ctx, caller, collection, o, arguments, logs)
 	}
 	return t, nil
 }
@@ -480,7 +507,7 @@ func (c *Collections) published(ctx context.Context, o offer) (trigger.Published
 
 // call runs the member's workflow with the call's arguments as its inputs, and answers as its mode
 // says: at once for async, and for sync once the run ends or the wait does.
-func (c *Collections) call(ctx context.Context, caller Caller, collection string, o offer, arguments json.RawMessage) (*mcp.CallResult, error) {
+func (c *Collections) call(ctx context.Context, caller Caller, collection string, o offer, arguments json.RawMessage, logs failureLog) (*mcp.CallResult, error) {
 	target := Target{Namespace: o.member.Namespace, Workflow: o.member.Workflow}
 	// "Calling one of its tools requires workflow:run on the workflow, never workflow:read", asked
 	// at every call, since a grant revoked takes the tool away from the next request.
@@ -564,7 +591,7 @@ func (c *Collections) call(ctx context.Context, caller Caller, collection string
 		}
 		return c.succeeded(ctx, target.Namespace, detail, block.Output)
 	case agk.Failed, agk.Cancelled, agk.TimedOut:
-		return &mcp.CallResult{Content: []mcp.Content{mcp.Text(ended(detail))}, StructuredContent: map[string]any{"run": string(run), "state": detail.State.String()}, IsError: true}, nil
+		return &mcp.CallResult{Content: []mcp.Content{mcp.Text(ended(detail, logs))}, StructuredContent: map[string]any{"run": string(run), "state": detail.State.String()}, IsError: true}, nil
 	}
 	// Still going when the wait is over: the run goes on, and the model is told how to follow it
 	// rather than told it failed.
@@ -655,20 +682,24 @@ func (c *Collections) succeeded(ctx context.Context, namespace string, detail db
 }
 
 // ended says why a run ended without succeeding, for the model that called it to correct itself:
-// "naming the failing step, its exit code and its message", the message being the reason the run
-// records where something other than its workflow ended it.
-func ended(d db.RunDetail) string {
+// "naming the failing step, its exit code and its message". The message is the end of the log of
+// the task the step failed by, as logs reads it, and the reason the run records where something
+// other than its workflow ended it.
+func ended(d db.RunDetail, logs failureLog) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Run %s of %s ended %s.", d.Run, d.Workflow, d.State)
+	var message []string
 	for _, s := range d.Steps {
 		if s.Verdict != agk.VerdictFailed {
 			continue
 		}
 		fmt.Fprintf(&b, " Step %s failed", s.Step)
-		for i := len(d.Tasks) - 1; i >= 0; i-- {
-			if t := d.Tasks[i]; t.Step == s.Step && t.ExitCode != nil {
+		if t, ok := failedBy(d.Tasks, s.Step); ok {
+			if t.ExitCode != nil {
 				fmt.Fprintf(&b, " with exit code %d", *t.ExitCode)
-				break
+			}
+			if logs != nil {
+				message = logs(d.Run, s.Step, t.Task)
 			}
 		}
 		b.WriteString(".")
@@ -677,5 +708,42 @@ func ended(d db.RunDetail) string {
 	if d.Reason != "" {
 		b.WriteString(" " + d.Reason + ".")
 	}
+	if text := lastOf(message, failureMost); text != "" {
+		b.WriteString(" Its log ends:\n" + text)
+	}
 	return b.String()
+}
+
+// failedBy is the task a step failed by: the last of its tasks that failed or was stopped at its
+// deadline, and where none was, the last of them that exited, as a step whose tasks a cancel
+// stopped has.
+func failedBy(tasks []db.TaskSummary, step agk.Step) (db.TaskSummary, bool) {
+	for _, failing := range []func(db.TaskSummary) bool{
+		func(t db.TaskSummary) bool { return t.State == agk.TaskFailed || t.State == agk.TaskTimedOut },
+		func(t db.TaskSummary) bool { return t.ExitCode != nil },
+	} {
+		for i := len(tasks) - 1; i >= 0; i-- {
+			if tasks[i].Step == step && failing(tasks[i]) {
+				return tasks[i], true
+			}
+		}
+	}
+	return db.TaskSummary{}, false
+}
+
+// lastOf is the end of lines at most most bytes long: whole lines where the last of them fits, the
+// end of the last one, from where a character begins, where it alone does not.
+func lastOf(lines []string, most int) string {
+	text := strings.Join(lines, "\n")
+	if len(text) <= most {
+		return text
+	}
+	text = text[len(text)-most:]
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		return text[i+1:]
+	}
+	for len(text) > 0 && !utf8.RuneStart(text[0]) {
+		text = text[1:]
+	}
+	return text
 }

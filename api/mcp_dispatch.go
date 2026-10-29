@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/mcp"
 )
@@ -100,6 +101,13 @@ type tailAnswer struct {
 	toolAnswer
 	most int
 
+	// of, where given, is the one task whose lines are kept, by its key: the stream sends a step's
+	// dispatches one after the other, its attempts and its shards, and a failed run's message is
+	// the failed task's own. Of a key handed out again after a loss, the last dispatch is the one
+	// that ended the task, and keeping says the stream is in one of that key's.
+	of      agk.TaskID
+	keeping bool
+
 	streaming bool
 	partial   []byte
 	event     string
@@ -150,19 +158,30 @@ func (a *tailAnswer) Write(b []byte) (int, error) {
 // Flush is a connection's, which sends what was written: everything is read as it is written here.
 func (a *tailAnswer) Flush() {}
 
-// read takes one line of the stream: an event's kind, and a line's or a gap's data under it.
+// read takes one line of the stream: an event's kind, and a line's or a gap's data under it, and
+// where the lines of one task are kept, a dispatch's under it, which begins that task's lines again.
 func (a *tailAnswer) read(line string) {
+	kept := a.of == "" || a.keeping
 	switch {
 	case strings.HasPrefix(line, "event: "):
 		a.event = strings.TrimPrefix(line, "event: ")
-	case strings.HasPrefix(line, "data: ") && a.event == "line":
+	case strings.HasPrefix(line, "data: ") && a.event == "dispatch" && a.of != "":
+		var d struct {
+			IdempotencyKey agk.TaskID `json:"idempotency_key"`
+		}
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &d) == nil {
+			if a.keeping = d.IdempotencyKey == a.of; a.keeping {
+				a.ring, a.next = a.ring[:0], 0
+			}
+		}
+	case strings.HasPrefix(line, "data: ") && a.event == "line" && kept:
 		var l struct {
 			Text string `json:"text"`
 		}
 		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &l) == nil {
 			a.keep(l.Text)
 		}
-	case strings.HasPrefix(line, "data: ") && a.event == "gap":
+	case strings.HasPrefix(line, "data: ") && a.event == "gap" && kept:
 		a.keep("(lines written and not kept)")
 	}
 }
