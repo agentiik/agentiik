@@ -386,6 +386,14 @@ describe("the files of a step and the outputs of a run", () => {
   });
 });
 
+describe("the steps in order", () => {
+  it("say each step's verdict in its word beside its dot, never by its colour alone", async () => {
+    open(`/finance/runs/${failed}`);
+    const path = await screen.findByRole("list", { name: "Steps in order" });
+    expect(within(path).getAllByRole("listitem").map((li) => li.textContent?.replace(/\s+/g, " ").trim())).toEqual(["normalize succeeded", "invoice failed", "archive pending"]);
+  });
+});
+
 describe("the step header and its ports", () => {
   it("names the image the step runs, the task chosen and its runner, and the parameters it was dispatched with", async () => {
     open(`/finance/runs/${failed}?step=invoice`);
