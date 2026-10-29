@@ -34,6 +34,11 @@ type Case struct {
 	// whoever it refuses are answered alike; package api's tests, which write an artifact, hold its
 	// authorisation.
 	FindsNothing bool
+
+	// Bearer is set where the route takes a bearer token alone and refuses a session as it refuses
+	// no credential, with 401 and a challenge of its own: the MCP surfaces, since a session is the
+	// console's credential and no MCP client holds the cookie.
+	Bearer bool
 }
 
 // Cases are every route the API serves, as the documentation guards them. A test holds the router's
@@ -99,8 +104,8 @@ var Cases = []Case{
 	// exist, and a body the route reads refused with 400 before anything changes.
 	// The user's server and a collection's endpoint, where MCP is served: "each call runs as the
 	// presenting principal", every tool a route asked as the caller, and a collection its owner's.
-	own("POST", "/mcp"),
-	own("POST", "/mcp/collections/{id}"),
+	{Route: api.Route{Method: "POST", Pattern: "/mcp", Own: true}, Bearer: true},
+	{Route: api.Route{Method: "POST", Pattern: "/mcp/collections/{id}", Own: true}, Bearer: true},
 	own("GET", "/api/v1/me/collections"),
 	{Route: api.Route{Method: "POST", Pattern: "/api/v1/me/collections", Own: true}, Refused: true},
 	own("GET", "/api/v1/me/collections/{id}"),

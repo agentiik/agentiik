@@ -154,6 +154,9 @@ func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 				path := written(c.Pattern, mixed) + query
 				a := f.ask(t, ctx, c.Method, path, who, body)
 				asked++
+				for _, p := range varying[:i+1] {
+					a = saidBack(a, named[p], nothing[p])
+				}
 				if diff := Difference(none, a); diff != "" {
 					t.Errorf("%s %s: as %s, %s answered %s", c.Method, c.Pattern, who.Name, path, diff)
 				}
@@ -164,6 +167,27 @@ func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 	if asked < 40 {
 		t.Fatalf("%d questions were asked of the routes naming something, and the API serves more of them than that", asked)
 	}
+}
+
+// saidBack is a with what it was asked about, where it says it back, written as what absence was
+// asked about: an answer repeating the identifier in its path, as a collection's Protected Resource
+// Metadata does for any identifier written as one, says nothing of whether the thing exists, and is
+// held alike with absence's once each names its own. An answer that names the thing only where it
+// exists still differs, since absence's then names nothing.
+func saidBack(a Answer, named, nothing string) Answer {
+	if named == "" || named == nothing {
+		return a
+	}
+	a.Body = []byte(strings.ReplaceAll(string(a.Body), named, nothing))
+	header := a.Header.Clone()
+	for k, values := range header {
+		for i, v := range values {
+			values[i] = strings.ReplaceAll(v, named, nothing)
+		}
+		header[k] = values
+	}
+	a.Header = header
+	return a
 }
 
 // unknowableByBody asks what names finance in a body or a query rather than a path, as who, where
