@@ -7,6 +7,7 @@ import (
 	"errors"
 	"html"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -88,6 +89,9 @@ type Console struct {
 	// index is the console's page, with the public URL's path written into its <base>.
 	index asset
 
+	// hsts is the Strict-Transport-Security every answer carries, hstsFor the public URL.
+	hsts string
+
 	// files are the build's other files, by their path from its root without the leading slash.
 	files map[string]asset
 }
@@ -115,7 +119,7 @@ func NewConsole(rt *Router, o ConsoleOptions) (*Console, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Console{files: map[string]asset{}}
+	c := &Console{files: map[string]asset{}, hsts: hstsFor(u)}
 	err = fs.WalkDir(o.Files, ".", func(name string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -177,6 +181,22 @@ func NewConsole(rt *Router, o ConsoleOptions) (*Console, error) {
 	return c, nil
 }
 
+// hstsFor is the Strict-Transport-Security the console and the sign-in page are served with on a
+// public URL: a year, so that a browser that has once reached the installation never asks it over
+// plain HTTP again, where whoever holds the network could answer with a page asking for the
+// password and the TOTP code. A passkey is bound to the origin and the __Host- cookie is never sent
+// over HTTP, but a password typed into somebody else's page is gone. None where the URL names an
+// address or localhost: a browser ignores it for an address, and would keep it for localhost a
+// year, refusing plain HTTP to whatever else answers there later. No subdomain is included, since
+// the installation's host says nothing of the others under the same name.
+func hstsFor(u *url.URL) string {
+	host := strings.ToLower(u.Hostname())
+	if u.Scheme != "https" || host == "" || net.ParseIP(host) != nil || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return ""
+	}
+	return "max-age=31536000"
+}
+
 // etagOf is the strong validator of a file served as it is, the same for the same bytes.
 func etagOf(body []byte) string {
 	sum := sha256.Sum256(body)
@@ -192,6 +212,9 @@ func (c *Console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// followed out of it would otherwise tell the site it leads to.
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Content-Type-Options", "nosniff")
+	if c.hsts != "" {
+		h.Set("Strict-Transport-Security", c.hsts)
+	}
 	a, ok := c.files[strings.TrimPrefix(r.URL.Path, "/")]
 	if !ok {
 		a = c.index

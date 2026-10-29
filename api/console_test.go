@@ -169,7 +169,7 @@ func TestEveryAnswerOfTheConsoleIsHeldToItsOrigin(t *testing.T) {
 		if strings.Contains(policy, "unsafe") || strings.Contains(policy, "http") {
 			t.Errorf("%s is served under %q, which lets it load what is not its own", path, policy)
 		}
-		if h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Referrer-Policy") != "no-referrer" || h.Get("Cache-Control") != "no-cache" {
+		if h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Referrer-Policy") != "no-referrer" || h.Get("Cache-Control") != "no-cache" || h.Get("Strict-Transport-Security") != "max-age=31536000" {
 			t.Errorf("%s is served with %v", path, h)
 		}
 		etag := h.Get("ETag")
@@ -179,6 +179,25 @@ func TestEveryAnswerOfTheConsoleIsHeldToItsOrigin(t *testing.T) {
 	}
 	if a, b := browsed(rt, "GET", "/", nil).Header().Get("ETag"), browsed(rt, "GET", "/assets/app.js", nil).Header().Get("ETag"); a == b {
 		t.Errorf("the page and a script share the ETag %s", a)
+	}
+}
+
+// A browser is told to reach the console over HTTPS alone where the public URL names a host, and
+// told nothing where it names an address, which a browser keeps no such rule for, or localhost,
+// where the rule would outlive the installation for a year and refuse whatever answers there next.
+func TestTheConsoleAsksForHTTPSAloneWhereItsURLNamesAHost(t *testing.T) {
+	for url, want := range map[string]string{
+		"https://agentiik.example.com":         "max-age=31536000",
+		"https://agentiik.example.com:8443/ci": "max-age=31536000",
+		"https://127.0.0.1:8443":               "",
+		"https://[2001:db8::1]":                "",
+		"https://localhost:8443":               "",
+		"https://agentiik.localhost":           "",
+	} {
+		w := browsed(consoled(t, url, build()), "GET", "/", nil)
+		if got := w.Header().Values("Strict-Transport-Security"); (want == "" && len(got) != 0) || (want != "" && (len(got) != 1 || got[0] != want)) {
+			t.Errorf("the console on %s is served Strict-Transport-Security %q, want %q", url, got, want)
+		}
 	}
 }
 

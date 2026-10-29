@@ -74,9 +74,10 @@ func TestThePageIsServedUnderAPolicyThatLoadsNothingFromElsewhere(t *testing.T) 
 	held := func(what string, w *httptest.ResponseRecorder) {
 		t.Helper()
 		for header, want := range map[string]string{
-			"Content-Security-Policy": pagePolicy,
-			"Referrer-Policy":         "no-referrer",
-			"X-Content-Type-Options":  "nosniff",
+			"Content-Security-Policy":   pagePolicy,
+			"Referrer-Policy":           "no-referrer",
+			"X-Content-Type-Options":    "nosniff",
+			"Strict-Transport-Security": "max-age=31536000",
 		} {
 			if got := w.Header().Values(header); len(got) != 1 || got[0] != want {
 				t.Errorf("%s is answered %s %q", what, header, got)
