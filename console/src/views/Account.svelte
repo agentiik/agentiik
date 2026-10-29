@@ -13,6 +13,7 @@
   import {
     addPasskey,
     credentialsOf,
+    kindOf,
     described,
     expiringIn,
     listOf,
@@ -363,7 +364,7 @@
           {#each credentials as c (c.id)}
             <tr>
               <td>{#if c.type === "passkey"}<Icon name="control-passkey" size={14} />{/if}{described(c)}</td>
-              <td class="muted">{c.type === "passkey" ? c.kind : c.type === "password" ? "password" : "one-time codes"}</td>
+              <td class="muted">{kindOf(c)}</td>
               <td class="term muted"><time datetime={c.created_at} title={c.created_at}>{clock(c.created_at, now)}</time></td>
               <td class="term muted">{#if c.last_used_at}<time datetime={c.last_used_at} title={c.last_used_at}>{clock(c.last_used_at, now)}</time>{:else}not used yet{/if}</td>
               <td class="end">

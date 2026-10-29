@@ -123,6 +123,7 @@ func NewUsers(rt *Router, o UserOptions) (*UserAPI, error) {
 		{"DELETE", "/api/v1/groups/{group}", s.removeGroup},
 		{"PUT", "/api/v1/groups/{group}/members/{login}", s.addMember},
 		{"DELETE", "/api/v1/groups/{group}/members/{login}", s.removeMember},
+		{"GET", "/api/v1/users/{login}/credentials", s.credentials},
 		{"GET", "/api/v1/users/{login}/avatar", s.avatar},
 		{"DELETE", "/api/v1/users/{login}/avatar", s.removeAvatar},
 	} {
@@ -683,6 +684,42 @@ func (s *UserAPI) user(w http.ResponseWriter, r *http.Request, _ Principal, _ Ta
 	default:
 		write(w, http.StatusOK, userOf(found))
 	}
+}
+
+// credentials is GET /api/v1/users/{login}/credentials: a user's credentials, listed to an
+// administrator as GET /api/v1/me/credentials lists the caller's, each described and none held, so
+// that whoever administers the installation sees what an account signs in with, synced or
+// device-bound, before recovering it. Nothing here removes one: its holder does, and a lost one is
+// replaced through a recovery code.
+func (s *UserAPI) credentials(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
+	login := r.PathValue("login")
+	if LoginRef(login) != nil {
+		fail(w, http.StatusNotFound, noUser)
+		return
+	}
+	var held []db.Credential
+	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+		if _, err := wide.User(ctx, login); err != nil {
+			return err
+		}
+		var err error
+		held, err = wide.CredentialsOf(ctx, login)
+		return err
+	})
+	switch {
+	case errors.Is(err, db.ErrNoPrincipal):
+		fail(w, http.StatusNotFound, noUser)
+		return
+	case err != nil:
+		fail(w, http.StatusInternalServerError, "the credentials could not be read")
+		return
+	}
+	list := CredentialList{Credentials: []any{}}
+	for _, c := range held {
+		list.Credentials = append(list.Credentials, credentialOf(c))
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	write(w, http.StatusOK, list)
 }
 
 // updateUser is PATCH /api/v1/users/{login}: what an administrator gives a user after creating them,

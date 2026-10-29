@@ -415,6 +415,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{login}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user, by login. */
+                login: components["parameters"]["login"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a user's credentials
+         * @description A user's credentials, oldest first, as GET /api/v1/me/credentials lists the caller's: their passkeys, each with its identifier, kind, both flags, label, and when it was enrolled and last used; the password where one is still stored; and a TOTP generator where one is enrolled. Never a public key, a hash or a shared secret. So that whoever administers the installation sees what an account signs in with, synced or device-bound, before recovering it; nothing here removes one, which its holder does, a lost one being replaced through a recovery code. A user who enrolled nothing holds none. Administrator only.
+         */
+        get: operations["listUserCredentials"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/tokens": {
         parameters: {
             query?: never;
@@ -430,7 +453,7 @@ export interface paths {
         put?: never;
         /**
          * Mint an API token
-         * @description Mints an API token for the caller, or for a service account of a namespace the caller owns: 256 bits of entropy, stored hashed, its value shown in this answer and never again. It expires after 90 days unless the request asks for another expiry, and after a year at most, an expiry up to a minute past the year taken as asked for a client whose clock runs a little ahead, so that a token forgotten in a script stops on its own and none is a credential for good. An optional scope narrows it and can only narrow: on every request its rights are its principal's intersected with the scope. A principal holds at most 100 live tokens, counted under a lock on the principal so that two mints at once cannot both take the last place. Audited as api_token.create, in the namespace of a service account's token. A namespace the caller owns is one on which it holds the owner role, by an unexpired grant of its own or of one of its groups, on the namespace rather than on one of its workflows. An administrator's powers pass through a token only where its scope does not narrow them away: a token with no scope carries them, and within or permissions takes them away, so a token an administrator mints to run one workflow never creates a user. None is minted by a token narrowed by a scope, whose narrowing the token it minted would escape; by the bootstrap token, whose one lasting use is to create the first administrator; for a service account by that account's own token, since a token that minted its successor would be a credential for good; or for a namespace's built-in NS/agentiik, the installation's unattended identity, of which a token would let whoever holds it act as the runs nobody started: a script is given a service account of its own.
+         * @description Mints an API token for the caller, or for a service account of a namespace the caller owns: 256 bits of entropy, stored hashed, its value shown in this answer and never again. It expires after 90 days unless the request asks for another expiry, and after a year at most, an expiry up to a minute past the year taken as asked for a client whose clock runs a little ahead, so that a token forgotten in a script stops on its own and none is a credential for good. An optional scope narrows it and can only narrow: on every request its rights are its principal's intersected with the scope. A principal holds at most 100 live tokens, counted under a lock on the principal so that two mints at once cannot both take the last place. Audited as api_token.create, in the namespace of a service account's token. A namespace the caller owns is one on which it holds the owner role, by an unexpired grant of its own or of one of its groups, on the namespace rather than on one of its workflows. An administrator's powers pass through a token only where its scope does not narrow them away: a token with no scope carries them, and within or permissions takes them away, so a token an administrator mints to run one workflow never creates a user. A browser's session mints one only where it was signed in to in the last 10 minutes, and is asked to sign in again otherwise, before the body is read, as for a passkey registered from it: a token outlives the session that mints it, its sign-out, its 30 days, a password changed and the passkey that opened it removed, and an administrator's carries their powers, so a session left open or a cookie carried off would otherwise mint a credential for up to a year. A bearer token mints however long ago it was minted. None is minted by a token narrowed by a scope, whose narrowing the token it minted would escape; by the bootstrap token, whose one lasting use is to create the first administrator; for a service account by that account's own token, since a token that minted its successor would be a credential for good; or for a namespace's built-in NS/agentiik, the installation's unattended identity, of which a token would let whoever holds it act as the runs nobody started: a script is given a service account of its own.
          */
         post: operations["createToken"];
         delete?: never;
@@ -471,7 +494,7 @@ export interface paths {
         };
         /**
          * Who the caller is
-         * @description The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, a user's carrying what they say of themself and when their photo was last set, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; and break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.
+         * @description The caller: its principal as written, whether it administers the installation through the credential it presented, the user or service account record behind it, neither for the bootstrap token, a user's carrying what they say of themself and when their photo was last set, and its groups; its effective permissions keyed by scope, each namespace where it holds anything and each workflow where a grant, a deny or the token's scope makes them other than its namespace's, narrowed by that scope, leaving out a workflow where it holds nothing, as one it cannot read; and its notifications, newest first: admin_access_widened, an administrator having written a grant in a namespace by the installation's power, put a user in a group holding a role there, or widened their own access there, told to its owners and, where the namespace had nobody to tell before, the other administrators as well, each saying the act and who did it; passkey_counter_refused, a sign-in refused for a passkey's signature counter, told to its user; break_glass_recovery, a recovery code agentiik-api recover issued an administrator, naming the account, told to every administrator; and recovery_code_issued and recovery_code_used, a recovery code an administrator or the bootstrap token issued the caller, naming who, and that code spent, naming who issued it and the credential it enrolled, told to the caller alone and dismissed by nobody. A notification past its 90 days is removed as the list is read. A token narrowed by a scope reads no notification, since reading what the installation tells a principal is none of the nine, so that a script holding one neither reads that an administrator widened their access nor makes the notice go away before its owner reads it. What agk whoami prints, and what the console reads to hide what the caller does not hold rather than disable it.
          */
         get: operations["getMe"];
         put?: never;
@@ -501,7 +524,7 @@ export interface paths {
         post?: never;
         /**
          * Dismiss one of the caller's notifications
-         * @description Dismisses one of the notifications GET /api/v1/me lists, which lists it no more. One not dismissed is kept 90 days from when it was written: long enough to reach someone back from leave, and bounded so that GET /api/v1/me does not grow for ever. Dismissing changes nothing of what happened: the grant.create, the signin.fail or the enrolment.issue the audit log recorded stays. A notification owed to a group was written once for each of its members, so that one member dismissing it dismisses it for nobody else. A token narrowed by a scope dismisses none, as it reads none.
+         * @description Dismisses one of the notifications GET /api/v1/me lists, which lists it no more. One not dismissed is kept 90 days from when it was written: long enough to reach someone back from leave, and bounded so that GET /api/v1/me does not grow for ever. Dismissing changes nothing of what happened: the grant.create, the signin.fail or the enrolment.issue the audit log recorded stays. A notification owed to a group was written once for each of its members, so that one member dismissing it dismisses it for nobody else. A token narrowed by a scope dismisses none, as it reads none. A recovery code's, recovery_code_issued or recovery_code_used, is refused 409 and kept its 90 days, since whoever spent the code signs in as the caller, from the session it opened or with the credential it enrolled, and could otherwise dismiss what tells the caller of it before they read it.
          */
         delete: operations["dismissNotification"];
         options?: never;
@@ -523,7 +546,7 @@ export interface paths {
         get: operations["getMyAvatar"];
         /**
          * Set the caller's photo
-         * @description Sets the caller's photo in place of any before it: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it, which a photo shown to colleagues would hand them. The Content-Type says the body is one of the two and the bytes say which, since a browser names a file's type by its extension. Set by the user alone, as the profile is: the bootstrap token, a service account and a token narrowed by a scope are refused saying so. avatar_updated_at says when it was set, which a client adds to the photo's address. Audited as user.avatar with the size it was stored at, and never the photo.
+         * @description Sets the caller's photo in place of any before it: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. Pictures are re-encoded a few at a time in each process of the API, a user's photo and a namespace's picture alike, one for each processor and no more than a quarter of its memory holds at 64 MiB each, so that many sent at once cannot take the memory every other request needs; one that waits five seconds for its turn is refused, and stores nothing. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it, which a photo shown to colleagues would hand them. The Content-Type says the body is one of the two and the bytes say which, since a browser names a file's type by its extension. Set by the user alone, as the profile is: the bootstrap token, a service account and a token narrowed by a scope are refused saying so. avatar_updated_at says when it was set, which a client adds to the photo's address. Audited as user.avatar with the size it was stored at, and never the photo.
          */
         put: operations["setMyAvatar"];
         post?: never;
@@ -566,7 +589,7 @@ export interface paths {
         };
         /**
          * List the caller's collections
-         * @description The caller's collections, by name, whole and not paged, each with its id, its name, its description, the url a client is given and its members, each member with its workflow, its ref and its as where written, and the tool it offers or why it offers none, read at the head of each member's ref as the next tools/list reads it. Any authenticated principal, about its own: nobody reads another principal's, an administrator included, since a collection grants nothing and is one principal's arrangement of what they may already run. The bootstrap token, which is nobody, holds none and lists none.
+         * @description The caller's collections, by name, whole and not paged, each with its id, its name, its description, the url a client is given and its members, each member with its workflow, its ref and its as where written, and the tool it offers or why it offers none, read at the head of each member's ref as the next tools/list reads it. Any authenticated principal, about its own: nobody reads another principal's, an administrator included, since a collection grants nothing and is one principal's arrangement of what they may already run. The bootstrap token, which is nobody, holds none and lists none, and a token narrowed by a scope lists none either, since a collection names workflows of every namespace its holder runs, which a scope keeps the token from, and managing one is none of the nine permissions a scope keeps.
          */
         get: operations["listCollections"];
         put?: never;
@@ -593,7 +616,7 @@ export interface paths {
         };
         /**
          * Read one of the caller's collections
-         * @description One of the caller's collections, as the list gives it: each member with its workflow, its ref and its as where written, and tool, the name it is offered under, or null beside reason, no_mcp_block where the entry point at the head of its ref declares no mcp block and not_runnable where the caller may no longer run the workflow, deleted ones included. What the web console shows of it, so that a member missing from a client's tool list is one its owner can account for. Another principal's collection is answered 404, to an administrator as to anybody.
+         * @description One of the caller's collections, as the list gives it: each member with its workflow, its ref and its as where written, and tool, the name it is offered under, or null beside reason, no_mcp_block where the entry point at the head of its ref declares no mcp block, not_runnable where the caller may no longer run the workflow, deleted ones included, and tool_name_taken where another member's tool has come to go by the same name, both left out until as or a commit tells them apart. What the web console shows of it, so that a member missing from a client's tool list is one its owner can account for. Another principal's collection is answered 404, to an administrator as to anybody.
          */
         get: operations["getCollection"];
         put?: never;
@@ -658,7 +681,7 @@ export interface paths {
         put?: never;
         /**
          * Create a namespace
-         * @description Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20 and the other five unset, so that what its runs produce is kept until somebody decides otherwise. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words the API's first path segment routes on are refused by the grammar. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.
+         * @description Creates a shared namespace, owned by whoever creates it, with quotas where an administrator sets them. Any user creates one, and is given the owner role on it in the same transaction, so that they can share it and act in it from the start: an owner in the record alone would be refused everything in it. owner, a user or group:NAME, and quotas are an administrator's to write: a user naming another owner than themself, or any quota, is refused, and their namespace takes the installation's defaults, max_concurrent_tasks 20 and the other five unset, so that what its runs produce is kept until somebody decides otherwise. An administrator's namespace is owned by the owner it names, or by the administrator where it names none; the bootstrap token, which is nobody, names one. A service account and a token narrowed by a scope create none, since a namespace is a person's, who answers for what is shared in it. The owner's grant is written by the creator. The namespace's built-in identity, NS/agentiik, is created with it and holds no grant until an owner gives it one. Its name is refused where a login holds it, since logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them; and where a renamed namespace holds it as a former name, which still reaches that namespace. The reserved words are refused by the grammar: those the API's first path segment routes on, and from v0.7.0 api, hooks, mcp and objects, whose addresses the API answers rather than the web console. allowed_runner_pools names pools that exist. Audited as namespace.create, and the owner's grant as grant.create in the namespace.
          */
         post: operations["createNamespace"];
         delete?: never;
@@ -715,7 +738,7 @@ export interface paths {
         get: operations["getNamespaceAvatar"];
         /**
          * Set a namespace's picture
-         * @description Sets the namespace's picture in place of any before it, held to the rules of a user's photo: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it. Set by its owner, whoever holds grant:manage at its scope, a personal namespace's user among them, or an administrator. The record's avatar_updated_at says when it was set, which a client adds to the picture's address. Audited as namespace.avatar with the size it was stored at, and never the picture.
+         * @description Sets the namespace's picture in place of any before it, held to the rules of a user's photo: the body a PNG or a JPEG of at most 1 MiB, its Content-Type image/png or image/jpeg. Its size in pixels is read from its header before anything is decoded, and one past 2048 by 2048 is refused, since a few kilobytes of PNG can announce a picture that takes gigabytes to hold. Pictures are re-encoded a few at a time in each process of the API, a user's photo and a namespace's picture alike, one for each processor and no more than a quarter of its memory holds at 64 MiB each, so that many sent at once cannot take the memory every other request needs; one that waits five seconds for its turn is refused, and stores nothing. It is then decoded and encoded again as a PNG, scaled down to 512 by 512 at most keeping its aspect, and turned upright where a JPEG's Exif says it was taken on its side, so that what is stored carries nothing of the file but its pixels: no Exif, and no location a phone wrote into it. Set by its owner, whoever holds grant:manage at its scope, a personal namespace's user among them, or an administrator. The record's avatar_updated_at says when it was set, which a client adds to the picture's address. Audited as namespace.avatar with the size it was stored at, and never the picture.
          */
         put: operations["setNamespaceAvatar"];
         post?: never;
@@ -1336,6 +1359,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/{ns}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a namespace's runs
+         * @description GET /api/v1/runs within the namespace the path names: the runs of each of its workflows the caller holds run:read on, over the namespace or the workflow itself, newest first, each as the listing across namespaces answers it, narrowed by the same workflow, state, since, until and limit. The namespace is read from the path, a former name reaching it as its name does, and a namespace in the query is not read, since the path's is the only one its questions answer about. Every workflow of the namespace is asked about as one question, so that a namespace the caller holds nothing in lists nothing, as one that does not exist does, and asks what that one asks: a listing is no way of learning which namespaces and workflows exist, by what it answers or by how long it takes.
+         */
+        get: operations["listNamespaceRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{id}": {
         parameters: {
             query?: never;
@@ -1351,6 +1397,31 @@ export interface paths {
          * @description A run whole: its state, what started it and whom it is attributed to, each step's verdict and the envelopes it published, each task with the envelopes it was handed, its runner and its exit code, and for a replay the run and the step it replays from. Its inputs are envelope contents, answered only to a caller holding run:read_data on the run's workflow and otherwise left out. Requires run:read on the run's workflow. The same answer as GET /api/v1/{ns}/runs/{id}, the path a Location names a run by.
          */
         get: operations["getRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/{ns}/runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read a run under its namespace
+         * @description The run at the path the Location of startRun, cancelRun and replayRun names it by: the answer GET /api/v1/runs/{id} gives, authorised the same way, over the run's own workflow rather than over the namespace, so that run:read held on that workflow alone reads it and a deny of run:read on it refuses it. A run of another namespace than the path names is answered as one that does not exist, before anything is asked about the namespace it is in, so that the path is no way of learning where a run is. A former name of the namespace reaches it as its name does. Its inputs are envelope contents, answered only to a caller holding run:read_data on the run's workflow and otherwise left out. Requires run:read on the run's workflow.
+         */
+        get: operations["getNamespaceRun"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1653,7 +1724,7 @@ export interface paths {
         };
         /**
          * Fetch an artifact
-         * @description Fetches one artifact by the URI an envelope names it with: a redirect to a presigned URL good for 5 minutes where it has no fetch budget, so that the bytes never touch the control plane; the bytes themselves where it has one, since a redirect would spend a fetch on a client that never arrived. A fetch counts when the transfer completes, is held while it goes and given back where it does not; one held while every fetch left is being served is answered 409. Expired, or with its budget spent, it is 410 rather than 404, so that a client tells this existed and is finished from this never existed, and the run detail keeps showing it. A HEAD is answered what a GET would be, bytes aside, and spends nothing. A Range is not honoured. Requires run:read_data on the workflow of the run that published it, a run of another namespace answered as one that does not exist.
+         * @description Fetches one artifact by the URI an envelope names it with: a redirect to a presigned URL good for 5 minutes where it has no fetch budget, so that the bytes never touch the control plane; the bytes themselves where it has one, since a redirect would spend a fetch on a client that never arrived. A fetch counts when the transfer completes, is held while it goes and given back where it does not; one held while every fetch left is being served is answered 409. Expired, or with its budget spent, it is 410 rather than 404, so that a client tells this existed and is finished from this never existed, and the run detail keeps showing it. A HEAD is answered what a GET would be, bytes aside, and spends nothing. A browser's session spends a budget only from the public URL's pages, where Sec-Fetch-Site is same-origin, or none for the address bar and a bookmark, or, where the browser sends no Sec-Fetch-Site, its one Origin header is the public URL's origin, and is answered 403 otherwise, a HEAD too, before any fetch is held: SameSite=Lax carries the cookie on a link followed from another site and on an image on another host of the same site, so whoever posted one would otherwise spend the budget for whoever followed or loaded it. A bearer token, which no page carries, and an artifact with no budget, are answered from anywhere. A Range is not honoured. Requires run:read_data on the workflow of the run that published it, a run of another namespace answered as one that does not exist.
          */
         get: operations["getArtifact"];
         put?: never;
@@ -3109,7 +3180,7 @@ export interface components {
                 [key: string]: components["schemas"]["permission"][];
             };
             /**
-             * @description What the installation has to tell the caller, newest first: an administrator having written a grant in a namespace the caller owns by the installation's power, put a user in a group holding a role there, or widened their own access there, each with the act and who did it, told to the other administrators too where the namespace had nobody to tell; a sign-in refused for one of the caller's passkeys' signature counters; and a recovery code agentiik-api recover issued an administrator, told to every administrator. Each is kept 90 days from when it was written, or until the caller dismisses it with DELETE /api/v1/me/notifications/{id}; one past its days is removed as this is read. Empty through a token narrowed by a scope, which reads none.
+             * @description What the installation has to tell the caller, newest first: an administrator having written a grant in a namespace the caller owns by the installation's power, put a user in a group holding a role there, or widened their own access there, each with the act and who did it, told to the other administrators too where the namespace had nobody to tell; a sign-in refused for one of the caller's passkeys' signature counters; a recovery code agentiik-api recover issued an administrator, told to every administrator; and a recovery code issued the caller, and that code spent, told to the caller alone. Each is kept 90 days from when it was written, or until the caller dismisses it with DELETE /api/v1/me/notifications/{id}, which a recovery code's never is; one past its days is removed as this is read. Empty through a token narrowed by a scope, which reads none.
              * @example []
              * @example [
              *       {
@@ -5064,7 +5135,7 @@ export interface components {
              */
             parent?: components["schemas"]["commit"];
             /**
-             * @description The commit's message, which git log shows beside it: one character at least that is not a blank. Written with one line feed ending it; the commit workflow.commit makes carries a Via: mcp trailer besides, so that git log says what arrived through MCP.
+             * @description The commit's message, which git log shows beside it: one character at least that is not white space, as Unicode counts it. Written with one line feed ending it; the commit workflow.commit makes carries a Via: mcp trailer besides, so that git log says what arrived through MCP.
              * @example Normalize with the pinned image
              * @example Add the reminder script
              */
@@ -8095,14 +8166,14 @@ export interface components {
          *             {
          *               "step": "normalize",
          *               "verdict": "succeeded",
-         *               "started_at": "2026-09-30T05:40:12Z",
-         *               "finished_at": "2026-09-30T05:41:02Z"
+         *               "started_at": "2026-10-01T05:41:03Z",
+         *               "finished_at": "2026-10-01T05:41:05Z"
          *             },
          *             {
          *               "step": "invoice",
          *               "verdict": "failed",
-         *               "started_at": "2026-09-30T05:41:03Z",
-         *               "finished_at": "2026-09-30T05:44:10Z"
+         *               "started_at": "2026-10-01T05:41:05Z",
+         *               "finished_at": "2026-10-01T05:42:55Z"
          *             }
          *           ]
          *         },
@@ -8143,14 +8214,14 @@ export interface components {
              *           {
              *             "step": "normalize",
              *             "verdict": "succeeded",
-             *             "started_at": "2026-09-30T05:40:12Z",
-             *             "finished_at": "2026-09-30T05:41:02Z"
+             *             "started_at": "2026-10-01T05:41:03Z",
+             *             "finished_at": "2026-10-01T05:41:05Z"
              *           },
              *           {
              *             "step": "invoice",
              *             "verdict": "failed",
-             *             "started_at": "2026-09-30T05:41:03Z",
-             *             "finished_at": "2026-09-30T05:44:10Z"
+             *             "started_at": "2026-10-01T05:41:05Z",
+             *             "finished_at": "2026-10-01T05:42:55Z"
              *           }
              *         ]
              *       },
@@ -9305,7 +9376,7 @@ export interface components {
          *           "members": [
          *             {
          *               "workflow": "finance/monthly-invoicing",
-         *               "tool": "create_invoice"
+         *               "tool": "create_invoices"
          *             },
          *             {
          *               "workflow": "support/order-status",
@@ -9345,7 +9416,7 @@ export interface components {
              *         "members": [
              *           {
              *             "workflow": "finance/monthly-invoicing",
-             *             "tool": "create_invoice"
+             *             "tool": "create_invoices"
              *           },
              *           {
              *             "workflow": "support/order-status",
@@ -14744,6 +14815,37 @@ export interface operations {
             413: components["responses"]["tooLarge"];
         };
     };
+    listUserCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user, by login. */
+                login: components["parameters"]["login"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The credentials. */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["noStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["credentialList"];
+                };
+            };
+            /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            400: components["responses"]["badRequest"];
+            401: components["responses"]["unauthorised"];
+            /** @description The caller is not an administrator, or holds a session that may only enrol. */
+            403: components["responses"]["forbidden"];
+            /** @description No user by that login, or a login no user can have. */
+            404: components["responses"]["notFound"];
+        };
+    };
     listTokens: {
         parameters: {
             query?: never;
@@ -14796,7 +14898,7 @@ export interface operations {
             /** @description The body is refused: principal written empty or outside the grammar of a login and of NS/NAME, a device_label empty, over 256 characters or holding U+0000, an expiry that is not an instant, or a scope naming neither permissions nor within, an empty one, one naming something twice, a permission that is not one of the nine or a place no grant could name. A request carrying two credentials, a bearer token beside the session cookie or two session cookies, is refused as well. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description A session that may only enrol; a token narrowed by a scope; the bootstrap token, whose refusal names agk user create LOGIN --admin; or a service account's token asking for that same account. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
+            /** @description A session that may only enrol; a browser's session signed in to more than 10 minutes ago, with RFC 9470's challenge, which the console answers by asking for a sign-in again; a token narrowed by a scope; the bootstrap token, whose refusal names agk user create LOGIN --admin; or a service account's token asking for that same account. A request carrying a session from another origin than the public URL's is refused as well, before the session is looked up. */
             403: components["responses"]["forbidden"];
             /** @description The principal holds 100 live tokens, the most one may hold. */
             409: components["responses"]["conflict"];
@@ -14917,6 +15019,15 @@ export interface operations {
             403: components["responses"]["forbidden"];
             /** @description No notification of the caller's by that identifier: dismissed already, past its 90 days, or never the caller's; and any through a token narrowed by a scope, or the bootstrap token, which are told nothing. */
             404: components["responses"]["notFound"];
+            /** @description A recovery code's notification, issued the caller or spent on their account, which nobody dismisses; it stays listed its 90 days. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
         };
     };
     getMyAvatar: {
@@ -15016,6 +15127,17 @@ export interface operations {
             /** @description The body is not a PNG or a JPEG that can be read, or its header announces more than 2048 pixels a side, saying how many. */
             422: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description Too many pictures are being re-encoded at once to take this photo within five seconds: nothing was stored, and the request may be sent again once Retry-After has passed. */
+            503: {
+                headers: {
+                    /** @description One second: a re-encoding takes half a second at the most. */
+                    "Retry-After": components["headers"]["retryAfter"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -15134,7 +15256,7 @@ export interface operations {
             /** @description The body is refused: no name, a name outside the identifier grammar, a description that is not a string, past 280 characters or holding a line break or another control character, null, or a field the route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description The bootstrap token, which is nobody and owns nothing, refused saying so; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. */
+            /** @description The bootstrap token, which is nobody and owns nothing, refused saying so; a token narrowed by a scope, which reaches no collection, refused before the body is read; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. */
             403: components["responses"]["forbidden"];
             /** @description Another of the caller's collections holds the name, which is how their owner tells them apart. */
             409: {
@@ -15181,7 +15303,7 @@ export interface operations {
             /** @description Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description Only for a session that may only enrol. Every other refusal here is a 404. */
+            /** @description A token narrowed by a scope, which reaches no collection, refused before anything is looked up, whether the collection exists or not; or a session that may only enrol. Every other refusal here is a 404. */
             403: components["responses"]["forbidden"];
             /** @description No collection of the caller's by that identifier: another principal's, to an administrator as to anybody, since a collection is its owner's alone and asking must teach nothing of another's; one removed; or one never made. */
             404: components["responses"]["notFound"];
@@ -15209,7 +15331,7 @@ export interface operations {
             /** @description A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
+            /** @description A token narrowed by a scope, which reaches no collection, refused before the body is read and anything is looked up, whether the collection exists or not; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
             403: components["responses"]["forbidden"];
             /** @description No collection of the caller's by that identifier: another principal's, to an administrator as to anybody, since a collection is its owner's alone and asking must teach nothing of another's; one removed; or one never made. */
             404: components["responses"]["notFound"];
@@ -15244,7 +15366,7 @@ export interface operations {
             /** @description The body names nothing to change, a field the route does not read, null, a name outside the identifier grammar, or a description that is not a string, past 280 characters or holding a line break or another control character. Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
+            /** @description A token narrowed by a scope, which reaches no collection, refused before the body is read and anything is looked up, whether the collection exists or not; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
             403: components["responses"]["forbidden"];
             /** @description No collection of the caller's by that identifier: another principal's, to an administrator as to anybody, since a collection is its owner's alone and asking must teach nothing of another's; one removed; or one never made. */
             404: components["responses"]["notFound"];
@@ -15290,10 +15412,10 @@ export interface operations {
                     "application/json": components["schemas"]["collection"];
                 };
             };
-            /** @description The body is refused: not an object, no body at all, a ref outside git's rules for a ref name, an as outside the identifier grammar, null, or a field the route does not read; or a ref a branch and a tag of the repository both hold by that short name, written in full instead. Two credentials: a bearer token beside the session cookie, or two session cookies. */
+            /** @description The body is refused: not an object, no body at all, a ref outside git's rules for a ref name, a ref that is a whole commit, an as outside the identifier grammar, null, or a field the route does not read; or a ref a branch and a tag of the repository both hold by that short name, written in full instead. A commit is refused because a member is read at a branch or a tag, so that it follows the workflow as its triggers follow the default branch. Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
+            /** @description A token narrowed by a scope, which reaches no collection, refused before the body is read and anything is looked up, whether the collection exists or not; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
             403: components["responses"]["forbidden"];
             /** @description No collection of the caller's by that identifier, another principal's to an administrator as to anybody; or no workflow by that namespace and name that the caller may run, which reads as one that does not exist, so that adding one teaches nothing of what the caller may not run. */
             404: components["responses"]["notFound"];
@@ -15346,7 +15468,7 @@ export interface operations {
             /** @description A body, which this route does not read. Two credentials: a bearer token beside the session cookie, or two session cookies. */
             400: components["responses"]["badRequest"];
             401: components["responses"]["unauthorised"];
-            /** @description A session that may only enrol, or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
+            /** @description A token narrowed by a scope, which reaches no collection, refused before the body is read and anything is looked up, whether the collection exists or not; a session that may only enrol; or a request carrying a session from another origin than the public URL's, refused before the session is looked up. Every other refusal of the collection here is a 404. */
             403: components["responses"]["forbidden"];
             /** @description No collection of the caller's by that identifier: another principal's, to an administrator as to anybody, since a collection is its owner's alone and asking must teach nothing of another's; one removed; or one never made. */
             404: components["responses"]["notFound"];
@@ -15622,6 +15744,17 @@ export interface operations {
             /** @description The body is not a PNG or a JPEG that can be read, or its header announces more than 2048 pixels a side, saying how many. */
             422: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            /** @description Too many pictures are being re-encoded at once to take this picture within five seconds: nothing was stored, and the request may be sent again once Retry-After has passed. */
+            503: {
+                headers: {
+                    /** @description One second: a re-encoding takes half a second at the most. */
+                    "Retry-After": components["headers"]["retryAfter"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -17156,6 +17289,50 @@ export interface operations {
             401: components["responses"]["unauthorised"];
         };
     };
+    listNamespaceRuns: {
+        parameters: {
+            query?: {
+                /** @description Narrows the listing to the workflows of that name, in the namespace given or in every one the caller reads. One the caller does not hold run:read on lists nothing, as one that does not exist does. */
+                workflow?: components["parameters"]["runsWorkflow"];
+                /** @description Narrows the listing to the runs in one state. A word that is no run state is refused with 400. */
+                state?: components["parameters"]["runsState"];
+                /** @description The runs created at this instant or after it, in RFC 3339. A value that is no such time is refused with 400. */
+                since?: components["parameters"]["runsSince"];
+                /** @description The runs created at this instant or before it, in RFC 3339, both bounds being included. A statistics bucket carries the since and until that open the runs it counts. */
+                until?: components["parameters"]["runsUntil"];
+                /** @description How many runs at most, newest first: 50 when left out, and at most 500. A limit outside 1 to 500, or no whole number, is read as 50 rather than refused. */
+                limit?: components["parameters"]["runsLimit"];
+            };
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The namespace's runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runList"];
+                };
+            };
+            /** @description A state that is no run state, or a since or an until that is no time. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
+            401: components["responses"]["unauthorised"];
+        };
+    };
     getRun: {
         parameters: {
             query?: never;
@@ -17178,6 +17355,34 @@ export interface operations {
                 };
             };
             401: components["responses"]["unauthorised"];
+            404: components["responses"]["notFound"];
+        };
+    };
+    getNamespaceRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace, by name, or by a name it held before it was renamed, which reaches it as its name does, so that an address written before a rename keeps working. One the caller cannot see is answered as one that does not exist, so that no name can be learnt by asking. */
+                ns: components["parameters"]["ns"];
+                /** @description The run, by its identifier. One the caller may not read is answered as one that does not exist. */
+                id: components["parameters"]["runId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["runDetail"];
+                };
+            };
+            401: components["responses"]["unauthorised"];
+            /** @description No such run, one the caller may not read, or a run of another namespace than the path names: the same answer for each, so that asking teaches nothing. */
             404: components["responses"]["notFound"];
         };
     };
@@ -17749,6 +17954,15 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["unauthorised"];
+            /** @description A browser's session asking for an artifact with a fetch budget from anywhere but the public URL's pages, or from a browser that does not say where the request comes from, refused before any fetch is held. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["error"];
+                };
+            };
             /** @description No such artifact, never written or in a run the caller may not read. */
             404: {
                 headers: {

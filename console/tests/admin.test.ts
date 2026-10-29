@@ -117,6 +117,49 @@ describe("the users, for an administrator", () => {
   });
 });
 
+describe("a user's sign-in methods, for an administrator", () => {
+  it("lists them, synced or device-bound, with when each was enrolled and last used, and removes none", async () => {
+    const s = scenario("dana");
+    s["GET /api/v1/users/carol/credentials"] = {
+      status: 200,
+      body: {
+        credentials: [
+          { type: "password", id: "01M2AAZ9G62NQXFAFCXKRPJEH5", created_at: "2026-09-27T08:55:00Z" },
+          { type: "passkey", id: "aVBob25lUGFzc2tleQ", label: "phone", backup_eligible: true, backup_state: true, kind: "synced", created_at: "2026-09-27T09:02:00Z", last_used_at: "2026-09-27T12:30:00Z" },
+        ],
+      },
+    };
+    const { asked } = open("/users", s);
+    const row = (await screen.findByText("carol", { selector: "td .login" })).closest("tr")!;
+    await fireEvent.click(within(row).getByRole("button", { name: "Sign-in methods" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sign-in methods of carol" });
+    const rows = (await within(dialog).findAllByRole("row")).slice(1).map((r) => [...r.querySelectorAll("td")].slice(0, 2).map((d) => d.textContent?.trim()));
+    expect(rows).toEqual([
+      ["The password", "password"],
+      ["phone", "synced"],
+    ]);
+    expect(within(dialog).getByText("not used yet")).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: /Remove/ })).toBeNull();
+    expect(asked.filter((a) => a.key.startsWith("DELETE"))).toEqual([]);
+  });
+
+  it("says a user who enrolled nothing holds none, and what the API refused as it said it", async () => {
+    const s = scenario("dana");
+    s["GET /api/v1/users/carol/credentials"] = { status: 200, body: { credentials: [] } };
+    s["GET /api/v1/users/dana/credentials"] = { status: 403, body: { error: "a session that may only enrol reaches nothing else" } };
+    open("/users", s);
+    const carol = (await screen.findByText("carol", { selector: "td .login" })).closest("tr")!;
+    await fireEvent.click(within(carol).getByRole("button", { name: "Sign-in methods" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sign-in methods of carol" });
+    expect(await within(dialog).findByText("None enrolled")).toBeTruthy();
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    const dana = (await screen.findByText("dana", { selector: "td .login" })).closest("tr")!;
+    await fireEvent.click(within(dana).getByRole("button", { name: "Sign-in methods" }));
+    const own = await screen.findByRole("dialog", { name: "Sign-in methods of dana" });
+    expect(await within(own).findByText(/A session that may only enrol reaches nothing else/)).toBeTruthy();
+  });
+});
+
 describe("the groups, for an administrator", () => {
   it("lists each group with its members, and creates one with its first members", async () => {
     const s = scenario("dana");
