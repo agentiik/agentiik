@@ -7,8 +7,8 @@ Publishes the workflow as one tool to model-driven clients: one block, one tool,
 - `/mcp`: Publishes the workflow as one tool to model-driven clients: one block, one tool, whose arguments are the workflow's inputs and whose result is optionally one of its outputs. Whether a client is offered it is decided by whoever adds the workflow to a collection, so the block says what the tool is and never who may call it. Nothing is inferred from the graph, so publishing a workflow never leaks its internals, and publishing, renaming or withdrawing the tool is a commit like any other change.
 - `/mcp/name`: The tool's name, the workflow's name where none is written. It is stable across commits because clients hold it and send it back in every call: renaming it is withdrawing one tool and publishing another, in every collection that does not give the tool a name of its own.
 - `/mcp/title`: Label a client shows to a person in a list of tools, where the name would read as machinery.
-- `/mcp/description`: What the tool does, when to reach for it and what it refuses. This is the field a model actually acts on, and the one worth spending sentences on: a tool published without one is exactly the tool a model has no way to decide to call.
-- `/mcp/output`: The name of one workflow output declared in this file, optional. Its envelope becomes the result, carried as structuredContent with a text rendering beside it, and its schema, where it declares one, the tool's outputSchema. Leaving it out publishes a tool that has an effect and returns only that it succeeded. It names an output and never a step or a port, so that the graph stays free to change beneath a published tool.
+- `/mcp/description`: What the tool does, when to reach for it and what it refuses. This is the field a model actually acts on, and the one worth spending sentences on: a tool published without one is exactly the tool a model has no way to decide to call, and one of white space alone, as Unicode counts it, line breaks and the spaces of every script included, is refused as none, since it tells a model as little.
+- `/mcp/output`: The name of one workflow output declared in this file, optional. Its envelope becomes the result, carried as structuredContent with a text rendering beside it. Where the output declares a schema and the tool is sync, the tool's outputSchema describes that envelope, { meta, items } with each item's data held to the output's schema, since the protocol holds a structured result to its outputSchema and the result is the envelope; an async tool publishes none, since its call answers the run it started and never the output. Leaving it out publishes a tool that has an effect and returns only that it succeeded. It names an output and never a step or a port, so that the graph stays free to change beneath a published tool.
 - `/mcp/mode`: Whether the call waits. sync holds the call until the run finishes and returns the output; async returns the run identifier at once, to be followed with run.get on the user's server.
 - `/mcp/timeout`: How long a sync call waits. It is capped at 120 seconds because clients time out long before a workflow gives up, and a workflow that cannot finish inside that has to be async. The ceiling is carried by the grammar of the value, so a timeout above it is refused here and not left to the validator; the companion rule, that an async tool carries no timeout at all, is stated on mode.
 - `/mcp/annotations`: The protocol's own hints, passed through to the client unchanged. They tell a client what to expect of a call, never what it is allowed to do: that is decided by the grants and not by a field in this file.
@@ -36,7 +36,11 @@ Publishes the workflow as one tool to model-driven clients: one block, one tool,
   "properties": {
     "name": {"$ref": "#/$defs/identifier"},
     "title": {"type": "string"},
-    "description": {"type": "string", "minLength": 1},
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "[^\\x09-\\x0d\\x20\\x85\\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+    },
     "output": {"$ref": "#/$defs/portName"},
     "mode": {"enum": ["sync", "async"], "default": "sync"},
     "timeout": {"$ref": "#/$defs/mcpTimeout"},

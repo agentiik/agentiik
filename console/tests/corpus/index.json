@@ -1,5 +1,5 @@
 {
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "What each fixture pins. A fixture under valid/ must be accepted by the schema named beside it. A fixture under invalid/ must be refused; refused_by says by what. schema means the JSON Schema document alone refuses it, and a consumer can assert that with a validator and nothing else. validator means the documentation states the rule but JSON Schema cannot express it, because it needs the graph, the brick manifest, the included file or the expression language; those fixtures are schema valid on purpose and are refused by the workflow validator instead.",
   "schemas": {
     "workflow": "../workflow.schema.json",
@@ -136,7 +136,7 @@
         },
         {
           "file": "workflow/invalid/namespace-reserved.yaml",
-          "rule": "A namespace named after a word the API routes on. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts and stats cannot name a namespace.",
+          "rule": "A namespace named after a word the API routes on. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts and stats cannot name a namespace; and from v0.7.0 neither can api, hooks, mcp and objects, since an address's first path segment decides whether the API or the web console answers it.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
         },
@@ -323,6 +323,18 @@
         {
           "file": "workflow/invalid/mcp-tool-without-description.yaml",
           "rule": "A published tool with no description. The description is the field a model acts on, so a tool without one is exactly the tool a model has no way to decide to call.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-tool-description-blank.yaml",
+          "rule": "A published tool whose description is spaces alone. The engine refuses it as a tool with no description, since it tells a model as little, so the schema asks for a character that is not white space.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-tool-description-unicode-blank.yaml",
+          "rule": "A published tool whose description is white space outside ASCII alone, a no-break space and an ideographic space. The engine trims every character Unicode counts as white space before asking whether a description says anything, so the schema refuses each of them, and not only the ASCII blanks \\S stands for in RE2, which the core validates with.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#publishing-tools"
         },
@@ -1211,6 +1223,12 @@
           "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
         },
         {
+          "file": "wire/invalid/principal-user-login-mcp.json",
+          "rule": "mcp is reserved from v0.7.0, as api, hooks and objects are, since the API answers every address under /mcp and the web console every first path segment outside the API's, which it reads as a namespace, and a login is also the name of its personal namespace",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
           "file": "wire/invalid/principal-user-login-256-characters.json",
           "rule": "a login is at most 255 characters, the most a directory or a bus subject token holds a name to, since it is also the name of its personal namespace",
           "refused_by": "schema",
@@ -1513,6 +1531,10 @@
         {
           "file": "wire/valid/namespace-record-renamed.json",
           "covers": "a namespace renamed twice, listing the names it left in the order it left them, the first a word reserved since it was created before v0.3.0, which a former name may be, and a picture set"
+        },
+        {
+          "file": "wire/valid/namespace-record-renamed-from-mcp.json",
+          "covers": "a namespace created as mcp before v0.7.0 reserved the word, renamed so that the web console opens its pages, and keeping mcp as a former name, which a word reserved since may be"
         }
       ],
       "invalid": [
@@ -1688,6 +1710,26 @@
         {
           "file": "wire/valid/notification-break-glass-recovery.json",
           "covers": "agentiik-api recover having issued the administrator alice a recovery code from the installation's host, told to every administrator with her login and nothing else"
+        },
+        {
+          "file": "wire/valid/notification-break-glass-recovery-of-a-login-reserved-since.json",
+          "covers": "agentiik-api recover having issued a recovery code to the administrator mcp, whose login was made before v0.7.0 reserved the word and not yet given a new one: a notification names the login as it stood when it was told"
+        },
+        {
+          "file": "wire/valid/notification-recovery-code-issued-by-a-login-reserved-since.json",
+          "covers": "a recovery code issued the reader by the administrator mcp, whose login a later release reserved: by keeps the login it was told with, which may be a word reserved since"
+        },
+        {
+          "file": "wire/valid/notification-login-changed.json",
+          "covers": "the user mcp, whose login was made before v0.7.0 reserved the word, given mc-petit by an administrator and told so: the login they had, a word reserved since, which their personal namespace keeps as a former name, the one they were given, and who gave it"
+        },
+        {
+          "file": "wire/valid/notification-recovery-code-issued.json",
+          "covers": "an administrator having issued the reader a recovery code, told to the reader alone with who issued it and nothing of the code or its link"
+        },
+        {
+          "file": "wire/valid/notification-recovery-code-used.json",
+          "covers": "a recovery code having been spent on the reader's account, told to the reader with who issued it and the credential it enrolled, so that they can remove it if it was not them"
         }
       ],
       "invalid": [
@@ -1736,6 +1778,48 @@
         {
           "file": "wire/invalid/notification-break-glass-without-login.json",
           "rule": "every administrator is told which account the break-glass path issued a recovery code, since an administrator who did not run it has to know whose it was",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/notification-login-changed-without-from.json",
+          "rule": "a user given a new login is told which login they had, the one every address and grant they knew named them by",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/notification-login-changed-by-nobody.json",
+          "rule": "a user given a new login is told who gave it, the administrator they would ask why",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/notification-login-changed-to-a-reserved-word.json",
+          "rule": "a new login is held as one at the creation, so it is never a reserved word: the login a user had may be one, reserved since, and the login they are given never is",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/notification-break-glass-naming-a-former-login.json",
+          "rule": "from names the login a user had, on login_changed alone; each kind carries what its reader needs and nothing of the others'",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/notification-recovery-code-issued-by-nobody.json",
+          "rule": "a user told of a recovery code issued for them is told who issued it, since they are the one who knows whether they asked anybody for one",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/notification-recovery-code-used-enrolling-nothing.json",
+          "rule": "a user told that a recovery code was spent on their account is told the credential it enrolled, which is what they remove if it was not them",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/notification-recovery-code-issued-naming-a-namespace.json",
+          "rule": "a recovery code is issued for an account and names no namespace; each kind carries what its reader needs and nothing of the others'",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#auth"
         }
@@ -1859,6 +1943,11 @@
         {
           "file": "wire/valid/collection-member-not-runnable.json",
           "covers": "a member read at a branch written in full, and one whose workflow its owner may no longer run, offering nothing"
+        },
+        {
+          "file": "wire/valid/collection-member-tool-name-taken.json",
+          "covers": "two members whose tools came to go by one name after both were written, a commit to one of their mcp blocks, each offering nothing beside tool_name_taken, and a third offering its tool",
+          "source": "https://agentiik.github.io/docs#collections"
         }
       ],
       "invalid": [

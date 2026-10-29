@@ -3,9 +3,9 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Agentiik API",
-    "version": "0.6.0",
-    "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces, their quotas, secrets and variables, grants and API tokens; the runners and the audit log an administrator reads; the workflow repositories; the runs listed, read, followed, cancelled and replayed; and the statistics the console's charts read.",
-    "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, and every route the web console of v0.6.0 reads and acts with, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
+    "version": "0.7.0",
+    "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces, their quotas, secrets and variables, grants and API tokens; the runners and the audit log an administrator reads; the caller's collections; the workflow repositories, a workflow validated and committed without git among them; the runs listed, read, followed, cancelled and replayed; the statistics the console's charts read; and the OAuth 2.1 authorisation server that issues the tokens of /mcp and each collection.",
+    "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, every route the web console of v0.6.0 reads and acts with, and the collections, the validation and the commit routes and the OAuth authorisation server of v0.7.0, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
   },
   "externalDocs": {
     "description": "The documentation, which decides what the API does: this document follows it.",
@@ -447,7 +447,7 @@
           },
           "409": {
             "$ref": "#/components/responses/conflict",
-            "description": "The installation is addressed by an IP address, which a browser refuses as a Relying Party Identifier."
+            "description": "The installation is addressed by an IP address, which a browser refuses as a Relying Party Identifier, or an assertion carries authorization on an installation serving no MCP, which allows no client."
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
@@ -1269,6 +1269,10 @@
           "403": {
             "$ref": "#/components/responses/forbidden",
             "description": "From another origin than the public URL's; or passwords are forbidden by the policy that applies to the account, the error naming the setting password."
+          },
+          "409": {
+            "$ref": "#/components/responses/conflict",
+            "description": "A sign-in carries authorization on an installation serving no MCP, which allows no client."
           },
           "413": {
             "$ref": "#/components/responses/tooLarge"
@@ -11980,6 +11984,465 @@
           }
         }
       }
+    },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "operationId": "oauthServerMetadata",
+        "tags": [
+          "sign-in"
+        ],
+        "summary": "Read the authorisation server's metadata",
+        "description": "RFC 8414's document of the installation's own OAuth 2.1 authorisation server, which issues the tokens of /mcp and each collection, to anybody. Where the public URL has a path, it follows the suffix, as RFC 8414 inserts it. Answered 404 under AGK_MCP=off, as every route of the authorisation server, which serves the MCP surfaces alone. Not audited.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#oauth"
+        },
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/oauthServerMetadata"
+                },
+                "examples": {
+                  "metadata": {
+                    "summary": "the installation's authorisation server",
+                    "value": {
+                      "issuer": "https://agentiik.example.com",
+                      "authorization_endpoint": "https://agentiik.example.com/auth/authorize",
+                      "token_endpoint": "https://agentiik.example.com/api/v1/auth/oauth/token",
+                      "scopes_supported": [
+                        "workflow:read",
+                        "workflow:run",
+                        "workflow:write",
+                        "workflow:delete",
+                        "run:read",
+                        "run:read_data",
+                        "secret:use",
+                        "secret:write",
+                        "grant:manage"
+                      ],
+                      "response_types_supported": [
+                        "code"
+                      ],
+                      "response_modes_supported": [
+                        "query"
+                      ],
+                      "grant_types_supported": [
+                        "authorization_code",
+                        "refresh_token"
+                      ],
+                      "token_endpoint_auth_methods_supported": [
+                        "none"
+                      ],
+                      "code_challenge_methods_supported": [
+                        "S256"
+                      ],
+                      "authorization_response_iss_parameter_supported": true,
+                      "client_id_metadata_document_supported": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource/mcp": {
+      "get": {
+        "operationId": "mcpResourceMetadata",
+        "tags": [
+          "sign-in"
+        ],
+        "summary": "Read /mcp's Protected Resource Metadata",
+        "description": "RFC 9728's document of /mcp, to anybody: its resource identifier, the authorisation server, the nine permissions as its scopes, and header as the one bearer method. Where the public URL has a path, it comes between the suffix and /mcp. Answered 404 under AGK_MCP=off. Not audited.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#protocol"
+        },
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/protectedResourceMetadata"
+                },
+                "examples": {
+                  "mcp": {
+                    "summary": "/mcp",
+                    "value": {
+                      "resource": "https://agentiik.example.com/mcp",
+                      "authorization_servers": [
+                        "https://agentiik.example.com"
+                      ],
+                      "scopes_supported": [
+                        "workflow:read",
+                        "workflow:run",
+                        "workflow:write",
+                        "workflow:delete",
+                        "run:read",
+                        "run:read_data",
+                        "secret:use",
+                        "secret:write",
+                        "grant:manage"
+                      ],
+                      "bearer_methods_supported": [
+                        "header"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource/mcp/collections/{id}": {
+      "get": {
+        "operationId": "collectionResourceMetadata",
+        "tags": [
+          "sign-in"
+        ],
+        "summary": "Read a collection's Protected Resource Metadata",
+        "description": "RFC 9728's document of /mcp/collections/{id}, to anybody, its one scope workflow:run. Answered for any identifier written as one, whether a collection holds it or not, so that the metadata tells nobody which exist; 404 for one that is not written as an identifier, and under AGK_MCP=off. Not audited.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#protocol"
+        },
+        "security": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The collection's identifier, as its URL carries it.",
+            "schema": {
+              "$ref": "wire.schema.json#/$defs/ulid"
+            },
+            "examples": {
+              "collection": {
+                "value": "01JR8Q2W6H3V0X9K4M7N5P1T2C"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/protectedResourceMetadata"
+                },
+                "examples": {
+                  "collection": {
+                    "summary": "a collection",
+                    "value": {
+                      "resource": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+                      "authorization_servers": [
+                        "https://agentiik.example.com"
+                      ],
+                      "scopes_supported": [
+                        "workflow:run"
+                      ],
+                      "bearer_methods_supported": [
+                        "header"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        }
+      }
+    },
+    "/auth/authorize": {
+      "get": {
+        "operationId": "authorizeClient",
+        "tags": [
+          "sign-in"
+        ],
+        "summary": "Ask a person to allow an MCP client",
+        "description": "The authorisation endpoint: the client's Client ID Metadata Document fetched, the request held to OAuth 2.1, and the sign-in page naming the client, the hosts of its client_id and its redirect URI, the resource and the permissions asked, which allows by a sign-in carrying authorization and denies by a link back with error=access_denied. A client_id, a redirect_uri or a document that does not hold is a page saying so, 400, sending the browser nowhere; any other refusal is a 400 page with a link back carrying OAuth's error, error_description, state and iss, which the person follows. Under the page's Content-Security-Policy, never cached. Not audited.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#oauth"
+        },
+        "security": [],
+        "parameters": [
+          {
+            "name": "response_type",
+            "in": "query",
+            "required": true,
+            "description": "code, the one OAuth 2.1 keeps.",
+            "schema": {
+              "const": "code"
+            },
+            "examples": {
+              "code": {
+                "value": "code"
+              }
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": true,
+            "description": "The https URL of the client's metadata document.",
+            "schema": {
+              "$ref": "#/components/schemas/clientIdentifierUrl"
+            },
+            "examples": {
+              "client": {
+                "value": "https://client.example.com/oauth/client.json"
+              }
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "required": true,
+            "description": "One of the document's redirect_uris to the character, but for the port of a loopback one.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "examples": {
+              "loopback": {
+                "value": "http://127.0.0.1:4711/callback"
+              }
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "required": true,
+            "description": "The SHA-256 of the client's verifier.",
+            "schema": {
+              "$ref": "#/components/schemas/codeChallenge"
+            },
+            "examples": {
+              "challenge": {
+                "value": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"
+              }
+            }
+          },
+          {
+            "name": "code_challenge_method",
+            "in": "query",
+            "required": true,
+            "description": "S256, the one method served.",
+            "schema": {
+              "const": "S256"
+            },
+            "examples": {
+              "S256": {
+                "value": "S256"
+              }
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "required": true,
+            "description": "The URL of /mcp or of a collection under the public URL, which the token is issued for and accepted at alone (RFC 8707).",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "examples": {
+              "mcp": {
+                "value": "https://agentiik.example.com/mcp"
+              }
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "description": "Permissions separated by spaces, each one of the nine and none twice; left out, every scope the resource uses.",
+            "schema": {
+              "$ref": "#/components/schemas/oauthScope"
+            },
+            "examples": {
+              "reading": {
+                "value": "workflow:read run:read"
+              }
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "Handed back as it came.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\x20-\\x7e]{1,1024}$"
+            },
+            "examples": {
+              "state": {
+                "value": "af0ifjsldkj"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page asking the person.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "page": {
+                    "summary": "the page asking the person",
+                    "value": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Allow Example Client</title></head>\n<body>...</body>\n</html>\n"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The page saying why the request is refused, with a link back to the client where its client_id and redirect_uri hold.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "refused": {
+                    "summary": "the page saying why",
+                    "value": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Cannot allow this client</title></head>\n<body>...</body>\n</html>\n"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oauth/token": {
+      "post": {
+        "operationId": "oauthToken",
+        "tags": [
+          "sign-in"
+        ],
+        "summary": "Trade an authorisation code or a refresh token for tokens",
+        "description": "The token endpoint, to anybody, authenticated by what it carries. A code is single use, good for a minute and spent by the first request its form accepts, and answers an access token, good for an hour, and a refresh token, of the account that allowed the client, for the resource and the scopes it allowed, its grant one of that account's API tokens, labelled with the client's name and ending 90 days later, audited as api_token.create with the credential that signed in, the client_id and the audience. A refresh token answers a new pair and spends itself, not audited; one presented after it was spent ends the grant, recorded as api_token.revoke by installation with reason refresh_token_reused. A refused code is recorded as signin.fail, about the account it was minted for or an unknown authorisation code, within the bound on failed sign-ins. Answered 404 under AGK_MCP=off.",
+        "externalDocs": {
+          "description": "Where the documentation specifies it.",
+          "url": "https://agentiik.github.io/docs#oauth"
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/oauthTokenRequest"
+              },
+              "examples": {
+                "authorization_code": {
+                  "summary": "A code /auth/authorize handed back",
+                  "value": {
+                    "grant_type": "authorization_code",
+                    "code": "agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+                    "code_verifier": "cZ8hZxDEvfLznd4Ardqn6A1NxuCFaoluRfS-47oehmE",
+                    "client_id": "https://client.example.com/oauth/client.json",
+                    "redirect_uri": "http://127.0.0.1:4711/callback",
+                    "resource": "https://agentiik.example.com/mcp"
+                  }
+                },
+                "refresh_token": {
+                  "summary": "A refresh token, spent by this request",
+                  "value": {
+                    "grant_type": "refresh_token",
+                    "refresh_token": "agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+                    "client_id": "https://client.example.com/oauth/client.json"
+                  }
+                }
+              }
+            }
+          },
+          "description": "The grant, as a form, OAuth's own encoding: an authorisation code with its verifier, or a refresh token."
+        },
+        "responses": {
+          "200": {
+            "description": "The tokens, shown this once.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/oauthToken"
+                },
+                "examples": {
+                  "tokens": {
+                    "summary": "An access token and the refresh token beside it",
+                    "value": {
+                      "access_token": "agktoken_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+                      "token_type": "Bearer",
+                      "expires_in": 3600,
+                      "refresh_token": "agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+                      "scope": "workflow:read run:read"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OAuth's error response: invalid_grant for a code or a refresh token that opens nothing, whatever the reason, or a principal holding 100 live tokens; invalid_target, invalid_scope, invalid_request or unsupported_grant_type.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/noStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/oauthError"
+                },
+                "examples": {
+                  "invalid_grant": {
+                    "summary": "A code or a refresh token that opens nothing",
+                    "value": {
+                      "error": "invalid_grant",
+                      "error_description": "that code or refresh token opens nothing: used already, past its time, never issued, revoked, or not issued to this client, for this redirect URI or for this verifier"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -13165,6 +13628,18 @@
                 "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"
               }
             ]
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/oauthAuthorization",
+            "description": "What an MCP client opened /auth/authorize with, for an assertion that allows it. Never beside terminal, and never on a registration.",
+            "examples": [
+              {
+                "client_id": "https://client.example.com/oauth/client.json",
+                "redirect_uri": "http://127.0.0.1:4711/callback",
+                "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk",
+                "resource": "https://agentiik.example.com/mcp"
+              }
+            ]
           }
         },
         "allOf": [
@@ -13269,7 +13744,13 @@
               "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"
             }
           }
-        ]
+        ],
+        "not": {
+          "required": [
+            "terminal",
+            "authorization"
+          ]
+        }
       },
       "redirectTo": {
         "title": "Redirect to agk login",
@@ -13321,10 +13802,18 @@
             ]
           },
           "redirect_to": {
-            "$ref": "#/components/schemas/redirectTo",
-            "description": "Where the page sends the browser next. Present only for an assertion that carried terminal.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/redirectTo"
+              },
+              {
+                "$ref": "#/components/schemas/oauthRedirectTo"
+              }
+            ],
+            "description": "Where the page sends the browser next, for a sign-in agk login started or one allowing an MCP client. Never beside a session that may only enrol.",
             "examples": [
-              "http://127.0.0.1:53682/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0"
+              "http://127.0.0.1:53682/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+              "http://127.0.0.1:4711/callback?code=agkcode_hETdtl86N8K0gq2v9xW3bQ7yRzPnL5mF&state=af0ifjsldkj&iss=https%3A%2F%2Fagentiik.example.com"
             ]
           }
         },
@@ -13432,6 +13921,18 @@
                 "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"
               }
             ]
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/oauthAuthorization",
+            "description": "What an MCP client opened /auth/authorize with, for a sign-in that allows it. Never beside terminal.",
+            "examples": [
+              {
+                "client_id": "https://client.example.com/oauth/client.json",
+                "redirect_uri": "http://127.0.0.1:4711/callback",
+                "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk",
+                "resource": "https://agentiik.example.com/mcp"
+              }
+            ]
           }
         },
         "examples": [
@@ -13444,7 +13945,13 @@
             "password": "correct horse battery staple",
             "totp": "492039"
           }
-        ]
+        ],
+        "not": {
+          "required": [
+            "terminal",
+            "authorization"
+          ]
+        }
       },
       "signIn": {
         "title": "Signed in",
@@ -13472,10 +13979,18 @@
             ]
           },
           "redirect_to": {
-            "$ref": "#/components/schemas/redirectTo",
-            "description": "Where the page sends the browser next, for a sign-in agk login started. Never beside a session that may only enrol, which mints no token.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/redirectTo"
+              },
+              {
+                "$ref": "#/components/schemas/oauthRedirectTo"
+              }
+            ],
+            "description": "Where the page sends the browser next, for a sign-in agk login started or one allowing an MCP client. Never beside a session that may only enrol.",
             "examples": [
-              "http://127.0.0.1:53682/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0"
+              "http://127.0.0.1:53682/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+              "http://127.0.0.1:4711/callback?code=agkcode_hETdtl86N8K0gq2v9xW3bQ7yRzPnL5mF&state=af0ifjsldkj&iss=https%3A%2F%2Fagentiik.example.com"
             ]
           }
         },
@@ -23278,6 +23793,575 @@
         "examples": [
           {
             "workflows": []
+          }
+        ]
+      },
+      "oauthScope": {
+        "title": "OAuth scope",
+        "type": "string",
+        "pattern": "^(workflow:read|workflow:run|workflow:write|workflow:delete|run:read|run:read_data|secret:use|secret:write|grant:manage)( (workflow:read|workflow:run|workflow:write|workflow:delete|run:read|run:read_data|secret:use|secret:write|grant:manage))*$",
+        "description": "The permissions a token keeps, separated by spaces: the nine, written as everywhere else. A token keeps them wherever its person holds them, and nothing else.",
+        "examples": [
+          "workflow:read run:read",
+          "workflow:run"
+        ]
+      },
+      "clientIdentifierUrl": {
+        "title": "Client identifier URL",
+        "type": "string",
+        "format": "uri",
+        "pattern": "^https://[^/?#@]+/[^?#]+$",
+        "maxLength": 2048,
+        "description": "An MCP client's client_id: the https URL of its Client ID Metadata Document, with a path and no user, query, fragment or dot segment, outside the public URL's origin.",
+        "examples": [
+          "https://client.example.com/oauth/client.json"
+        ]
+      },
+      "refreshToken": {
+        "title": "Refresh token",
+        "type": "string",
+        "pattern": "^agkrefresh_[A-Za-z0-9_-]{43,}$",
+        "description": "An OAuth grant's refresh token: single use, a refresh spending it and answering the next.",
+        "examples": [
+          "agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0"
+        ]
+      },
+      "oauthAuthorization": {
+        "title": "MCP client's authorisation",
+        "type": "object",
+        "required": [
+          "client_id",
+          "redirect_uri",
+          "code_challenge",
+          "resource"
+        ],
+        "additionalProperties": false,
+        "description": "What an MCP client opened /auth/authorize with, handed on by the page with the sign-in that allows it, held to its rules again there.",
+        "properties": {
+          "client_id": {
+            "$ref": "#/components/schemas/clientIdentifierUrl",
+            "description": "The client.",
+            "examples": [
+              "https://client.example.com/oauth/client.json"
+            ]
+          },
+          "redirect_uri": {
+            "type": "string",
+            "format": "uri",
+            "description": "Where the browser goes back with the code.",
+            "examples": [
+              "http://127.0.0.1:4711/callback"
+            ]
+          },
+          "code_challenge": {
+            "$ref": "#/components/schemas/codeChallenge",
+            "description": "The SHA-256 of the client's verifier.",
+            "examples": [
+              "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"
+            ]
+          },
+          "resource": {
+            "type": "string",
+            "format": "uri",
+            "description": "The URL of /mcp or of a collection.",
+            "examples": [
+              "https://agentiik.example.com/mcp"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/oauthScope",
+            "description": "The permissions asked.",
+            "examples": [
+              "workflow:read run:read"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "pattern": "^[\\x20-\\x7e]{1,1024}$",
+            "description": "The client's state, handed back as it came.",
+            "examples": [
+              "af0ifjsldkj"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "client_id": "https://client.example.com/oauth/client.json",
+            "redirect_uri": "http://127.0.0.1:4711/callback",
+            "code_challenge": "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk",
+            "resource": "https://agentiik.example.com/mcp",
+            "scope": "workflow:read run:read",
+            "state": "af0ifjsldkj"
+          }
+        ]
+      },
+      "oauthRedirectTo": {
+        "title": "Redirect to an MCP client",
+        "type": "string",
+        "format": "uri",
+        "description": "Where the page sends the browser once a sign-in allowing an MCP client has succeeded: the client's redirect URI with code, iss and the client's state, or with error, error_description and iss where the collection it names is not the account's.",
+        "examples": [
+          "http://127.0.0.1:4711/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0&iss=https%3A%2F%2Fagentiik.example.com&state=af0ifjsldkj"
+        ]
+      },
+      "oauthServerMetadata": {
+        "title": "Authorisation server metadata",
+        "type": "object",
+        "required": [
+          "issuer",
+          "authorization_endpoint",
+          "token_endpoint",
+          "scopes_supported",
+          "response_types_supported",
+          "grant_types_supported",
+          "token_endpoint_auth_methods_supported",
+          "code_challenge_methods_supported",
+          "authorization_response_iss_parameter_supported",
+          "client_id_metadata_document_supported"
+        ],
+        "description": "RFC 8414's document, as the installation writes it.",
+        "properties": {
+          "issuer": {
+            "type": "string",
+            "format": "uri",
+            "description": "The public URL.",
+            "examples": [
+              "https://agentiik.example.com"
+            ]
+          },
+          "authorization_endpoint": {
+            "type": "string",
+            "format": "uri",
+            "description": "/auth/authorize under the public URL.",
+            "examples": [
+              "https://agentiik.example.com/auth/authorize"
+            ]
+          },
+          "token_endpoint": {
+            "type": "string",
+            "format": "uri",
+            "description": "/api/v1/auth/oauth/token under the public URL.",
+            "examples": [
+              "https://agentiik.example.com/api/v1/auth/oauth/token"
+            ]
+          },
+          "scopes_supported": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/permission"
+            },
+            "description": "The nine permissions.",
+            "examples": [
+              [
+                "workflow:read",
+                "workflow:run",
+                "workflow:write",
+                "workflow:delete",
+                "run:read",
+                "run:read_data",
+                "secret:use",
+                "secret:write",
+                "grant:manage"
+              ]
+            ]
+          },
+          "response_types_supported": {
+            "const": [
+              "code"
+            ],
+            "description": "code alone.",
+            "examples": [
+              [
+                "code"
+              ]
+            ]
+          },
+          "response_modes_supported": {
+            "const": [
+              "query"
+            ],
+            "description": "query alone.",
+            "examples": [
+              [
+                "query"
+              ]
+            ]
+          },
+          "grant_types_supported": {
+            "const": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "description": "The two grants served.",
+            "examples": [
+              [
+                "authorization_code",
+                "refresh_token"
+              ]
+            ]
+          },
+          "token_endpoint_auth_methods_supported": {
+            "const": [
+              "none"
+            ],
+            "description": "No client is authenticated: every client is a public one.",
+            "examples": [
+              [
+                "none"
+              ]
+            ]
+          },
+          "code_challenge_methods_supported": {
+            "const": [
+              "S256"
+            ],
+            "description": "S256 alone.",
+            "examples": [
+              [
+                "S256"
+              ]
+            ]
+          },
+          "authorization_response_iss_parameter_supported": {
+            "const": true,
+            "description": "Every authorisation response carries iss (RFC 9207).",
+            "examples": [
+              true
+            ]
+          },
+          "client_id_metadata_document_supported": {
+            "const": true,
+            "description": "A client is taken by its Client ID Metadata Document.",
+            "examples": [
+              true
+            ]
+          }
+        },
+        "examples": [
+          {
+            "issuer": "https://agentiik.example.com",
+            "authorization_endpoint": "https://agentiik.example.com/auth/authorize",
+            "token_endpoint": "https://agentiik.example.com/api/v1/auth/oauth/token",
+            "scopes_supported": [
+              "workflow:read",
+              "workflow:run",
+              "workflow:write",
+              "workflow:delete",
+              "run:read",
+              "run:read_data",
+              "secret:use",
+              "secret:write",
+              "grant:manage"
+            ],
+            "response_types_supported": [
+              "code"
+            ],
+            "response_modes_supported": [
+              "query"
+            ],
+            "grant_types_supported": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "token_endpoint_auth_methods_supported": [
+              "none"
+            ],
+            "code_challenge_methods_supported": [
+              "S256"
+            ],
+            "authorization_response_iss_parameter_supported": true,
+            "client_id_metadata_document_supported": true
+          }
+        ]
+      },
+      "protectedResourceMetadata": {
+        "title": "Protected Resource Metadata",
+        "type": "object",
+        "required": [
+          "resource",
+          "authorization_servers",
+          "scopes_supported",
+          "bearer_methods_supported"
+        ],
+        "description": "RFC 9728's document of an MCP surface.",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "format": "uri",
+            "description": "The surface's URL under the public URL.",
+            "examples": [
+              "https://agentiik.example.com/mcp"
+            ]
+          },
+          "authorization_servers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The public URL alone.",
+            "examples": [
+              [
+                "https://agentiik.example.com"
+              ]
+            ]
+          },
+          "scopes_supported": {
+            "type": "array",
+            "items": {
+              "$ref": "wire.schema.json#/$defs/permission"
+            },
+            "description": "The nine for /mcp, workflow:run for a collection.",
+            "examples": [
+              [
+                "workflow:run"
+              ]
+            ]
+          },
+          "bearer_methods_supported": {
+            "const": [
+              "header"
+            ],
+            "description": "The Authorization header alone.",
+            "examples": [
+              [
+                "header"
+              ]
+            ]
+          }
+        },
+        "examples": [
+          {
+            "resource": "https://agentiik.example.com/mcp/collections/01JR8Q2W6H3V0X9K4M7N5P1T2C",
+            "authorization_servers": [
+              "https://agentiik.example.com"
+            ],
+            "scopes_supported": [
+              "workflow:run"
+            ],
+            "bearer_methods_supported": [
+              "header"
+            ]
+          }
+        ]
+      },
+      "oauthTokenRequest": {
+        "title": "Token request",
+        "description": "OAuth's token request, as a form: a code with its verifier, its client and its redirect URI, or a refresh token with its client. A parameter written twice is refused.",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "grant_type",
+              "code",
+              "code_verifier",
+              "client_id",
+              "redirect_uri"
+            ],
+            "properties": {
+              "grant_type": {
+                "const": "authorization_code",
+                "description": "authorization_code, trading a code.",
+                "examples": [
+                  "authorization_code"
+                ]
+              },
+              "code": {
+                "$ref": "#/components/schemas/exchangeCode",
+                "description": "The code /auth/authorize handed back, single use and good for a minute.",
+                "examples": [
+                  "agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0"
+                ]
+              },
+              "code_verifier": {
+                "$ref": "#/components/schemas/codeVerifier",
+                "description": "The verifier whose SHA-256 the challenge was.",
+                "examples": [
+                  "cZ8hZxDEvfLznd4Ardqn6A1NxuCFaoluRfS-47oehmE"
+                ]
+              },
+              "client_id": {
+                "$ref": "#/components/schemas/clientIdentifierUrl",
+                "description": "The client the code was minted for.",
+                "examples": [
+                  "https://client.example.com/oauth/client.json"
+                ]
+              },
+              "redirect_uri": {
+                "type": "string",
+                "format": "uri",
+                "description": "The redirect URI the code was handed back at, to the character.",
+                "examples": [
+                  "http://127.0.0.1:4711/callback"
+                ]
+              },
+              "resource": {
+                "type": "string",
+                "format": "uri",
+                "description": "The resource the code was minted for, checked where it is sent.",
+                "examples": [
+                  "https://agentiik.example.com/mcp"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "grant_type",
+              "refresh_token",
+              "client_id"
+            ],
+            "properties": {
+              "grant_type": {
+                "const": "refresh_token",
+                "description": "refresh_token, trading a refresh token.",
+                "examples": [
+                  "refresh_token"
+                ]
+              },
+              "refresh_token": {
+                "$ref": "#/components/schemas/refreshToken",
+                "description": "The refresh token, spent by this request.",
+                "examples": [
+                  "agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0"
+                ]
+              },
+              "client_id": {
+                "$ref": "#/components/schemas/clientIdentifierUrl",
+                "description": "The client the grant was issued to.",
+                "examples": [
+                  "https://client.example.com/oauth/client.json"
+                ]
+              },
+              "scope": {
+                "$ref": "#/components/schemas/oauthScope",
+                "description": "Fewer permissions than the grant holds, narrowing it for good; left out, the grant's own.",
+                "examples": [
+                  "workflow:read"
+                ]
+              },
+              "resource": {
+                "type": "string",
+                "format": "uri",
+                "description": "The grant's audience, checked where it is sent.",
+                "examples": [
+                  "https://agentiik.example.com/mcp"
+                ]
+              }
+            }
+          }
+        ],
+        "examples": [
+          {
+            "grant_type": "authorization_code",
+            "code": "agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+            "code_verifier": "cZ8hZxDEvfLznd4Ardqn6A1NxuCFaoluRfS-47oehmE",
+            "client_id": "https://client.example.com/oauth/client.json",
+            "redirect_uri": "http://127.0.0.1:4711/callback",
+            "resource": "https://agentiik.example.com/mcp"
+          }
+        ]
+      },
+      "oauthToken": {
+        "title": "Token response",
+        "type": "object",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "refresh_token",
+          "scope"
+        ],
+        "additionalProperties": false,
+        "description": "OAuth's token response: an access token, written as an API token is, and the refresh token beside it.",
+        "properties": {
+          "access_token": {
+            "$ref": "#/components/schemas/apiTokenValue",
+            "description": "The access token, accepted at the grant's audience alone.",
+            "examples": [
+              "agktoken_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0"
+            ]
+          },
+          "token_type": {
+            "const": "Bearer",
+            "description": "Bearer.",
+            "examples": [
+              "Bearer"
+            ]
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600,
+            "description": "The access token's seconds left, an hour, less where the grant ends sooner.",
+            "examples": [
+              3600
+            ]
+          },
+          "refresh_token": {
+            "$ref": "#/components/schemas/refreshToken",
+            "description": "The next refresh token.",
+            "examples": [
+              "agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/oauthScope",
+            "description": "The permissions the token keeps.",
+            "examples": [
+              "workflow:read run:read"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "access_token": "agktoken_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "agkrefresh_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0",
+            "scope": "workflow:read run:read"
+          }
+        ]
+      },
+      "oauthError": {
+        "title": "OAuth error",
+        "type": "object",
+        "required": [
+          "error",
+          "error_description"
+        ],
+        "additionalProperties": false,
+        "description": "OAuth's error response.",
+        "properties": {
+          "error": {
+            "enum": [
+              "invalid_request",
+              "invalid_grant",
+              "invalid_target",
+              "invalid_scope",
+              "unsupported_grant_type"
+            ],
+            "description": "What OAuth names the refusal.",
+            "examples": [
+              "invalid_grant"
+            ]
+          },
+          "error_description": {
+            "type": "string",
+            "pattern": "^[\\x20-\\x21\\x23-\\x5b\\x5d-\\x7e]+$",
+            "description": "Why, in a sentence of the characters OAuth allows.",
+            "examples": [
+              "that code or refresh token opens nothing: used already, past its time, never issued, revoked, or not issued to this client, for this redirect URI or for this verifier"
+            ]
+          }
+        },
+        "examples": [
+          {
+            "error": "invalid_grant",
+            "error_description": "that code or refresh token opens nothing: used already, past its time, never issued, revoked, or not issued to this client, for this redirect URI or for this verifier"
           }
         ]
       }
