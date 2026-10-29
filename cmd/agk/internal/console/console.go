@@ -165,7 +165,7 @@ type Model struct {
 	runTab string
 
 	// The panes': the one in focus, where a border was dragged and the one being dragged, and how
-	// far the log of logBackOf is scrolled back from its end.
+	// many rows the log of logBackOf is scrolled back from its end.
 	focus     pane
 	split     split
 	dragging  string

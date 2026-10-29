@@ -309,7 +309,13 @@ func (m Model) panePress(key string) (tea.Model, tea.Cmd, bool) {
 	case logPane:
 		switch key {
 		case "up", "k":
-			m.logBack, m.logBackOf = min(max(0, len(m.logs[m.logKey()].lines)-1), m.scrolledBack()+1), m.logKey()
+			// A row back, where the log holds one above the row scrolled to: its lines are wrapped
+			// onto the rows of the pane, and only as many of them as that takes.
+			back := m.scrolledBack()
+			if len(lastRows(m.logs[m.logKey()].lines, m.logWidth(), back+2)) > back+1 {
+				back++
+			}
+			m.logBack, m.logBackOf = back, m.logKey()
 			return m, nil, true
 		case "down", "j":
 			m.logBack, m.logBackOf = max(0, m.scrolledBack()-1), m.logKey()
@@ -327,8 +333,19 @@ func (m Model) logKey() string {
 	return string(m.run.Run) + "/" + stepOf(m.run, m.step)
 }
 
-// scrolledBack is how many lines the log shown is scrolled back from its end: none for another
-// log than the one scrolled.
+// logWidth is how many columns the inside of the log's pane is wide as the window lays it out, which
+// its lines are wrapped to.
+func (m Model) logWidth() int {
+	for _, b := range m.laidOut(m.height - 2) {
+		if b.pane == logPane {
+			return b.w - 4
+		}
+	}
+	return 0
+}
+
+// scrolledBack is how many rows the log shown is scrolled back from its end: none for another log
+// than the one scrolled.
 func (m Model) scrolledBack() int {
 	if m.logBackOf != m.logKey() {
 		return 0

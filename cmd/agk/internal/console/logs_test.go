@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -158,8 +159,8 @@ func TestWhatIsSaidAboutALogIsDrawn(t *testing.T) {
 	}
 }
 
-// The log takes what the run leaves, its last lines shown, each cut to the window rather than
-// wrapped; at 80 columns it is under the panes as at 160.
+// The log takes what the run leaves, its last rows shown, each line wrapped onto the rows after it
+// inside the pane; at 80 columns it is under the panes as at 160.
 func TestTheLogTakesWhatTheRunLeaves(t *testing.T) {
 	t.Parallel()
 	logs := invoiceLogs()
@@ -183,6 +184,48 @@ func TestTheLogTakesWhatTheRunLeaves(t *testing.T) {
 			}
 		}
 		m.unfollow()
+	}
+}
+
+// A line wider than the log's pane is wrapped onto the rows after it, every column kept, since the
+// refusal a failed step ends on is what its log is read for; ↑ scrolls back a row at a time, through
+// the rows of a line wrapped too, and stops at the log's first row.
+func TestALongLogLineIsWrappedAndScrolledByRows(t *testing.T) {
+	t.Parallel()
+	refusal := "invoice 2/3, attempt 4 | the ledger answered 503: ORD-0002 was refused, since its customer holds no VAT number on file and the ledger posts no invoice to a customer without one, asked at 06:01:12, 06:01:44 and 06:02:31"
+	logs := invoiceLogs()
+	logs.lines["invoice"] = nil
+	for i := 1; i <= 20; i++ {
+		logs.lines["invoice"] = append(logs.lines["invoice"], fmt.Sprintf("line %02d", i))
+	}
+	logs.lines["invoice"] = append(logs.lines["invoice"], refusal, "invoice 2/3, attempt 4 | exit 108")
+	// Stacked at 100 columns, the log in focus is 96 columns inside and shows 21 rows of the 24 the
+	// log takes: 20 lines, the refusal on 3 rows, and the exit code.
+	m := press(t, paned(t, logs, 100, 40), tabKey, tabKey)
+	defer m.unfollow()
+	lines := strings.Split(screen(m), "\n")
+	at := slices.IndexFunc(lines, func(l string) bool {
+		return strings.HasPrefix(inside(l), "invoice 2/3, attempt 4 | the ledger answered 503:")
+	})
+	if m.focus != logPane || at < 0 || at+3 > len(lines) {
+		t.Fatalf("the refusal is not drawn where a row starts, the focus on %v:\n%s", m.focus, screen(m))
+	}
+	if got := strings.TrimRight(inside(lines[at])+inside(lines[at+1])+inside(lines[at+2]), " "); got != refusal || !strings.Contains(screen(m), "line 04") || strings.Contains(screen(m), "line 03") {
+		t.Errorf("the refusal is not wrapped onto the rows after it, which read %q:\n%s", got, screen(m))
+	}
+	m = press(t, m, up)
+	if s := screen(m); !strings.Contains(s, "1 row back") || strings.Contains(s, "| exit 108") || !strings.Contains(s, "line 03") || !strings.Contains(s, "06:02:31") {
+		t.Errorf("↑ once does not scroll back a row:\n%s", s)
+	}
+	m = press(t, m, up)
+	if s := screen(m); !strings.Contains(s, "2 rows back") || strings.Contains(s, "06:02:31") || !strings.Contains(s, "line 02") {
+		t.Errorf("↑ twice does not scroll back into the rows of the refusal:\n%s", s)
+	}
+	for range 30 {
+		m = press(t, m, up)
+	}
+	if s := screen(m); !strings.Contains(s, "3 rows back") || !strings.Contains(s, "line 01") {
+		t.Errorf("↑ past the log's first row does not stop there:\n%s", s)
 	}
 }
 
@@ -240,25 +283,33 @@ func TestALineOfAMebibyteIsCutInOnePass(t *testing.T) {
 	}
 }
 
-// A log line of keycaps, which Lip Gloss measures two columns each, is cut inside its pane.
-func TestALogLineOfKeycapsIsCutInsideItsPane(t *testing.T) {
+// A log line of keycaps, which Lip Gloss measures two columns each, is wrapped inside its pane, a
+// keycap carried whole onto the next row rather than split across the border.
+func TestALogLineOfKeycapsIsWrappedInsideItsPane(t *testing.T) {
 	logs := &stepLogs{lines: map[string][]string{"invoice": {"invoice | answer: " + strings.Repeat("1️⃣ 2️⃣ 3️⃣ ", 30), "invoice | the end"}}}
 	m := followingLogs(t, &installation{}, logs, 160, 40)
 	s := screen(m)
-	drawn := false
+	first, rows, cut := false, 0, false
 	for i, l := range strings.Split(s, "\n") {
 		if w := lipgloss.Width(l); w != 160 {
 			t.Errorf("line %d is %d columns wide in a window of 160: %q", i, w, l)
 		}
-		drawn = drawn || strings.Contains(l, "invoice | answer: 1️⃣ 2️⃣ 3️⃣") && strings.HasSuffix(l, "… │")
+		// The log's pane is the last on the line, after the border the run's pane ends on.
+		log := l[strings.LastIndex(l, "││")+len("││"):]
+		first = first || strings.HasPrefix(log, " invoice | answer: 1️⃣ 2️⃣ 3️⃣")
+		if strings.Contains(log, "1️⃣ 2️⃣ 3️⃣") {
+			rows++
+			cut = cut || strings.Contains(log, "…")
+		}
 	}
-	if !drawn {
-		t.Errorf("the line of keycaps is not drawn cut inside its pane:\n%s", s)
+	if !first || rows < 2 || cut || !strings.Contains(s, "│ invoice | the end") {
+		t.Errorf("the line of keycaps is not wrapped inside its pane, on %d rows:\n%s", rows, s)
 	}
 }
 
 // A log line of a mebibyte, as a runner ships at most, is kept to its first lineKept bytes and an
-// ellipsis, and drawn at once, cut inside its pane, at every size.
+// ellipsis, and drawn at once, its last rows wrapped inside its pane and ending in the ellipsis, at
+// every size.
 func TestALogLineOfAMebibyteIsKeptShortAndDrawnAtOnce(t *testing.T) {
 	t.Parallel()
 	for _, size := range [][2]int{{80, 24}, {160, 40}} {
@@ -270,14 +321,15 @@ func TestALogLineOfAMebibyteIsKeptShortAndDrawnAtOnce(t *testing.T) {
 		}
 		s := soon(t, "drawing a log line of a mebibyte", func() string { return screen(m) })
 		drawn := false
-		for i, l := range strings.Split(s, "\n") {
+		lines := strings.Split(s, "\n")
+		for i, l := range lines {
 			if w := lipgloss.Width(l); w != size[0] {
 				t.Errorf("at %d by %d, line %d is %d columns wide: %q", size[0], size[1], i, w, l)
 			}
-			drawn = drawn || strings.Contains(l, "invoice | xxx") && strings.HasSuffix(strings.TrimRight(l, " │"), "x…")
+			drawn = drawn || i > 0 && strings.HasSuffix(strings.TrimRight(l, " │"), "x…") && strings.HasSuffix(lines[i-1], strings.Repeat("x", 12)+" │")
 		}
 		if !drawn {
-			t.Errorf("at %d by %d, the line is not drawn cut with an ellipsis:\n%s", size[0], size[1], s)
+			t.Errorf("at %d by %d, the line is not drawn wrapped and ending in its ellipsis:\n%s", size[0], size[1], s)
 		}
 	}
 }

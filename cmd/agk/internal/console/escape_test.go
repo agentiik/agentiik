@@ -50,7 +50,7 @@ func (w *terminal) String() string {
 // The log of agentiik/agentiik#858, followed live by a console run by Bubble Tea as console.Run
 // runs it, at the depths a terminal over SSH draws, writes none of its controls to the terminal:
 // what they would have done is shown as their escapes, a link is its text, and the line holding
-// tabs is cut inside its pane, whose border closes it.
+// tabs is wrapped inside its pane, whose border closes each of its rows.
 func TestALogReachesTheTerminalAsTextAlone(t *testing.T) {
 	for _, c := range []struct{ name, colorterm, term string }{
 		{"true colour", "truecolor", "xterm-256color"},
@@ -106,14 +106,15 @@ func TestALogReachesTheTerminalAsTextAlone(t *testing.T) {
 
 			s := screen(final.(Model))
 			tabs := -1
-			for i, l := range strings.Split(s, "\n") {
+			lines := strings.Split(s, "\n")
+			for i, l := range lines {
 				if w := lipgloss.Width(l); w != 160 {
 					t.Errorf("line %d is %d columns wide in a window of 160: %q", i, w, l)
 				}
 				if strings.Contains(l, "invoice | a     b       c       d") {
 					tabs = i
-					if !strings.HasSuffix(l, "… │") {
-						t.Errorf("the line holding tabs is not cut inside its pane: %q", l)
+					if !strings.HasSuffix(l, " │") || i+1 == len(lines) || !strings.HasSuffix(lines[i+1], "yyy │") {
+						t.Errorf("the line holding tabs is not wrapped inside its pane:\n%s", s)
 					}
 				}
 			}

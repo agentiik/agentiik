@@ -3,12 +3,13 @@ package console
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/agentiik/agentiik/cmd/agk/internal/shown"
 )
@@ -206,7 +207,7 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 }
 
 // logLines is the log of the step chosen as the inspector draws it, its header and then as many of
-// its last lines as height holds.
+// its last rows as height holds, each line wrapped onto as many rows as it takes.
 func (m Model) logLines(t theme, step string, height int) []string {
 	if height <= 0 {
 		return nil
@@ -220,9 +221,11 @@ func (m Model) logLines(t theme, step string, height int) []string {
 	case b.over:
 		header = append(header, part{muted, "  read to its end"})
 	}
-	back := min(m.scrolledBack(), max(0, len(b.lines)-(height-1)))
+	back := m.scrolledBack()
+	rows := lastRows(b.lines, m.width, back+height-1)
+	back = min(back, max(0, len(rows)-(height-1)))
 	if back > 0 {
-		header = append(header, part{muted, fmt.Sprintf("  %d lines back", back)})
+		header = append(header, part{muted, "  " + counting(back, "row") + " back"})
 	}
 	lines := []string{t.line(false, m.width, within(header, m.width)...)}
 	if len(b.lines) == 0 {
@@ -232,13 +235,58 @@ func (m Model) logLines(t theme, step string, height int) []string {
 		}
 		return append(lines, t.line(false, m.width, part{quiet, said}))
 	}
-	end := len(b.lines) - back
-	for _, l := range b.lines[max(0, end-(height-1)):end] {
-		r := plain
-		if l.said {
-			r = quiet
+	end := len(rows) - back
+	for _, r := range rows[max(0, end-(height-1)):end] {
+		role := plain
+		if r.said {
+			role = quiet
 		}
-		lines = append(lines, t.line(false, m.width, within([]part{{r, l.text}}, m.width)...))
+		lines = append(lines, t.line(false, m.width, within([]part{{role, r.text}}, m.width)...))
 	}
 	return lines
+}
+
+// logRow is one row of the log's pane: a line of the log, or as much of one as the row holds, and
+// whether the line is one said about the log rather than in it.
+type logRow struct {
+	text string
+	said bool
+}
+
+// lastRows are the last rows of a log in a pane width columns wide, n of them or more where the log
+// holds as many: each line wrapped onto the rows it takes, from the last line back, and no more
+// lines wrapped than n rows need, so that a frame costs what it shows rather than the whole log.
+func lastRows(lines []logLine, width, n int) []logRow {
+	var rows []logRow
+	for i := len(lines) - 1; i >= 0 && len(rows) < n; i-- {
+		on := onRows(lines[i].text, width)
+		for j := len(on) - 1; j >= 0; j-- {
+			rows = append(rows, logRow{text: on[j], said: lines[i].said})
+		}
+	}
+	slices.Reverse(rows)
+	return rows
+}
+
+// onRows is a line of a log on the rows of a pane width columns wide: whole on one row where it
+// fits, and otherwise cut where each row ends and carried onto the next, every column kept, since
+// what a log says past the pane's edge, the refusal a failed step ends on, is what it is read for.
+// It is cut as within cuts, a grapheme cluster at a time, so that no row runs past its pane.
+func onRows(text string, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	text = shown.Text(text)
+	var rows []string
+	for {
+		row := cut(text, width)
+		if row == "" && text != "" {
+			// A cluster wider than the whole row takes the row, to be cut there with an ellipsis.
+			row, _ = xansi.FirstGraphemeCluster(text, xansi.GraphemeWidth)
+		}
+		rows = append(rows, row)
+		if text = text[len(row):]; text == "" {
+			return rows
+		}
+	}
 }
