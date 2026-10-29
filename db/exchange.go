@@ -13,7 +13,9 @@ import (
 // agk login's one-time codes: what a sign-in agk login started mints, for the sign-in page to hand
 // agk at its loopback address, and what agk trades, with the verifier whose SHA-256 opened the
 // page, for an API token. Verifying the verifier and minting the token are the API's; what is here
-// is the code kept between the sign-in and the exchange.
+// is the code kept between the sign-in and the exchange. An MCP client's OAuth authorisation code is
+// one too, minted by the sign-in its person allowed it with and traded at the token endpoint, with
+// what OAuth binds it to besides (CodeAuthorization).
 
 // ExchangeCodeLife is how long a code is taken: a minute, the time a browser takes to follow a
 // redirect to a port of its own machine, and short enough that one read off a browser's history
@@ -39,6 +41,30 @@ type ExchangeCode struct {
 
 	IssuedAt  time.Time
 	ExpiresAt time.Time
+
+	// OAuth is what an MCP client's authorisation binds the code to besides, and nil for agk
+	// login's: an OAuth authorisation code is kept here as agk login's is, a sign-in on its way to a
+	// token, and each door refuses the other's.
+	OAuth *CodeAuthorization
+}
+
+// CodeAuthorization is what an OAuth authorisation code was minted for: "bound to the client
+// identifier, code challenge and redirect URI", and what the person allowed, the resource and the
+// permissions.
+type CodeAuthorization struct {
+	// ClientID is the client's Client ID Metadata Document URL, and ClientName the name it gave
+	// itself there when the person allowed it, which its grant is listed under.
+	ClientID   string
+	ClientName string
+
+	// RedirectURI is where the browser was sent back with the code, which the token request names
+	// again.
+	RedirectURI string
+
+	// Resource is the URL of the MCP surface the token is for, its audience, and Scope the
+	// permissions it keeps.
+	Resource string
+	Scope    []string
 }
 
 // IssueExchangeCode keeps a code until it is taken or its minute passes, and removes some of those
@@ -52,10 +78,16 @@ func (w *Wide) IssueExchangeCode(ctx context.Context, c ExchangeCode) error {
 		                  limit $2 for update skip locked)`, c.IssuedAt, lapsedSwept); err != nil {
 		return fmt.Errorf("db: the exchange codes past their minute could not be removed: %w", err)
 	}
+	var oauth CodeAuthorization
+	if c.OAuth != nil {
+		oauth = *c.OAuth
+	}
 	_, err := w.tx.Exec(ctx,
-		`insert into exchange_codes (hash, login, credential, code_challenge, issued_at, expires_at)
-		 values ($1, $2, $3, $4, $5, $6)`,
-		c.Hash, c.Login, c.Credential, c.CodeChallenge, c.IssuedAt, c.ExpiresAt)
+		`insert into exchange_codes (hash, login, credential, code_challenge, issued_at, expires_at,
+		                             client_id, client_name, redirect_uri, resource, scope)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		c.Hash, c.Login, c.Credential, c.CodeChallenge, c.IssuedAt, c.ExpiresAt,
+		nilIfEmpty(oauth.ClientID), nilIfEmpty(oauth.ClientName), nilIfEmpty(oauth.RedirectURI), nilIfEmpty(oauth.Resource), oauth.Scope)
 	var pg *pgconn.PgError
 	switch {
 	case errors.As(err, &pg) && pg.ConstraintName == "exchange_codes_login_fkey":
@@ -74,15 +106,23 @@ func (w *Wide) IssueExchangeCode(ctx context.Context, c ExchangeCode) error {
 // verifier that is not its own is spent all the same.
 func (w *Wide) TakeExchangeCode(ctx context.Context, hash []byte, now time.Time) (ExchangeCode, error) {
 	var c ExchangeCode
+	var oauth CodeAuthorization
+	var clientID *string
 	err := w.tx.QueryRow(ctx,
 		`delete from exchange_codes where hash = $1 and expires_at > $2
-		 returning hash, login, credential, code_challenge, issued_at, expires_at`, hash, now,
-	).Scan(&c.Hash, &c.Login, &c.Credential, &c.CodeChallenge, &c.IssuedAt, &c.ExpiresAt)
+		 returning hash, login, credential, code_challenge, issued_at, expires_at,
+		           client_id, coalesce(client_name, ''), coalesce(redirect_uri, ''), coalesce(resource, ''), scope`, hash, now,
+	).Scan(&c.Hash, &c.Login, &c.Credential, &c.CodeChallenge, &c.IssuedAt, &c.ExpiresAt,
+		&clientID, &oauth.ClientName, &oauth.RedirectURI, &oauth.Resource, &oauth.Scope)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ExchangeCode{}, ErrNoExchangeCode
 	}
 	if err != nil {
 		return ExchangeCode{}, fmt.Errorf("db: an exchange code could not be taken: %w", err)
+	}
+	if clientID != nil {
+		oauth.ClientID = *clientID
+		c.OAuth = &oauth
 	}
 	return c, nil
 }

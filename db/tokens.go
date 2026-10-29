@@ -39,6 +39,14 @@ type APIToken struct {
 	ExpiresAt   time.Time
 	LastUsedAt  time.Time
 	RevokedAt   time.Time
+
+	// Audience, ClientID and AccessExpiresAt are an OAuth grant's, and empty for every other
+	// token: the resource its access token is accepted at and nowhere else, the client it was
+	// issued to, and when its current access token lapses, which Hash is the SHA-256 of and each
+	// refresh replaces, while ExpiresAt is the grant's end.
+	Audience        string
+	ClientID        string
+	AccessExpiresAt time.Time
 }
 
 // MintToken writes a token for a principal, which is a user or a service account. CreatedAt and
@@ -47,9 +55,10 @@ type APIToken struct {
 func (w *Wide) MintToken(ctx context.Context, t APIToken) error {
 	tag, err := w.tx.Exec(ctx,
 		`insert into api_tokens (id, hash, principal, principal_kind, scope_permissions, scope_within,
-		                         device_label, created_at, expires_at)
-		 select $1, $2, id, kind, $4, $5, $6, $7, $8 from principals where id = $3`,
-		t.ID, t.Hash, t.Principal, t.Permissions, t.Within, nilIfEmpty(t.DeviceLabel), t.CreatedAt, t.ExpiresAt)
+		                         device_label, created_at, expires_at, audience, client_id, access_expires_at)
+		 select $1, $2, id, kind, $4, $5, $6, $7, $8, $9, $10, $11 from principals where id = $3`,
+		t.ID, t.Hash, t.Principal, t.Permissions, t.Within, nilIfEmpty(t.DeviceLabel), t.CreatedAt, t.ExpiresAt,
+		nilIfEmpty(t.Audience), nilIfEmpty(t.ClientID), nilIfZero(t.AccessExpiresAt))
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.ConstraintName == "api_tokens_principal_kind_check" {
 		return fmt.Errorf("db: %s is a group, which holds no token", t.Principal)
@@ -86,28 +95,33 @@ func (w *Wide) LiveTokens(ctx context.Context, principal string, now time.Time) 
 }
 
 const tokenColumns = `id, hash, principal, scope_permissions, scope_within, coalesce(device_label, ''),
-	created_at, expires_at, last_used_at, revoked_at`
+	created_at, expires_at, last_used_at, revoked_at, coalesce(audience, ''), coalesce(client_id, ''), access_expires_at`
 
 func scanToken(row pgx.Row) (APIToken, error) {
 	var t APIToken
-	var used, revoked *time.Time
+	var used, revoked, access *time.Time
 	err := row.Scan(&t.ID, &t.Hash, &t.Principal, &t.Permissions, &t.Within, &t.DeviceLabel,
-		&t.CreatedAt, &t.ExpiresAt, &used, &revoked)
+		&t.CreatedAt, &t.ExpiresAt, &used, &revoked, &t.Audience, &t.ClientID, &access)
 	if used != nil {
 		t.LastUsedAt = *used
 	}
 	if revoked != nil {
 		t.RevokedAt = *revoked
 	}
+	if access != nil {
+		t.AccessExpiresAt = *access
+	}
 	return t, err
 }
 
 // TokenByHash answers the token whose value hashes to hash, if it is neither revoked nor expired
-// at now, and its principal is not a suspended user.
+// at now, and its principal is not a suspended user. An OAuth grant's is answered while its current
+// access token lasts as well, an hour from the refresh that issued it.
 func (w *Wide) TokenByHash(ctx context.Context, hash []byte, now time.Time) (APIToken, error) {
 	t, err := scanToken(w.tx.QueryRow(ctx,
 		`select `+tokenColumns+` from api_tokens
 		  where hash = $1 and revoked_at is null and expires_at > $2
+		    and (access_expires_at is null or access_expires_at > $2)
 		    and `+fmt.Sprintf(liveUser, "api_tokens.principal"), hash, now))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return APIToken{}, ErrNoToken
