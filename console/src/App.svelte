@@ -403,9 +403,9 @@
     transition: transform 0.18s ease;
   }
 
+  /* Drawn over the scrim, which sets it apart from the screen, with its hairline and no shadow. */
   .frame.narrow.drawn .side {
     transform: none;
-    box-shadow: 0 0 32px rgb(0 0 0 / 0.25);
   }
 
   .scrim {

@@ -88,12 +88,13 @@
     backdrop-filter: blur(1px);
   }
 
+  /* Lifted by its ground and its hairline, never a shadow, as every layer is: the backdrop already
+     sets it apart from the screen. */
   .dialog {
     max-width: 100%;
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-card);
     background: var(--surface);
-    box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
   }
 
   .dialog:focus {
