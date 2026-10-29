@@ -24,9 +24,9 @@ import (
 	"github.com/agentiik/agentiik/version"
 )
 
-// A workflow's repository, as the API answers it: created empty, read with the version a run naming
-// no ref runs and a page of its history, its tree read at a ref, its default branch named and
-// protected, and deleted. Renaming and moving one are to come.
+// A workflow's repository, as the API answers it: created empty, read with the version a ref names,
+// or the one a run naming no ref runs, and a page of its history, its tree read at a ref, its
+// default branch named and protected, and deleted. Renaming and moving one are to come.
 
 // WorkflowCreate is what POST /api/v1/{ns}/workflows reads, openapi.json's workflowCreate.
 type WorkflowCreate struct {
@@ -342,10 +342,17 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request, who Prin
 	write(w, http.StatusCreated, s.repositoryOut(r.Context(), created, ""))
 }
 
-// readWorkflow answers GET /api/v1/{ns}/workflows/{name}: the repository, the version a run naming
-// no ref runs with its graph, and a page of the default branch's history.
+// readWorkflow answers GET /api/v1/{ns}/workflows/{name}: the repository, the version ref names with
+// its graph, the one a run naming no ref runs where it names none, and a page of the default
+// branch's history.
+//
+// ref chooses the version alone. The repository, its labels among it, and the history are the
+// default branch's whatever it names, so that from and limit page the same history with it or
+// without it, and the labels answered are those a search finds the workflow by.
 func (s *Server) readWorkflow(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
 	q := r.URL.Query()
+	// An empty ref is none, as an empty from or limit is, and as the inputs route reads its own.
+	ref := q.Get("ref")
 	from := q.Get("from")
 	if from != "" && !wholeCommit.MatchString(from) {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("from is %.64q, and a page of history starts at a commit named in full, forty lowercase hexadecimal characters", from))
@@ -363,49 +370,74 @@ func (s *Server) readWorkflow(w http.ResponseWriter, r *http.Request, _ Principa
 
 	var record db.WorkflowRecord
 	var repository db.Repository
-	var head *db.Listed
+	var head, asked *db.Listed
+	status := http.StatusOK
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
 		if record, err = ns.WorkflowRecord(ctx, over.Workflow); err != nil {
 			return err
 		}
-		if record.Head == "" {
-			latest, _, err := ns.TreeVersions(ctx, over.Workflow, "", 1)
-			if err == nil && len(latest) == 1 {
-				head = &latest[0]
+		if head, err = defaultVersion(ctx, ns, over.Workflow, record); err != nil {
+			return err
+		}
+		if record.Head != "" {
+			if repository, err = ns.Repository(ctx, over.Workflow); err != nil {
+				return err
 			}
+		}
+		if ref == "" {
+			asked = head
+			return nil
+		}
+		// Resolved as a run asked for by the ref resolves it, so that the version answered is the
+		// one such a run would be pinned to now.
+		commit, refused, why := resolveRef(ctx, ns, over.Workflow, ref)
+		if why != nil {
+			status = refused
+			return why
+		}
+		at, err := ns.VersionsAt(ctx, over.Workflow, []string{commit})
+		if err != nil {
 			return err
 		}
-		if repository, err = ns.Repository(ctx, over.Workflow); err != nil {
-			return err
+		v, held := at[commit]
+		if !held {
+			// Every branch and tag is at a version, since a push makes one of each commit it
+			// leaves a ref pointing at; one that is not is answered as a commit that is no
+			// version is, rather than with a version that is not there.
+			status = http.StatusNotFound
+			return fmt.Errorf("%.200s names %s, which is no version of the workflow", ref, commit)
 		}
-		at, err := ns.VersionsAt(ctx, over.Workflow, []string{record.Head})
-		if v, held := at[record.Head]; held {
-			head = &v
-		}
-		return err
+		asked = &v
+		return nil
 	})
 	if errors.Is(err, db.ErrNoWorkflow) {
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
 		return
 	}
 	if err != nil {
+		if status != http.StatusOK {
+			fail(w, status, err.Error())
+			return
+		}
 		s.report(err)
 		fail(w, http.StatusInternalServerError, "the workflow could not be read")
 		return
 	}
 
-	detail := WorkflowDetail{Repository: s.repositoryOut(r.Context(), record, ""), History: []HistoryEntry{}}
+	defaultCommit := ""
 	if head != nil {
-		detail.Version = versionOut(*head)
-		if g, err := s.versions.Graph(r.Context(), over.Namespace, over.Workflow, head.Commit); err == nil {
-			detail.Repository.Labels = labelsOf(g)
-			if resolved, err := g.Resolved(head.Commit); err == nil {
+		defaultCommit = head.Commit
+	}
+	detail := WorkflowDetail{Repository: s.repositoryOut(r.Context(), record, defaultCommit), History: []HistoryEntry{}}
+	if asked != nil {
+		detail.Version = versionOut(*asked)
+		if g, err := s.versions.Graph(r.Context(), over.Namespace, over.Workflow, asked.Commit); err == nil {
+			if resolved, err := g.Resolved(asked.Commit); err == nil {
 				detail.Graph = resolved
 			}
 		}
 	}
-	var status int
 	if record.Head == "" {
 		detail.History, detail.Next, status, err = s.treeHistory(r.Context(), over, from, limit)
 	} else {
@@ -939,6 +971,27 @@ func resolveRef(ctx context.Context, ns *db.NS, workflow, ref string) (string, i
 		return "", http.StatusOK, err
 	}
 	return commit, http.StatusOK, nil
+}
+
+// defaultVersion is the version a run naming no ref runs, found as db.NS.DefaultCommit finds its
+// commit: the default branch's head, or while it is unborn the latest version a tree push
+// recorded. Nil where there is none.
+func defaultVersion(ctx context.Context, ns *db.NS, workflow string, record db.WorkflowRecord) (*db.Listed, error) {
+	if record.Head == "" {
+		latest, _, err := ns.TreeVersions(ctx, workflow, "", 1)
+		if err != nil || len(latest) == 0 {
+			return nil, err
+		}
+		return &latest[0], nil
+	}
+	at, err := ns.VersionsAt(ctx, workflow, []string{record.Head})
+	if err != nil {
+		return nil, err
+	}
+	if v, held := at[record.Head]; held {
+		return &v, nil
+	}
+	return nil, nil
 }
 
 // defaultCommit is the commit a run naming none runs, as db.NS.DefaultCommit finds it.
