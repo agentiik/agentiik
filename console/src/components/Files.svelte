@@ -10,6 +10,7 @@
   import { binary, changes, folders, foldersOf, hunks, lineDiff, shownUpTo, sizeOf, type Change, type Entry, type Node } from "../lib/tree";
   import type { Problem } from "../lib/workflow-check";
   import Icon from "./Icon.svelte";
+  import LineDiff from "./LineDiff.svelte";
 
   // A workflow's repository as one ref holds it: its files as folders, and the file chosen in
   // JetBrains Mono on the sunken surface, numbered; or, compared with another ref, what differs
@@ -269,16 +270,10 @@
         <p class="head"><span class="term">{change.path}</span>{#if counted}<span class="added">+{counted.added}</span><span class="removed">−{counted.removed}</span>{/if}{#if change.kind === "modified" && change.before.mode !== change.after.mode}<span class="muted">mode {change.before.mode} to {change.after.mode}</span>{/if}</p>
         {#if !sides}
           <p class="muted" role="status">Loading</p>
+        {:else if diffed && diffed.length > 0}
+          <LineDiff hunks={diffed} />
         {:else if diffed}
-          {#each diffed as hunk, i (i)}
-            <ol class="diff code">
-              {#each hunk.lines as line, j (j)}
-                <li class={line.kind}><span class="number">{line.before ?? ""}</span><span class="number">{line.after ?? ""}</span><span class="sign" aria-hidden="true">{line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}</span><span class="text">{line.text}</span></li>
-              {/each}
-            </ol>
-          {:else}
-            <p class="muted">Mode changed only</p>
-          {/each}
+          <p class="muted">Mode changed only</p>
         {:else}
           <p class="muted">Not drawn: {sides.before && "not" in sides.before ? sides.before.not : sides.after && "not" in sides.after ? sides.after.not : ""}.</p>
         {/if}
@@ -453,24 +448,16 @@
     color: var(--waiting);
   }
 
-  .file,
-  .diff {
+  .file {
+    max-height: 72vh;
     margin: 0;
     padding: calc(var(--unit) * 3) 0;
     overflow: auto;
+    border-radius: 0 0 var(--radius-pane) var(--radius-pane);
     background: var(--sunken);
     font-size: 12.5px;
     --leading: 1.6;
     list-style: none;
-  }
-
-  .file {
-    max-height: 72vh;
-    border-radius: 0 0 var(--radius-pane) var(--radius-pane);
-  }
-
-  .diff + .diff {
-    border-top: var(--border-hairline) dashed var(--lineStrong);
   }
 
   .file li {
@@ -478,28 +465,11 @@
     grid-template-columns: 52px 1fr;
   }
 
-  .diff li {
-    display: grid;
-    grid-template-columns: 44px 44px 16px 1fr;
-  }
-
-  .diff li.added {
-    background: var(--succeededFill);
-  }
-
-  .diff li.removed {
-    background: var(--failedFill);
-  }
-
   .number {
     padding-right: calc(var(--unit) * 4);
     color: var(--faint);
     text-align: right;
     user-select: none;
-  }
-
-  .sign {
-    color: var(--muted);
   }
 
   .text {

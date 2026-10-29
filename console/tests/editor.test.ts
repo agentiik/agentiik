@@ -195,13 +195,48 @@ describe("committing from the editor", () => {
     expect(asked.filter((a) => a.key === route)).toHaveLength(1);
   });
 
-  it("says a branch moved since the file was opened, as the API says it", async () => {
-    await edited(committing(managing(), 409, { error: `main has moved since ${opened}: it points at ${"c".repeat(40)} now. Read the files again at it, and commit what they hold then` }));
+  it("opens the file again at what a moved branch now holds, the change made kept beside it, and commits from there", async () => {
+    const moved = "c".repeat(40);
+    const s = committing(managing(), 409, { error: `main has moved since ${opened}: it points at ${moved} now. Read the files again at it, and commit what they hold then` });
+    const { before } = await edited(s);
+    // What main holds now: somebody else's change, made while the file was being edited.
+    const now = before.replace("  archive:\n", "  archive:\n    timeout: 1h\n");
+    const detail = s["GET /api/v1/finance/workflows/monthly-invoicing"]!.body as { version: Record<string, unknown> };
+    detail.version = { ...detail.version, commit: moved };
+    s[`GET /api/v1/finance/workflows/monthly-invoicing/tree/${moved}?path=agentiik.yaml`] = { status: 200, text: now };
     await fireEvent.click(screen.getByRole("button", { name: "Commit" }));
     await fireEvent.submit(screen.getByRole("form", { name: "Commit" }));
-    expect(await screen.findByText(/Could not commit to main\./)).toBeTruthy();
-    expect(screen.getAllByText(/main has moved since/).length).toBeGreaterThan(0);
+    expect(await screen.findByText(`main had moved: opened again at ${moved.slice(0, 7)}.`)).toBeTruthy();
+    expect(screen.queryByRole("form", { name: "Commit" })).toBeNull();
+    expect(await text()).toBe(now);
+    expect(screen.getByText("No change")).toBeTruthy();
+    const yours = within(screen.getByRole("region", { name: "Your change" }));
+    expect(yours.getByText("1 line added")).toBeTruthy();
+    expect(yours.getByText("# kept ten years")).toBeTruthy();
+    // The change kept beside the file is not lost by leaving without a word.
+    await fireEvent.click(screen.getByRole("button", { name: "Stop editing" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+    // Made again, it is committed from what main now holds.
+    await type(now.replace("  archive:\n", "  archive:\n    # kept ten years\n"));
+    s[route] = { status: 201, body: { commit: "d".repeat(40), branch: "main", parent: moved } };
+    await fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    await fireEvent.submit(screen.getByRole("form", { name: "Commit" }));
+    expect(await screen.findByText("Committed to main.")).toBeTruthy();
+    expect(asked.filter((a) => a.key === route).map((a) => (a.body as { parent: string }).parent)).toEqual([opened, moved]);
+  });
+
+  it("says the 409 of a new branch named as one that exists, which moved nothing under the file", async () => {
+    const { before } = await edited(committing(managing(), 409, { error: `keep-longer has moved since ${opened}: it points at ${"c".repeat(40)} now. Read the files again at it, and commit what they hold then` }));
+    await fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    const form = screen.getByRole("form", { name: "Commit" });
+    await fireEvent.click(within(form).getByRole("radio", { name: "A new branch" }));
+    await fireEvent.input(within(form).getByRole("textbox", { name: "The new branch" }), { target: { value: "keep-longer" } });
+    await fireEvent.submit(form);
+    expect(await screen.findByText(/Could not commit to keep-longer\./)).toBeTruthy();
+    expect(screen.getAllByText(/keep-longer has moved since/).length).toBeGreaterThan(0);
     expect(screen.getByRole("form", { name: "Commit" })).toBeTruthy();
+    expect(await text()).toBe(before.replace("  archive:\n", "  archive:\n    # kept ten years\n"));
+    expect(screen.queryByRole("region", { name: "Your change" })).toBeNull();
   });
 
   it("commits onto a new branch alone where the default branch is protected from the caller, and opens the files at it", async () => {
