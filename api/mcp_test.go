@@ -248,6 +248,45 @@ func TestEachToolSaysWhetherItReadsOrRemoves(t *testing.T) {
 	}
 }
 
+// secret.declare names the stores a declaration may name as its route takes them, builtin, env and
+// vault, and no other: its description gave one no release defines, which a model reading it tried
+// and was refused. A store off the list is the protocol's error, before anything is asked.
+func TestSecretDeclareNamesTheStoresItsRouteTakes(t *testing.T) {
+	rt, err := api.NewRouter(owning{}, cookieOrBearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	_, result, _ := called(t, rt, "alice", "tools/list", nil)
+	var provider map[string]any
+	for _, tool := range result["tools"].([]any) {
+		if tool := tool.(map[string]any); tool["name"] == "secret.declare" {
+			provider, _ = tool["inputSchema"].(map[string]any)["properties"].(map[string]any)["provider"].(map[string]any)
+		}
+	}
+	enum, _ := provider["enum"].([]any)
+	if !slices.Equal(enum, []any{api.ProviderBuiltin, api.ProviderEnv, api.ProviderVault}) {
+		t.Errorf("secret.declare's provider is %v", provider)
+	}
+	described, _ := provider["description"].(string)
+	for _, store := range []string{api.ProviderBuiltin, api.ProviderEnv, api.ProviderVault} {
+		if !strings.Contains(described, store) {
+			t.Errorf("secret.declare's provider is described without %s: %q", store, described)
+		}
+	}
+	if strings.Contains(strings.ToLower(described), "aws") {
+		t.Errorf("secret.declare's provider is described with a store no release defines: %q", described)
+	}
+	_, _, refusal := called(t, rt, "alice", "tools/call", map[string]any{"name": "secret.declare", "arguments": map[string]any{
+		"namespace": "finance", "name": "billing", "provider": "aws-secrets-manager", "path": "finance/billing",
+	}})
+	if refusal == nil || refusal.Code != mcp.CodeInvalidParams {
+		t.Errorf("a store off the list was answered %v", refusal)
+	}
+}
+
 // workflow.language answers a topic with its page and no topic with the orientation, each as
 // agentiik/schemas generated it, and refuses a topic that is none by naming the ones that are.
 func TestWorkflowLanguageTeachesATopicAtATime(t *testing.T) {
