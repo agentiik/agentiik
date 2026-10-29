@@ -12,13 +12,17 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/schema"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -565,11 +569,11 @@ func TestACollectionOffersEachMembersTool(t *testing.T) {
 		t.Errorf("the inputSchema reads %v", input)
 	}
 	properties := input["properties"].(map[string]any)
-	if properties["orders"].(map[string]any)["$ref"] != "./schemas/order.json" || properties["note"].(map[string]any)["type"] != "string" {
+	if properties["orders"].(map[string]any)["$ref"] != "#/$defs/schemas~1order.json" || properties["note"].(map[string]any)["type"] != "string" {
 		t.Errorf("the inputs read %v", properties)
 	}
 	bundled := input["$defs"].(map[string]any)["schemas/order.json"].(map[string]any)
-	if input["$id"] != "agk://repo/" || bundled["$id"] != "agk://repo/schemas/order.json" || bundled["type"] != "array" {
+	if _, based := input["$id"]; based || bundled["$id"] != nil || bundled["type"] != "array" {
 		t.Errorf("the file the inputs reference is bundled as %v under %v", bundled, input["$id"])
 	}
 	output := tool["outputSchema"].(map[string]any)
@@ -605,6 +609,166 @@ func TestACollectionOffersEachMembersTool(t *testing.T) {
 	if n := len(result["tools"].([]any)); n != 2 {
 		t.Errorf("the collection offers %d tools", n)
 	}
+}
+
+// ledgerDocument publishes ledger, whose inputs and output reach files declaring an $id of their
+// own: order.json an absolute one, and references to itself by pointer and by anchor; rel.json a
+// relative one, which moves where its reference to line.json resolves, beside a nested $id; and an
+// input referring to its own $defs.
+const ledgerDocument = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: ledger, namespace: finance }
+inputs:
+  orders: { schema: { $ref: "./schemas/order.json#/$defs/orders" }, required: true }
+  detail: { schema: { $ref: "./schemas/rel.json" }, default: {} }
+  code: { schema: { $defs: { code: { type: string, pattern: "^[A-Z]{3}$" } }, $ref: "#/$defs/code" }, default: "EUR" }
+outputs:
+  entries: { from: { step: archive, port: ok }, schema: { $ref: "./schemas/rel.json" } }
+mcp:
+  description: Post the orders to the ledger and return its entries.
+  output: entries
+steps:
+  archive:
+    image: ` + image + `
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]
+`
+
+// ledgerFiles are the files ledger's schemas reach, and line.json beside them, which a reference
+// resolved against the tree's root rather than against rel.json's $id would reach instead.
+var ledgerFiles = map[string]any{
+	"schemas/order.json":    `{"$id": "https://acme.example/schemas/order.json", "$defs": {"orders": {"type": "array", "items": {"$ref": "#/$defs/order"}}, "order": {"type": "object", "required": ["order"], "properties": {"order": {"type": "string"}, "line": {"$ref": "#line"}}}, "line": {"$anchor": "line", "type": "integer"}}}`,
+	"schemas/rel.json":      `{"$id": "sub/rel.json", "type": "object", "properties": {"line": {"$ref": "line.json"}, "nested": {"$ref": "nested"}}, "$defs": {"nested": {"$id": "nested", "type": "boolean"}}}`,
+	"schemas/sub/line.json": `{"type": "integer", "minimum": 1}`,
+	"schemas/line.json":     `{"type": "string"}`,
+}
+
+// "Each file an input reaches is embedded under $defs", and the published schemas resolve with no
+// retrieval and no knowledge of a base URI: every reference is a pointer into the bundle, which
+// every client resolves, and no $id is left to move one, so that a file declaring an $id of its own
+// is reached as the engine reaches it. Python's urljoin resolves nothing under agk:, the base the
+// engine compiles under, and a file's own $id took its references elsewhere, so a client could not
+// compile the tool. Compiled here under an address of the client's own, with a loader that fetches
+// nothing, each schema judges every value as the engine judges it against the tree.
+func TestABundledSchemaResolvesWithNoRetrieval(t *testing.T) {
+	c := servingCollections(t)
+	if err := c.pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		if err := ns.SaveWorkflow(ctx, "ledger", "main"); err != nil {
+			return err
+		}
+		_, err := ns.RecordImages(ctx, "ledger", "alice", time.Time{}, db.Images{Manifests: map[string][]byte{image: []byte(brickManifest)}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]any{"agentiik.yaml": ledgerDocument}
+	tree := fstest.MapFS{}
+	for name, body := range ledgerFiles {
+		files[name] = body
+		tree[name] = &fstest.MapFile{Data: []byte(body.(string))}
+	}
+	if status, answer := c.ask("POST", "/api/v1/finance/workflows/ledger/commits", "alice", map[string]any{"message": "first", "files": files}); status != http.StatusCreated {
+		t.Fatalf("ledger could not be committed: %d %v", status, answer)
+	}
+	id := c.made("alice", "ledger-desk")
+	c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/ledger", "alice", map[string]any{})
+	_, result, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/list", nil)
+	if refusal != nil || len(result["tools"].([]any)) != 1 {
+		t.Fatalf("the collection lists %v %v", result, refusal)
+	}
+	tool := result["tools"].([]any)[0].(map[string]any)
+
+	// Nothing a client would resolve against a base: no $id anywhere, and every reference a
+	// pointer from the root of the schema it is in.
+	for _, field := range []string{"inputSchema", "outputSchema"} {
+		var walk func(at string, v any)
+		walk = func(at string, v any) {
+			switch v := v.(type) {
+			case map[string]any:
+				for k, child := range v {
+					if ref, ok := child.(string); (k == "$ref" && (!ok || !strings.HasPrefix(ref, "#/"))) || k == "$id" {
+						t.Errorf("%s writes %s: %v at %s", field, k, child, at)
+					}
+					walk(at+"/"+k, child)
+				}
+			case []any:
+				for i, child := range v {
+					walk(fmt.Sprintf("%s/%d", at, i), child)
+				}
+			}
+		}
+		walk("", tool[field])
+	}
+
+	// Each input, and the output's items, judged by the published schema as a client compiles it
+	// and by the engine against the tree, alike.
+	client := func(field, pointer string) *jsonschema.Schema {
+		t.Helper()
+		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(must(json.Marshal(tool[field]))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		jc := jsonschema.NewCompiler()
+		jc.DefaultDraft(jsonschema.Draft2020)
+		jc.UseLoader(fetchingNothing{t})
+		if err := jc.AddResource("https://client.example/tool.json", doc); err != nil {
+			t.Fatal(err)
+		}
+		s, err := jc.Compile("https://client.example/tool.json#" + pointer)
+		if err != nil {
+			t.Fatalf("%s does not compile with nothing fetched: %v", field, err)
+		}
+		return s
+	}
+	engine := func(written string) *schema.Schema {
+		t.Helper()
+		s, err := schema.NewCompiler(tree).Compile([]byte(written))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for _, c := range []struct {
+		name, written string
+		values        []string
+		want          []bool
+	}{
+		{"orders", `{"$ref": "./schemas/order.json#/$defs/orders"}`, []string{`[{"order": "ORD-1", "line": 3}]`, `[{"order": 1}]`, `[{"order": "ORD-1", "line": "three"}]`}, []bool{true, false, false}},
+		{"detail", `{"$ref": "./schemas/rel.json"}`, []string{`{"line": 2, "nested": true}`, `{"line": 0}`, `{"line": "two"}`, `{"nested": 1}`}, []bool{true, false, false, false}},
+		{"code", `{"$defs": {"code": {"type": "string", "pattern": "^[A-Z]{3}$"}}, "$ref": "#/$defs/code"}`, []string{`"EUR"`, `"eur"`}, []bool{true, false}},
+	} {
+		published, written := client("inputSchema", "/properties/"+c.name), engine(c.written)
+		for i, raw := range c.values {
+			v, _ := jsonschema.UnmarshalJSON(strings.NewReader(raw))
+			if got, held := published.Validate(v) == nil, written.Validate(v) == nil; got != c.want[i] || held != c.want[i] {
+				t.Errorf("the input %s judges %s %v as published and %v against the tree, want %v", c.name, raw, got, held, c.want[i])
+			}
+		}
+	}
+	items := client("outputSchema", "")
+	for raw, want := range map[string]bool{`{"line": 2}`: true, `{"line": 0}`: false, `{"line": "two"}`: false} {
+		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(`{"meta": {}, "items": [{"id": "01JMZ8W4K7A1B2C3D4E5F6G7H8", "data": ` + raw + `, "files": []}]}`))
+		if got := items.Validate(v) == nil; got != want {
+			t.Errorf("the outputSchema judges data %s %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// fetchingNothing is a client's loader that is never to be asked: what a bundle reaches, it holds.
+type fetchingNothing struct{ t *testing.T }
+
+func (f fetchingNothing) Load(url string) (any, error) {
+	f.t.Errorf("the schema asked for %s, which a client would have had to fetch", url)
+	return nil, fmt.Errorf("%s is not fetched", url)
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 // head is the commit a workflow's default branch names.
