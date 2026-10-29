@@ -35,7 +35,7 @@ func (m Model) drawn(picks *[]pick) string {
 	}
 	t := m.theme()
 	t.picks = picks
-	if m.width < leastWidth || m.height < leastHeight {
+	if m.tooSmall() {
 		asked := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			fmt.Sprintf("The window is %d by %d: agk console needs %d by %d.\nMake it larger, or press q to quit.", m.width, m.height, leastWidth, leastHeight))
 		lines := strings.Split(asked, "\n")

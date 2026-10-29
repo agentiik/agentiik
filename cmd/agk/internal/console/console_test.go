@@ -311,6 +311,35 @@ func TestATooSmallWindowIsAskedToGrow(t *testing.T) {
 	}
 }
 
+// A window too small to draw in takes no key but q and ctrl+c, since a key would act on what is not
+// drawn: c then y would cancel a run whose prompt never showed. A prompt open when the window shrinks
+// under the least size is answered no, and is not found waiting for a y once the window grows back.
+func TestATooSmallWindowTakesNoKeyButQ(t *testing.T) {
+	in := &installation{me: mayRunIn()}
+	in.run = aFailedRun()
+	in.run.State = agk.Running
+	m := press(t, opened(t, in, Options{Run: failedRun}, 70, 20), keyC, yes)
+	if m.asking != notAsking || len(in.sent) != 0 {
+		t.Fatalf("c then y in a window of 70 by 20 leaves the prompt %d, and sent %v", m.asking, in.sent)
+	}
+	m = press(t, send(t, m, tea.WindowSizeMsg{Width: 160, Height: 40}).(Model), keyC)
+	if m.asking != askingCancel {
+		t.Fatalf("c in a window of 160 by 40 does not ask:\n%s", screen(m))
+	}
+	m = send(t, m, tea.WindowSizeMsg{Width: 70, Height: 20}).(Model)
+	m = press(t, send(t, m, tea.WindowSizeMsg{Width: 160, Height: 40}).(Model), yes)
+	if m.asking != notAsking || len(in.sent) != 0 {
+		t.Errorf("a prompt shrunk out of sight and grown back is answered y: sent %v", in.sent)
+	}
+	// q quits as the window says, though the palette open would take it as a letter.
+	m = send(t, press(t, m, colon), tea.WindowSizeMsg{Width: 70, Height: 20}).(Model)
+	if _, cmd := m.Update(quit); cmd == nil {
+		t.Error("q does not quit a window too small to draw in, the palette open")
+	} else if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("q in a window too small to draw in does something other than quit, the palette open")
+	}
+}
+
 // ↓ and j move the selection, which stops at either end; enter opens the run selected, which is
 // read and described; esc goes back to the runs.
 func TestTheKeysMoveOpenAndGoBack(t *testing.T) {
