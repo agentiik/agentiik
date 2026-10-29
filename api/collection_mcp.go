@@ -59,12 +59,14 @@ const treeBase = "agk://repo/"
 // token.
 func (m *MCP) serveCollection(w http.ResponseWriter, r *http.Request, caller Caller) {
 	if _, bearer := bearerOf(r); !bearer {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		refuse(w, http.StatusUnauthorized, "a collection's endpoint takes a bearer token, an API token or one issued for this installation, and a session is the console's")
+		m.noBearer(w, r, "a collection's endpoint takes a bearer token, an API token or one issued for this installation, and a session is the console's")
 		return
 	}
-	if caller.Narrowed() {
-		// Before the collection is looked up, so that the answer is the same whatever it names.
+	if caller.Narrowed() && caller.Audience == "" {
+		// Before the collection is looked up, so that the answer is the same whatever it names. The
+		// OAuth token issued for this collection is the one narrowed token that reaches it: its
+		// audience is the collection, which Principals holds it to, and it keeps workflow:run,
+		// which is all a call takes.
 		refuse(w, http.StatusForbidden, narrowedReachesNoCollection)
 		return
 	}

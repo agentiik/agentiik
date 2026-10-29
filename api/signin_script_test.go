@@ -395,6 +395,18 @@ func TestThePageScriptSignsInWithAPasswordAsTheRouteAnswers(t *testing.T) {
 	}
 }
 
+// anAuthorisation is what the authorisation page is written with for an MCP client asking for /mcp,
+// as the page is served for a request that holds.
+func anAuthorisation() *authorizeData {
+	return &authorizeData{
+		ClientName: "Example client", ClientHost: "client.example.com", ReturnHost: "127.0.0.1:4711", Loopback: true,
+		Surface: "/mcp, everything your account reaches there", Permissions: []permissionAsked{{Name: "workflow:read", Allows: allows[WorkflowRead]}},
+		Deny:     "http://127.0.0.1:4711/callback?error=access_denied&iss=https%3A%2F%2Fagentiik.example.com",
+		ClientID: "https://client.example.com/oauth.json", RedirectURI: "http://127.0.0.1:4711/callback", CodeChallenge: terminalChallenge,
+		Resource: "https://agentiik.example.com/mcp", Scope: "workflow:read", State: "the client's state",
+	}
+}
+
 // What the pages agk login opens are opened with, in the tests: the loopback address and the
 // challenge openapi.json's examples write, and the verifier it is the SHA-256 of.
 const (
@@ -569,6 +581,8 @@ func onAStandInBrowser(t *testing.T, engine, answers string) []string {
 		"enrol-ip":             {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "withheld", Own: "withheld"}},
 		"enrol-password":       {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "offered"}},
 		"enrol-ip-password":    {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered", Own: "offered"}},
+		"authorize":            {"authorize.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld", Own: "withheld", Authorize: anAuthorisation()}},
+		"authorize-password":   {"authorize.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "offered", Authorize: anAuthorisation()}},
 	} {
 		var b bytes.Buffer
 		if err := pages.ExecuteTemplate(&b, page.file, page.data); err != nil {

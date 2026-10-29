@@ -1,0 +1,42 @@
+{{template "head" .}}
+<body>
+{{template "lockup"}}
+{{with .Authorize}}<main id="page" data-page="authorize" data-passkeys="{{$.Passkeys}}" data-password="{{$.Password}}" data-own="{{$.Own}}" data-client-id="{{.ClientID}}" data-redirect-uri="{{.RedirectURI}}" data-code-challenge="{{.CodeChallenge}}" data-resource="{{.Resource}}" data-scope="{{.Scope}}" data-state="{{.State}}">
+<h1>Allow {{.ClientName}}?</h1>
+<noscript><p class="problem">This page signs you in with JavaScript, which this browser is not running for it.</p></noscript>
+<p><strong>{{.ClientName}}</strong> asks for a token to act as you at {{.Surface}}. It names itself at <code>{{.ClientHost}}</code>, and the name is its own to choose: allow it only if that host is the program you mean.</p>
+<p>It is sent back to <code>{{.ReturnHost}}</code>.{{if .Loopback}} That is a program on this machine, and nothing proves which one listens there: allow it only if you started it yourself.{{end}}</p>
+<h2>It may, wherever you hold the permission</h2>
+<ul class="permissions">
+{{- range .Permissions}}
+<li><code>{{.Name}}</code>: {{.Allows}}</li>
+{{- end}}
+</ul>
+<p class="note">For 90 days, unless you revoke it sooner among your tokens. No administrator's power and no credential of yours passes to it. Signing in here is how you allow it, whatever this browser is signed in as already.</p>
+
+<section id="passkey" hidden>
+<button type="button" id="sign-in">Sign in with a passkey and allow</button>
+</section>
+
+<p id="unavailable" class="problem" hidden></p>
+
+<form id="password" method="post" hidden>
+<h2>With a password</h2>
+<label for="login">Login</label>
+<input id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+<label for="secret">Password</label>
+<input id="secret" name="password" type="password" autocomplete="current-password" required>
+<label for="totp">One-time code <span class="hint">only if your account has one</span></label>
+<input id="totp" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6">
+<button type="submit" id="password-button">Sign in with a password and allow</button>
+</form>
+
+<p id="enrolling" class="note" hidden>The installation asks your account for a passkey before anything else, and a sign-in that may only enrol allows no client. <a href="enrol">Enrol one</a>, then come back to this page from {{.ClientName}}.</p>
+
+<p id="status" role="status" aria-live="polite"></p>
+<p id="problem" class="problem" role="alert" hidden></p>
+
+<footer><a id="deny" href="{{.Deny}}">Deny</a>, and {{.ClientName}} is told you did.</footer>
+</main>{{end}}
+</body>
+</html>

@@ -68,6 +68,11 @@ type ceremonyAnswered struct {
 	// nil for any other ceremony.
 	Terminal *TerminalSignIn
 
+	// Authorization is what an MCP client opened /auth/authorize with, for an assertion that allows
+	// it, and nil for any other ceremony; approved is it held to its rules again, by verify.
+	Authorization *OAuthSignIn
+	approved      *approval
+
 	// labelled is whether the request wrote a label, null being none.
 	labelled bool
 }
@@ -88,6 +93,8 @@ func (q *ceremonyAnswered) field(b *body, name string) error {
 		return text(b, &q.Label)
 	case "terminal":
 		return readTerminal(b, &q.Terminal)
+	case "authorization":
+		return readAuthorization(b, &q.Authorization)
 	}
 	return unknown(name)
 }
@@ -111,8 +118,16 @@ func (q ceremonyAnswered) check() error {
 		return errors.New("label: it holds a line break or another control character, and it is one line, shown in a console as it is")
 	case q.Terminal != nil && q.Ceremony == db.CeremonyRegistration:
 		return errors.New("terminal: agk login signs in with an assertion, and a registration hands it no code")
+	case q.Authorization != nil && q.Ceremony == db.CeremonyRegistration:
+		return errors.New("authorization: an MCP client is allowed by a sign-in, an assertion, and a registration allows none")
+	case q.Authorization != nil && q.Terminal != nil:
+		return errors.New("authorization: a sign-in hands its code to agk login or to an MCP client, and this one names both")
 	case q.Terminal != nil:
 		if err := q.Terminal.check(); err != nil {
+			return err
+		}
+	case q.Authorization != nil:
+		if err := q.Authorization.check(); err != nil {
 			return err
 		}
 	}

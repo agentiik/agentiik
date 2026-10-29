@@ -55,6 +55,10 @@ type Principals struct {
 	origin      string
 	ipAddressed bool
 
+	// resources is the public URL every OAuth token's audience is under, and empty where none is
+	// accepted: see AcceptOAuth.
+	resources string
+
 	// questions counts the transactions opened to say who a principal is and what it holds, for a
 	// test to hold that what a question costs does not depend on its targets.
 	questions atomic.Int64
@@ -70,6 +74,17 @@ func NewPrincipals(pool *db.Pool, now func() time.Time) (*Principals, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Principals{pool: pool, now: now}, nil
+}
+
+// AcceptOAuth has the tokens the installation's own authorisation server issues accepted, each at the
+// resource it was issued for, under publicURL: /mcp or one collection. Until it is called, a token
+// issued for a resource opens nothing anywhere, which is what an installation serving no MCP holds.
+func (p *Principals) AcceptOAuth(publicURL string) error {
+	if _, err := originOf(publicURL); err != nil {
+		return err
+	}
+	p.resources = strings.TrimRight(publicURL, "/")
+	return nil
 }
 
 // Identify is the router's: the principal a bearer token belongs to, with the token's scope, or
@@ -118,6 +133,15 @@ func (p *Principals) Identify(r *http.Request) (Identity, error) {
 		if err != nil {
 			return err
 		}
+		// An OAuth token is accepted at its audience and nowhere else: "MCP servers MUST validate
+		// that access tokens were issued specifically for them as the intended audience", and "MUST
+		// NOT accept or transit any other tokens". One presented elsewhere opens nothing, and is
+		// answered as a token that opens nothing is, since saying it is a real one presented at
+		// the wrong door would tell whoever found it where to take it.
+		if token.Audience != "" && token.Audience != servedResource(r, p.resources) {
+			as = Identity{Refused: noToken}
+			return nil
+		}
 		scope, err := access.ParseTokenScope(token.Permissions, token.Within)
 		if err != nil {
 			return fmt.Errorf("api: the scope of token %s: %w", token.ID, err)
@@ -125,7 +149,7 @@ func (p *Principals) Identify(r *http.Request) (Identity, error) {
 		if err := w.TokenUsed(ctx, token.ID, now); err != nil {
 			return err
 		}
-		as = Identity{Principal: Principal(token.Principal), Scope: scope, Token: token.ID}
+		as = Identity{Principal: Principal(token.Principal), Scope: scope, Token: token.ID, Audience: token.Audience}
 		return nil
 	})
 	if err != nil {

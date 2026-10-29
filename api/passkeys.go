@@ -83,6 +83,11 @@ type PasskeyOptions struct {
 	// SignIns is what the sign-in routes share: where a sign-in comes from, and the bound on the
 	// failures they record. Nil is one of the ceremonies' own, reading no proxy's header.
 	SignIns *SignIns
+
+	// OAuth is the installation's own authorisation server, which a sign-in carrying an MCP
+	// client's authorization mints its code for, and nil where it issues no token, which refuses
+	// such a sign-in.
+	OAuth *OAuth
 }
 
 // PasskeyAPI is the passkey ceremonies.
@@ -97,6 +102,7 @@ type PasskeyAPI struct {
 	rpID, origin, unavailable string
 
 	signIns *SignIns
+	oauth   *OAuth
 
 	// checked is run between a registration's verification and the transaction that writes it,
 	// where a test changes what was checked. Nil outside tests.
@@ -167,7 +173,7 @@ func NewPasskeys(rt *Router, o PasskeyOptions) (*PasskeyAPI, error) {
 	}
 	s := &PasskeyAPI{
 		pool: o.Pool, identify: o.Identify, now: o.Now, trouble: o.Trouble,
-		rpID: strings.ToLower(u.Hostname()), origin: origin, signIns: o.SignIns,
+		rpID: strings.ToLower(u.Hostname()), origin: origin, signIns: o.SignIns, oauth: o.OAuth,
 	}
 	if net.ParseIP(s.rpID) != nil {
 		s.rpID, s.unavailable = "", ipAddressed
@@ -515,6 +521,17 @@ func (s *PasskeyAPI) verify(w http.ResponseWriter, r *http.Request, _ Principal,
 	if err := ask.check(); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if ask.Authorization != nil {
+		// Held to its rules again before anything is verified, the client's document read as the
+		// page was served with it, so that a sign-in allowing a client that no longer holds
+		// signs nobody in and spends no challenge.
+		approved, status, why := approveSignIn(r.Context(), s.oauth, *ask.Authorization)
+		if approved == nil {
+			fail(w, status, why)
+			return
+		}
+		ask.approved = approved
 	}
 	now := s.now().Truncate(time.Microsecond)
 	if ask.Ceremony == db.CeremonyRegistration {
@@ -990,9 +1007,15 @@ func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremony
 			return err
 		}
 		cookie = opened
-		// A passkey's session is a full one, which agk login's sign-in hands a code beside.
-		if ask.Terminal != nil {
+		// A passkey's session is a full one, which agk login's sign-in hands a code beside, and an
+		// MCP client's authorisation its own.
+		switch {
+		case ask.Terminal != nil:
 			if redirect, err = handOff(ctx, wide, ask.Terminal, user.Login, id, now); err != nil {
+				return err
+			}
+		case ask.approved != nil:
+			if redirect, err = s.oauth.handOff(ctx, wide, ask.approved, user.Login, id, now); err != nil {
 				return err
 			}
 		}

@@ -10,12 +10,17 @@ import (
 // Every first segment of an address the API answers at the root is a word no namespace is created
 // under, so that the web console, which answers every other address and reads its first segment as
 // a namespace, opens every new namespace's pages: auth reserved from the start, for the routes under
-// /api/v1/auth/, and api, hooks, mcp and objects late, for the console's sake. No word is reserved
-// for the console's sake but a root.
+// /api/v1/auth/, and api, hooks, mcp and objects late, for the console's sake. A root no namespace
+// could ever be named, .well-known, which holds a dot, needs no reservation. No word is reserved for
+// the console's sake but a root.
 func TestEveryRootOfTheAPIIsAWordNoNamespaceTakes(t *testing.T) {
 	for _, root := range apiRoots {
 		r, late := agk.ReservedLate(root)
+		unnameable := namespaceName(root, func(string) bool { return false }) != nil
 		switch {
+		case unnameable && (agk.IsReservedNamespace(root) || late):
+			t.Errorf("%s, which no namespace can be named, is reserved all the same: %+v", root, r)
+		case unnameable:
 		case !agk.IsReservedNamespace(root):
 			t.Errorf("/%s is an address the API answers, and %s a name a namespace may still be given, whose console pages the API would answer", root, root)
 		case root == "auth" && late:

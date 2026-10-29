@@ -493,7 +493,13 @@ func (ForRunner) guards() guard { return guard{runner: true} }
 // registered with HandleOwn, whose handler is given a Caller in place of a target: who asks, how
 // the credential it presented narrows it, and what it owns and holds through that credential, which
 // the router asks the authorizer rather than leaving to the handler, as it asks everything else.
-type Own struct{}
+type Own struct {
+	// Challenge, where set, is the WWW-Authenticate a request identifying nobody is answered with,
+	// for a route that is a protected resource of its own and says where a token for it is asked
+	// for: an MCP surface (oauth.go). It is told whether a credential came and opened nothing, and
+	// nil answers Bearer alone, as every other route does.
+	Challenge func(r *http.Request, invalid bool) string
+}
 
 func (Own) guards() guard { return guard{own: true} }
 
@@ -519,6 +525,10 @@ type Caller struct {
 	// credential: see Identity.ProvedAt.
 	ProvedAt time.Time
 
+	// Audience is the resource the OAuth token the request presented was issued for, and empty for
+	// any other credential: see Identity.Audience.
+	Audience string
+
 	scope  access.TokenScope
 	owners Owners
 
@@ -534,6 +544,15 @@ type Caller struct {
 // none of the nine and "a permissions list keeps only the permissions it names", as it keeps no
 // administrator's powers.
 func (c Caller) Narrowed() bool { return c.scope.Narrows() }
+
+// throughEveryPermission is the caller as a token of its person keeping all nine permissions would
+// be, reaching where the credential reaches: what an OAuth token's client could be allowed, which the
+// user's server lists to it (mcp.go). It administers nothing, since the router still asks about the
+// credential presented, and a narrowed one carries no administrator's powers.
+func (c Caller) throughEveryPermission() Caller {
+	c.scope = access.TokenScope{Permissions: access.Permissions, Within: c.scope.Within}
+	return c
+}
 
 // Administers answers whether the caller administers the installation through the credential it
 // presented, asked as every administrator's route asks it, as grant:manage at the installation: never
@@ -739,6 +758,12 @@ type Identity struct {
 	// Token is the identifier of the API token presented, which a caller revokes and lists
 	// itself by, and empty for any other credential.
 	Token string
+
+	// Audience is the resource an OAuth token presented was issued for, its URL under the public
+	// URL, and empty for any other credential, an API token among them. Such a token is answered
+	// only where the request is to that resource (servedResource), so a route that sees it knows the
+	// request is to it.
+	Audience string
 
 	// ProvedAt is when the session the request carries was opened, which the credential that
 	// opened it proved, and zero for any other credential. It is the last proof of possession the
