@@ -1,9 +1,12 @@
 package main
 
 import (
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/agentiik/agentiik/api"
 )
 
 // "Test the tool set per role (viewer, operator, editor, owner, administrator), recording what each
@@ -12,9 +15,17 @@ import (
 // grant. Each is offered what the routes behind the tools let them use somewhere and nothing else,
 // "so a principal who can write nowhere never sees workflow.commit"; and a tool they are not offered
 // is no tool of theirs to call, answered as one the server does not have.
+//
+// And the credentials a route refuses for what they are rather than for what they hold, which no
+// grant changes: finance/nightly, a service account operating payroll as oscar does, and mallory's
+// token narrowed to hr, which she owns, create no namespace, which "is a person's"; the narrowed
+// token reaches no collection, nor does the bootstrap token, which is nobody and owns none.
 func TestEachRoleIsOfferedTheToolsItMayUse(t *testing.T) {
 	x := someTenants(t)
-	everybody := "workflow.language workflow.schema namespace.list namespace.get namespace.create"
+	x.must("POST", "/api/v1/finance/workflows/payroll/grants", x.as["alice"], api.GrantRequest{Principal: "finance/nightly", Role: "operator"}, http.StatusCreated)
+	x.as["the bootstrap token"] = asker{bearer: theToken}
+	anyone := "workflow.language workflow.schema namespace.list namespace.get"
+	everybody := anyone + " namespace.create"
 	collections := "collection.list collection.get collection.create collection.update collection.delete collection.remove"
 	offered := map[string]string{
 		// workflow:read and run:read on finance.
@@ -29,6 +40,13 @@ func TestEachRoleIsOfferedTheToolsItMayUse(t *testing.T) {
 		"alice": everybody + " workflow.validate workflow.commit namespace.update namespace.delete grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.cancel run.replay " + collections + " collection.add",
 		// The installation's, and nothing of any namespace's workflows.
 		"carol": everybody + " namespace.update namespace.delete namespace.quotas grant.list grant.create grant.revoke " + collections + " runner.list",
+		// oscar's grant, as a service account: no namespace made, and collections of its own.
+		"finance/nightly": anyone + " workflow.list workflow.run run.list run.get run.logs run.cancel run.replay " + collections + " collection.add",
+		// An owner's columns on hr through the scope, and neither a namespace nor a collection.
+		"mallory's token for hr": anyone + " workflow.validate workflow.commit namespace.update namespace.delete grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.cancel run.replay",
+		// An administrator owning every namespace while it lasts, naming the owner of one it
+		// creates, and owning no collection.
+		"the bootstrap token": everybody + " workflow.validate workflow.commit namespace.update namespace.delete namespace.quotas grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.cancel run.replay runner.list",
 	}
 
 	var every []string
