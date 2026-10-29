@@ -48,8 +48,9 @@ type tenants struct {
 	t  *testing.T
 	in *installation
 
-	// as are how each principal asks, bearing a token of theirs, how mallory asks with a token
-	// narrowed to hr, and how her browser does, carrying her session from the public URL's origin.
+	// as are how each principal asks, bearing a token of theirs, finance/nightly included, how
+	// mallory asks with a token narrowed to hr, and how her browser does, carrying her session from
+	// the public URL's origin.
 	as map[string]asker
 
 	// run is a run of finance/monthly-invoicing, and grant and workflowGrant a grant on finance
@@ -213,6 +214,8 @@ func someTenants(t *testing.T) *tenants {
 	x.must("POST", "/api/v1/service-accounts", x.as["alice"], api.NewServiceAccount{Namespace: "finance", Name: "nightly"}, http.StatusCreated)
 	issued := x.answer(x.must("POST", "/api/v1/auth/tokens", x.as["alice"], api.TokenRequest{Principal: "finance/nightly"}, http.StatusCreated))
 	x.token, _ = issued["api_token"].(map[string]any)["id"].(string)
+	nightly, _ := issued["token"].(string)
+	x.as["finance/nightly"] = asker{bearer: nightly}
 
 	// A pool, and a machine joined to it.
 	x.must("POST", "/api/v1/runner-pools", asker{bearer: theToken}, aPool(), http.StatusCreated)

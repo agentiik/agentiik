@@ -36,8 +36,15 @@ type routed struct {
 	offered func(Effective) bool
 
 	// own marks a tool about the caller's own collections, which a token narrowed by a scope reaches
-	// none of, whatever it holds: its route refuses such a token, so the tool is left out of its list.
+	// none of, whatever it holds, and the bootstrap token none either, being nobody and owning
+	// nothing: their routes refuse both, so the tool is left out of their lists.
 	own bool
+
+	// person marks a tool whose route a person's credential reaches and no other, or an
+	// administrator's: "a namespace is a person's", so POST /api/v1/namespaces refuses a service
+	// account and a token narrowed by a scope 403 whatever they hold, and the tool is left out of
+	// their lists. The bootstrap token reaches it, since it administers for as long as it lasts.
+	person bool
 
 	// request is the route the arguments make, its query and its body, nil for none.
 	request func(args map[string]any) (method, path string, query url.Values, body any)
@@ -165,7 +172,7 @@ func userTools() []routed {
 				`"name":{"type":"string","description":"The namespace's name: lowercase words joined by hyphens."}`,
 				`"owner":{"type":"string","description":"Another owner than yourself, a login or group:NAME. An administrator's alone."}`,
 				`"quotas":{"type":"object","description":"The namespace's quotas, as namespace.quotas sets them. An administrator's alone."}`),
-			annotations: writes(), offered: anybody,
+			annotations: writes(), offered: anybody, person: true,
 			request: func(a map[string]any) (string, string, url.Values, any) { return "POST", "/api/v1/namespaces", nil, a },
 		},
 		{

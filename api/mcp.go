@@ -130,10 +130,16 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, error) {
 	if use(holds(WorkflowWrite)) {
 		tools = append(tools, m.workflowCommit(r))
 	}
+	// Left out even where the authorizer does not say what is granted, since what keeps these
+	// credentials from those routes is what they are and not a grant: a narrowed token's scope, a
+	// service account's being nobody's person, and the bootstrap token's being nobody at all.
+	_, _, owner := owned(caller)
+	account := strings.Contains(string(caller.Principal), "/")
 	for _, t := range userTools() {
-		if t.own && caller.Narrowed() {
-			// Left out even where the authorizer does not say what is granted, since what keeps
-			// a narrowed token from a collection is the scope and not a grant.
+		if t.own && (caller.Narrowed() || !owner) {
+			continue
+		}
+		if t.person && (caller.Narrowed() || account) {
 			continue
 		}
 		if use(t.offered) {
