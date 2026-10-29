@@ -149,8 +149,12 @@ func (m Model) narrowed(filter string) (tea.Model, tea.Cmd) {
 	return m.showing(runsView)
 }
 
-// dismissRefused is a notification the installation did not dismiss, and why.
-type dismissRefused struct{ err error }
+type (
+	// dismissed is a notification the installation dismissed.
+	dismissed struct{}
+	// dismissRefused is a notification the installation did not dismiss, and why.
+	dismissRefused struct{ err error }
+)
 
 // noticeCommands are the notifications, each dismissed when chosen, but a recovery code's, which the
 // API keeps its 90 days whoever asks and which choosing only closes the palette on. A dismissal
@@ -169,7 +173,7 @@ func (m Model) noticeCommands() []command {
 				if err := send(ctx, "DELETE", "/api/v1/me/notifications/"+url.PathEscape(id), nil, nil); err != nil {
 					return dismissRefused{err: err}
 				}
-				return meAgain{}
+				return dismissed{}
 			}
 		}})
 	}

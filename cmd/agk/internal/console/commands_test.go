@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -141,6 +142,44 @@ func TestThePaletteDismissesANotification(t *testing.T) {
 	m = press(t, m, down, enter)
 	if len(in.sent) != 1 || in.sent[0] != "DELETE /api/v1/me/notifications/"+widened.ID+" null" || !slices.Contains(in.asked[asked:], "/api/v1/me") {
 		t.Errorf("choosing a notification sent %v and read %v", in.sent, in.asked[asked:])
+	}
+}
+
+// A dismissal reads GET /api/v1/me once, and the reads every half minute stay one chain: a dismissal
+// answered the half minute's own message, whose read asked for the next, so that each one started
+// a second chain reading /me every 30 seconds for as long as the console stayed open.
+func TestADismissalKeepsTheReadsOfMeOneChain(t *testing.T) {
+	in := &installation{runs: someRuns(), me: withNotices(recovery, widened, counter)}
+	m := opened(t, in, Options{}, 120, 30)
+	// The chain opening asked for is the one pending; each link asked for after it is counted.
+	links := 0
+	m.tick = func(_ time.Duration, then func(time.Time) tea.Msg) tea.Cmd {
+		if _, ok := then(now).(meAgain); ok {
+			links++
+		}
+		return nil
+	}
+	dismiss := func(m Model, down int) Model {
+		t.Helper()
+		m = press(t, typed(t, press(t, m, colon), "notif"), enter)
+		for range down {
+			m = press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+		}
+		asked := len(in.asked)
+		m = press(t, m, enter)
+		if read := slices.DeleteFunc(slices.Clone(in.asked[asked:]), func(p string) bool { return p != "/api/v1/me" }); len(read) != 1 {
+			t.Errorf("a dismissal read /me %d times", len(read))
+		}
+		return m
+	}
+	m = dismiss(m, 1)
+	if links != 0 {
+		t.Fatalf("a dismissal asked for %d more reads half a minute later, beside the chain's own", links)
+	}
+	m = readAgain(t, m, meAgain{})
+	m = dismiss(m, 2)
+	if links != 1 {
+		t.Errorf("the chain and a dismissal asked for %d reads half a minute later, where the chain asks for one", links)
 	}
 }
 
