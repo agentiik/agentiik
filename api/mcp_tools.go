@@ -235,8 +235,10 @@ func userTools() []routed {
 			description: "Declares a secret by the provider that keeps its value and the path it is read at there, or changes a declaration. It never takes a value: a builtin secret's value is written with the console, agk or the API, where the person writing it is the one holding it.",
 			input: object([]string{"namespace", "name", "provider"}, argNamespace,
 				`"name":{"type":"string","description":"The secret's name, as a workflow's secrets block names it."}`,
-				`"provider":{"type":"string","description":"The store the value is kept in, such as env, vault or aws-secrets-manager."}`,
-				`"path":{"type":"string","description":"Where the provider keeps the value."}`),
+				// The stores the route takes, by the identifiers it takes them by, and no other: a
+				// store a description makes up is one a model tries and is refused.
+				`"provider":{"type":"string","enum":["`+ProviderBuiltin+`","`+ProviderEnv+`","`+ProviderVault+`"],"description":"The store the value is kept in: builtin, the installation's encrypted store, which takes no path and whose value is written with the console, agk or the API; env, a variable of the API's own environment, for development, where the installation gives the namespace a prefix; or vault, refused until its provider arrives."}`,
+				`"path":{"type":"string","description":"Where the provider keeps the value: for env, a variable under the namespace's prefix. None for builtin, which keeps it under the namespace and the name."}`),
 			annotations: writes(), offered: holdsInNamespace(SecretWrite),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "PUT", "/api/v1/" + segment(str(a, "namespace")) + "/secrets/" + segment(str(a, "name")), nil, pick(a, "provider", "path")
