@@ -217,7 +217,6 @@
     border: var(--border-hairline) solid var(--line);
     border-radius: var(--radius-card);
     background: var(--surface);
-    box-shadow: 0 12px 32px -12px color-mix(in srgb, var(--text) 18%, transparent);
   }
 
   h1 {

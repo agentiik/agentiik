@@ -244,7 +244,6 @@
     border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-card);
     background: var(--surface);
-    box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
   }
 
   .palette:focus {

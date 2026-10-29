@@ -56,7 +56,6 @@
     border-left: 3px solid var(--succeeded);
     border-radius: var(--radius-card);
     background: var(--surface);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
     font-size: var(--type-control-size);
   }
 
