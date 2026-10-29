@@ -7,6 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/agentiik/agentiik/db"
 )
 
 // : opens the command palette over whatever is on screen: every command of the view and every view,
@@ -14,7 +16,8 @@ import (
 // identifier, matched as the filter matches. It opens on the five commands used last, and shows
 // each command's key beside it, so that a command found once is a keystroke the next time. A
 // command for what the principal does not hold is left out, as it is of the key line. Its
-// Notifications lists every notification GET /api/v1/me holds, and dismisses one.
+// Notifications lists every notification GET /api/v1/me holds, and dismisses one, but a recovery
+// code's, which nobody dismisses.
 
 // command is one line of the palette: what it is, the key that does it where one does, and what
 // choosing it does.
@@ -146,13 +149,15 @@ func (m Model) narrowed(filter string) (tea.Model, tea.Cmd) {
 	return m.showing(runsView)
 }
 
-// noticeCommands are the notifications, each dismissed when chosen.
+// noticeCommands are the notifications, each dismissed when chosen, but a recovery code's, which the
+// API keeps its 90 days whoever asks and which choosing only closes the palette on.
 func (m Model) noticeCommands() []command {
 	var out []command
 	for _, n := range m.me.Notifications {
 		id := n.ID
+		kept := db.Undismissed(n.Kind)
 		out = append(out, command{label: n.sentence(), kind: "notification", act: func(m Model) (tea.Model, tea.Cmd) {
-			if m.o.Send == nil {
+			if kept || m.o.Send == nil {
 				return m, nil
 			}
 			send, ctx := m.o.Send, m.ctx

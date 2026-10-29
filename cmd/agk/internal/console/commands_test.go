@@ -142,3 +142,20 @@ func TestThePaletteDismissesANotification(t *testing.T) {
 		t.Errorf("choosing a notification sent %v and read %v", in.sent, in.asked[asked:])
 	}
 }
+
+// A recovery code's notification is listed and dismissed by nobody, as the API keeps it its 90 days
+// whoever asks: choosing it closes the palette and sends nothing.
+func TestThePaletteDismissesNoRecoveryCodesNotification(t *testing.T) {
+	for _, kind := range []string{"recovery_code_issued", "recovery_code_used"} {
+		kept := notice{ID: "01M2AK7T9W1Y3A5C7E9G1J3K5N", Kind: kind, By: "carol", Credential: "bmV3UGFzc2tleQ"}
+		in := &installation{runs: someRuns(), me: withNotices(kept)}
+		m := press(t, typed(t, press(t, opened(t, in, Options{}, 120, 30), colon), "notif"), enter)
+		if lines := paletteLines(m); m.palette == nil || len(lines) < 2 || !strings.Contains(lines[1], "carol") {
+			t.Fatalf("Notifications does not list %s:\n%s", kind, screen(m))
+		}
+		m = press(t, m, enter)
+		if len(in.sent) != 0 || m.palette != nil {
+			t.Errorf("choosing %s sent %v, the palette open: %v", kind, in.sent, m.palette != nil)
+		}
+	}
+}

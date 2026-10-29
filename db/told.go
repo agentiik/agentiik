@@ -126,6 +126,12 @@ var ErrKeptNotification = errors.New("db: that notification is kept its 90 days,
 // and nothing the user reads would say that somebody else holds a way in to their account.
 var undismissed = []string{RecoveryCodeIssued, RecoveryCodeUsed}
 
+// Undismissed says whether a notification of kind is kept its NotificationKept whoever asks to
+// dismiss it, so that a client offers no dismissal the API refuses (undismissed).
+func Undismissed(kind string) bool {
+	return slices.Contains(undismissed, kind)
+}
+
 // Notification is one thing told to one principal.
 type Notification struct {
 	ID        string

@@ -21,12 +21,13 @@ import (
 
 // notice is a notification as GET /api/v1/me lists it.
 type notice struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	Act       string `json:"act"`
-	By        string `json:"by"`
-	Namespace string `json:"namespace"`
-	Login     string `json:"login"`
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Act        string `json:"act"`
+	By         string `json:"by"`
+	Namespace  string `json:"namespace"`
+	Login      string `json:"login"`
+	Credential string `json:"credential"`
 }
 
 // acts are what an administrator did that widened their own access, as the web console says them.
@@ -61,7 +62,8 @@ func (n notice) sentence() string {
 	case "recovery_code_issued":
 		return or(n.By, "An administrator") + " issued you a recovery code."
 	case "recovery_code_used":
-		return "A recovery code " + or(n.By, "an administrator") + " issued enrolled a new way in to your account."
+		return "A recovery code " + or(n.By, "an administrator") + " issued enrolled " + or(n.Credential, "a new sign-in method") +
+			" on your account. If that was not you, remove it from your sign-in methods and tell another administrator."
 	}
 	return n.Kind
 }
