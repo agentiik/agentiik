@@ -51,6 +51,7 @@ func (m Model) drawn(picks *[]pick) string {
 	switch {
 	case m.listing:
 		lines = m.keysListed(t)
+		lines = lines[min(m.listedPast, max(0, len(lines)-body)):]
 	case m.view == runView:
 		lines = m.panesLines(in, body)
 	case m.view == runnersView:
@@ -188,6 +189,9 @@ func (m Model) keyLine(t theme) string {
 		keys = [][2]string{{"y", "Replay from " + stepOf(m.run, m.step)}, {"any other key", "Keep it"}}
 	case m.listing:
 		keys = [][2]string{{"esc", "Close"}, {"q", "Quit"}}
+		if m.listedOver() > 0 {
+			keys = append([][2]string{{"↑↓", "Scroll"}}, keys...)
+		}
 	case m.filtering && m.view == runsView:
 		keys = [][2]string{{"type", "Filter"}, {"↑↓", "Move"}, {"enter", "Keep"}, {"esc", "Clear"}}
 	case m.view == runView:
@@ -242,15 +246,28 @@ func (m Model) keyLine(t theme) string {
 		}
 		keys = append(keys, [2]string{"q", "Quit"}, [2]string{"?", "Every key"})
 	}
-	var parts []part
-	for i, k := range keys {
-		if i > 0 {
-			parts = append(parts, part{plain, "   "})
+	named := func(keys [][2]string) []part {
+		var parts []part
+		for i, k := range keys {
+			if i > 0 {
+				parts = append(parts, part{plain, "   "})
+			}
+			parts = append(parts, part{strong, k[0]}, part{muted, " " + k[1]})
 		}
-		parts = append(parts, part{strong, k[0]}, part{muted, " " + k[1]})
+		return parts
 	}
-	return t.line(false, m.width, within(parts, m.width)...)
+	// ? lists every key of the view, so it is the key the line keeps where the window is too
+	// narrow for all of them: those before it are left out from the last, each whole, and stay a
+	// keystroke away in the list.
+	for len(keys) > 1 && keys[len(keys)-1][0] == "?" && widthOf(named(keys)) > m.width {
+		keys = slices.Delete(keys, len(keys)-2, len(keys)-1)
+	}
+	return t.line(false, m.width, within(named(keys), m.width)...)
 }
+
+// listedOver is how many rows of the list of keys the window is too short for, which the arrows
+// scroll past.
+func (m Model) listedOver() int { return max(0, len(m.keysListed(m.theme()))-(m.height-2)) }
 
 // keysListed is every key of the view, which ? opens over it.
 func (m Model) keysListed(t theme) []string {

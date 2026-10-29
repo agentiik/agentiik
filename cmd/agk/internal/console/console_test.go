@@ -386,6 +386,47 @@ func TestQuestionMarkListsEveryKey(t *testing.T) {
 	}
 }
 
+// At 80 by 24 a run's list of keys is longer than the window, and the arrows scroll it, which the
+// key line says, from its first row to its last and no further; ? opens it again at its start.
+func TestTheListOfKeysScrollsInAShortWindow(t *testing.T) {
+	in := &installation{me: mayRunIn()}
+	in.run = aFailedRun()
+	in.run.State = agk.Running
+	m := press(t, opened(t, in, Options{Run: failedRun}, 80, 24), help)
+	if s := screen(m); !strings.Contains(s, "Every key of this view") || strings.Contains(s, "Cancel the run") || lastLine(m) != "↑↓ Scroll   esc Close   q Quit" {
+		t.Fatalf("the list of keys at 80 by 24 opens on:\n%s", s)
+	}
+	for range 40 {
+		m = press(t, m, down)
+	}
+	s := screen(m)
+	if !strings.Contains(s, "Cancel the run, once a prompt naming it is answered y") || !strings.Contains(s, "mouse") || strings.Contains(s, "Every key of this view") {
+		t.Errorf("↓ does not scroll the list of keys to its end:\n%s", s)
+	}
+	if lines := strings.Split(s, "\n"); !strings.Contains(lines[len(lines)-2], "as the terminal does") {
+		t.Errorf("↓ scrolls the list of keys past its last row:\n%s", s)
+	}
+	m = press(t, m, up, help, help)
+	if !strings.Contains(screen(m), "Every key of this view") {
+		t.Errorf("? does not open the list of keys again at its start:\n%s", screen(m))
+	}
+}
+
+// Where the window is too narrow for every key of the view, the key line leaves out those before ?,
+// from the last, each whole, and keeps ?, which lists them all.
+func TestTheKeyLineKeepsTheKeyThatListsEveryKey(t *testing.T) {
+	in := &installation{me: mayRunIn()}
+	in.run = aFailedRun()
+	in.run.State = agk.Running
+	m := opened(t, in, Options{Run: failedRun}, 80, 24)
+	if last := lastLine(m); last != "tab Next pane   ↑↓ Step   [] Port   g Graph   c Cancel run   ? Every key" {
+		t.Errorf("the run view's key line at 80 columns is %q", last)
+	}
+	if last := lastLine(press(t, opened(t, in, Options{Run: failedRun}, 120, 24), keyC)); last != "y Cancel run   any other key Keep it" {
+		t.Errorf("a prompt's key line is %q", last)
+	}
+}
+
 // inside is a line of a pane without its frame.
 func inside(line string) string {
 	line = strings.TrimPrefix(line, "│ ")

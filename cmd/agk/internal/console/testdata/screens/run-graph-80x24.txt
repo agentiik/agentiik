@@ -21,4 +21,4 @@ ucceeded  1s  │┄rejected 0┄╮   ┃ failed  1m 50s ┃─error 3─╮╭
 
 
 
-↑↓ Step   ←→ Along an edge   enter Inspect   g List   esc Run   q Quit   ? Ever…
+↑↓ Step   ←→ Along an edge   enter Inspect   g List   esc Run   ? Every key

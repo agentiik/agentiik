@@ -21,4 +21,4 @@ inputs     customers, orders  -> normalize
 
 
 
-↑↓ Step   ←→ Along an edge   enter Inspect   g Drawing   esc Run   q Quit   ? E…
+↑↓ Step   ←→ Along an edge   enter Inspect   g Drawing   esc Run   ? Every key
