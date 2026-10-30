@@ -4,9 +4,9 @@ Each file is copied as its repository publishes it and never edited here. A new 
 
 | File | From | At |
 | --- | --- | --- |
-| `openapi.json`, `wire.schema.json` | `agentiik/schemas`, the document the console's client is generated from and the schema its records refer to, taken from its branch `mcp-pins-and-bulk`, which describes `resolve` on the images route, since v0.7.3 is not tagged there yet | `d582b58` |
-| `envelope.schema.json` | `agentiik/schemas`, the schema the envelopes the console reads refer to, taken from the same commit | `d582b58` |
-| `workflow.schema.json` | `agentiik/schemas`, the schema a workflow file is held to, which the console checks `agentiik.yaml` against before anything is sent (`src/lib/workflow-check.ts`), taken from the same commit | `d582b58` |
+| `openapi.json`, `wire.schema.json` | `agentiik/schemas`, the document the console's client is generated from and the schema its records refer to, taken from its main branch, which describes a task's `taken_at` and `resolve` on the images route, since v0.7.3 is not tagged there yet | `8634e6f` |
+| `envelope.schema.json` | `agentiik/schemas`, the schema the envelopes the console reads refer to, taken from the same commit | `8634e6f` |
+| `workflow.schema.json` | `agentiik/schemas`, the schema a workflow file is held to, which the console checks `agentiik.yaml` against before anything is sent (`src/lib/workflow-check.ts`), taken from the same commit | `8634e6f` |
 | `tokens.css` | `agentiik/design`, the tokens `tools/build.py` generates from `tokens.json` | `v0.7.0` |
 | `tokens.json` | `agentiik/design`, the token file itself, which `agk console`'s palette is generated from (`cmd/agk/internal/console/palette.go`), so that the terminal and the browser are drawn from one copy at one version | `v0.7.0` |
 | `icons/` | `agentiik/design`, the icon set and its index | `v0.7.0` |
