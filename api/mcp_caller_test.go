@@ -134,6 +134,9 @@ func least(schema map[string]any) any {
 		return 1
 	case "boolean":
 		return false
+	case "array":
+		items, _ := schema["items"].(map[string]any)
+		return []any{least(items)}
 	case "object":
 		out := map[string]any{}
 		if n, _ := schema["minProperties"].(float64); n > 0 {

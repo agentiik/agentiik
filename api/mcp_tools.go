@@ -53,6 +53,10 @@ type routed struct {
 	// read, where set, reads the route's answer itself rather than answering it as it came, with
 	// the arguments of the call, and more for what else it has to ask of the API.
 	read func(args map[string]any, a *toolAnswer, more requester) (*mcp.CallResult, error)
+
+	// each, where set, is the argument a call may list many items under in place of one, each
+	// item made as its own request of the route (mcp_bulk.go).
+	each *bulk
 }
 
 // requester makes one more request of the API for a tool, as its first was made: as the caller,
@@ -314,6 +318,18 @@ func userTools() []routed {
 			},
 		},
 		{
+			name: "workflow_pin", title: "Pin image tags",
+			description: "Pins each image a step names by a tag to the digest its registry serves under the tag now, an index's for an image of several architectures, as agk push pins it, so that workflow_validate and workflow_commit no longer refuse the tag as image-not-pinned; every run of the next version runs those bytes, whatever the tag names later. The installation asks the registry itself, over HTTPS, with no credentials, as a runner pulls, and only a registry on the public internet: an image a runner could not pull is refused, saying why, and nothing is pinned. Answers each tag with the name@sha256 it is pinned to. It records no brick's manifest, which manifest-missing asks for: that is read out of the image itself, by agk push.",
+			input: object([]string{"namespace", "workflow", "images"}, argNamespace, argWorkflow,
+				`"images":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1},"description":"The images to pin, each as a step writes it, by a tag, or by none and so latest: python:3.13-alpine, ghcr.io/acme/agk-fetch-orders:1.2.0."}`),
+			annotations: &mcp.Annotations{ReadOnlyHint: mcp.Hint(false), DestructiveHint: mcp.Hint(false), IdempotentHint: mcp.Hint(false), OpenWorldHint: mcp.Hint(true)},
+			offered:     holds(WorkflowWrite),
+			request: func(a map[string]any) (string, string, url.Values, any) {
+				return "POST", workflowPath(a) + "/images", nil, map[string]any{"resolve": a["images"]}
+			},
+			read: pinnedTags,
+		},
+		{
 			name: "workflow_delete", title: "Delete a workflow",
 			description: "Deletes a workflow with its runs: its runs still going are cancelled and the data of every run expires at once.",
 			input:       object([]string{"namespace", "workflow"}, argNamespace, argWorkflow), annotations: removes(), offered: holds(WorkflowDelete),
@@ -323,15 +339,17 @@ func userTools() []routed {
 		},
 		{
 			name: "workflow_run", title: "Run a workflow",
-			description: "Starts a run of a workflow, at the head of its default branch, of the branch or tag ref names, or of a commit that is a version, with the inputs given, each held to its schema before the run exists. Follow it with run_get.",
+			description: "Starts a run of a workflow, at the head of its default branch, of the branch or tag ref names, or of a commit that is a version, with the inputs given, each held to its schema before the run exists. inputs_each starts one run per entry instead, up to 100, all at the same ref, each asked, refused, counted against the namespace's quota and audited as a call of its own would be, and answers each run or refusal in order; a quota reached stops the starts there, saying how many were not attempted. Follow a run with run_get.",
 			input: object([]string{"namespace", "workflow"}, argNamespace, argWorkflow,
 				`"ref":{"type":"string","description":"A branch or a tag, the default branch where left out."}`,
 				`"commit":{"type":"string","description":"A commit that is a version, in place of ref."}`,
-				`"inputs":{"type":"object","description":"The run's inputs, by the names the workflow declares."}`),
+				`"inputs":{"type":"object","description":"The run's inputs, by the names the workflow declares."}`,
+				`"inputs_each":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"object"},"description":"In place of inputs: one run per entry, each entry a run's inputs, up to 100 runs."}`),
 			annotations: writes(), offered: holds(WorkflowRun),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "POST", "/api/v1/" + segment(str(a, "namespace")) + "/workflows/" + segment(str(a, "workflow")) + "/runs", nil, pick(a, "ref", "commit", "inputs")
 			},
+			each: &bulk{list: "inputs_each", one: "inputs"},
 		},
 		{
 			name: "run_list", title: "List runs",
@@ -398,11 +416,14 @@ func userTools() []routed {
 		},
 		{
 			name: "run_cancel", title: "Cancel a run",
-			description: "Asks for a run in flight to be cancelled, which the controller carries out: its steps under way end cancelled and those not reached pending.",
-			input:       object([]string{"run"}, argRun), annotations: writes(), offered: holds(WorkflowRun),
+			description: "Asks for a run in flight to be cancelled, which the controller carries out: its steps under way end cancelled and those not reached pending. Give run, or runs to cancel up to 100 at once, each asked, refused and audited as a call of its own would be, and answered in order.",
+			input: object(nil, argRun,
+				`"runs":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string","minLength":1},"description":"In place of run: the identifiers of up to 100 runs, as run_list answers them."}`),
+			annotations: writes(), offered: holds(WorkflowRun),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "POST", "/api/v1/runs/" + segment(str(a, "run")) + "/cancel", nil, map[string]any{}
 			},
+			each: &bulk{list: "runs", one: "run", required: true, echo: true},
 		},
 		{
 			name: "run_replay", title: "Replay a run",
@@ -566,6 +587,15 @@ func (m *MCP) tool(r *http.Request, t routed) mcp.Tool {
 			args, err := argumentsOf(t, arguments)
 			if err != nil {
 				return nil, err
+			}
+			if t.each != nil {
+				items, many, err := t.each.items(t.name, args)
+				if err != nil {
+					return nil, err
+				}
+				if many {
+					return m.inBulk(r, t, args, items)
+				}
 			}
 			method, path, query, body := t.request(args)
 			if t.name == "run_logs" {
