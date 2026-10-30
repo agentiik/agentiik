@@ -355,7 +355,7 @@ func userTools() []routed {
 		},
 		{
 			name: "run_get", title: "Get a run",
-			description: "A run's state and each step's verdict, with its reason where the verdict alone does not say why, a step refused before any task started among them, what started it and the principal it is attributed to; its inputs only to whoever holds run:read_data.",
+			description: "A run's state and each step's verdict, with its reason where the verdict alone does not say why, a step refused before any task started among them, each task's state with taken_at once a runner took it, a dispatched task without it waiting on its pool's queue for a free slot, what started it and the principal it is attributed to; its inputs only to whoever holds run:read_data.",
 			input:       object([]string{"run"}, argRun), annotations: reads(), offered: holds(RunRead),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "GET", "/api/v1/runs/" + segment(str(a, "run")), nil, nil

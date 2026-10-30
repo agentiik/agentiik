@@ -350,6 +350,10 @@ func (m Model) stepLines(step string, now time.Time, width int) (lines [][]part,
 			where = "none, a cache hit of " + string(t.MemoisedFrom)
 		case t.Called != "":
 			where = "none, it called " + string(t.Called)
+		case t.Runner == "" && t.State == agk.TaskDispatched:
+			// On its pool's queue until a runner with a free slot takes it, as the browser's
+			// inspector says it: the state alone read as a task stuck.
+			where = "queued for a slot"
 		case t.Runner == "":
 			where = "not held yet"
 		case m.runners != nil:

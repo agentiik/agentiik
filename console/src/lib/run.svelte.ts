@@ -52,6 +52,13 @@ export function tasksOf(run: RunDetail, step: string): TaskSummary[] {
     .sort((a, b) => b.attempt - a.attempt || (a.shard?.index ?? 0) - (b.shard?.index ?? 0));
 }
 
+// queued says whether a task waits on its pool's queue for a runner with a free slot: dispatched,
+// and taken by no runner yet. A runner takes no more tasks than it has slots, so a task queued is
+// the installation's runners being busy, which a dispatched state alone read as a task stuck.
+export function queued(t: TaskSummary): boolean {
+  return t.state === "dispatched" && !t.runner && !t.taken_at;
+}
+
 // lastAttempt is each shard's latest task of a step: what the step's strip of cells shows.
 export function lastAttempt(run: RunDetail, step: string): TaskSummary[] {
   const byShard = new Map<number, TaskSummary>();
