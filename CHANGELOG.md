@@ -10,11 +10,15 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Validation refuses a value fed to an input port that the file shows is no batch, as `step-input-not-a-batch`: a number, a boolean or text written as it is, a list holding one, and a workflow input fed whole whose schema declares a scalar type, which every run refused to the step before any container started. The refusal says to write it under a key of an object, `count: { value: "${{ workflow.inputs.count }}" }`, and the run's own refusal names the value as the file does, `a number` rather than `a something the language does not write` (#934).
 - Every tool of the user's server is named with an underscore, `run_list` where it was `run.list`: the protocol allows a dot and the Anthropic Messages API does not, so a Claude client called `run_list` and was answered `Unknown tool`. The instructions, the descriptions, the errors, the language reference `workflow_language` answers and the audit log's `tool` name them so. A call by the dotted name is still answered as the tool, unlisted, until v0.8.0 removes it, since a client keeps the names it was listed (#932).
 - The fixture corpus, the language reference and the schema parts are agentiik/schemas at `b67b555`, which describes a step's `reason`, says what a port takes, pins `step-input-not-a-batch` and names the user's server's tools with an underscore where a description cites one; the console's `openapi.json`, `wire.schema.json`, `workflow.schema.json`, `envelope.schema.json` and corpus are copied from it, and `schema.d.ts` regenerated.
+- A script step's container reads its run in `/agk/run.json` on a server as it does locally: `trigger_kind`, `triggered_by` and `started_at` arrive with the grant's redemption and `state` is `running`, where a runner wrote `queued`, `manual`, nobody and the year one; what the driver is not told is left out rather than written as a zero (#935).
+- `agk` is on a script step's `PATH`, after the image's own commands, wherever the runner binds the helper, so `agk items | jq` runs as the documentation writes it (#936).
+- A script step whose image names no account, or root, runs as `65532:65532`; an image naming another account keeps it (#937).
 
 ### Upgrading
 
 - Migration 0077 adds `steps.reason` and fills it in from the document of every run that has one, so that a run that failed before the upgrade says why after it.
 - A version stored before this release that feeds a port a scalar keeps rebuilding and running, its step failing as it did; a push of it, or `workflow_validate`, is refused.
+- Upgrade a runner with its API, as every component of a release is: a runner of v0.7.1 reads a redemption strictly and refuses one answering `run`, reporting its task as run in no container. A runner of this release takes a v0.7.1 API's answer, and tells the container only what the task names of its run.
 
 ## v0.7.1, 2026-10-30
 

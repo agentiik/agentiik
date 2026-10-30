@@ -5,11 +5,11 @@ Shell commands run inside image instead of treating it as a brick, under the sam
 ## Keywords
 
 - `/steps/*/script`, `/.*/script`: Shell commands run inside image instead of treating it as a brick, under the same contract every brick honours: the same mounts, the same environment, the same isolation, the same meaning for the exit code. No manifest is read, so nothing about the ports is inferred and outputs has to be declared. A script that writes nothing and exits 0 publishes one item on out carrying its standard output and whatever it left in /agk/out/files/, which is what makes a two-line script worth writing.
-- `/steps/*/before_script`, `/.*/before_script`: What this step runs before its script, usually the one tool the image does not carry.
+- `/steps/*/before_script`, `/.*/before_script`: What this step runs before its script, usually preparation every script step of the workflow shares, written once in defaults or a hidden block.
 - `/steps/*/after_script`, `/.*/after_script`: What this step runs after its script, whether the script worked or not.
 - `/steps/*/shell`, `/.*/shell`: The interpreter this step's commands are handed to, and the flags it starts with.
 - `/defaults/before_script`, `/defaults/after_script`, `/steps/*/script`, `/steps/*/before_script`, `/steps/*/after_script`, `/.*/script`, `/.*/before_script`, `/.*/after_script`: A list of shell commands, run in order inside the container. The first one to exit non-zero ends the step with that code, which the exit code table then reads as an application, transient or infrastructure failure.
-- `/defaults/before_script`, `/steps/*/before_script`, `/.*/before_script`: Commands prepended to script, merged from defaults and from extends outwards in. They run in the same container, which is where a step installs the one tool it needs before doing its work.
+- `/defaults/before_script`, `/steps/*/before_script`, `/.*/before_script`: Commands prepended to script, merged from defaults and from extends outwards in. They run in the same container and the same shell, so a variable they export or a directory they make under /tmp is there when script runs. They install nothing: the root filesystem is read-only, /tmp is mounted noexec, the commands run as an account that is never root and a step has no network unless it asks for one, so a tool a step needs is one its image carries.
 - `/defaults/after_script`, `/steps/*/after_script`, `/.*/after_script`: Commands appended to script, run in the same container even when script failed, so that a diagnostic dump survives a failure. Their own exit code does not change the step's verdict.
 - `/defaults/shell`, `/steps/*/shell`, `/.*/shell`: The interpreter the commands are handed to, and the flags it starts with. It defaults to ["/bin/sh", "-e"], so the first command that fails ends the step rather than letting the rest run on a broken assumption.
 
@@ -94,7 +94,7 @@ steps:
 steps:
   normalize:
     before_script:
-    - apk add --no-cache jq curl
+    - mkdir -p /tmp/work
 ```
 
 `/steps/*/after_script`:
@@ -127,7 +127,7 @@ steps:
 `workflow.schema.json#/$defs/beforeScript`:
 
 ```yaml
-- apk add --no-cache jq curl
+- export HOME=/tmp
 ```
 
 `workflow.schema.json#/$defs/afterScript`:

@@ -148,8 +148,8 @@ func TestAManifestDeclaringARootUserIsRefusedBeforeAnyContainerRuns(t *testing.T
 	}
 }
 
-// The three spellings the rule refuses, and the one it does not. "The group half is not
-// read, so nonroot:0 is accepted."
+// The spellings of root the rule refuses, which are brick.schema.json's, and the ones it does
+// not. "The group half is not read, so nonroot:0 is accepted."
 func TestTheAccountsTheNonRootRuleRefuses(t *testing.T) {
 	for _, c := range []struct {
 		user    string
@@ -159,7 +159,10 @@ func TestTheAccountsTheNonRootRuleRefuses(t *testing.T) {
 		{user: "0", refused: true},
 		{user: "0:0", refused: true},
 		{user: "root:root", refused: true},
+		{user: "00", refused: true},
+		{user: "0:1000", refused: true},
 		{user: "nonroot:0", refused: false},
+		{user: "10", refused: false},
 		{user: "65532:65532", refused: false},
 		{user: "nonroot", refused: false},
 		{user: "", refused: false},
@@ -195,6 +198,73 @@ func TestAnImageCarryingNoManifestIsABaseImage(t *testing.T) {
 	}
 	if _, _, none, known := cache.lookup(imageDigest); !known || !none {
 		t.Error("an image known to carry no manifest was not remembered as one")
+	}
+}
+
+// A script step runs in a base image, which names root or nobody as often as not, and it runs as
+// 65532:65532 then, for the reason a brick manifest may not declare root: a read-only root
+// filesystem and dropped capabilities are worth little to uid 0. An image that names another
+// account keeps it, and so does a step that is not a script, whose account its manifest decides.
+func TestAScriptStepNeverRunsAsRoot(t *testing.T) {
+	for _, c := range []struct {
+		image  string
+		script bool
+		want   string
+	}{
+		{image: "", script: true, want: "65532:65532"},
+		{image: "root", script: true, want: "65532:65532"},
+		{image: "0", script: true, want: "65532:65532"},
+		{image: "0:0", script: true, want: "65532:65532"},
+		{image: "root:root", script: true, want: "65532:65532"},
+		{image: "0:1000", script: true, want: "65532:65532"},
+		{image: "root:staff", script: true, want: "65532:65532"},
+		{image: "nonroot", script: true, want: "nonroot"},
+		{image: "1000:1000", script: true, want: "1000:1000"},
+		{image: "nobody:0", script: true, want: "nobody:0"},
+		{image: "", script: false, want: ""},
+		{image: "root", script: false, want: "root"},
+	} {
+		ref := "docker.io/library/python@" + imageDigest
+		cli, _ := withDaemon(t, dockertest.With(dockertest.Options{
+			Images: map[string]dockertest.Image{ref: {Digest: imageDigest, Config: docker.ImageConfig{User: c.image}}},
+		}))
+		task := imageTask(ref)
+		if c.script {
+			task.Script = []string{"id"}
+		}
+		cache := newManifests()
+		// Twice: the second answer comes from the cache, which knows the image carries no
+		// manifest and must settle the account the same way.
+		for range 2 {
+			got, err := resolveImage(t.Context(), cli, cache, task, "", nil)
+			if err != nil {
+				t.Fatalf("image user %q: %s", c.image, err)
+			}
+			if got.User != c.want {
+				t.Errorf("image user %q, script %v: runs as %q, want %q", c.image, c.script, got.User, c.want)
+			}
+		}
+	}
+}
+
+// A script step in a brick image runs as the account its manifest declares, which the rule
+// already holds to non-root, and not as 65532:65532.
+func TestAScriptInABrickImageRunsAsItsManifestSays(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	cli, _ := withDaemon(t, dockertest.With(dockertest.Options{
+		Images: map[string]dockertest.Image{ref: {
+			Digest: imageDigest, Config: docker.ImageConfig{User: "root"},
+			Manifest: []byte(strings.Replace(goodManifest, "65532:65532", "1000:1000", 1)),
+		}},
+	}))
+	task := imageTask(ref)
+	task.Script = []string{"id"}
+	got, err := resolveImage(t.Context(), cli, newManifests(), task, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.User != "1000:1000" {
+		t.Errorf("runs as %q, want the manifest's 1000:1000", got.User)
 	}
 }
 
@@ -371,6 +441,20 @@ func TestABrickWithNoManifestIsRefusedOnAServer(t *testing.T) {
 	script.Script = []string{"true"}
 	if _, err := r.Run(t.Context(), script); err != nil {
 		t.Errorf("a script step was refused the base image it runs in: %s", err)
+	}
+	// It runs in that image, which names root, as an account that is not root.
+	created := 0
+	for _, c := range r.daemon.Created() {
+		if c.Labels[LabelTask] != string(script.ID) {
+			continue
+		}
+		created++
+		if c.Config.User != scriptUser {
+			t.Errorf("the script step's container was created as %q, in an image naming root, and a script runs as %s there", c.Config.User, scriptUser)
+		}
+	}
+	if created != 1 {
+		t.Errorf("%d containers were created for the script step", created)
 	}
 
 	r.cfg.Policy.RequireDigest = DigestLifted

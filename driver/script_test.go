@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -37,7 +38,7 @@ func scriptTask(before, script, after []string) graph.Task {
 // is the invocation itself rather than a transcription of it.
 func runProgram(t *testing.T, task graph.Task, policy []string) (code int, stdout, stderr string) {
 	t.Helper()
-	entrypoint, cmd := scriptCommand(task, policy)
+	entrypoint, cmd := scriptCommand(task, policy, false)
 	if len(entrypoint) == 0 {
 		t.Fatal("the step is a script and it composed no command")
 	}
@@ -64,7 +65,7 @@ func runProgram(t *testing.T, task graph.Task, policy []string) (code int, stdou
 }
 
 func TestAStepThatNamesNoShellGetsTheDefault(t *testing.T) {
-	entrypoint, cmd := scriptCommand(scriptTask(nil, []string{"true"}, nil), nil)
+	entrypoint, cmd := scriptCommand(scriptTask(nil, []string{"true"}, nil), nil, false)
 	if !slices.Equal(entrypoint, DefaultShell) {
 		t.Errorf("entry point: got %v, want %v", entrypoint, DefaultShell)
 	}
@@ -78,14 +79,14 @@ func TestTheStepsOwnShellWinsOverThePolicysAndThePolicysOverTheDefault(t *testin
 	task.Shell = []string{"/bin/sh", "-eu", "-o", "pipefail"}
 	policy := []string{"/bin/bash", "-e"}
 
-	entrypoint, _ := scriptCommand(task, policy)
+	entrypoint, _ := scriptCommand(task, policy, false)
 	want := []string{"/bin/sh", "-eu", "-o", "pipefail", "-c"}
 	if !slices.Equal(entrypoint, want) {
 		t.Errorf("entry point: got %v, want the step's own shell with the flag that takes a program, %v", entrypoint, want)
 	}
 
 	task.Shell = nil
-	entrypoint, _ = scriptCommand(task, policy)
+	entrypoint, _ = scriptCommand(task, policy, false)
 	if want := []string{"/bin/bash", "-e", "-c"}; !slices.Equal(entrypoint, want) {
 		t.Errorf("entry point: got %v, want the policy's shell, %v", entrypoint, want)
 	}
@@ -95,7 +96,7 @@ func TestAShellThatAlreadyTakesAProgramIsNotGivenTheFlagTwice(t *testing.T) {
 	task := scriptTask(nil, []string{"true"}, nil)
 	task.Shell = []string{"/bin/sh", "-c"}
 
-	entrypoint, _ := scriptCommand(task, nil)
+	entrypoint, _ := scriptCommand(task, nil, false)
 	if want := []string{"/bin/sh", "-c"}; !slices.Equal(entrypoint, want) {
 		t.Errorf("entry point: got %v, want %v", entrypoint, want)
 	}
@@ -104,7 +105,7 @@ func TestAShellThatAlreadyTakesAProgramIsNotGivenTheFlagTwice(t *testing.T) {
 func TestResolvingTheShellDoesNotWriteIntoTheDefault(t *testing.T) {
 	before := slices.Clone(DefaultShell)
 	for range 2 {
-		scriptCommand(scriptTask(nil, []string{"true"}, nil), nil)
+		scriptCommand(scriptTask(nil, []string{"true"}, nil), nil, false)
 	}
 	if !slices.Equal(DefaultShell, before) {
 		t.Errorf("DefaultShell: got %v, want %v", DefaultShell, before)
@@ -113,7 +114,7 @@ func TestResolvingTheShellDoesNotWriteIntoTheDefault(t *testing.T) {
 
 func TestABrickStepComposesNoCommand(t *testing.T) {
 	task := graph.Task{Step: "normalize", Image: "ghcr.io/acme/agk-normalize@sha256:9f2c1db7e0"}
-	entrypoint, cmd := scriptCommand(task, nil)
+	entrypoint, cmd := scriptCommand(task, nil, false)
 	if entrypoint != nil || cmd != nil {
 		t.Errorf("got %v %v, want nothing: what runs in a brick is the entry point its image declares", entrypoint, cmd)
 	}
@@ -221,7 +222,7 @@ func TestAfterScriptRunsWhenBeforeScriptFailed(t *testing.T) {
 
 func TestAStepWithNoAfterScriptIsJustItsCommands(t *testing.T) {
 	task := scriptTask([]string{"printf b"}, []string{"printf s"}, nil)
-	_, cmd := scriptCommand(task, nil)
+	_, cmd := scriptCommand(task, nil, false)
 	if strings.Contains(cmd[0], afterFunc) {
 		t.Errorf("program: got %q, want no handler where there is nothing to run whatever happened", cmd[0])
 	}
@@ -229,6 +230,71 @@ func TestAStepWithNoAfterScriptIsJustItsCommands(t *testing.T) {
 	code, stdout, _ := runProgram(t, task, nil)
 	if code != 0 || stdout != "bs" {
 		t.Errorf("got exit %d and %q, want 0 and \"bs\"", code, stdout)
+	}
+}
+
+// runWithEnv runs the program composed for a task, with or without the helper bound, under the
+// default shell and exactly the environment given, which is the image's as the daemon hands it
+// over.
+func runWithEnv(t *testing.T, task graph.Task, helper bool, env []string) (code int, stdout string) {
+	t.Helper()
+	entrypoint, cmd := scriptCommand(task, nil, helper)
+	if _, err := os.Stat(entrypoint[0]); err != nil {
+		t.Skipf("no %s on this machine to run the program with", entrypoint[0])
+	}
+	c := exec.CommandContext(t.Context(), entrypoint[0], append(entrypoint[1:], cmd...)...)
+	c.Env = env
+	var out strings.Builder
+	c.Stdout = &out
+	err := c.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &exit):
+		code = exit.ExitCode()
+	default:
+		t.Fatalf("running the program: %v", err)
+	}
+	return code, out.String()
+}
+
+// The documentation writes agk items | jq in a script, so where the helper is bound its
+// directory is on the search path, after the image's own, which the program keeps: the
+// container's environment names no PATH, and the image's is the one the shell starts with.
+// after_script runs from a trap, after the search path was set, and finds it too.
+func TestAScriptFindsTheHelperAfterTheImagesOwnCommands(t *testing.T) {
+	task := scriptTask(nil, []string{`printf '%s\n' "$PATH"`}, []string{`printf '%s' "$PATH"`})
+	code, stdout := runWithEnv(t, task, true, []string{"PATH=/usr/local/bin:/usr/bin:/bin"})
+	want := "/usr/local/bin:/usr/bin:/bin:/agk/bin"
+	if code != 0 || stdout != want+"\n"+want {
+		t.Errorf("got exit %d and %q, want the image's search path and then %s, in script and in after_script", code, stdout, path.Dir(BinPath))
+	}
+
+	_, cmd := scriptCommand(task, nil, true)
+	if first, _, _ := strings.Cut(cmd[0], "\n"); first != helperOnPath {
+		t.Errorf("the program starts %q, want the search path set before anything of the author's runs", first)
+	}
+}
+
+// An image that sets no PATH is still a script step that runs, under a shell started with -u,
+// which the documentation's example names: the line reads PATH without expanding it unset.
+// Some shells give themselves a search path when the environment names none, and the helper's
+// directory goes after it there too.
+func TestTheHelperLineSurvivesAnImageWithNoPath(t *testing.T) {
+	task := scriptTask(nil, []string{`printf '%s' "$PATH"`}, nil)
+	task.Shell = []string{"/bin/sh", "-eu"}
+	code, stdout := runWithEnv(t, task, true, []string{})
+	if code != 0 || (stdout != path.Dir(BinPath) && !strings.HasSuffix(stdout, ":"+path.Dir(BinPath))) {
+		t.Errorf("got exit %d and %q, want 0 and a search path ending in %s", code, stdout, path.Dir(BinPath))
+	}
+}
+
+// Where no helper is bound the program says nothing about the search path: a directory
+// that is not there is not put on it.
+func TestNoHelperLeavesTheSearchPathAlone(t *testing.T) {
+	_, cmd := scriptCommand(scriptTask(nil, []string{"true"}, nil), nil, false)
+	if strings.Contains(cmd[0], "PATH") {
+		t.Errorf("program: got %q, want nothing about PATH where no helper is bound", cmd[0])
 	}
 }
 

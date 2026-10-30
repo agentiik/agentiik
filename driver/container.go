@@ -71,9 +71,10 @@ func containerConfig(t graph.Task, image, user string, env, entrypoint, cmd []st
 		Entrypoint: entrypoint,
 		Cmd:        cmd,
 		Env:        env,
-		// The account is the image's, required by the manifest and checked at
-		// publication. It is passed rather than assumed, so that a manifest
-		// declaring root is refused where manifests are read and not here.
+		// The account is the manifest's, required by it and checked at
+		// publication, or for a script step the image's unless that is root or
+		// nothing (baseImageAccount). It is passed rather than assumed, so that a
+		// manifest declaring root is refused where manifests are read and not here.
 		User:   user,
 		Labels: labels(t),
 

@@ -27,7 +27,8 @@ import (
 // it would have needed a value. The runner is the other end: it redeems the grant, fetches what
 // the redemption names and puts the task back together, so that driver.Run is handed the same
 // graph.Task on a server that agk run --local hands it on a laptop. What only a server has, the
-// task's own store, secret values and tree, travels beside it as driver.Sources.
+// task's own store, secret values and tree, and the head of its run, travels beside it as
+// driver.Sources.
 
 // ErrNotAsNamed is something fetched for a task that is not what the task message and its
 // redemption name: an input envelope that does not hash to its digest or does not hold the items
@@ -327,6 +328,14 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 		return nil, fmt.Errorf("runner: task %s: %w", t.ID, err)
 	}
 	sources := driver.Sources{Store: store, Secrets: secrets, Repo: dir}
+	if r.Run != nil {
+		// answers read the head at the top of this function and refused one that does not
+		// read, so it reads. The rest of the run is the task's own, named by the key TaskOf
+		// held the message to.
+		head, _ := r.Run.head()
+		head.ID, head.Workflow, head.Namespace, head.Commit = t.Run, t.Workflow, t.Namespace, t.Commit
+		sources.Run = head
+	}
 	if len(relocated) > 0 {
 		apart, err := newTreeDir(o.WorkRoot, t.ID)
 		if err != nil {

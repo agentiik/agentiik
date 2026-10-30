@@ -53,7 +53,7 @@ func prepared(t *testing.T, task graph.Task, secrets Secrets, repo string) (*giv
 	}
 	t.Cleanup(func() { w.remove() })
 
-	run := agk.Run{ID: "01JMZ8V1P9C4", Workflow: "finance/monthly-invoicing@a3f9c1e", Namespace: "finance", Commit: "a3f9c1e"}
+	run := contextOf(agk.Run{ID: "01JMZ8V1P9C4", Workflow: "finance/monthly-invoicing@a3f9c1e", Namespace: "finance", Commit: "a3f9c1e"})
 	g, err := prepare(context.Background(), task, w, laptop(), store, run, repo, secrets)
 	if err != nil {
 		t.Fatalf("prepare: %s", err)
@@ -273,7 +273,7 @@ func TestARunnersTreeIsBoundWithTheRelocationsItWasHanded(t *testing.T) {
 	}
 	t.Cleanup(func() { w.remove() })
 	ctx := WithSources(context.Background(), Sources{Store: store, Repo: laid, Bound: []Bound{{Source: apart, Target: "/etc/ssl/certs/internal-ca.pem"}}})
-	g, err := prepare(ctx, task, w, laptop(), store, agk.Run{}, laid, nil)
+	g, err := prepare(ctx, task, w, laptop(), store, runContext{}, laid, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestASelectorThatLeavesTheTreeIsRefused(t *testing.T) {
 	defer w.remove()
 
 	task := graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{{From: "../../etc/shadow", To: "/etc/shadow"}}}
-	_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, t.TempDir(), nil)
+	_, err = prepare(context.Background(), task, w, laptop(), store, runContext{}, t.TempDir(), nil)
 	if err == nil {
 		t.Fatalf("a selector reaching outside the repository tree was mounted")
 	}
@@ -331,6 +331,111 @@ func TestTheRunContextAndTheParametersAreReadOnlyDocuments(t *testing.T) {
 	if values["endpoint"] != "https://api.billing.example.com/v2" {
 		t.Fatalf("%s carries %v", ParamsPath, values)
 	}
+}
+
+// runFileOf is /agk/run.json as a container reads it, for one task of run 01JMZ8V1P9C4 prepared
+// on a driver whose run source is runs, with ctx carrying whatever sources the task was given.
+func runFileOf(t *testing.T, ctx context.Context, runs func(context.Context, agk.RunID) (agk.Run, error)) map[string]any {
+	t.Helper()
+	task := graph.Task{Run: "01JMZ8V1P9C4", Workflow: "monthly-invoicing", Namespace: "finance", Commit: "a3f9c1e", Step: "invoice", Attempt: 1}
+	d := &Docker{cfg: Config{Runs: runs}}
+	run, err := d.runOf(ctx, task)
+	if err != nil {
+		t.Fatalf("runOf: %s", err)
+	}
+	g, _ := preparedWith(t, task, run)
+	var file map[string]any
+	readJSON(t, mountAt(t, g, RunPath).Source, &file)
+	return file
+}
+
+// preparedWith is prepared for a run context of the test's own.
+func preparedWith(t *testing.T, task graph.Task, run runContext) (*given, *workdir) {
+	t.Helper()
+	store, err := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
+	if err != nil {
+		t.Fatalf("opening a store: %s", err)
+	}
+	task.ID = agk.NewTaskID(task.Run, task.Step, 1, agk.Shard{})
+	w, err := newWorkdir(t.TempDir(), task.ID)
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	t.Cleanup(func() { w.remove() })
+	g, err := prepare(t.Context(), task, w, laptop(), store, run, "", nil)
+	if err != nil {
+		t.Fatalf("prepare: %s", err)
+	}
+	return g, w
+}
+
+// A runner has no run source, and the head of the run arrives with the task's redemption. The
+// container is told what started the run, on whose behalf and when, and that it is running,
+// whatever state the run was recorded in when it was handed over: one of its tasks is in a
+// container, which is what running means. No run that has a container running has finished, so
+// there is no finished_at to tell.
+func TestAContainerIsToldTheRunItsRedemptionAnswered(t *testing.T) {
+	started := time.Date(2026, 10, 1, 4, 3, 13, 0, time.FixedZone("CEST", 2*60*60))
+	ctx := WithSources(t.Context(), Sources{Run: agk.Run{
+		ID: "01JMZ8V1P9C4", Workflow: "monthly-invoicing", Namespace: "finance", Commit: "a3f9c1e",
+		Trigger: agk.TriggerSchedule, TriggeredBy: "finance/agentiik", State: agk.Queued, StartedAt: started,
+	}})
+	file := runFileOf(t, ctx, func(context.Context, agk.RunID) (agk.Run, error) {
+		return agk.Run{}, errors.New("the daemon's own run source was asked, and the task carried its run")
+	})
+
+	want := map[string]any{
+		"id": "01JMZ8V1P9C4", "workflow": "monthly-invoicing", "namespace": "finance", "commit": "a3f9c1e",
+		"trigger_kind": "schedule", "triggered_by": "finance/agentiik", "state": "running",
+		"started_at": "2026-10-01T02:03:13Z",
+	}
+	if len(file) != len(want) {
+		t.Errorf("%s carries %v, want exactly %v", RunPath, file, want)
+	}
+	for k, v := range want {
+		if file[k] != v {
+			t.Errorf("%s says %s is %v, want %v", RunPath, k, file[k], v)
+		}
+	}
+}
+
+// A driver told nothing about the run but what the task carries writes that and leaves the
+// rest out. The zeros it used to write read as facts: a queued run, started in the year one,
+// by a person who asked for it, triggered_by nobody.
+func TestARunNobodyDescribedIsNotDescribedWithZeros(t *testing.T) {
+	file := runFileOf(t, t.Context(), nil)
+	for _, k := range []string{"trigger_kind", "triggered_by", "started_at", "finished_at"} {
+		if v, ok := file[k]; ok {
+			t.Errorf("%s says %s is %v, and nothing told the driver", RunPath, k, v)
+		}
+	}
+	if file["id"] != "01JMZ8V1P9C4" || file["commit"] != "a3f9c1e" || file["state"] != "running" {
+		t.Errorf("%s carries %v, want the run the task names, running", RunPath, file)
+	}
+}
+
+// agk run --local answers from its own run source, a manual run attributed to local, with no
+// commit, since the working tree is not one: the file leaves the commit out as AGK_COMMIT is
+// left out, and still says what started the run, which manual is a statement of here.
+func TestALocalRunIsToldFromTheRunSource(t *testing.T) {
+	file := runFileOf(t, t.Context(), func(_ context.Context, id agk.RunID) (agk.Run, error) {
+		return agk.Run{ID: id, Workflow: "finance/monthly-invoicing", Namespace: "finance", Trigger: agk.TriggerManual, TriggeredBy: "local", StartedAt: time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)}, nil
+	})
+	if file["trigger_kind"] != "manual" || file["triggered_by"] != "local" || file["started_at"] != "2026-10-30T09:00:00Z" || file["state"] != "running" {
+		t.Errorf("%s carries %v", RunPath, file)
+	}
+	if v, ok := file["commit"]; ok {
+		t.Errorf("%s says the commit is %v, and a local run executes no commit", RunPath, v)
+	}
+}
+
+// A run handed over with a task is held to the task's own run, as a store is held to its
+// namespace: the mistake would tell a container it belongs to somebody else's run.
+func TestARunThatIsNotTheTasksIsRefused(t *testing.T) {
+	ctx := WithSources(t.Context(), Sources{Run: agk.Run{ID: "01JR8RB4K2M6", Namespace: "support", Trigger: agk.TriggerMCP, TriggeredBy: "alice"}})
+	d := &Docker{}
+	_, err := d.runOf(ctx, graph.Task{Run: "01JMZ8V1P9C4", Namespace: "finance", Step: "invoice", Attempt: 1})
+	runnersOwn(t, err, "a run that is not the task's")
 }
 
 // A step with no parameters gets a document with no keys rather than the word null,
@@ -411,7 +516,7 @@ func TestASecretMountedOutsideAgkSecretsIsRefused(t *testing.T) {
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: "/run/secrets/bearer"}}}
-	_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", vault{"bearer": "token"})
+	_, err = prepare(context.Background(), task, w, laptop(), store, runContext{}, "", vault{"bearer": "token"})
 	if err == nil {
 		t.Fatalf("a secret was mounted at /run/secrets/bearer")
 	}
@@ -442,7 +547,7 @@ func TestASecretMountIsAFileUnderAgkSecretsAndNeverItsParent(t *testing.T) {
 			t.Fatalf("newWorkdir: %s", err)
 		}
 		task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: mount}}}
-		_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", vault{"bearer": "token"})
+		_, err = prepare(context.Background(), task, w, laptop(), store, runContext{}, "", vault{"bearer": "token"})
 		w.remove()
 		if err == nil {
 			t.Errorf("a secret was mounted at %s", mount)
@@ -470,7 +575,7 @@ func TestTwoSecretsOnOnePathAreRefused(t *testing.T) {
 		{Name: "billing", Mount: "/agk/secrets/token"},
 		{Name: "bearer", Mount: "/agk/secrets/token"},
 	}}
-	_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", vault{"billing": "a", "bearer": "b"})
+	_, err = prepare(context.Background(), task, w, laptop(), store, runContext{}, "", vault{"billing": "a", "bearer": "b"})
 	if err == nil {
 		t.Fatalf("two secrets were mounted at one path")
 	}
@@ -487,7 +592,7 @@ func TestSecretsWithNoSourceAreRefused(t *testing.T) {
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "billing"}}}
-	if _, err := prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", nil); err == nil {
+	if _, err := prepare(context.Background(), task, w, laptop(), store, runContext{}, "", nil); err == nil {
 		t.Fatalf("a task naming a secret was prepared with no secret source")
 	}
 }
@@ -503,7 +608,7 @@ func TestASecretThatCannotBeRedeemedRefusesTheTask(t *testing.T) {
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "billing"}}}
-	_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", vault{})
+	_, err = prepare(context.Background(), task, w, laptop(), store, runContext{}, "", vault{})
 	if err == nil || !strings.Contains(err.Error(), "billing") {
 		t.Fatalf("the refusal does not name the secret: %v", err)
 	}

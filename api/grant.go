@@ -366,6 +366,38 @@ type Grant struct {
 	Tree []TreeEntry `json:"tree"`
 
 	Uploads Uploads `json:"uploads"`
+
+	// Run is the head of the task's run, which the container is told in /agk/run.json.
+	Run RunHead `json:"run"`
+}
+
+// RunHead is what a container is told of its run beyond what the task message names: what
+// started it, the principal it is attributed to, and when it was let in, under the names the
+// run expression context and the API's run record give them.
+//
+// It travels here because nothing else that reaches a runner carries it. The task message names
+// the run and the version and carries no more of the run on purpose, since it waits on a queue,
+// and a runner reads no run: it reads its grants. run.trigger_kind and run.triggered_by are
+// "available everywhere" a step's expressions are, so a step could be handed both as parameters
+// already, and a container told them is told nothing a workflow could not tell it. Without them
+// the runner wrote what the task carries and zeros for the rest, which read as a manual run,
+// started in the year one, by nobody.
+//
+// StartedAt is left out where the run records no start, as the run record leaves it out while a
+// run is queued; a run a task was dispatched for has started.
+type RunHead struct {
+	TriggerKind agk.TriggerKind `json:"trigger_kind"`
+	TriggeredBy string          `json:"triggered_by"`
+	StartedAt   string          `json:"started_at,omitempty"`
+}
+
+// runHeadOf is the head a redemption answers with.
+func runHeadOf(got db.Redeemed) RunHead {
+	head := RunHead{TriggerKind: got.Trigger, TriggeredBy: got.TriggeredBy}
+	if !got.StartedAt.IsZero() {
+		head.StartedAt = got.StartedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return head
 }
 
 // errNoCommit is a scope naming no version, which is a scope written by a controller from before
@@ -388,6 +420,7 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 	out := Grant{
 		TaskID:    got.Row,
 		ExpiresAt: got.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		Run:       runHeadOf(got),
 		Inputs:    []Input{}, Secrets: []Secret{}, Tree: []TreeEntry{},
 	}
 

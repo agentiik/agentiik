@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -98,6 +99,47 @@ type given struct {
 	hold    *holder
 }
 
+// runContext is what /agk/run.json carries: the head of the run the task belongs to, as far
+// as whoever dispatched the task knows it, and nothing it does not know.
+//
+// It is a type of its own rather than agk.Run written as it is, because agk.Run is also the
+// evaluator's state and the local run record, where a zero is a value: a run nobody has let
+// in yet is queued, a run that has not finished has no end, and the first trigger kind,
+// manual, is what a run has when nobody said otherwise. Read inside a container, the same
+// zeros are claims about a run the container is part of, and they were false: state queued
+// beside a container that is running, started_at in the year one, and trigger_kind manual
+// for a schedule. So what is not known is left out rather than written as its zero, which is
+// the rule the environment table already keeps, and what is known by the container's very
+// existence is said: a run one of whose tasks is in a container is running, the state the
+// documentation defines as "at least one task active or ready". finished_at has no place
+// here at all, since no run has finished while a container of it runs.
+type runContext struct {
+	ID        agk.RunID `json:"id"`
+	Workflow  string    `json:"workflow"`
+	Namespace string    `json:"namespace"`
+
+	// Commit is absent for agk run --local, which runs the working tree and no commit, as
+	// AGK_COMMIT is.
+	Commit string `json:"commit,omitempty"`
+
+	// Trigger is a pointer because its zero value is a trigger kind: absent says nobody
+	// told this driver what started the run, where manual would say a person had asked.
+	Trigger     *agk.TriggerKind `json:"trigger_kind,omitempty"`
+	TriggeredBy string           `json:"triggered_by,omitempty"`
+	State       agk.RunState     `json:"state"`
+	StartedAt   time.Time        `json:"started_at,omitzero"`
+}
+
+// contextOf is the run context of a run whose head is known, from a run source or from the
+// task's redemption.
+func contextOf(run agk.Run) runContext {
+	return runContext{
+		ID: run.ID, Workflow: run.Workflow, Namespace: run.Namespace, Commit: run.Commit,
+		Trigger: &run.Trigger, TriggeredBy: run.TriggeredBy,
+		State: agk.Running, StartedAt: run.StartedAt.UTC(),
+	}
+}
+
 // prepare writes the host side of the contract under the task's working directory and
 // says what the container is to be given.
 //
@@ -106,7 +148,7 @@ type given struct {
 // and then the two writable paths. Nothing here starts anything or talks to a daemon: it
 // is files on a disk and a slice of mounts, which is why every one of these rules is
 // tested with no Docker in reach.
-func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, store *artifact.Store, run agk.Run, repo string, secrets Secrets) (*given, error) {
+func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, store *artifact.Store, run runContext, repo string, secrets Secrets) (*given, error) {
 	g := &given{Tmpfs: map[string]string{}}
 
 	in, err := brick.WriteInputs(ctx, store, w.In, t.Inputs)

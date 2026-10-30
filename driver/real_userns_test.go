@@ -115,10 +115,12 @@ func remappedDriver(t *testing.T, observer Observer, image string) *Docker {
 	return d
 }
 
-// The two images a task in the range runs from: alpine as its own root, which is the base
-// of the range on the host, and the same image as 65532, the account a brick is required
-// to run as, which is another account of the range and owns nothing it was given. The
-// userns job builds the second after the restart.
+// The two images a task in the range runs from: alpine, which names no account, and the
+// same image naming 65532, the account a brick is required to run as, which is another
+// account of the range and owns nothing it was given. A script step in the first runs as
+// 65532 all the same, since a script never runs as root, so the two reach that account
+// the two ways it is reached: the image's choice and the driver's. The userns job builds
+// the second after the restart.
 const (
 	rootImage    = "alpine:3.21"
 	nonRootImage = "agentiik-test/nonroot:3.21"

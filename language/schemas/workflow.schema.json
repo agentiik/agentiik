@@ -892,7 +892,7 @@
         "before_script": {
           "$ref": "#/$defs/beforeScript",
           "description": "Commands every script step runs first, merged outwards in with those of the blocks it extends.",
-          "examples": [["apk add --no-cache jq curl"]]
+          "examples": [["export HOME=/tmp"]]
         },
         "after_script": {
           "$ref": "#/$defs/afterScript",
@@ -1158,8 +1158,8 @@
         },
         "before_script": {
           "$ref": "#/$defs/beforeScript",
-          "description": "What this step runs before its script, usually the one tool the image does not carry.",
-          "examples": [["apk add --no-cache jq curl"]]
+          "description": "What this step runs before its script, usually preparation every script step of the workflow shares, written once in defaults or a hidden block.",
+          "examples": [["mkdir -p /tmp/work"]]
         },
         "after_script": {
           "$ref": "#/$defs/afterScript",
@@ -1487,9 +1487,9 @@
     },
     "beforeScript": {
       "title": "Commands before the script",
-      "description": "Commands prepended to script, merged from defaults and from extends outwards in. They run in the same container, which is where a step installs the one tool it needs before doing its work.",
+      "description": "Commands prepended to script, merged from defaults and from extends outwards in. They run in the same container and the same shell, so a variable they export or a directory they make under /tmp is there when script runs. They install nothing: the root filesystem is read-only, /tmp is mounted noexec, the commands run as an account that is never root and a step has no network unless it asks for one, so a tool a step needs is one its image carries.",
       "$ref": "#/$defs/commands",
-      "examples": [["apk add --no-cache jq curl"]]
+      "examples": [["export HOME=/tmp"]]
     },
     "afterScript": {
       "title": "Commands after the script",

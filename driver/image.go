@@ -152,6 +152,7 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 
 	if m, text, none, known := cache.lookup(digest); known {
 		if none {
+			out.User = baseImageAccount(t, out.User)
 			return out, nil
 		}
 		out.Manifest, out.Text = &m, text
@@ -172,8 +173,10 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 	}
 	if document == nil {
 		// An image carrying no manifest is a base image, which is what a script
-		// step runs in. The account stays the image's own.
+		// step runs in. Nothing declares its account but the image, which names
+		// root or nobody as often as not, so baseImageAccount decides it.
 		cache.keep(digest, nil, nil)
+		out.User = baseImageAccount(t, out.User)
 		return out, nil
 	}
 
@@ -347,18 +350,54 @@ func oneFile(r io.Reader) ([]byte, error) {
 	}
 }
 
-// declaresRootUser says whether an account is one of the three spellings of root.
+// declaresRootUser says whether an account is root: root, or uid 0 however many zeros spell
+// it, with any group or none, which is the brick manifest's own rule (brick's rootAccount and
+// the pattern brick.schema.json refuses).
 //
 // "The group half is not read, so nonroot:0 is accepted": the rule is about the process
 // the container runs as, and a group of zero grants nothing on its own.
 func declaresRootUser(user string) bool {
 	account, _, _ := strings.Cut(user, ":")
-	switch strings.TrimSpace(account) {
-	case "root", "0":
-		return true
-	default:
-		return false
+	account = strings.TrimSpace(account)
+	return account == "root" || (account != "" && strings.Trim(account, "0") == "")
+}
+
+// scriptUser is the account a script step runs as where its image names none, or names root.
+//
+// 65532:65532 is the account the documentation's own brick manifests declare, distroless's
+// nonroot, and it names no account an image is likely to hold files as. It is written as
+// numbers, which the daemon takes as they are, because a name is resolved against the
+// image's /etc/passwd and a base image need not have one, let alone an entry for it.
+const scriptUser = "65532:65532"
+
+// baseImageAccount is the account a step whose image carries no manifest runs as: the
+// image's own, unless that is root or nothing, and then scriptUser, for a script step.
+//
+// The brick manifest refuses root "because a read-only root filesystem and dropped
+// capabilities are worth little to a process running as uid 0", and a script is the same
+// container with a shell in it, held to the same contract. A base image is not built to run
+// as anybody in particular, so it names root or leaves the account to the daemon, which runs
+// it as root: python:3.13-alpine does, and a script in it answered id with uid=0(root).
+// userns-remap would make that root an unprivileged account of the host, and the Compose
+// install gives that floor up by default, require_userns_remap = false, since a daemon remaps
+// nothing unless told to, so the step's own account is the line that holds on every host. An
+// image that names an account other than root chose it, and keeps it.
+//
+// The account costs a script nothing the contract offers: the root filesystem is read-only
+// whoever writes to it, /tmp and /agk/out are writable by any account, and every file under
+// /agk is laid out readable by any account, which bricks running as accounts of their own
+// already depend on. What uid 0 had beyond that was every file of the image root owns,
+// whatever its mode, and on a daemon that does not remap, the host's own root for a process
+// that escapes the container, which is what the rule takes away.
+//
+// A step that is not a script, run where the digest floor is lifted, keeps the image's
+// account, which is what a brick under development with no manifest yet has always run as;
+// on a server such a step is refused before anything is created.
+func baseImageAccount(t graph.Task, user string) string {
+	if !isScript(t) || (strings.TrimSpace(user) != "" && !declaresRootUser(user)) {
+		return user
 	}
+	return scriptUser
 }
 
 // Manifest reads the brick manifest of one image, which is what agk validate needs to

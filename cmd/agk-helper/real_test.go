@@ -234,16 +234,12 @@ func TestTheHelperIsWhatAScriptStepPipesInto(t *testing.T) {
 		Image:     image,
 		Inputs:    map[agk.Port]agk.Envelope{"in": batch("ok", 3)},
 		Script: []string{
-			// The documented example writes agk items, with no path, and nothing
-			// puts /agk/bin on PATH: the contract's environment table does not
-			// name the variable and the driver does not set it, so the bare name
-			// does not resolve and a step written exactly as the page writes it
-			// says "agk: not found". The line below is what makes the documented
-			// spelling work today, and the gap is one for the page or for the
-			// driver's environment rather than for this program, which is mounted
-			// at the path it is given.
-			`PATH="$PATH:` + filepath.Dir(BinPath) + `"`,
-			// The documented pipe, and the shell is the one reading it.
+			// The image names no account, and a script step whose image names none,
+			// or root, runs as 65532:65532: everything below is done as that account.
+			`test "$(id -u):$(id -g)" = 65532:65532`,
+			// The documented pipe, spelled as the page spells it, with no path: the
+			// driver puts /agk/bin on a script's search path where it binds the
+			// helper, and the shell is the one reading it.
 			`agk items | grep -c vat_number > /tmp/count`,
 			`test "$(cat /tmp/count)" = "3"`,
 			// One item per vat number, with the identity derived from the payload.
