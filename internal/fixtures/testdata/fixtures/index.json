@@ -1082,6 +1082,10 @@
           "covers": "redeeming one task's grant: the input URLs, the secret values, the upload URLs, the repository tree the step will see and the head of the run it belongs to"
         },
         {
+          "file": "wire/valid/grant-redemption-for-a-runner-before-v0.7.2.json",
+          "covers": "the answer to a runner reporting a release before v0.7.2, which carries no run: that runner reads the document strictly and would refuse a member it does not know"
+        },
+        {
           "file": "wire/valid/grant-redemption-secret-mount-with-a-dot.json",
           "covers": "a secret value answered for a mount carrying a dot, client.key, which the task message and the brick manifest already accepted and this answer used to refuse"
         }

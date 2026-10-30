@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -367,8 +369,9 @@ type Grant struct {
 
 	Uploads Uploads `json:"uploads"`
 
-	// Run is the head of the task's run, which the container is told in /agk/run.json.
-	Run RunHead `json:"run"`
+	// Run is the head of the task's run, which the container is told in /agk/run.json, and nil
+	// for a runner that could not read it (readsRunHead).
+	Run *RunHead `json:"run,omitempty"`
 }
 
 // RunHead is what a container is told of its run beyond what the task message names: what
@@ -384,20 +387,68 @@ type Grant struct {
 // started in the year one, by nobody.
 //
 // StartedAt is left out where the run records no start, as the run record leaves it out while a
-// run is queued; a run a task was dispatched for has started.
+// run is queued; a run a task was dispatched for has started. The whole head is left out for a
+// runner reporting a release before v0.7.2, which could not read it (readsRunHead).
 type RunHead struct {
 	TriggerKind agk.TriggerKind `json:"trigger_kind"`
 	TriggeredBy string          `json:"triggered_by"`
 	StartedAt   string          `json:"started_at,omitempty"`
 }
 
-// runHeadOf is the head a redemption answers with.
-func runHeadOf(got db.Redeemed) RunHead {
-	head := RunHead{TriggerKind: got.Trigger, TriggeredBy: got.TriggeredBy}
+// runHeadOf is the head a redemption answers with, or nil for a runner that could not read it.
+func runHeadOf(got db.Redeemed) *RunHead {
+	if !readsRunHead(got.RunnerVersion) {
+		return nil
+	}
+	head := &RunHead{TriggerKind: got.Trigger, TriggeredBy: got.TriggeredBy}
 	if !got.StartedAt.IsZero() {
 		head.StartedAt = got.StartedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return head
+}
+
+// runHeadSince is the first release whose runner reads run in a redemption.
+var runHeadSince = [3]int{0, 7, 2}
+
+// releaseVersion is a version as the runner reports it, agent_version: a semantic version
+// without its v, a pseudo-version for a build between releases among them.
+var releaseVersion = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+
+// readsRunHead says whether a runner reporting this agent version reads a redemption carrying
+// run, which is every runner but one reporting a release before v0.7.2.
+//
+// A runner before v0.7.2 reads a redemption strictly, refusing a field it does not know, and
+// would report every task it is answered with run as run in no container. An installation is
+// upgraded with no step and in no order, an updater recreating one container at a time and a
+// runner on another host maybe a release behind, so such a runner is answered as it was
+// before, and its containers are told what their task names of the run and no more. It is
+// read from what the runner reported at its join or its latest heartbeat, which is the
+// version holding the credential that asks. A pseudo-version of a commit after v0.7.1,
+// 0.7.2-0.<date>-<hash>, orders before 0.7.2 and is answered without, since the commit may
+// predate the field and an answer without it costs that runner nothing. A build nobody
+// released, 0.0.0-devel, and anything that does not read as a version are answered with it,
+// as the runner of this source tree is.
+//
+// It can go once no supported runner predates v0.7.2.
+func readsRunHead(version string) bool {
+	if version == "0.0.0-devel" {
+		return true
+	}
+	m := releaseVersion.FindStringSubmatch(version)
+	if m == nil {
+		return true
+	}
+	for i, want := range runHeadSince {
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil {
+			return true
+		}
+		if n != want {
+			return n > want
+		}
+	}
+	// 0.7.2 itself, which a pre-release of it orders before.
+	return m[4] == ""
 }
 
 // errNoCommit is a scope naming no version, which is a scope written by a controller from before

@@ -869,18 +869,46 @@ func TestARedemptionIsWhatTheWireDescribes(t *testing.T) {
 	}
 }
 
+// joinedReporting puts a machine in the pool that reports an agent version of its own, and answers
+// its identifier and its credential.
+func (g grants) joinedReporting(t *testing.T, version string) (runner, credential string) {
+	t.Helper()
+	var token db.JoinToken
+	if err := g.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		now := time.Now().UTC()
+		token, err = w.IssueJoinToken(ctx, "dmz", nil, "admin", now, now.Add(time.Hour))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	machine := aMachine(token.Clear)
+	machine.AgentVersion = version
+	w, answer := call(t, g.handler, "POST", "/api/v1/runners", "", machine)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("joining answered %d: %s", w.Code, w.Body)
+	}
+	runner, _ = answer["runner"].(string)
+	credential, _ = answer["credential"].(string)
+	return runner, credential
+}
+
 // The head of the task's run is answered with everything else, as the run's row holds it, since
 // nothing else that reaches a runner carries it and the container is told it in /agk/run.json:
 // what started the run, the principal it is attributed to, and when it was let in.
 func TestARedemptionAnswersTheHeadOfTheTasksRun(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
-	credential := g.joined(t)
+	_, credential := g.joinedReporting(t, "0.7.2")
 	clear, _, _ := g.dispatched(t, nil)
 
-	answer := g.redeemed(t, credential, asking(clear))
+	ask := asking(clear)
+	answer := g.redeemed(t, credential, ask)
 	want := api.RunHead{TriggerKind: agk.TriggerSchedule, TriggeredBy: "finance/agentiik", StartedAt: "2026-10-01T04:03:13.25Z"}
-	if answer.Run != want {
+	if answer.Run == nil || *answer.Run != want {
 		t.Errorf("the run's head is answered as %+v, want %+v", answer.Run, want)
+	}
+	if err := conforms(t, "/$defs/grantRedemption", map[string]any{"request": ask, "response": answer}); err != nil {
+		t.Errorf("the redemption carrying the run's head is not what the wire describes: %s", err)
 	}
 
 	// A run whose row records no start, which no run a task was dispatched for is, is answered
@@ -889,13 +917,63 @@ func TestARedemptionAnswersTheHeadOfTheTasksRun(t *testing.T) {
 	if _, err := conn.Exec(t.Context(), `update runs set started_at = null where id = '`+grantRun+`'`); err != nil {
 		t.Fatal(err)
 	}
-	w, raw := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
+	w, raw := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, ask)
 	if w.Code != http.StatusOK {
 		t.Fatalf("redeeming again answered %d: %s", w.Code, w.Body)
 	}
 	head, _ := raw["run"].(map[string]any)
 	if _, ok := head["started_at"]; ok || head["trigger_kind"] != "schedule" {
 		t.Errorf("the run's head is answered as %v", head)
+	}
+}
+
+// A runner reporting a release before v0.7.2 reads a redemption strictly and would refuse one
+// carrying run, reporting its task as run in no container, so it is answered as it was before:
+// an installation is upgraded in no order, and a runner on another host may lag a release. What
+// it reported last is what is read, so the same runner reporting v0.7.2 at its next heartbeat is
+// answered with the head; a pseudo-version of a commit before v0.7.2 is answered without, and a
+// build nobody released with it.
+func TestARunnerBeforeV072IsAnsweredWithoutTheRunsHead(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	runner, credential := g.joinedReporting(t, "0.7.1")
+	clear, _, _ := g.dispatched(t, nil)
+	ask := asking(clear)
+
+	w, raw := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, ask)
+	if w.Code != http.StatusOK {
+		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
+	}
+	if v, ok := raw["run"]; ok {
+		t.Errorf("a runner reporting 0.7.1 is answered run %v, which it cannot read", v)
+	}
+	if err := conforms(t, "/$defs/grantRedemption", map[string]any{"request": ask, "response": raw}); err != nil {
+		t.Errorf("the redemption without the run's head is not what the wire describes: %s", err)
+	}
+
+	for _, c := range []struct {
+		version string
+		head    bool
+	}{
+		{"0.7.2", true},
+		{"0.8.0", true},
+		{"1.0.0", true},
+		{"0.0.0-devel", true},
+		{"0.7.2-0.20261030142000-ab4170da9f3c", false},
+		{"0.6.9", false},
+		{"0.2.0", false},
+	} {
+		beat := aBeat(runner)
+		beat.AgentVersion = c.version
+		if w, _ := call(t, g.handler, "POST", "/api/v1/runners/heartbeat", credential, beat); w.Code != http.StatusOK {
+			t.Fatalf("the heartbeat reporting %s answered %d: %s", c.version, w.Code, w.Body)
+		}
+		w, raw := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, ask)
+		if w.Code != http.StatusOK {
+			t.Fatalf("redeeming as %s answered %d: %s", c.version, w.Code, w.Body)
+		}
+		if _, ok := raw["run"]; ok != c.head {
+			t.Errorf("a runner reporting %s is answered the run's head: %v, want %v", c.version, ok, c.head)
+		}
 	}
 }
 

@@ -316,10 +316,10 @@ func TestARedemptionThatDoesNotAnswerTheMessageIsRefused(t *testing.T) {
 	}
 }
 
-// An API of the release before this one answers no run's head, and its answer is taken: what a
-// container is told of its run decides nothing about the task, so a runner upgraded before its API
-// keeps running tasks meanwhile, and the container is told what the task message names. A head
-// that is there is read as the run's.
+// An API before v0.7.2 answers no run's head, and its answer is taken: what a container is told
+// of its run decides nothing about the task, so a runner upgraded before its API keeps running
+// tasks meanwhile, and the container is told what the task message names. A head that is there
+// is read as the run's.
 func TestARedemptionWithNoRunIsTakenAndOneWithARunIsRead(t *testing.T) {
 	var m bus.TaskMessage
 	readFixture(t, "fixtures/wire/valid/task-message.json", &m)
@@ -335,8 +335,20 @@ func TestARedemptionWithNoRunIsTakenAndOneWithARunIsRead(t *testing.T) {
 		t.Errorf("the head reads as %+v", head)
 	}
 
-	r.Run = nil
-	if err := r.answers(m); err != nil {
-		t.Errorf("an answer with no run is refused: %s", err)
+	// The corpus's answer with no run, as an API before v0.7.2 writes it, read the way Redeem
+	// reads every answer, strictly, and then assembled: no run is handed to the driver, which
+	// writes what the task names, running, and leaves the rest out.
+	older := answering(redemptionFixture(t, "fixtures/wire/valid/grant-redemption-for-a-runner-before-v0.7.2.json"), m)
+	b, err := json.Marshal(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := api(t, func(w http.ResponseWriter, r *http.Request) { w.Write(b) })
+	got, err := c.Redeem(t.Context(), m)
+	if err != nil {
+		t.Fatalf("an answer with no run is refused: %s", err)
+	}
+	if got.Run != nil {
+		t.Errorf("an answer with no run reads as carrying %+v", got.Run)
 	}
 }
