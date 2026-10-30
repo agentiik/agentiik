@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"mime"
 	"net/http"
 	"net/url"
 	"path"
@@ -19,7 +20,9 @@ import (
 // does; and a read the route refuses is the revision's resource not found, the same whether what it
 // names is absent or out of the caller's reach, since the route's 404 is already the same for both.
 
-// treeTemplate and runTemplate are the two families of resource a caller's grants open.
+// treeTemplate, runTemplate and artifactTemplate are the families of resource a caller's grants
+// open. A run's file keeps the URI its envelope names it by, agk://run/, so that what run.output
+// answers is what a client reads, with nothing to rewrite.
 var (
 	treeTemplate = mcp.Template{
 		URITemplate: "agentiik://{ns}/{name}/tree/{ref}/{path}",
@@ -34,6 +37,12 @@ var (
 		Description: "A run as run.get answers it: its state, each step's verdict, what started it and whom it is attributed to, its inputs only to whoever holds run:read_data.",
 		MimeType:    "application/json",
 	}
+	artifactTemplate = mcp.Template{
+		URITemplate: "agk://run/{run}/{step}/{port}/{name}",
+		Name:        "artifact",
+		Title:       "A file a run wrote",
+		Description: "A file a run's step wrote, by the URI an envelope's files name it by, as run.artifact reads it: text where it is text, its bytes where they are not, typed as its envelope declares it. Up to 1 MiB; a file its workflow gave a fetch budget spends one fetch.",
+	}
 )
 
 // resourceTool is the tool a read is made as, which the request the route serves says it came by.
@@ -45,6 +54,18 @@ func (m *MCP) reader(r *http.Request) func(context.Context, string) ([]mcp.Conte
 	return func(ctx context.Context, uri string) ([]mcp.Contents, error) {
 		if strings.HasPrefix(uri, "agentiik://language/") || strings.HasPrefix(uri, "agentiik://schema/") {
 			return readLanguage(ctx, uri)
+		}
+		if strings.HasPrefix(uri, "agk://run/") {
+			// The route parses the URI and reads the run out of it to authorise the read, so a URI
+			// that names nothing is answered as one out of reach.
+			a, err := m.dispatch(r.WithContext(ctx), resourceTool, "GET", "/api/v1/artifacts/"+segment(uri), nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			if err := readable(uri, a); err != nil {
+				return nil, err
+			}
+			return []mcp.Contents{artifactContents(uri, a.header.Get("Content-Type"), a.body.Bytes())}, nil
 		}
 		rest, ok := strings.CutPrefix(uri, "agentiik://")
 		if !ok {
@@ -134,4 +155,47 @@ func fileContents(uri, file string, b []byte) mcp.Contents {
 		kind = "text/markdown"
 	}
 	return mcp.Contents{URI: uri, MimeType: kind, Text: string(b)}
+}
+
+// artifactContents is a run's file as a read answers it: text where its media type is a kind of text
+// and its bytes are UTF-8 holding no NUL, its bytes otherwise, typed as its envelope declares it.
+func artifactContents(uri, kind string, b []byte) mcp.Contents {
+	if textual(kind) && utf8.Valid(b) && bytes.IndexByte(b, 0) < 0 {
+		return mcp.Contents{URI: uri, MimeType: kind, Text: string(b)}
+	}
+	return mcp.Contents{URI: uri, MimeType: kind, Blob: b}
+}
+
+// fileBlock is a run's file as a tool answers it: text as text, an image of a kind a client shows as
+// an image, and any other file as the resource it is, embedded with its URI and media type.
+func fileBlock(uri, kind string, b []byte) mcp.Content {
+	c := artifactContents(uri, kind, b)
+	if c.Blob == nil {
+		return mcp.Text(c.Text)
+	}
+	if t, _, err := mime.ParseMediaType(kind); err == nil && shown[t] {
+		return mcp.Image(b, t)
+	}
+	return mcp.Embedded(c)
+}
+
+// shown are the images a client of MCP shows, those the clients that take an image block take.
+var shown = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
+
+// textual says whether a media type is text: text/ anything, JSON, YAML, XML and their suffixes, and
+// the few application/ types that are text by another name.
+func textual(kind string) bool {
+	t, _, err := mime.ParseMediaType(kind)
+	if err != nil {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(t, "text/"), strings.HasSuffix(t, "+json"), strings.HasSuffix(t, "+xml"), strings.HasSuffix(t, "+yaml"):
+		return true
+	}
+	switch t {
+	case "application/json", "application/x-ndjson", "application/yaml", "application/x-yaml", "application/xml", "application/javascript", "application/toml", "application/sql":
+		return true
+	}
+	return false
 }

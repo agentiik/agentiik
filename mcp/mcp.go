@@ -90,15 +90,55 @@ type Tool struct {
 	Call func(ctx context.Context, arguments json.RawMessage) (*CallResult, error) `json:"-"`
 }
 
-// Content is one block of a tool's result. Only text is sent: a tool's output is an envelope or a
-// document, which is JSON, and an image or an audio clip is something no tool here produces.
+// Content is one block of a tool's result: text, which every output but a file is, since an
+// envelope or a document is JSON; or a file a run wrote, as an image where it is one, which a client
+// shows and a model looks at, and as an embedded resource otherwise, its text or its bytes with what
+// it is, which the revision has a client handle as it handles a resource it read.
 type Content struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+
+	// Data and MimeType are an image's bytes and media type, which the revision carries in base64
+	// under data.
+	Data     []byte `json:"data"`
+	MimeType string `json:"mimeType"`
+
+	// Resource is an embedded resource's contents.
+	Resource *Contents `json:"resource"`
 }
 
 // Text is a text block.
 func Text(s string) Content { return Content{Type: "text", Text: s} }
+
+// Image is an image block, of the media type given.
+func Image(b []byte, mimeType string) Content {
+	return Content{Type: "image", Data: b, MimeType: mimeType}
+}
+
+// Embedded is a block holding a resource's contents.
+func Embedded(c Contents) Content { return Content{Type: "resource", Resource: &c} }
+
+// MarshalJSON writes the members of the block's type and no other, since a client holding a block
+// to the revision's schema refuses an image with text in it.
+func (c Content) MarshalJSON() ([]byte, error) {
+	switch c.Type {
+	case "image":
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			Data     []byte `json:"data"`
+			MimeType string `json:"mimeType"`
+		}{c.Type, c.Data, c.MimeType})
+	case "resource":
+		return json.Marshal(struct {
+			Type     string    `json:"type"`
+			Resource *Contents `json:"resource"`
+		}{c.Type, c.Resource})
+	}
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{c.Type, c.Text})
+}
 
 // CallResult is what a tool answers a call with.
 type CallResult struct {

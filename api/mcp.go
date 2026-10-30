@@ -164,11 +164,11 @@ func (m *MCP) serve(w http.ResponseWriter, r *http.Request, caller Caller) {
 }
 
 // stepUp is what an OAuth token could be allowed that its scope lacks: the permissions each tool its
-// person may use needs and the token does not reach, and those a read of the tree or of a run needs,
-// none where the token reaches it or its person does not.
+// person may use needs and the token does not reach, and those a read of the tree, of a run or of a
+// run's file needs, none where the token reaches it or its person does not.
 type stepUp struct {
-	tools     map[string][]Permission
-	tree, run []Permission
+	tools               map[string][]Permission
+	tree, run, artifact []Permission
 }
 
 // neededBy is what the request needs that the token lacks: a call of a tool, or a read of a resource,
@@ -182,6 +182,8 @@ func (s stepUp) neededBy(r *http.Request) []Permission {
 		switch {
 		case strings.HasPrefix(name, "agentiik://run/"):
 			return s.run
+		case strings.HasPrefix(name, "agk://run/"):
+			return s.artifact
 		case strings.HasPrefix(name, "agentiik://language/"), strings.HasPrefix(name, "agentiik://schema/"):
 			return nil
 		case strings.HasPrefix(name, "agentiik://"):
@@ -308,6 +310,12 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, stepUp, erro
 		templates = append(templates, runTemplate)
 		if up.tools != nil && !holds(RunRead)(effective) {
 			up.run = needed(holds(RunRead), effective, listed)
+		}
+	}
+	if use(holds(RunReadData)) {
+		templates = append(templates, artifactTemplate)
+		if up.tools != nil && !holds(RunReadData)(effective) {
+			up.artifact = needed(holds(RunReadData), effective, listed)
 		}
 	}
 	return mcp.Surface{

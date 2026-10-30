@@ -5,6 +5,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ## Unreleased
 
 - The home's Server activity sets the tasks runners hold against the slots they offer, as `Tasks running`, and counts those waiting on their pool's queue apart, as `Tasks queued`; its chart draws both. `GET /api/v1/stats/activity` answers `tasks_held` and `tasks_queued`, and each bucket `tasks_held_max` and `tasks_queued_max`, from the instant a runner took a task, which `tasks.taken_at` keeps from this release (#930).
+- The user's server reads a run's files: `run.artifact` takes the `agk://run/` URI an envelope names a file by and answers text as text, an image as an image and any other file as an embedded resource, and the template `agk://run/{run}/{step}/{port}/{name}` reads the same, both under `run:read_data`. The API reads the object itself rather than answering a presigned URL, a fetch budget is spent as by any fetch, and a file above 1 MiB is refused with its size (#931).
 
 ## v0.7.1, 2026-10-30
 
