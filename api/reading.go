@@ -347,7 +347,9 @@ const (
 // while the bytes go, and the bytes have fetchTransfer to go in. A HEAD is answered what a GET
 // would be, bytes aside, and holds nothing, since nothing is fetched. A Range is not honoured: the
 // whole artifact is answered, which is the one transfer that can count. A budget is spent by a
-// session only from the public URL's pages, 403 otherwise before anything is held (Spends).
+// session only from the public URL's pages, 403 otherwise before anything is held (Spends). A
+// request made through MCP, by run.artifact or a read of the artifact's resource, is answered the
+// bytes whatever the budget, up to mcpArtifactMost, and 413 above it.
 func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	u, err := agk.ParseURI(r.PathValue("uri"))
 	if err != nil || !utf8.ValidString(u.Name) {
@@ -367,7 +369,28 @@ func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principa
 		return
 	}
 
+	// Through MCP the bytes are answered whatever the budget, and never a redirect: "no credential
+	// crosses MCP", and a presigned URL is one for as long as it works. What a client of MCP is
+	// answered lands in a model's context, so an artifact above mcpArtifactMost is refused before a
+	// fetch is held, saying how else to fetch it; and the bytes are answered as the media type their
+	// envelope declares, the client being no browser this origin has to keep from rendering them.
+	_, viaMCP := throughOf(r.Context())
+	kind := "application/octet-stream"
+	if viaMCP {
+		if got.Size > mcpArtifactMost {
+			fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("the artifact is %d bytes, and a client of MCP is answered %d at most, since what it is answered lands in a model's context: fetch it from GET /api/v1/artifacts/{uri} with an API token", got.Size, mcpArtifactMost))
+			return
+		}
+		if got.MediaType != "" {
+			kind = got.MediaType
+		}
+	}
+
 	if !got.Budgeted {
+		if viaMCP {
+			s.objectOf(w, r, u, got, kind)
+			return
+		}
 		if s.urls == nil {
 			fail(w, http.StatusServiceUnavailable, "this installation mints no presigned URLs, and an artifact with no fetch budget is fetched through one")
 			return
@@ -400,7 +423,7 @@ func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principa
 			s.fetchable(w, db.ErrInFlight)
 			return
 		}
-		bytesOf(w, u, got.Size)
+		bytesOf(w, u, got.Size, kind)
 		return
 	}
 
@@ -440,7 +463,7 @@ func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principa
 		return
 	}
 	defer rc.Close()
-	bytesOf(w, u, got.Size)
+	bytesOf(w, u, got.Size, kind)
 	sum := sha256.New()
 	sent, err := io.Copy(w, io.TeeReader(rc, sum))
 	if err != nil {
@@ -472,11 +495,34 @@ func (s *Server) fetchable(w http.ResponseWriter, err error) bool {
 	return false
 }
 
+// mcpArtifactMost is the largest artifact a client of MCP is answered: a mebibyte of text is some
+// 250,000 tokens, more than most models' context holds, and an image or a PDF of that size is one a
+// model reads whole. Anything larger is a file for a person, fetched through the route.
+const mcpArtifactMost = 1 << 20
+
+// objectOf answers an artifact with no fetch budget through MCP: its bytes, read from the store as a
+// budget's are, with nothing to hold or spend.
+func (s *Server) objectOf(w http.ResponseWriter, r *http.Request, u agk.URI, got db.Resolved, kind string) {
+	if s.objects == nil {
+		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and an artifact is read from nowhere else")
+		return
+	}
+	rc, err := s.objects.Open(r.Context(), got.Key)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the artifact could not be fetched")
+		return
+	}
+	defer rc.Close()
+	bytesOf(w, u, got.Size, kind)
+	io.Copy(w, rc)
+}
+
 // bytesOf writes the headers an artifact's bytes are served with: as bytes, which a browser
 // neither renders nor sniffs, since they are served from the API's own origin, to be saved under
-// the artifact's name, and kept by no cache, since a budget is counted here.
-func bytesOf(w http.ResponseWriter, u agk.URI, size int64) {
-	w.Header().Set("Content-Type", "application/octet-stream")
+// the artifact's name, and kept by no cache, since a budget is counted here. A client of MCP is
+// answered the media type the artifact declares instead, as kind.
+func bytesOf(w http.ResponseWriter, u agk.URI, size int64, kind string) {
+	w.Header().Set("Content-Type", kind)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": u.Name}))
 	w.Header().Set("Cache-Control", "no-store")

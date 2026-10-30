@@ -35,18 +35,18 @@ func TestEachRoleIsOfferedTheToolsItMayUse(t *testing.T) {
 		"oscar": everybody + " workflow.list workflow.run run.list run.get run.logs run.cancel run.replay " + collections + " collection.add",
 		// An editor's columns on one workflow: no workflow made, and no secret, which are a
 		// namespace's.
-		"walter": everybody + " workflow.validate workflow.commit workflow.list workflow.get workflow.update workflow.run run.list run.get run.logs run.output run.cancel run.replay " + collections + " collection.add",
+		"walter": everybody + " workflow.validate workflow.commit workflow.list workflow.get workflow.update workflow.run run.list run.get run.logs run.output run.artifact run.cancel run.replay " + collections + " collection.add",
 		// The owner's every column on the namespace, but nothing an administrator hands out.
-		"alice": everybody + " workflow.validate workflow.commit namespace.update namespace.delete grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.cancel run.replay " + collections + " collection.add",
+		"alice": everybody + " workflow.validate workflow.commit namespace.update namespace.delete grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.artifact run.cancel run.replay " + collections + " collection.add",
 		// The installation's, and nothing of any namespace's workflows.
 		"carol": everybody + " namespace.update namespace.delete namespace.quotas grant.list grant.create grant.revoke " + collections + " runner.list",
 		// oscar's grant, as a service account: no namespace made, and collections of its own.
 		"finance/nightly": anyone + " workflow.list workflow.run run.list run.get run.logs run.cancel run.replay " + collections + " collection.add",
 		// An owner's columns on hr through the scope, and neither a namespace nor a collection.
-		"mallory's token for hr": anyone + " workflow.validate workflow.commit namespace.update namespace.delete grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.cancel run.replay",
+		"mallory's token for hr": anyone + " workflow.validate workflow.commit namespace.update namespace.delete grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.artifact run.cancel run.replay",
 		// An administrator owning every namespace while it lasts, naming the owner of one it
 		// creates, and owning no collection.
-		"the bootstrap token": everybody + " workflow.validate workflow.commit namespace.update namespace.delete namespace.quotas grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.cancel run.replay runner.list",
+		"the bootstrap token": everybody + " workflow.validate workflow.commit namespace.update namespace.delete namespace.quotas grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.artifact run.cancel run.replay runner.list",
 	}
 
 	var every []string

@@ -802,6 +802,12 @@ func TestWhatADispatchWasHandedIsReadAsItIs(t *testing.T) {
 // bytes in the store.
 func (s someRuns) anArtifact(t *testing.T, run, name string, fetches int, content []byte) agk.URI {
 	t.Helper()
+	return s.aTypedArtifact(t, run, name, "text/html", fetches, content)
+}
+
+// aTypedArtifact is anArtifact of the media type given.
+func (s someRuns) aTypedArtifact(t *testing.T, run, name, kind string, fetches int, content []byte) agk.URI {
+	t.Helper()
 	sum := sha256.Sum256(content)
 	digest := hex.EncodeToString(sum[:])
 	if err := s.objects.Put(t.Context(), artifact.Key("finance", digest), bytes.NewReader(content)); err != nil {
@@ -809,7 +815,7 @@ func (s someRuns) anArtifact(t *testing.T, run, name string, fetches int, conten
 	}
 	u := agk.URI{Run: agk.RunID(run), Step: "archive", Port: "ok", Name: name}
 	if err := s.pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
-		_, err := ns.WriteArtifact(ctx, db.Reference{URI: u, Digest: digest, Size: int64(len(content)), MediaType: "text/html", For: time.Hour, Fetches: fetches})
+		_, err := ns.WriteArtifact(ctx, db.Reference{URI: u, Digest: digest, Size: int64(len(content)), MediaType: kind, For: time.Hour, Fetches: fetches})
 		return err
 	}); err != nil {
 		t.Fatal(err)

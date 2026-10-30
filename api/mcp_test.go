@@ -224,7 +224,7 @@ func TestEachToolSaysWhetherItReadsOrRemoves(t *testing.T) {
 	}
 	// An authorizer that says nothing of what anybody holds lists every tool.
 	names, hints := offeredTo(t, rt, "anybody")
-	readOnly := []string{"workflow.language", "workflow.schema", "workflow.validate", "namespace.list", "namespace.get", "grant.list", "secret.list", "workflow.list", "workflow.get", "run.list", "run.get", "run.logs", "run.output", "runner.list", "collection.list", "collection.get"}
+	readOnly := []string{"workflow.language", "workflow.schema", "workflow.validate", "namespace.list", "namespace.get", "grant.list", "secret.list", "workflow.list", "workflow.get", "run.list", "run.get", "run.logs", "run.output", "run.artifact", "runner.list", "collection.list", "collection.get"}
 	destructive := []string{"namespace.delete", "grant.revoke", "workflow.delete", "secret.remove", "collection.delete"}
 	for _, name := range names {
 		h := hints[name]
@@ -334,15 +334,15 @@ func TestWorkflowSchemaAnswersAPart(t *testing.T) {
 
 // The language and the schemas are resources too, for a client that prefers attaching documents
 // to calling a tool: every topic and every part listed, each read as the tool answers it. A file of
-// a repository and a run are listed beside them to whoever holds what workflow.get and run.get need
-// somewhere, as the tools are.
+// a repository, a run and a run's file are listed beside them to whoever holds what workflow.get,
+// run.get and run.artifact need somewhere, as the tools are.
 func TestTheLanguageIsReadAsResources(t *testing.T) {
 	rt := platform(t)
 	_, result, _ := called(t, rt, "alice", "resources/list", nil)
 	if resources, _ := result["resources"].([]any); len(resources) != len(language.Topics())+len(language.Parts()) {
 		t.Errorf("%d resources are listed", len(resources))
 	}
-	for as, want := range map[string]string{"alice": "language schema tree run", "nobody": "language schema"} {
+	for as, want := range map[string]string{"alice": "language schema tree run artifact", "nobody": "language schema"} {
 		_, result, _ = called(t, rt, as, "resources/templates/list", nil)
 		var names []string
 		for _, template := range result["resourceTemplates"].([]any) {

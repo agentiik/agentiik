@@ -118,6 +118,13 @@ func reads() *mcp.Annotations { return readOnly() }
 func writes() *mcp.Annotations {
 	return &mcp.Annotations{ReadOnlyHint: mcp.Hint(false), DestructiveHint: mcp.Hint(false), IdempotentHint: mcp.Hint(false), OpenWorldHint: mcp.Hint(false)}
 }
+
+// fetches is a tool that reads and may spend what it reads: an artifact with a fetch budget spends
+// one, which is the consumption its workflow declared it for and the one change the read makes, so
+// it is no write, but reading it twice may not read the same.
+func fetches() *mcp.Annotations {
+	return &mcp.Annotations{ReadOnlyHint: mcp.Hint(true), DestructiveHint: mcp.Hint(false), IdempotentHint: mcp.Hint(false), OpenWorldHint: mcp.Hint(false)}
+}
 func removes() *mcp.Annotations {
 	return &mcp.Annotations{ReadOnlyHint: mcp.Hint(false), DestructiveHint: mcp.Hint(true), IdempotentHint: mcp.Hint(true), OpenWorldHint: mcp.Hint(false)}
 }
@@ -367,11 +374,26 @@ func userTools() []routed {
 		},
 		{
 			name: "run.output", title: "Read a run's output",
-			description: "One output of a finished run, its envelope as the workflow declares it. Requires run:read_data, which reading a run's data takes.",
+			description: "One output of a finished run, its envelope as the workflow declares it; run.artifact reads a file it names. Requires run:read_data, which reading a run's data takes.",
 			input:       object([]string{"run", "name"}, argRun, `"name":{"type":"string","description":"The output's name, as the workflow declares it."}`),
 			annotations: reads(), offered: holds(RunReadData),
 			request: func(a map[string]any) (string, string, url.Values, any) {
 				return "GET", "/api/v1/runs/" + segment(str(a, "run")) + "/outputs/" + segment(str(a, "name")), nil, nil
+			},
+		},
+		{
+			name: "run.artifact", title: "Read a file a run wrote",
+			description: "One file a run's step wrote, by the agk://run/<run>/<step>/<port>/<name> URI an envelope's files name it by, in run.output or run.get: text as text, an image as an image, and any other file as an embedded resource of its media type. A file above 1 MiB is refused with its size, since what this answers lands in your context. A file its workflow gave a fetch budget spends one fetch, as any fetch does. Requires run:read_data, which reading a run's data takes.",
+			input:       object([]string{"uri"}, `"uri":{"type":"string","description":"The file's URI, as an envelope's files name it: agk://run/<run>/<step>/<port>/<name>."}`),
+			annotations: fetches(), offered: holds(RunReadData),
+			request: func(a map[string]any) (string, string, url.Values, any) {
+				return "GET", "/api/v1/artifacts/" + segment(str(a, "uri")), nil, nil
+			},
+			read: func(args map[string]any, a *toolAnswer, _ requester) (*mcp.CallResult, error) {
+				if a.status != http.StatusOK {
+					return result(a)
+				}
+				return &mcp.CallResult{Content: []mcp.Content{fileBlock(str(args, "uri"), a.header.Get("Content-Type"), a.body.Bytes())}}, nil
 			},
 		},
 		{
