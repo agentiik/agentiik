@@ -97,7 +97,9 @@ func TestAnEndedTaskIsNotRedeemedEvenByItsRunner(t *testing.T) {
 
 // The binding a redemption makes is what a result is checked against on the way out, so it reads
 // back as the runner that redeemed, as nobody before any redemption, and not at all for a dispatch
-// named by the row of one task and the key of another.
+// named by the row of one task and the key of another. The run detail says when the runner took
+// it, and nothing of the kind before, which is what tells a dispatch waiting on its pool's queue
+// from one a runner holds.
 func TestADispatchIsHeldByTheRunnerThatRedeemedIt(t *testing.T) {
 	super, app := database(t)
 	seed(t, super)
@@ -144,8 +146,24 @@ func TestADispatchIsHeldByTheRunnerThatRedeemedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	detailed := func() TaskSummary {
+		t.Helper()
+		var d RunDetail
+		if err := pool.In(ctx, "finance", func(ctx context.Context, ns *NS) error {
+			var err error
+			d, err = ns.RunDetail(ctx, financeRun)
+			return err
+		}); err != nil || len(d.Tasks) != 1 {
+			t.Fatalf("the run detail lists %v, answering %v", d.Tasks, err)
+		}
+		return d.Tasks[0]
+	}
+
 	if runner, err := heldBy(key, row); err != nil || runner != "" {
 		t.Errorf("a dispatch nobody redeemed is held by %q, answering %v", runner, err)
+	}
+	if task := detailed(); !task.TakenAt.IsZero() || task.Runner != "" {
+		t.Errorf("a dispatch nobody redeemed reads as taken at %s by %q", task.TakenAt, task.Runner)
 	}
 	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
 		_, err := w.Redeem(ctx, clear, key, "runner-dmz-02", now)
@@ -170,6 +188,9 @@ func TestADispatchIsHeldByTheRunnerThatRedeemedIt(t *testing.T) {
 	}
 	if !taken.Equal(now.Truncate(time.Microsecond)) {
 		t.Errorf("a dispatch redeemed at %s and again a minute later was taken at %s", now, taken)
+	}
+	if task := detailed(); !task.TakenAt.Equal(taken) || task.Runner != "runner-dmz-02" {
+		t.Errorf("a dispatch taken at %s by runner-dmz-02 reads as taken at %s by %q", taken, task.TakenAt, task.Runner)
 	}
 
 	for _, c := range []struct {

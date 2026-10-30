@@ -154,6 +154,22 @@ func TestAnEnvelopeIsShownUnderRunReadDataAlone(t *testing.T) {
 	}
 }
 
+// A dispatched task nobody took waits on its pool's queue for a slot, which is said where its
+// runner would be named, and a task not yet dispatched is not held yet.
+func TestADispatchedTaskNobodyTookIsQueuedForASlot(t *testing.T) {
+	in := &installation{}
+	in.run = aFailedRun()
+	in.run.Tasks[4] = db.TaskSummary{Step: "invoice", State: agk.TaskDispatched, Attempt: 1, Shard: &agk.Shard{Index: 3, Of: 3}}
+	s := screen(opened(t, in, Options{Run: failedRun}, 160, 40))
+	if !strings.Contains(s, "queued for a slot") || strings.Contains(s, "not held yet") {
+		t.Errorf("a dispatched task nobody took reads:\n%s", s)
+	}
+	in.run.Tasks[4].State = agk.TaskPending
+	if s := screen(opened(t, in, Options{Run: failedRun}, 160, 40)); !strings.Contains(s, "not held yet") || strings.Contains(s, "queued for a slot") {
+		t.Errorf("a task not yet dispatched reads:\n%s", s)
+	}
+}
+
 // An administrator reads each runner's pool and labels beside its name; nobody else asks.
 func TestAnAdministratorSeesARunnersPoolAndLabels(t *testing.T) {
 	admin := &installation{me: &principal{Principal: "dana", Admin: true, Permissions: map[string][]string{"finance": {"run:read"}}},

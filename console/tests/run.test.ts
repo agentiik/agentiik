@@ -4,7 +4,7 @@ import { connect } from "../src/api/client";
 import App from "../src/App.svelte";
 import { band } from "../src/lib/exit";
 import { Place } from "../src/lib/place.svelte";
-import { lastAttempt, tasksOf, type RunDetail } from "../src/lib/run.svelte";
+import { lastAttempt, queued, tasksOf, type RunDetail } from "../src/lib/run.svelte";
 import { Session } from "../src/lib/session.svelte";
 import { answering, scenario, type Scenario } from "./scenario";
 
@@ -42,6 +42,15 @@ describe("a step's tasks", () => {
   it("strip to each shard's latest attempt", () => {
     expect(lastAttempt(run, "invoice").map((t) => `${t.shard?.index}:${t.attempt}:${t.state}`)).toEqual(["1:1:succeeded", "2:1:succeeded", "3:2:failed", "4:1:succeeded", "5:1:succeeded", "6:1:succeeded", "7:1:succeeded", "8:1:succeeded"]);
   });
+
+  it("are queued for a slot while dispatched and taken by no runner", () => {
+    const task = { task: "r/invoice/1", step: "invoice", attempt: 1 };
+    expect(queued({ ...task, state: "dispatched" })).toBe(true);
+    expect(queued({ ...task, state: "dispatched", runner: "runner-dmz-01", taken_at: "2026-10-01T05:42:21Z" })).toBe(false);
+    // Bound before v0.7.2 kept the instant: the runner still says it is held.
+    expect(queued({ ...task, state: "dispatched", runner: "runner-dmz-01" })).toBe(false);
+    expect(queued({ ...task, state: "pending" })).toBe(false);
+  });
 });
 
 describe("the run inspector", () => {
@@ -58,6 +67,24 @@ describe("the run inspector", () => {
     step.reason = "graph: step invoice: port orders: inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects";
     open(`/finance/runs/${failed}`, s);
     expect(await screen.findByText(step.reason)).toBeTruthy();
+  });
+
+  it("says a dispatched task nobody took is queued for a slot, and names the runner holding one", async () => {
+    const s = scenario("alice");
+    const tasks = detail(s).tasks.filter((t) => t.step === "invoice" && t.attempt === 1);
+    for (const t of tasks.slice(3, 5)) {
+      t.state = "dispatched";
+      delete t.exit_code;
+      delete t.started_at;
+      delete t.finished_at;
+    }
+    delete tasks[3]!.runner;
+    delete tasks[3]!.taken_at;
+    tasks[4]!.runner = "runner-dmz-02";
+    tasks[4]!.taken_at = "2026-10-01T05:42:21Z";
+    open(`/finance/runs/${failed}`, s);
+    expect(await screen.findByText("queued for a slot")).toBeTruthy();
+    expect(screen.getAllByText("queued for a slot")).toHaveLength(1);
   });
 
   it("leaves out what a principal without run:read_data may not see, without a word of it", async () => {

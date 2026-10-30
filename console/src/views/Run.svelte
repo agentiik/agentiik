@@ -22,7 +22,7 @@
   import { holds } from "../lib/permissions";
   import { follow, type Place } from "../lib/place.svelte";
   import { runAt, runsOf } from "../lib/route";
-  import { lastAttempt, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
+  import { lastAttempt, queued, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
   import { sentence } from "../lib/signin";
 
   // The run inspector: one run, each step's verdict and shards on the left, and on the right the step
@@ -378,7 +378,7 @@
               <dt>Task</dt>
               <dd class="term">attempt {task.attempt}{#if task.shard}&nbsp;· shard {task.shard.index} of {task.shard.of}{/if}</dd>
               <dt>Runner</dt>
-              <dd class="term">{task.runner ?? (task.memoised_from ? `none, a cache hit of ${task.memoised_from}` : task.called ? `none, it called ${task.called}` : "not held yet")}</dd>
+              <dd class="term">{task.runner ?? (task.memoised_from ? `none, a cache hit of ${task.memoised_from}` : task.called ? `none, it called ${task.called}` : queued(task) ? "none yet, queued for a slot on its pool" : "not held yet")}</dd>
             {/if}
           </dl>
           {#if readsData && task?.params && Object.keys(task.params).length > 0}
@@ -402,7 +402,7 @@
                       </button>
                     </td>
                     <td><StatePill state={t.state} live={!reader.ended} /></td>
-                    <td class="term muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : "")}</td>
+                    <td class="term muted">{t.runner ?? (t.memoised_from ? `cache hit of ${t.memoised_from}` : t.called ? `called ${t.called}` : queued(t) ? "queued for a slot" : "")}</td>
                     <td class="number code">{t.exit_code ?? ""}</td>
                     <td class="number term">{lasted(t.started_at, t.finished_at)}</td>
                   </tr>

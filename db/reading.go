@@ -140,6 +140,13 @@ type TaskSummary struct {
 	Runner   string `json:"runner,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 
+	// TakenAt is when a runner took the task, its redemption binding the task to it. It tells the
+	// two halves of dispatched apart, which the state alone does not: a task nobody took waits on
+	// its pool's queue until a runner with a free slot redeems it, and one taken is that runner's,
+	// pulling its image or running pre_task. An instant and never a value the task was handed, so
+	// it is answered under run:read with the state. Left out on a task no runner took, and on one
+	// bound before v0.7.2 kept the instant, which runner still names as held.
+	TakenAt    time.Time `json:"taken_at,omitzero"`
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
 
@@ -441,7 +448,7 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 	// what the one dispatch it was prepared for was handed.
 	rows, err := n.tx.Query(ctx, `
 		select t.idempotency_key, t.step, t.state, t.attempt, t.shard_index, t.shard_of,
-		       t.runner, t.exit_code, t.started_at, t.finished_at, t.memoised_from, coalesce(t.called_run, ''),
+		       t.runner, t.exit_code, t.taken_at, t.started_at, t.finished_at, t.memoised_from, coalesce(t.called_run, ''),
 		       g.scope->'inputs', g.scope->'params',
 		       s.envelopes_purged_at
 		from tasks t join steps s on s.namespace = t.namespace and s.run_id = t.run_id and s.step = t.step
@@ -462,10 +469,10 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		var state string
 		var index, of *int
 		var runner, memoised *string
-		var started, finished, purged *time.Time
+		var taken, started, finished, purged *time.Time
 		var handed, params []byte
 		if err := rows.Scan(&t.Task, &t.Step, &state, &t.Attempt, &index, &of,
-			&runner, &t.ExitCode, &started, &finished, &memoised, &t.Called, &handed, &params, &purged); err != nil {
+			&runner, &t.ExitCode, &taken, &started, &finished, &memoised, &t.Called, &handed, &params, &purged); err != nil {
 			return nil, err
 		}
 		if t.Inputs, err = inputsHanded(handed, purged); err != nil {
@@ -487,6 +494,9 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		}
 		if memoised != nil {
 			t.MemoisedFrom = agk.RunID(*memoised)
+		}
+		if taken != nil {
+			t.TakenAt = *taken
 		}
 		if started != nil {
 			t.StartedAt = *started
