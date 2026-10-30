@@ -445,7 +445,9 @@ func reportSucceeded(w io.Writer, at remote, d db.RunDetail) {
 		for _, f := range fs {
 			failure(w, f)
 		}
-		fmt.Fprintf(w, "agk logs %s shows what they wrote\n", d.Run)
+		if wrote(fs) {
+			fmt.Fprintf(w, "agk logs %s shows what they wrote\n", d.Run)
+		}
 	}
 }
 
@@ -473,13 +475,24 @@ func reportEnded(w io.Writer, d db.RunDetail) {
 	for _, f := range fs {
 		failure(w, f)
 	}
-	fmt.Fprintf(w, "agk logs %s shows what they wrote\n", d.Run)
+	if wrote(fs) {
+		fmt.Fprintf(w, "agk logs %s shows what they wrote\n", d.Run)
+	}
+}
+
+// wrote says whether a task is among the failures, which a log may hold the lines of: a step
+// refused before any task started wrote none.
+func wrote(fs []local.Failure) bool {
+	return slices.ContainsFunc(fs, func(f local.Failure) bool { return f.Attempt > 0 })
 }
 
 // failuresOf reads the failures a run ended with out of its tasks: the current dispatch of every
 // shard whose state a report names, which is failed, timed_out or lost, in step order. An attempt
 // a retry moved past is not one, as in a local run, and the current dispatch is the shard's last
-// row, since the tasks come ordered by step, attempt, shard and requeue.
+// row, since the tasks come ordered by step, attempt, shard and requeue. A failed step's reason is
+// read out of its summary, as a local run reads it out of the state: on its first failure, or as
+// a failure of its own where no task of it failed, a step refused before any task started, which
+// read as no step failed.
 func failuresOf(d db.RunDetail) []local.Failure {
 	current := map[shardKey]db.TaskSummary{}
 	for _, t := range d.Tasks {
@@ -513,6 +526,14 @@ func failuresOf(d db.RunDetail) []local.Failure {
 		}
 		out = append(out, f)
 	}
+	for _, s := range d.Steps {
+		if s.Verdict == agk.VerdictFailed && s.Reason != "" {
+			out = local.WithReason(out, s.Step, s.Reason)
+		}
+	}
+	// In step order again, a step's own failure added last landing where its tasks' would have,
+	// and the shards of a step kept in theirs.
+	slices.SortStableFunc(out, func(a, b local.Failure) int { return strings.Compare(string(a.Step), string(b.Step)) })
 	return out
 }
 
