@@ -13,6 +13,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/mcp"
+	"github.com/agentiik/agentiik/version"
 )
 
 // A tool of the user's server is a route of the API. "Its tools mirror the API and hold no authority
@@ -249,7 +250,9 @@ func result(a *toolAnswer) (*mcp.CallResult, error) {
 
 // refusedText is a refusal as a model reads it: the API's sentence, and where it carries a problem
 // of the hook's, where it is, what was expected there and the topic of workflow_language to read
-// before correcting the draft.
+// before correcting the draft. A tag no pin holds is no fault of the draft, which a client of MCP
+// could not correct by reading the language: it is told to pin the tag with workflow_pin, which is
+// what the hook's own sentence, written for a pusher with agk at hand, cannot name.
 func refusedText(status int, structured any) string {
 	o, _ := structured.(map[string]any)
 	said, _ := o["error"].(string)
@@ -260,7 +263,9 @@ func refusedText(status int, structured any) string {
 	if detail, _ := o["detail"].(string); detail != "" {
 		lines = append(lines, detail)
 	}
-	if rule, _ := o["rule"].(string); rule != "" {
+	// A problem of the hook's names its topic; a run's input refused names a rule too, required,
+	// schema or undeclared, beside the input, and its sentence says all there is.
+	if rule, _ := o["rule"].(string); rule != "" && o["topic"] != nil {
 		node, _ := o["pointer"].(string)
 		if node == "" {
 			node = "the document"
@@ -270,7 +275,11 @@ func refusedText(status int, structured any) string {
 		}
 		expected, _ := o["expected"].(string)
 		topic, _ := o["topic"].(string)
-		lines = append(lines, "at "+node+", expected "+expected, "read workflow_language with topic "+topic+" before correcting the draft")
+		next := "read workflow_language with topic " + topic + " before correcting the draft"
+		if rule == string(version.RuleImageNotPinned) {
+			next = "the draft need not change: pin the tag with workflow_pin, which asks its registry for the digest it serves now and records it, then call again"
+		}
+		lines = append(lines, "at "+node+", expected "+expected, next)
 	}
 	return strings.Join(lines, "\n")
 }

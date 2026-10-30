@@ -72,6 +72,9 @@ type Server struct {
 	liveHub    *liveHub
 	liveTiming liveTiming
 	trouble    func(error)
+
+	// tags resolves an image tag at its registry for a writer who asks the images route to.
+	tags *tagResolver
 }
 
 // ServerOptions are what a Server is given.
@@ -142,7 +145,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now,
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
 		liveHub: &liveHub{pool: o.Pool}, liveTiming: defaultLiveTiming,
-		publicURL: o.PublicURL, router: rt, hooks: o.Hooks,
+		publicURL: o.PublicURL, router: rt, hooks: o.Hooks, tags: &tagResolver{},
 	}
 	starter, err := trigger.New(trigger.Options{Pool: o.Pool, Versions: o.Versions, Objects: o.Objects, Report: s.report, Now: o.Now})
 	if err != nil {

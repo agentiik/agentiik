@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/x509"
 	"net/http"
+	"net/netip"
 	"time"
 )
 
@@ -82,3 +84,11 @@ func ObserveRequests(m *MCP, observe func(next http.Handler) http.Handler) { m.a
 
 // Reencode is what PUT /api/v1/me/avatar stores of a photo sent: a PNG, with its size in pixels.
 func Reencode(raw []byte) ([]byte, int, int, error) { return reencode(raw, "photo") }
+
+// ResolvingTags has s resolve an image tag through lookup, asking hub where a reference names Docker
+// Hub and trusting roots, and reaching the addresses allowed although they are the loopback's, as a
+// test's registry is: every other address of a special-use range is refused as the installation
+// refuses it.
+func ResolvingTags(s *Server, hub string, roots *x509.CertPool, lookup func(context.Context, string) ([]netip.Addr, error), allowed ...netip.Addr) {
+	s.tags = &tagResolver{hub: hub, roots: roots, lookup: lookup, allowed: allowed}
+}

@@ -7,11 +7,15 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A run's detail tells a dispatched task waiting on its pool's queue from one a runner took: `GET /api/v1/runs/{id}`, and so `run_get`, answers `taken_at` on a task, under `run:read`, and the console's step pane and `agk console` say a dispatched task nobody took is queued for a slot (#948).
 - `agk run` and `agk status` print why a step failed where its tasks do not say: a step refused before any task started, its port fed what is no batch, is reported as the step that failed with its `reason`, where the run said no step failed; a failed step's reason goes with its first task's failure, and `agk status` says a skipped or cancelled step's under it (#949).
 - A collection's sync call that fails names the step's `reason` beside its exit code, and one that succeeds embeds the files of the run it started after the envelope, as `run_artifact` answers them, under `workflow:run` alone: up to 1 MiB together, a fetch budget spent as by any fetch, and a file of another run, above the ceiling, expired or spent named with its size and why (#950).
-- The console's `openapi.json` is copied from agentiik/schemas#154, which describes `taken_at`, and `schema.d.ts` regenerated.
+- A client of MCP pins an image: `workflow_pin` has the installation ask each tag's registry for the digest it serves under it now, the index's for an image of several architectures, and pins it as `agk push` would, through `POST /api/v1/{ns}/workflows/{name}/images` with `resolve`, under `workflow:write`, audited as `image.pin`. The registry is asked over HTTPS, with no credential and no proxy, and only where every address its host resolves to is public, each address checked again as it is dialled; 16 tags a request, within 20 seconds. `workflow_validate` and `workflow_commit` answering `image-not-pinned` say to call it (#940).
+- `run_cancel` takes `runs` and `workflow_run` takes `inputs_each`, up to 100 items each made as its own request of the route, as the caller, and answered in order; a quota reached stops the starts there, saying how many were not attempted (#941).
+- A run's input refused through MCP is said in its own sentence, no longer followed by a line sending the client to an empty topic of `workflow_language`.
+- The fixture corpus, the language reference, the schema parts and the console's `openapi.json` and schemas are agentiik/schemas `8634e6f`, its main branch, which describes `taken_at` and `resolve`, recorded in `internal/fixtures/testdata/SCHEMAS_COMMIT`, `fixtures.Commit` and `language.Source`, and `schema.d.ts` regenerated.
 
 ### Upgrading
 
 - Nothing to do and no order to keep: `taken_at` is read from the column migration 0076 added in v0.7.2, and a task bound before then still names its runner, which says it is held.
+- `workflow_pin` needs no migration and changes no message between the programs. The API makes requests of registries only when a writer asks it to resolve a tag; an installation whose API has no route to the internet answers that request `502` and pins with `agk push` as before.
 
 ## v0.7.2, 2026-10-30
 

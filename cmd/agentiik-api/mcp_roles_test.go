@@ -35,18 +35,18 @@ func TestEachRoleIsOfferedTheToolsItMayUse(t *testing.T) {
 		"oscar": everybody + " workflow_list workflow_run run_list run_get run_logs run_cancel run_replay " + collections + " collection_add",
 		// An editor's columns on one workflow: no workflow made, and no secret, which are a
 		// namespace's.
-		"walter": everybody + " workflow_validate workflow_commit workflow_list workflow_get workflow_update workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay " + collections + " collection_add",
+		"walter": everybody + " workflow_validate workflow_commit workflow_list workflow_get workflow_update workflow_pin workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay " + collections + " collection_add",
 		// The owner's every column on the namespace, but nothing an administrator hands out.
-		"alice": everybody + " workflow_validate workflow_commit namespace_update namespace_delete grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay " + collections + " collection_add",
+		"alice": everybody + " workflow_validate workflow_commit namespace_update namespace_delete grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_pin workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay " + collections + " collection_add",
 		// The installation's, and nothing of any namespace's workflows.
 		"carol": everybody + " namespace_update namespace_delete namespace_quotas grant_list grant_create grant_revoke " + collections + " runner_list",
 		// oscar's grant, as a service account: no namespace made, and collections of its own.
 		"finance/nightly": anyone + " workflow_list workflow_run run_list run_get run_logs run_cancel run_replay " + collections + " collection_add",
 		// An owner's columns on hr through the scope, and neither a namespace nor a collection.
-		"mallory's token for hr": anyone + " workflow_validate workflow_commit namespace_update namespace_delete grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay",
+		"mallory's token for hr": anyone + " workflow_validate workflow_commit namespace_update namespace_delete grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_pin workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay",
 		// An administrator owning every namespace while it lasts, naming the owner of one it
 		// creates, and owning no collection.
-		"the bootstrap token": everybody + " workflow_validate workflow_commit namespace_update namespace_delete namespace_quotas grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay runner_list",
+		"the bootstrap token": everybody + " workflow_validate workflow_commit namespace_update namespace_delete namespace_quotas grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_pin workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay runner_list",
 	}
 
 	var every []string

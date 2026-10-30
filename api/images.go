@@ -63,10 +63,12 @@ type Images struct {
 }
 
 // RecordImages is what POST /api/v1/{ns}/workflows/{name}/images carries: the digest each tag is
-// pinned to, and the manifest of each image by digest, as its text.
+// pinned to, the manifest of each image by digest, as its text, and the tags the installation is to
+// resolve at their registries and pin to what each serves (registry.go).
 type RecordImages struct {
 	Pins      map[string]string `json:"pins,omitempty"`
 	Manifests map[string]string `json:"manifests,omitempty"`
+	Resolve   []string          `json:"resolve,omitempty"`
 }
 
 // imagesMost is how many pins, and how many manifests, one recording carries: 256, one per image a
@@ -113,6 +115,17 @@ func (ri *RecordImages) field(b *body, name string) error {
 			ri.Manifests[image] = manifest
 			return nil
 		})
+	case "resolve":
+		tooMany := fmt.Sprintf("this recording resolves more than the %d image tags it may: each is a few requests the installation makes of a registry, and a workflow names a handful", resolveMost)
+		if err := texts(b, &ri.Resolve, resolveMost, tooMany); err != nil {
+			return err
+		}
+		for i, reference := range ri.Resolve {
+			if slices.Contains(ri.Resolve[:i], reference) {
+				return twice("the image", reference)
+			}
+		}
+		return nil
 	}
 	return unknown(name)
 }
@@ -156,14 +169,24 @@ func (s *Server) recordImages(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, statusOf(err), err.Error())
 		return
 	}
-	if len(ri.Pins)+len(ri.Manifests) == 0 {
-		fail(w, http.StatusBadRequest, "this recording names no pin and no manifest, and records nothing")
+	if len(ri.Pins)+len(ri.Manifests)+len(ri.Resolve) == 0 {
+		fail(w, http.StatusBadRequest, "this recording names no pin, no manifest and no tag to resolve, and records nothing")
 		return
 	}
 	images, err := checkImages(ri)
 	if err != nil {
 		fail(w, statusOf(err), err.Error())
 		return
+	}
+	for _, reference := range ri.Resolve {
+		if _, pinned := ri.Pins[reference]; pinned {
+			fail(w, http.StatusBadRequest, fmt.Sprintf("%.64q is pinned and resolved by one recording, and which of the two digests to keep is not the API's to guess", reference))
+			return
+		}
+		if _, err := s.tags.parseTag(reference); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	for _, image := range slices.Sorted(maps.Keys(images.Manifests)) {
 		// Held to what a version is made under, the bound a port is written to included, so
@@ -174,6 +197,29 @@ func (s *Server) recordImages(w http.ResponseWriter, r *http.Request, who Princi
 		if _, err := brick.ParseManifest(images.Manifests[image]); err != nil {
 			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("the brick manifest of %s: %s", image, err))
 			return
+		}
+	}
+	// Last of all, once nothing else could refuse the recording, and outside any transaction, since
+	// a registry may take seconds to answer: the tags asked for, resolved by the installation where
+	// agk push resolves them on the pusher's daemon, and pinned as a pin a client sends is, the
+	// same checks, the same transaction and the same entries in the log.
+	if len(ri.Resolve) > 0 {
+		resolved, err := s.tags.resolveAll(r.Context(), ri.Resolve)
+		var refused *tagRefused
+		switch {
+		case errors.As(err, &refused):
+			fail(w, refused.status, refused.why)
+			return
+		case err != nil:
+			fail(w, http.StatusBadGateway, "the image tags could not be resolved, and nothing was pinned")
+			return
+		}
+		for reference, image := range resolved {
+			if agk.ImageRepository(image) != agk.ImageRepository(reference) || !agk.ImageByDigest(image) {
+				fail(w, http.StatusBadGateway, fmt.Sprintf("%s resolved to %.100q, which is no digest of its repository, and nothing was pinned", reference, image))
+				return
+			}
+			images.Pins[reference] = db.CanonicalImage(image)
 		}
 	}
 
