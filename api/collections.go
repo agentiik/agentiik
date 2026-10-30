@@ -692,7 +692,7 @@ func (c *Collections) writeMember(w http.ResponseWriter, r *http.Request, caller
 		// it, so the rounds end when those writes do; the request's context, ended when its client
 		// goes, bounds them otherwise. No count of rounds bounds them, since one would refuse a member
 		// that clashes with nothing whenever a client adds a few at once, as one calling
-		// collection.add in parallel does: each write landing first costs every other a round.
+		// collection_add in parallel does: each write landing first costs every other a round.
 		if err != nil || judged {
 			break
 		}

@@ -203,6 +203,12 @@ type Surface struct {
 	// names nothing the caller may read: the revision's answer to a resource not found, which is
 	// the same whether it is absent or out of reach.
 	Read func(ctx context.Context, uri string) ([]Contents, error)
+
+	// Renamed answers a name a tool went by before it was renamed with the name it goes by now,
+	// and "" for any other. A call naming no tool offered is answered as a call of the tool whose
+	// former name it is, where that tool is offered, since a client calls by the names it was
+	// listed and keeps them; the list names each tool by its new name alone. Nil for none.
+	Renamed func(former string) string
 }
 
 // Error is a JSON-RPC error: a protocol error, as opposed to a tool's result that says it failed.
@@ -439,6 +445,11 @@ func (s *Server) answered(ctx context.Context, method string, params json.RawMes
 			return nil, InvalidParams("the arguments of a call are an object")
 		}
 		i := slices.IndexFunc(surface.Tools, func(t Tool) bool { return t.Name == p.Name })
+		if i < 0 && surface.Renamed != nil {
+			if now := surface.Renamed(p.Name); now != "" {
+				i = slices.IndexFunc(surface.Tools, func(t Tool) bool { return t.Name == now })
+			}
+		}
 		if i < 0 {
 			// The same answer for a tool that does not exist and one the caller is not offered:
 			// "an unusable tool is absent rather than refused", from a call as from the list.

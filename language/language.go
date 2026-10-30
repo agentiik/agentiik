@@ -3,7 +3,7 @@
 //
 // "The language documentation is generated from the schema, never written beside it." The pages
 // under reference/ are what tools/language.py wrote in agentiik/schemas, every sentence a
-// description of the schema and every example one of its examples, so workflow.language, the
+// description of the schema and every example one of its examples, so workflow_language, the
 // command line and the site teach the language the validator enforces rather than three readings of
 // it. This package holds them as they were written and reads nothing into them: a page is served as
 // it stands, and topics.json says which topic answers for which place in agentiik.yaml.
@@ -111,7 +111,7 @@ func Page(topic string) (string, bool) {
 }
 
 // Unknown is what a client is told of a name that is no topic: the name, and every topic it could
-// have asked for, so that the next request can be right. workflow.language answers it and agk
+// have asked for, so that the next request can be right. workflow_language answers it and agk
 // language prints it, so that a model and a person are refused in one sentence.
 func Unknown(topic string) string {
 	return fmt.Sprintf("there is no topic called %q: the topics are %s", topic, strings.Join(Names(), ", "))

@@ -661,7 +661,7 @@ func TestATokenNarrowedByAScopeReachesNoCollection(t *testing.T) {
 		}
 		n := 0
 		for _, tool := range result["tools"].([]any) {
-			if strings.HasPrefix(tool.(map[string]any)["name"].(string), "collection.") {
+			if strings.HasPrefix(tool.(map[string]any)["name"].(string), "collection_") {
 				n++
 			}
 		}
@@ -669,8 +669,8 @@ func TestATokenNarrowedByAScopeReachesNoCollection(t *testing.T) {
 			t.Errorf("%s is offered %d collection tools, and %d are theirs", who, n, want)
 		}
 	}
-	if _, _, refusal := calledAt(t, c.rt, "/mcp", narrowed, "tools/call", map[string]any{"name": "collection.list", "arguments": map[string]any{}}); refusal == nil || !strings.Contains(refusal.Message, "Unknown tool") {
-		t.Errorf("collection.list through a narrowed token was answered %v", refusal)
+	if _, _, refusal := calledAt(t, c.rt, "/mcp", narrowed, "tools/call", map[string]any{"name": "collection_list", "arguments": map[string]any{}}); refusal == nil || !strings.Contains(refusal.Message, "Unknown tool") {
+		t.Errorf("collection_list through a narrowed token was answered %v", refusal)
 	}
 }
 
@@ -998,7 +998,7 @@ func conforming(t *testing.T, rt *api.Router, path, name string, result map[stri
 }
 
 // "A run still going when the wait is over goes on, and the call answers its identifier and its
-// state, to follow with the user's server's run.get, rather than an error the run did not make." A
+// state, to follow with the user's server's run_get, rather than an error the run did not make." A
 // sync tool publishes the envelope as its outputSchema, so the answer is no structured content,
 // which that schema would refuse, and as the result has none it is a tool's error, which a client
 // hands the model as it is, its text saying that the run has not failed and goes on.
@@ -1022,7 +1022,7 @@ func TestARunStillGoingWhenTheWaitEndsIsToldToBeFollowed(t *testing.T) {
 	conforming(t, c.rt, path, "create_invoices", result)
 	text := textOf(result)
 	if _, structured := result["structuredContent"]; structured || result["isError"] != true ||
-		!strings.Contains(text, string(runs[0].Run)) || !strings.Contains(text, "queued") || !strings.Contains(text, "run.get") || !strings.Contains(text, "not failed") {
+		!strings.Contains(text, string(runs[0].Run)) || !strings.Contains(text, "queued") || !strings.Contains(text, "run_get") || !strings.Contains(text, "not failed") {
 		t.Errorf("a run still going was answered %v", result)
 	}
 }
@@ -1133,7 +1133,7 @@ func (c *collected) joined() (runner, credential string) {
 
 // "The run fails: a tool execution error, isError: true, naming the failing step, its exit code and
 // its message", so that a model can correct itself. The message is the end of the log of the task
-// the step failed by, read as run.logs reads it, through the log stream route as the caller: masked
+// the step failed by, read as run_logs reads it, through the log stream route as the caller: masked
 // as its runner masked it before shipping it, of that task's dispatch and no other's, and its last
 // lines alone, about 2 KiB of them.
 func TestAFailedRunIsToldWithTheEndOfTheLogItFailedBy(t *testing.T) {

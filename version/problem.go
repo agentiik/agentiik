@@ -12,7 +12,7 @@ import (
 // wrong, what was expected there and the topic of the language that explains it.
 //
 // "Give every validation error a JSON Pointer to the offending node, what was expected there, and
-// the workflow.language topic covering it", and "return the same errors from agk validate, the
+// the workflow_language topic covering it", and "return the same errors from agk validate, the
 // pre-receive hook and the API": a person holding the file is sent to its line, a client holding the
 // document as data to its node, and a model correcting a draft to the page that teaches what it got
 // wrong, from the one refusal, so that no reader is told something another is not.
@@ -36,7 +36,7 @@ type Problem struct {
 	// Expected is what was expected there.
 	Expected string `json:"expected"`
 
-	// Topic is the topic of workflow.language that covers the node.
+	// Topic is the topic of workflow_language that covers the node.
 	Topic string `json:"topic"`
 }
 
@@ -100,7 +100,7 @@ func (p Problem) Lines() []string {
 	if p.Pointer != "" {
 		node = p.Pointer
 	}
-	lines = append(lines, "at "+node+", expected "+p.Expected, "read workflow.language, topic "+p.Topic)
+	lines = append(lines, "at "+node+", expected "+p.Expected, "read workflow_language, topic "+p.Topic)
 	return lines
 }
 

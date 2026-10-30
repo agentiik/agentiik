@@ -53,15 +53,15 @@ func TestAnOperatorCallsACollectionsToolAndReadsNothingOfTheWorkflow(t *testing.
 	// oscar operates payroll and holds nothing else: he assembles a collection of it with his own
 	// server's tools.
 	oscar := x.as["oscar"]
-	made, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "collection.create", "arguments": map[string]any{"name": "payroll-desk"}})
+	made, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "collection_create", "arguments": map[string]any{"name": "payroll-desk"}})
 	if err != nil || made["isError"] == true {
-		t.Fatalf("collection.create answered %v %v", made, err)
+		t.Fatalf("collection_create answered %v %v", made, err)
 	}
 	collection := made["structuredContent"].(map[string]any)
 	id := collection["id"].(string)
-	added, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "collection.add", "arguments": map[string]any{"collection": id, "namespace": "finance", "workflow": "payroll"}})
+	added, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "collection_add", "arguments": map[string]any{"collection": id, "namespace": "finance", "workflow": "payroll"}})
 	if err != nil || added["isError"] == true {
-		t.Fatalf("collection.add answered %v %v", added, err)
+		t.Fatalf("collection_add answered %v %v", added, err)
 	}
 
 	// What his client is told at the collection's address: the one tool, declared, and nothing of
@@ -102,11 +102,11 @@ func TestAnOperatorCallsACollectionsToolAndReadsNothingOfTheWorkflow(t *testing.
 
 	// Nor does anything else he may ask reach the entry point: not his own server's tools, not its
 	// resources, not the API and not git. Each is refused as a workflow he cannot see is.
-	if res, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "payroll"}}); err == nil {
-		t.Errorf("workflow.get is offered to an operator and answered %v", res)
+	if res, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "workflow_get", "arguments": map[string]any{"namespace": "finance", "workflow": "payroll"}}); err == nil {
+		t.Errorf("workflow_get is offered to an operator and answered %v", res)
 	}
-	if res, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "workflow.validate", "arguments": map[string]any{"namespace": "finance", "workflow": "payroll", "files": map[string]any{}}}); err == nil {
-		t.Errorf("workflow.validate is offered to an operator and answered %v", res)
+	if res, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "workflow_validate", "arguments": map[string]any{"namespace": "finance", "workflow": "payroll", "files": map[string]any{}}}); err == nil {
+		t.Errorf("workflow_validate is offered to an operator and answered %v", res)
 	}
 	if _, err := x.mcpAsked(oscar, "resources/read", map[string]any{"uri": "agentiik://finance/payroll/tree/main/agentiik.yaml"}); err == nil {
 		t.Error("an operator read the entry point as a resource")
@@ -128,14 +128,14 @@ func TestAnOperatorCallsACollectionsToolAndReadsNothingOfTheWorkflow(t *testing.
 	// state, timings and log lines", each step by its name, image and ports as the run view draws
 	// them; and nothing of "the queries, endpoints and business rules inside it", which the role
 	// "deliberately lacks workflow:read" to keep from him.
-	res, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "run.get", "arguments": map[string]any{"run": run}})
+	res, err := x.mcpAsked(oscar, "tools/call", map[string]any{"name": "run_get", "arguments": map[string]any{"run": run}})
 	if err != nil || res["isError"] == true {
-		t.Fatalf("run.get of his own run answered %v %v", res, err)
+		t.Fatalf("run_get of his own run answered %v %v", res, err)
 	}
 	read, _ := json.Marshal(res)
 	for _, internal := range []string{"ledger.internal.example.com", "egress", "workflow.inputs.orders"} {
 		if strings.Contains(string(read), internal) {
-			t.Errorf("run.get tells an operator %q: %s", internal, read)
+			t.Errorf("run_get tells an operator %q: %s", internal, read)
 		}
 	}
 }

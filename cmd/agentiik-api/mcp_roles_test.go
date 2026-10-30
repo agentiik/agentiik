@@ -13,7 +13,7 @@ import (
 // is offered and refused." victor views finance, oscar operates finance/payroll, walter edits
 // finance/monthly-invoicing, alice owns finance and carol administers the installation holding no
 // grant. Each is offered what the routes behind the tools let them use somewhere and nothing else,
-// "so a principal who can write nowhere never sees workflow.commit"; and a tool they are not offered
+// "so a principal who can write nowhere never sees workflow_commit"; and a tool they are not offered
 // is no tool of theirs to call, answered as one the server does not have.
 //
 // And the credentials a route refuses for what they are rather than for what they hold, which no
@@ -24,29 +24,29 @@ func TestEachRoleIsOfferedTheToolsItMayUse(t *testing.T) {
 	x := someTenants(t)
 	x.must("POST", "/api/v1/finance/workflows/payroll/grants", x.as["alice"], api.GrantRequest{Principal: "finance/nightly", Role: "operator"}, http.StatusCreated)
 	x.as["the bootstrap token"] = asker{bearer: theToken}
-	anyone := "workflow.language workflow.schema namespace.list namespace.get"
-	everybody := anyone + " namespace.create"
-	collections := "collection.list collection.get collection.create collection.update collection.delete collection.remove"
+	anyone := "workflow_language workflow_schema namespace_list namespace_get"
+	everybody := anyone + " namespace_create"
+	collections := "collection_list collection_get collection_create collection_update collection_delete collection_remove"
 	offered := map[string]string{
 		// workflow:read and run:read on finance.
-		"victor": everybody + " workflow.validate secret.list workflow.list workflow.get run.list run.get run.logs " + collections,
+		"victor": everybody + " workflow_validate secret_list workflow_list workflow_get run_list run_get run_logs " + collections,
 		// workflow:run and run:read on payroll alone: no reading its tree, and so no validating a
 		// draft of it either.
-		"oscar": everybody + " workflow.list workflow.run run.list run.get run.logs run.cancel run.replay " + collections + " collection.add",
+		"oscar": everybody + " workflow_list workflow_run run_list run_get run_logs run_cancel run_replay " + collections + " collection_add",
 		// An editor's columns on one workflow: no workflow made, and no secret, which are a
 		// namespace's.
-		"walter": everybody + " workflow.validate workflow.commit workflow.list workflow.get workflow.update workflow.run run.list run.get run.logs run.output run.artifact run.cancel run.replay " + collections + " collection.add",
+		"walter": everybody + " workflow_validate workflow_commit workflow_list workflow_get workflow_update workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay " + collections + " collection_add",
 		// The owner's every column on the namespace, but nothing an administrator hands out.
-		"alice": everybody + " workflow.validate workflow.commit namespace.update namespace.delete grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.artifact run.cancel run.replay " + collections + " collection.add",
+		"alice": everybody + " workflow_validate workflow_commit namespace_update namespace_delete grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay " + collections + " collection_add",
 		// The installation's, and nothing of any namespace's workflows.
-		"carol": everybody + " namespace.update namespace.delete namespace.quotas grant.list grant.create grant.revoke " + collections + " runner.list",
+		"carol": everybody + " namespace_update namespace_delete namespace_quotas grant_list grant_create grant_revoke " + collections + " runner_list",
 		// oscar's grant, as a service account: no namespace made, and collections of its own.
-		"finance/nightly": anyone + " workflow.list workflow.run run.list run.get run.logs run.cancel run.replay " + collections + " collection.add",
+		"finance/nightly": anyone + " workflow_list workflow_run run_list run_get run_logs run_cancel run_replay " + collections + " collection_add",
 		// An owner's columns on hr through the scope, and neither a namespace nor a collection.
-		"mallory's token for hr": anyone + " workflow.validate workflow.commit namespace.update namespace.delete grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.artifact run.cancel run.replay",
+		"mallory's token for hr": anyone + " workflow_validate workflow_commit namespace_update namespace_delete grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay",
 		// An administrator owning every namespace while it lasts, naming the owner of one it
 		// creates, and owning no collection.
-		"the bootstrap token": everybody + " workflow.validate workflow.commit namespace.update namespace.delete namespace.quotas grant.list grant.create grant.revoke secret.list secret.declare secret.remove workflow.list workflow.get workflow.create workflow.update workflow.delete workflow.run run.list run.get run.logs run.output run.artifact run.cancel run.replay runner.list",
+		"the bootstrap token": everybody + " workflow_validate workflow_commit namespace_update namespace_delete namespace_quotas grant_list grant_create grant_revoke secret_list secret_declare secret_remove workflow_list workflow_get workflow_create workflow_update workflow_delete workflow_run run_list run_get run_logs run_output run_artifact run_cancel run_replay runner_list",
 	}
 
 	var every []string

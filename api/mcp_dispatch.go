@@ -98,10 +98,10 @@ func (m *MCP) serveTo(w http.ResponseWriter, r *http.Request, tool, method, path
 	return nil
 }
 
-// tailAnswer is what the log stream route answers run.logs: its events read as they are written,
+// tailAnswer is what the log stream route answers run_logs: its events read as they are written,
 // keeping the last lines asked for and nothing else, so that a log of any size is read in the room
 // of those lines. It flushes as a connection would, doing nothing, since the stream route sends
-// nothing past its headers to a writer that cannot, and run.logs then read every log as empty.
+// nothing past its headers to a writer that cannot, and run_logs then read every log as empty.
 // Anything but a stream, a refusal, is held whole as toolAnswer holds it.
 type tailAnswer struct {
 	toolAnswer
@@ -248,7 +248,7 @@ func result(a *toolAnswer) (*mcp.CallResult, error) {
 }
 
 // refusedText is a refusal as a model reads it: the API's sentence, and where it carries a problem
-// of the hook's, where it is, what was expected there and the topic of workflow.language to read
+// of the hook's, where it is, what was expected there and the topic of workflow_language to read
 // before correcting the draft.
 func refusedText(status int, structured any) string {
 	o, _ := structured.(map[string]any)
@@ -270,7 +270,7 @@ func refusedText(status int, structured any) string {
 		}
 		expected, _ := o["expected"].(string)
 		topic, _ := o["topic"].(string)
-		lines = append(lines, "at "+node+", expected "+expected, "read workflow.language with topic "+topic+" before correcting the draft")
+		lines = append(lines, "at "+node+", expected "+expected, "read workflow_language with topic "+topic+" before correcting the draft")
 	}
 	return strings.Join(lines, "\n")
 }

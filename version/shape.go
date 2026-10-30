@@ -184,7 +184,7 @@ func expectation(k jsonschema.ErrorKind) string {
 	case *kind.FalseSchema:
 		return "nothing here: the language has no such key or value at this place"
 	}
-	return "what the schema says of this place, which workflow.schema reads whole"
+	return "what the schema says of this place, which workflow_schema reads whole"
 }
 
 // The workflow's schema and a fragment's, compiled once from the parts the language reference

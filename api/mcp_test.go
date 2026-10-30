@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -160,7 +161,7 @@ func TestTheMCPEndpointIsOnePOST(t *testing.T) {
 func TestTheDiscoveryOrientsAClient(t *testing.T) {
 	_, result, _ := called(t, platform(t), "alice", "server/discover", nil)
 	instructions, _ := result["instructions"].(string)
-	for _, said := range []string{"git repository", "agentiik.yaml at the root", "workflow.language", "workflow.validate"} {
+	for _, said := range []string{"git repository", "agentiik.yaml at the root", "workflow_language", "workflow_validate"} {
 		if !strings.Contains(instructions, said) {
 			t.Errorf("the instructions do not say %q: %s", said, instructions)
 		}
@@ -192,20 +193,20 @@ func offeredTo(t *testing.T, rt *api.Router, who string) ([]string, map[string]m
 // Any authenticated principal is offered what teaches the language and what every user may do:
 // list namespaces and create one, and keep collections of their own, adding to one only a workflow
 // they may run; a tool the caller cannot use anywhere is absent rather than refused, so that a
-// principal who can write nowhere never sees workflow.commit.
+// principal who can write nowhere never sees workflow_commit.
 func TestAToolTheCallerCannotUseIsAbsent(t *testing.T) {
 	rt := platform(t)
 	names, _ := offeredTo(t, rt, "nobody-granted-anything")
-	if strings.Join(names, ",") != "workflow.language,workflow.schema,namespace.list,namespace.get,namespace.create,collection.list,collection.get,collection.create,collection.update,collection.delete,collection.remove" {
+	if strings.Join(names, ",") != "workflow_language,workflow_schema,namespace_list,namespace_get,namespace_create,collection_list,collection_get,collection_create,collection_update,collection_delete,collection_remove" {
 		t.Errorf("the tools offered to a principal holding nothing are %v", names)
 	}
 	names, _ = offeredTo(t, rt, "alice")
-	for _, want := range []string{"workflow.validate", "workflow.commit", "workflow.create", "workflow.run", "run.get", "run.output", "secret.list"} {
+	for _, want := range []string{"workflow_validate", "workflow_commit", "workflow_create", "workflow_run", "run_get", "run_output", "secret_list"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("an editor is not offered %s: %v", want, names)
 		}
 	}
-	for _, absent := range []string{"workflow.delete", "grant.create", "namespace.quotas", "runner.list", "namespace.delete"} {
+	for _, absent := range []string{"workflow_delete", "grant_create", "namespace_quotas", "runner_list", "namespace_delete"} {
 		if slices.Contains(names, absent) {
 			t.Errorf("an editor is offered %s, which an editor holds nowhere", absent)
 		}
@@ -224,8 +225,8 @@ func TestEachToolSaysWhetherItReadsOrRemoves(t *testing.T) {
 	}
 	// An authorizer that says nothing of what anybody holds lists every tool.
 	names, hints := offeredTo(t, rt, "anybody")
-	readOnly := []string{"workflow.language", "workflow.schema", "workflow.validate", "namespace.list", "namespace.get", "grant.list", "secret.list", "workflow.list", "workflow.get", "run.list", "run.get", "run.logs", "run.output", "run.artifact", "runner.list", "collection.list", "collection.get"}
-	destructive := []string{"namespace.delete", "grant.revoke", "workflow.delete", "secret.remove", "collection.delete"}
+	readOnly := []string{"workflow_language", "workflow_schema", "workflow_validate", "namespace_list", "namespace_get", "grant_list", "secret_list", "workflow_list", "workflow_get", "run_list", "run_get", "run_logs", "run_output", "run_artifact", "runner_list", "collection_list", "collection_get"}
+	destructive := []string{"namespace_delete", "grant_revoke", "workflow_delete", "secret_remove", "collection_delete"}
 	for _, name := range names {
 		h := hints[name]
 		switch {
@@ -248,7 +249,40 @@ func TestEachToolSaysWhetherItReadsOrRemoves(t *testing.T) {
 	}
 }
 
-// secret.declare names the stores a declaration may name as its route takes them, builtin, env and
+// Every tool is named as the Anthropic Messages API takes a tool's name, ^[a-zA-Z0-9_-]{1,64}$,
+// which holds no dot. A call by the dotted name a tool went by until v0.7.2 is still answered as a
+// call of the tool, unlisted, since a client calls by the names it was listed; the dotted name of a
+// tool the caller is not offered is refused as any name nobody offered is, by the name called.
+func TestEveryToolIsNamedAsTheMessagesAPITakesIt(t *testing.T) {
+	rt, err := api.NewRouter(owning{}, cookieOrBearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	taken := regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+	names, _ := offeredTo(t, rt, "anybody")
+	for _, name := range names {
+		if !taken.MatchString(name) {
+			t.Errorf("%s is a name the Messages API refuses", name)
+		}
+	}
+
+	rt = platform(t)
+	page, _ := language.Page("triggers")
+	if _, result, refusal := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.language", "arguments": map[string]any{"topic": "triggers"}}); refusal != nil || textOf(result) != page {
+		t.Errorf("a call by workflow.language answered %+v %v", refusal, result)
+	}
+	for _, name := range []string{"workflow.commit", "workflow.nothing", "workflow_language.x"} {
+		_, _, refusal := called(t, rt, "nobody-granted-anything", "tools/call", map[string]any{"name": name})
+		if refusal == nil || refusal.Code != mcp.CodeInvalidParams || refusal.Message != "Unknown tool: "+name {
+			t.Errorf("a call by %s, which names no tool offered, answered %+v", name, refusal)
+		}
+	}
+}
+
+// secret_declare names the stores a declaration may name as its route takes them, builtin, env and
 // vault, and no other: its description gave one no release defines, which a model reading it tried
 // and was refused. A store off the list is the protocol's error, before anything is asked.
 func TestSecretDeclareNamesTheStoresItsRouteTakes(t *testing.T) {
@@ -262,24 +296,24 @@ func TestSecretDeclareNamesTheStoresItsRouteTakes(t *testing.T) {
 	_, result, _ := called(t, rt, "alice", "tools/list", nil)
 	var provider map[string]any
 	for _, tool := range result["tools"].([]any) {
-		if tool := tool.(map[string]any); tool["name"] == "secret.declare" {
+		if tool := tool.(map[string]any); tool["name"] == "secret_declare" {
 			provider, _ = tool["inputSchema"].(map[string]any)["properties"].(map[string]any)["provider"].(map[string]any)
 		}
 	}
 	enum, _ := provider["enum"].([]any)
 	if !slices.Equal(enum, []any{api.ProviderBuiltin, api.ProviderEnv, api.ProviderVault}) {
-		t.Errorf("secret.declare's provider is %v", provider)
+		t.Errorf("secret_declare's provider is %v", provider)
 	}
 	described, _ := provider["description"].(string)
 	for _, store := range []string{api.ProviderBuiltin, api.ProviderEnv, api.ProviderVault} {
 		if !strings.Contains(described, store) {
-			t.Errorf("secret.declare's provider is described without %s: %q", store, described)
+			t.Errorf("secret_declare's provider is described without %s: %q", store, described)
 		}
 	}
 	if strings.Contains(strings.ToLower(described), "aws") {
-		t.Errorf("secret.declare's provider is described with a store no release defines: %q", described)
+		t.Errorf("secret_declare's provider is described with a store no release defines: %q", described)
 	}
-	_, _, refusal := called(t, rt, "alice", "tools/call", map[string]any{"name": "secret.declare", "arguments": map[string]any{
+	_, _, refusal := called(t, rt, "alice", "tools/call", map[string]any{"name": "secret_declare", "arguments": map[string]any{
 		"namespace": "finance", "name": "billing", "provider": "aws-secrets-manager", "path": "finance/billing",
 	}})
 	if refusal == nil || refusal.Code != mcp.CodeInvalidParams {
@@ -287,7 +321,7 @@ func TestSecretDeclareNamesTheStoresItsRouteTakes(t *testing.T) {
 	}
 }
 
-// workflow.language answers a topic with its page and no topic with the orientation, each as
+// workflow_language answers a topic with its page and no topic with the orientation, each as
 // agentiik/schemas generated it, and refuses a topic that is none by naming the ones that are.
 func TestWorkflowLanguageTeachesATopicAtATime(t *testing.T) {
 	rt := platform(t)
@@ -298,35 +332,35 @@ func TestWorkflowLanguageTeachesATopicAtATime(t *testing.T) {
 		}
 		return content[0].(map[string]any)["text"].(string)
 	}
-	if _, result, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.language"}); err != nil || text(result) != language.Orientation() {
+	if _, result, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_language"}); err != nil || text(result) != language.Orientation() {
 		t.Errorf("no topic answered %v %q", err, text(result))
 	}
 	page, _ := language.Page("triggers")
-	if _, result, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.language", "arguments": map[string]any{"topic": "triggers"}}); err != nil || text(result) != page {
+	if _, result, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_language", "arguments": map[string]any{"topic": "triggers"}}); err != nil || text(result) != page {
 		t.Errorf("the triggers topic answered %v %q", err, text(result))
 	}
-	_, _, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.language", "arguments": map[string]any{"topic": "loops"}})
+	_, _, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_language", "arguments": map[string]any{"topic": "loops"}})
 	if err == nil || err.Code != mcp.CodeInvalidParams || !strings.Contains(err.Message, "fan_out") {
 		t.Errorf("a topic that is none answered %+v", err)
 	}
-	if _, _, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.language", "arguments": map[string]any{"topics": "steps"}}); err == nil || err.Code != mcp.CodeInvalidParams {
+	if _, _, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_language", "arguments": map[string]any{"topics": "steps"}}); err == nil || err.Code != mcp.CodeInvalidParams {
 		t.Errorf("a misspelt argument answered %+v", err)
 	}
 }
 
-// workflow.schema answers a part's document as text and as structured content, and refuses a part
+// workflow_schema answers a part's document as text and as structured content, and refuses a part
 // that is none, or none named.
 func TestWorkflowSchemaAnswersAPart(t *testing.T) {
 	rt := platform(t)
 	want, _ := language.Schema("brick")
-	_, result, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.schema", "arguments": map[string]any{"part": "brick"}})
+	_, result, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_schema", "arguments": map[string]any{"part": "brick"}})
 	content, _ := result["content"].([]any)
 	structured, _ := result["structuredContent"].(map[string]any)
 	if err != nil || len(content) != 1 || content[0].(map[string]any)["text"] != string(want) || structured["$id"] != "https://schemas.agentiik.dev/brick.schema.json" {
 		t.Errorf("the brick part answered %v, %d blocks, $id %v", err, len(content), structured["$id"])
 	}
 	for _, arguments := range []map[string]any{{"part": "wire"}, {}, {"part": "brick", "as": "yaml"}} {
-		if _, _, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.schema", "arguments": arguments}); err == nil || err.Code != mcp.CodeInvalidParams {
+		if _, _, err := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_schema", "arguments": arguments}); err == nil || err.Code != mcp.CodeInvalidParams {
 			t.Errorf("%v answered %+v", arguments, err)
 		}
 	}
@@ -334,8 +368,8 @@ func TestWorkflowSchemaAnswersAPart(t *testing.T) {
 
 // The language and the schemas are resources too, for a client that prefers attaching documents
 // to calling a tool: every topic and every part listed, each read as the tool answers it. A file of
-// a repository, a run and a run's file are listed beside them to whoever holds what workflow.get,
-// run.get and run.artifact need somewhere, as the tools are.
+// a repository, a run and a run's file are listed beside them to whoever holds what workflow_get,
+// run_get and run_artifact need somewhere, as the tools are.
 func TestTheLanguageIsReadAsResources(t *testing.T) {
 	rt := platform(t)
 	_, result, _ := called(t, rt, "alice", "resources/list", nil)

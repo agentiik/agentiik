@@ -256,9 +256,9 @@ func TestBothServersSpeakTheRevisionToAConformanceClient(t *testing.T) {
 
 	// tools/list, and a call of the tool every client reads first.
 	tools := user.listed()
-	language := user.called(tools["workflow.language"], map[string]any{})
+	language := user.called(tools["workflow_language"], map[string]any{})
 	if language.result["isError"] == true || len(language.result["content"].([]any)) == 0 {
-		t.Errorf("workflow.language answered %v", language.result)
+		t.Errorf("workflow_language answered %v", language.result)
 	}
 
 	// resources/read of what resources/list names.
@@ -273,9 +273,9 @@ func TestBothServersSpeakTheRevisionToAConformanceClient(t *testing.T) {
 	}
 
 	// A collection, made with the user's server and called at its own address.
-	made := user.called(tools["collection.create"], map[string]any{"name": "payroll-desk"})
+	made := user.called(tools["collection_create"], map[string]any{"name": "payroll-desk"})
 	id := made.result["structuredContent"].(map[string]any)["id"].(string)
-	user.called(tools["collection.add"], map[string]any{"collection": id, "namespace": "finance", "workflow": "payroll"})
+	user.called(tools["collection_add"], map[string]any{"collection": id, "namespace": "finance", "workflow": "payroll"})
 	collection := &conformant{t: t, url: server.URL + "/mcp/collections/" + id, token: x.as["alice"].bearer}
 	discovered = collection.send("server/discover", nil)
 	capabilities, _ = discovered.result["capabilities"].(map[string]any)
@@ -537,11 +537,11 @@ func TestAClientIsAllowedAndHeldToTheRevisionsAuthorisation(t *testing.T) {
 	}
 	user := &conformant{t: t, url: server.URL + "/mcp", token: access}
 	listed := user.listed()
-	if listed["workflow.language"] == nil || listed["workflow.commit"] == nil || listed["collection.list"] != nil || listed["runner.list"] != nil {
+	if listed["workflow_language"] == nil || listed["workflow_commit"] == nil || listed["collection_list"] != nil || listed["runner_list"] != nil {
 		t.Errorf("the token lists %v", slices.Sorted(maps.Keys(listed)))
 	}
-	if language := user.called(listed["workflow.language"], map[string]any{}); language.result["isError"] == true {
-		t.Errorf("workflow.language answered %v", language.result)
+	if language := user.called(listed["workflow_language"], map[string]any{}); language.result["isError"] == true {
+		t.Errorf("workflow_language answered %v", language.result)
 	}
 
 	// The code is spent: presented again, with its own verifier, it opens nothing.
@@ -599,20 +599,23 @@ func TestAClientIsAllowedAndHeldToTheRevisionsAuthorisation(t *testing.T) {
 		t.Fatalf("the narrower code answered %d %v", status, reading)
 	}
 	reader := &conformant{t: t, url: server.URL + "/mcp", token: reading["access_token"].(string)}
-	if listed := reader.listed(); listed["workflow.commit"] == nil {
+	if listed := reader.listed(); listed["workflow_commit"] == nil {
 		t.Errorf("a token allowed less lists %v, and not what its person may be asked for", slices.Sorted(maps.Keys(listed)))
 	}
-	call := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"workflow.commit","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
-	r, _ = http.NewRequestWithContext(t.Context(), "POST", server.URL+"/mcp", strings.NewReader(call))
-	r.Header.Set("Authorization", "Bearer "+reading["access_token"].(string))
-	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("MCP-Protocol-Version", "2026-07-28")
-	r.Header.Set("Mcp-Method", "tools/call")
-	r.Header.Set("Mcp-Name", "workflow.commit")
-	w, raw = do(r)
-	if c := params(w.Header.Get("WWW-Authenticate")); w.StatusCode != http.StatusForbidden || c["error"] != "insufficient_scope" || c["scope"] != "workflow:write" ||
-		c["resource_metadata"] != tenantsOrigin+"/.well-known/oauth-protected-resource/mcp" {
-		t.Errorf("a call needing workflow:write with a token allowed less answered %d %v %s", w.StatusCode, c, raw)
+	// So is a call by the dotted name the tool went by until v0.7.2, which is answered as the tool.
+	for _, name := range []string{"workflow_commit", "workflow.commit"} {
+		call := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"` + name + `","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
+		r, _ = http.NewRequestWithContext(t.Context(), "POST", server.URL+"/mcp", strings.NewReader(call))
+		r.Header.Set("Authorization", "Bearer "+reading["access_token"].(string))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("MCP-Protocol-Version", "2026-07-28")
+		r.Header.Set("Mcp-Method", "tools/call")
+		r.Header.Set("Mcp-Name", name)
+		w, raw = do(r)
+		if c := params(w.Header.Get("WWW-Authenticate")); w.StatusCode != http.StatusForbidden || c["error"] != "insufficient_scope" || c["scope"] != "workflow:write" ||
+			c["resource_metadata"] != tenantsOrigin+"/.well-known/oauth-protected-resource/mcp" {
+			t.Errorf("a call of %s needing workflow:write with a token allowed less answered %d %v %s", name, w.StatusCode, c, raw)
+		}
 	}
 
 	// A refresh answers the next pair; the access token it replaced, and the refresh token it spent,

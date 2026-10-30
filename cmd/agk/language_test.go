@@ -91,7 +91,7 @@ func TestAgkLanguageRefusesAnUnknownTopicNamingTheTopics(t *testing.T) {
 	}
 }
 
-// agk language prints what workflow.language answers, asked of the API's own MCP server: the same
+// agk language prints what workflow_language answers, asked of the API's own MCP server: the same
 // orientation with no topic, the same page for a topic, and the same sentence for a topic that is
 // none, so that a person and a model are taught one language and refused in one sentence.
 func TestAgkLanguagePrintsWhatWorkflowLanguageAnswers(t *testing.T) {
@@ -109,7 +109,7 @@ func TestAgkLanguagePrintsWhatWorkflowLanguageAnswers(t *testing.T) {
 	ask := func(arguments map[string]any) (string, *mcp.Error) {
 		t.Helper()
 		params := map[string]any{
-			"name":      "workflow.language",
+			"name":      "workflow_language",
 			"arguments": arguments,
 			"_meta": map[string]any{
 				"io.modelcontextprotocol/protocolVersion":    mcp.Revision,
@@ -120,7 +120,7 @@ func TestAgkLanguagePrintsWhatWorkflowLanguageAnswers(t *testing.T) {
 		r := httptest.NewRequest("POST", "/mcp", strings.NewReader(string(b)))
 		r.Header.Set("MCP-Protocol-Version", mcp.Revision)
 		r.Header.Set("Mcp-Method", "tools/call")
-		r.Header.Set("Mcp-Name", "workflow.language")
+		r.Header.Set("Mcp-Name", "workflow_language")
 		r.Header.Set("Authorization", "Bearer alice")
 		w := httptest.NewRecorder()
 		rt.ServeHTTP(w, r)
@@ -133,13 +133,13 @@ func TestAgkLanguagePrintsWhatWorkflowLanguageAnswers(t *testing.T) {
 			Error *mcp.Error `json:"error"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
-			t.Fatalf("workflow.language answered %d %s", w.Code, w.Body)
+			t.Fatalf("workflow_language answered %d %s", w.Code, w.Body)
 		}
 		if answer.Error != nil {
 			return "", answer.Error
 		}
 		if len(answer.Result.Content) != 1 {
-			t.Fatalf("workflow.language answered %s", w.Body)
+			t.Fatalf("workflow_language answered %s", w.Body)
 		}
 		return answer.Result.Content[0].Text, nil
 	}
@@ -151,7 +151,7 @@ func TestAgkLanguagePrintsWhatWorkflowLanguageAnswers(t *testing.T) {
 		}
 		taught, refused := ask(arguments)
 		if refused != nil {
-			t.Errorf("workflow.language refused %q: %+v", topic, refused)
+			t.Errorf("workflow_language refused %q: %+v", topic, refused)
 			continue
 		}
 		e, out, errs := reading(t)
@@ -159,7 +159,7 @@ func TestAgkLanguagePrintsWhatWorkflowLanguageAnswers(t *testing.T) {
 			t.Errorf("agk %s leaves with %d: %s", strings.Join(args, " "), code, errs)
 		}
 		if out.String() != taught {
-			t.Errorf("agk %s printed\n%s\nand workflow.language answers\n%s", strings.Join(args, " "), out, taught)
+			t.Errorf("agk %s printed\n%s\nand workflow_language answers\n%s", strings.Join(args, " "), out, taught)
 		}
 	}
 
@@ -167,12 +167,12 @@ func TestAgkLanguagePrintsWhatWorkflowLanguageAnswers(t *testing.T) {
 	e, _, errs := reading(t)
 	run(t.Context(), e, []string{"language", "loops"})
 	if refused == nil || refused.Code != mcp.CodeInvalidParams || strings.TrimSuffix(errs.String(), "\n") != refused.Message {
-		t.Errorf("agk language loops said %q and workflow.language answered %+v", errs, refused)
+		t.Errorf("agk language loops said %q and workflow_language answered %+v", errs, refused)
 	}
 }
 
 // nobody is an authorizer that allows nothing and says nobody owns anything: what the MCP endpoint
-// needs to be served, since workflow.language is any authenticated principal's.
+// needs to be served, since workflow_language is any authenticated principal's.
 type nobody struct{}
 
 func (nobody) Allow(context.Context, api.Principal, api.Permission, api.Target) (bool, error) {

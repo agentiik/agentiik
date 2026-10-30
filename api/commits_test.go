@@ -191,7 +191,7 @@ func TestACommitIsAuthoredByTheUsersNameAndAddress(t *testing.T) {
 	}
 }
 
-// workflow.validate and workflow.commit are their routes made as the caller: the draft refused is
+// workflow_validate and workflow_commit are their routes made as the caller: the draft refused is
 // answered with where, what was expected and the topic, and the commit made is a real git commit,
 // marked as made through MCP in its message and in the audit log, naming the tool.
 func TestAClientValidatesAndCommitsThroughTheUsersServer(t *testing.T) {
@@ -212,28 +212,28 @@ func TestAClientValidatesAndCommitsThroughTheUsersServer(t *testing.T) {
 		return out
 	}
 
-	_, res, rpcErr := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.validate", "arguments": args(map[string]any{"files": map[string]any{"agentiik.yaml": workflowDocument + "stepz: {}\n"}})})
+	_, res, rpcErr := called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_validate", "arguments": args(map[string]any{"files": map[string]any{"agentiik.yaml": workflowDocument + "stepz: {}\n"}})})
 	if rpcErr != nil || res["isError"] != true {
 		t.Fatalf("a draft the hook refuses is answered %v, %v", res, rpcErr)
 	}
 	said := res["content"].([]any)[0].(map[string]any)["text"].(string)
-	for _, want := range []string{"/stepz", "expected", "workflow.language with topic repository"} {
+	for _, want := range []string{"/stepz", "expected", "workflow_language with topic repository"} {
 		if !strings.Contains(said, want) {
 			t.Errorf("the refusal reads %q, and does not say %s", said, want)
 		}
 	}
-	_, res, rpcErr = called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.validate", "arguments": args(map[string]any{"files": map[string]any{"agentiik.yaml": workflowDocument}})})
+	_, res, rpcErr = called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_validate", "arguments": args(map[string]any{"files": map[string]any{"agentiik.yaml": workflowDocument}})})
 	if rpcErr != nil || res["isError"] == true || res["structuredContent"].(map[string]any)["valid"] != true {
 		t.Fatalf("a valid draft is answered %v, %v", res, rpcErr)
 	}
 
-	_, res, rpcErr = called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.commit", "arguments": args(map[string]any{"message": "Draft the invoicing", "files": map[string]any{"agentiik.yaml": workflowDocument}})})
+	_, res, rpcErr = called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow_commit", "arguments": args(map[string]any{"message": "Draft the invoicing", "files": map[string]any{"agentiik.yaml": workflowDocument}})})
 	if rpcErr != nil || res["isError"] == true {
 		t.Fatalf("the commit is answered %v, %v", res, rpcErr)
 	}
 	commit := res["structuredContent"].(map[string]any)["commit"].(string)
 	if g.refs()["refs/heads/main"] != commit {
-		t.Errorf("main does not name the commit workflow.commit made")
+		t.Errorf("main does not name the commit workflow_commit made")
 	}
 	if body := strings.TrimSpace(g.cloned("alice").must("log", "--format=%B", "-1")); body != "Draft the invoicing\n\nVia: mcp" {
 		t.Errorf("the commit's message reads %q", body)
@@ -241,16 +241,32 @@ func TestAClientValidatesAndCommitsThroughTheUsersServer(t *testing.T) {
 	var marked bool
 	for _, e := range audited(t, g.pool) {
 		d := detailOf(t, e)
-		marked = marked || (e.Action == audit.RefUpdate && d["new"] == commit && d["through"] == "mcp" && d["tool"] == "workflow.commit")
+		marked = marked || (e.Action == audit.RefUpdate && d["new"] == commit && d["through"] == "mcp" && d["tool"] == "workflow_commit")
 	}
 	if !marked {
-		t.Error("the ref the commit moved is not recorded as moved through MCP by workflow.commit")
+		t.Error("the ref the commit moved is not recorded as moved through MCP by workflow_commit")
 	}
 
 	// The route's grants are the tool's: a reader commits nothing.
-	_, res, _ = called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.commit", "arguments": args(map[string]any{"parent": commit, "message": "a reader", "files": map[string]any{"a.txt": "a"}})})
+	_, res, _ = called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow_commit", "arguments": args(map[string]any{"parent": commit, "message": "a reader", "files": map[string]any{"a.txt": "a"}})})
 	if res["isError"] != true || g.refs()["refs/heads/main"] != commit {
 		t.Errorf("a reader's commit through MCP is answered %v", res)
+	}
+
+	// A client holding the dotted name the tool was listed under until v0.7.2 commits by it, and the
+	// audit log names the tool by its name now, whichever name the client called it by.
+	_, res, rpcErr = called(t, rt, "alice", "tools/call", map[string]any{"name": "workflow.commit", "arguments": args(map[string]any{"parent": commit, "message": "Note the invoicing", "files": map[string]any{"notes.txt": "monthly"}})})
+	if rpcErr != nil || res["isError"] == true {
+		t.Fatalf("the commit by the dotted name is answered %v, %v", res, rpcErr)
+	}
+	again := res["structuredContent"].(map[string]any)["commit"].(string)
+	marked = false
+	for _, e := range audited(t, g.pool) {
+		d := detailOf(t, e)
+		marked = marked || (e.Action == audit.RefUpdate && d["new"] == again && d["tool"] == "workflow_commit")
+	}
+	if !marked || g.refs()["refs/heads/main"] != again {
+		t.Error("the commit by the dotted name is not recorded as made by workflow_commit")
 	}
 }
 
@@ -265,26 +281,26 @@ func TestTheUsersServersToolsAreTheirRoutes(t *testing.T) {
 	}
 	_, first := g.committed("alice", map[string]any{"message": "first", "files": map[string]any{"agentiik.yaml": workflowDocument}})
 
-	_, res, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing"}})
+	_, res, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow_get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing"}})
 	if rpcErr != nil || res["isError"] == true {
-		t.Fatalf("a reader's workflow.get is answered %v, %v", res, rpcErr)
+		t.Fatalf("a reader's workflow_get is answered %v, %v", res, rpcErr)
 	}
 	if head := res["structuredContent"].(map[string]any)["repository"].(map[string]any)["head"]; head != first["commit"] {
-		t.Errorf("workflow.get answers the head %v, and the commit was %v", head, first["commit"])
+		t.Errorf("workflow_get answers the head %v, and the commit was %v", head, first["commit"])
 	}
-	_, res, _ = called(t, rt, "stranger", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing"}})
-	_, absent, _ := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "no-such-workflow"}})
+	_, res, _ = called(t, rt, "stranger", "tools/call", map[string]any{"name": "workflow_get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing"}})
+	_, absent, _ := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow_get", "arguments": map[string]any{"namespace": "finance", "workflow": "no-such-workflow"}})
 	if res["isError"] != true || absent["isError"] != true || res["content"].([]any)[0].(map[string]any)["text"] != absent["content"].([]any)[0].(map[string]any)["text"] {
 		t.Errorf("an invisible workflow is answered %v, and an absent one %v", res, absent)
 	}
 
 	// An argument the tool's schema refuses is the protocol's error, before anything is asked.
-	if _, _, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance"}}); rpcErr == nil || rpcErr.Code != -32602 {
+	if _, _, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow_get", "arguments": map[string]any{"namespace": "finance"}}); rpcErr == nil || rpcErr.Code != -32602 {
 		t.Errorf("a call naming no workflow is answered %v", rpcErr)
 	}
 }
 
-// "workflow.get: the entry point's text and the resolved graph at a ref, a branch, a tag or a commit
+// "workflow_get: the entry point's text and the resolved graph at a ref, a branch, a tag or a commit
 // that is a version, the default branch's head where none is named: GET /api/v1/{ns}/workflows/{name}
 // with ref, and the entry point read through the tree route at the commit it answers."
 func TestWorkflowGetReadsTheEntryPointAndTheGraphAtARef(t *testing.T) {
@@ -315,9 +331,9 @@ func TestWorkflowGetReadsTheEntryPointAndTheGraphAtARef(t *testing.T) {
 	get := func(arguments map[string]any) map[string]any {
 		t.Helper()
 		arguments["namespace"], arguments["workflow"] = "finance", "monthly-invoicing"
-		_, res, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": arguments})
+		_, res, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow_get", "arguments": arguments})
 		if rpcErr != nil {
-			t.Fatalf("workflow.get %v is answered %v", arguments, rpcErr)
+			t.Fatalf("workflow_get %v is answered %v", arguments, rpcErr)
 		}
 		return res
 	}
@@ -335,35 +351,35 @@ func TestWorkflowGetReadsTheEntryPointAndTheGraphAtARef(t *testing.T) {
 		}
 		res := get(arguments)
 		if res["isError"] == true {
-			t.Errorf("workflow.get at %q is refused: %v", ref, res["content"])
+			t.Errorf("workflow_get at %q is refused: %v", ref, res["content"])
 			continue
 		}
 		got := res["structuredContent"].(map[string]any)
 		if files, _ := got["files"].(map[string]any); files["agentiik.yaml"] != want.text || len(files) != 1 {
-			t.Errorf("workflow.get at %q answers the files %v, where agentiik.yaml is %q there", ref, got["files"], want.text)
+			t.Errorf("workflow_get at %q answers the files %v, where agentiik.yaml is %q there", ref, got["files"], want.text)
 		}
 		if v, _ := got["version"].(map[string]any); v["commit"] != want.commit {
-			t.Errorf("workflow.get at %q answers the version %v, not %s", ref, got["version"], want.commit)
+			t.Errorf("workflow_get at %q answers the version %v, not %s", ref, got["version"], want.commit)
 		}
 		if graph, _ := got["graph"].(map[string]any); graph["commit"] != want.commit {
-			t.Errorf("workflow.get at %q answers the graph of %v, not of %s", ref, graph["commit"], want.commit)
+			t.Errorf("workflow_get at %q answers the graph of %v, not of %s", ref, graph["commit"], want.commit)
 		}
 		if repository, _ := got["repository"].(map[string]any); repository["head"] != head {
-			t.Errorf("workflow.get at %q answers the repository %v, where main is %s", ref, repository, head)
+			t.Errorf("workflow_get at %q answers the repository %v, where main is %s", ref, repository, head)
 		}
 		// The text a model reads is the structured content, as every tool of the server answers
 		// it.
 		var said map[string]any
 		if err := json.Unmarshal([]byte(res["content"].([]any)[0].(map[string]any)["text"].(string)), &said); err != nil || said["files"].(map[string]any)["agentiik.yaml"] != want.text {
-			t.Errorf("workflow.get at %q says %v: %v", ref, res["content"], err)
+			t.Errorf("workflow_get at %q says %v: %v", ref, res["content"], err)
 		}
 	}
 
 	// A ref the route refuses is refused in its words, and an empty one by the tool's schema.
 	if res := get(map[string]any{"ref": "nothing"}); res["isError"] != true || !strings.Contains(res["content"].([]any)[0].(map[string]any)["text"].(string), "names no branch, no tag and no version") {
-		t.Errorf("workflow.get at a ref naming nothing is answered %v", res)
+		t.Errorf("workflow_get at a ref naming nothing is answered %v", res)
 	}
-	if _, _, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow.get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing", "ref": ""}}); rpcErr == nil || rpcErr.Code != -32602 {
-		t.Errorf("workflow.get at an empty ref is answered %v", rpcErr)
+	if _, _, rpcErr := called(t, rt, "bob", "tools/call", map[string]any{"name": "workflow_get", "arguments": map[string]any{"namespace": "finance", "workflow": "monthly-invoicing", "ref": ""}}); rpcErr == nil || rpcErr.Code != -32602 {
+		t.Errorf("workflow_get at an empty ref is answered %v", rpcErr)
 	}
 }

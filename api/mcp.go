@@ -32,7 +32,7 @@ import (
 
 // mcpInstructions is the discovery's orientation, and "it carries nothing else": what a workflow is,
 // where its entry point is, and the order a client drafting one reads, validates and commits in.
-const mcpInstructions = "A workflow is a git repository, and its entry point is agentiik.yaml at the root of the repository. Before drafting one, read the language with workflow.language: with no topic it gives an orientation, a complete minimal workflow and the list of topics. Before committing a draft, validate it with workflow.validate, which is the only authority on whether it is legal, and read the topic each error names."
+const mcpInstructions = "A workflow is a git repository, and its entry point is agentiik.yaml at the root of the repository. Before drafting one, read the language with workflow_language: with no topic it gives an orientation, a complete minimal workflow and the list of topics. Before committing a draft, validate it with workflow_validate, which is the only authority on whether it is legal, and read the topic each error names."
 
 // MCPOptions is what the platform's MCP server is built with.
 type MCPOptions struct {
@@ -171,12 +171,15 @@ type stepUp struct {
 	tree, run, artifact []Permission
 }
 
-// neededBy is what the request needs that the token lacks: a call of a tool, or a read of a resource,
-// as its Mcp-Method and Mcp-Name say, and nothing for any other.
+// neededBy is what the request needs that the token lacks: a call of a tool, by its name or a
+// former one, or a read of a resource, as its Mcp-Method and Mcp-Name say, and nothing for any other.
 func (s stepUp) neededBy(r *http.Request) []Permission {
 	name := r.Header.Get("Mcp-Name")
 	switch r.Header.Get("Mcp-Method") {
 	case "tools/call":
+		if now := renamed(name); now != "" {
+			name = now
+		}
 		return s.tools[name]
 	case "resources/read":
 		switch {
@@ -272,10 +275,10 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, stepUp, erro
 		}
 		return true
 	}
-	if offer("workflow.validate", holds(WorkflowRead)) {
+	if offer("workflow_validate", holds(WorkflowRead)) {
 		tools = append(tools, m.workflowValidate(r))
 	}
-	if offer("workflow.commit", holds(WorkflowWrite)) {
+	if offer("workflow_commit", holds(WorkflowWrite)) {
 		tools = append(tools, m.workflowCommit(r))
 	}
 	// Left out even where the authorizer does not say what is granted, since what keeps these
@@ -297,8 +300,8 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, stepUp, erro
 	// The resources, each listed to whoever holds its tool's permission somewhere, as the tool is,
 	// and read through its tool's route, which decides each read.
 	templates := []mcp.Template{
-		{URITemplate: "agentiik://language/{topic}", Name: "language", Title: "A page of the language reference", Description: "One topic of the workflow language, as workflow.language answers it, for a client that prefers attaching documents to calling a tool.", MimeType: "text/markdown"},
-		{URITemplate: "agentiik://schema/{part}", Name: "schema", Title: "A schema document", Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), as workflow.schema answers it.", MimeType: "application/schema+json"},
+		{URITemplate: "agentiik://language/{topic}", Name: "language", Title: "A page of the language reference", Description: "One topic of the workflow language, as workflow_language answers it, for a client that prefers attaching documents to calling a tool.", MimeType: "text/markdown"},
+		{URITemplate: "agentiik://schema/{part}", Name: "schema", Title: "A schema document", Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), as workflow_schema answers it.", MimeType: "application/schema+json"},
 	}
 	if use(holds(WorkflowRead)) {
 		templates = append(templates, treeTemplate)
@@ -323,7 +326,22 @@ func (m *MCP) offered(r *http.Request, caller Caller) (mcp.Surface, stepUp, erro
 		Resources: languageResources(),
 		Templates: templates,
 		Read:      m.reader(r),
+		Renamed:   renamed,
 	}, up, nil
+}
+
+// renamed is the name a tool goes by now, for a call by the dotted name it went by until v0.7.2,
+// run.list for run_list, and "" for any other name. The protocol allows a dot in a tool's name and
+// the Anthropic Messages API does not, holding a tool's name to ^[a-zA-Z0-9_-]{1,64}$, so a client
+// of that API renamed run.list to run_list and was answered that no such tool exists; every tool
+// is named with an underscore since, as a collection's already were. A client calls by the names it
+// was listed and keeps them, so the dotted name is still answered, unlisted, for the rest of the
+// v0.7 line, and v0.8.0 removes it. No tool's name holds a dot now, so none is shadowed.
+func renamed(former string) string {
+	if !strings.Contains(former, ".") {
+		return ""
+	}
+	return strings.ReplaceAll(former, ".", "_")
 }
 
 // readOnly are the annotations of a tool that reads and changes nothing: "the read-only tools carry
@@ -332,13 +350,13 @@ func readOnly() *mcp.Annotations {
 	return &mcp.Annotations{ReadOnlyHint: mcp.Hint(true), DestructiveHint: mcp.Hint(false), IdempotentHint: mcp.Hint(true), OpenWorldHint: mcp.Hint(false)}
 }
 
-// workflowLanguage is workflow.language: "a topic returns its page, no topic returns the
+// workflowLanguage is workflow_language: "a topic returns its page, no topic returns the
 // orientation, a minimal workflow and the topic list", each page the one agentiik/schemas generates
 // from the schema the validator enforces.
 func workflowLanguage() mcp.Tool {
 	topics, _ := json.Marshal(language.Names())
 	return mcp.Tool{
-		Name:        "workflow.language",
+		Name:        "workflow_language",
 		Title:       "Learn the workflow language",
 		Description: "The workflow language, one topic at a time: a summary, the keywords the topic covers, the JSON Schema fragment governing them and worked examples written where they go in agentiik.yaml. With no topic, an orientation: what the language is, one complete minimal workflow and the topics. Read it before drafting a workflow, and read the topic a validation error names before correcting it.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"topic":{"type":"string","description":"The topic to read. Leave it out for the orientation.","enum":` + string(topics) + `}},"additionalProperties":false}`),
@@ -348,7 +366,7 @@ func workflowLanguage() mcp.Tool {
 				Topic *string `json:"topic"`
 			}
 			if err := strictly(arguments, &in); err != nil {
-				return nil, mcp.InvalidParams("workflow.language takes one argument, topic: %v", err)
+				return nil, mcp.InvalidParams("workflow_language takes one argument, topic: %v", err)
 			}
 			if in.Topic == nil {
 				return &mcp.CallResult{Content: []mcp.Content{mcp.Text(language.Orientation())}}, nil
@@ -362,7 +380,7 @@ func workflowLanguage() mcp.Tool {
 	}
 }
 
-// workflowSchema is workflow.schema: "the JSON Schema 2020-12 document for the entry point, a brick
+// workflowSchema is workflow_schema: "the JSON Schema 2020-12 document for the entry point, a brick
 // manifest or an envelope", "for local validation or type generation". It answers the document as
 // text and as structured content, which the revision lets be any JSON value.
 func workflowSchema() mcp.Tool {
@@ -372,9 +390,9 @@ func workflowSchema() mcp.Tool {
 	}
 	names, _ := json.Marshal(parts)
 	return mcp.Tool{
-		Name:        "workflow.schema",
+		Name:        "workflow_schema",
 		Title:       "Get a schema document",
-		Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), for validating locally or generating types. A document the schema accepts can still be refused, for an input it reads and never declares or a cycle in its graph: workflow.validate is the only authority on whether a draft is legal.",
+		Description: "The JSON Schema 2020-12 document of the entry point (workflow), a brick manifest (brick) or an envelope (envelope), for validating locally or generating types. A document the schema accepts can still be refused, for an input it reads and never declares or a cycle in its graph: workflow_validate is the only authority on whether a draft is legal.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"part":{"type":"string","description":"The document to answer: workflow for agentiik.yaml, brick for /agk/brick.yaml, envelope for what travels along a port.","enum":` + string(names) + `}},"required":["part"],"additionalProperties":false}`),
 		Annotations: readOnly(),
 		Call: func(_ context.Context, arguments json.RawMessage) (*mcp.CallResult, error) {
@@ -382,7 +400,7 @@ func workflowSchema() mcp.Tool {
 				Part *string `json:"part"`
 			}
 			if err := strictly(arguments, &in); err != nil || in.Part == nil {
-				return nil, mcp.InvalidParams("workflow.schema takes one argument, part, which is one of %s", strings.Join(parts, ", "))
+				return nil, mcp.InvalidParams("workflow_schema takes one argument, part, which is one of %s", strings.Join(parts, ", "))
 			}
 			b, ok := language.Schema(*in.Part)
 			if !ok {

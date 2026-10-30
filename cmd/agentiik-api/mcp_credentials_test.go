@@ -170,18 +170,18 @@ func TestNoToolIssuesShowsOrTakesACredential(t *testing.T) {
 	}
 	// What a tool names besides what present says, where it is not what finance holds by that key.
 	own := map[string]map[string]any{
-		"run.output":        {"name": "invoices"},
-		"secret.declare":    {"name": "billing", "provider": "builtin"},
-		"secret.remove":     {"name": "ledger"},
-		"namespace.update":  {"name": "finance-desk"},
-		"workflow.create":   {"name": "drafted"},
-		"namespace.create":  {"name": "drafts"},
-		"collection.create": {"name": "desk"},
+		"run_output":        {"name": "invoices"},
+		"secret_declare":    {"name": "billing", "provider": "builtin"},
+		"secret_remove":     {"name": "ledger"},
+		"namespace_update":  {"name": "finance-desk"},
+		"workflow_create":   {"name": "drafted"},
+		"namespace_create":  {"name": "drafts"},
+		"collection_create": {"name": "desk"},
 	}
 	order := func(tool map[string]any) int {
 		hints, _ := tool["annotations"].(map[string]any)
 		switch name := tool["name"].(string); {
-		case strings.HasPrefix(name, "secret.") && hints["readOnlyHint"] != true:
+		case strings.HasPrefix(name, "secret_") && hints["readOnlyHint"] != true:
 			return 3
 		case hints["destructiveHint"] == true:
 			return 2
@@ -240,12 +240,12 @@ func TestNoToolIssuesShowsOrTakesACredential(t *testing.T) {
 		t.Fatalf("%d calls were made of %d tools and %d answered as done, and the user's server lists more than that", called, len(seen), answered)
 	}
 
-	// secret.declare is offered no value to write, and is refused one before anything is asked.
-	refused := ask("alice", "tools/call", map[string]any{"name": "secret.declare", "arguments": map[string]any{
+	// secret_declare is offered no value to write, and is refused one before anything is asked.
+	refused := ask("alice", "tools/call", map[string]any{"name": "secret_declare", "arguments": map[string]any{
 		"namespace": "finance", "name": "billing", "provider": "builtin", "value": "sk_live_from_a_model",
 	}})
 	if !strings.Contains(refused, `"code":-32602`) {
-		t.Errorf("secret.declare given a value answered %s", refused)
+		t.Errorf("secret_declare given a value answered %s", refused)
 	}
 
 	after := x.credentialsHeld()

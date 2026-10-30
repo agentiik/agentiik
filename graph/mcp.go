@@ -50,7 +50,7 @@ func checkMCP(wf *Workflow) error {
 func toolTimeout(tool *MCP) error {
 	switch {
 	case tool.Mode == ToolAsync && tool.Timed:
-		return refuse(RuleMCPTimeoutOnAsyncTool, "", "", fmt.Sprintf("the tool %s is async and waits %s: an async call returns the run identifier at once, to be followed with the user's server's run.get, so a timeout on it would mean nothing", tool.Name, tool.Timeout))
+		return refuse(RuleMCPTimeoutOnAsyncTool, "", "", fmt.Sprintf("the tool %s is async and waits %s: an async call returns the run identifier at once, to be followed with the user's server's run_get, so a timeout on it would mean nothing", tool.Name, tool.Timeout))
 	case tool.Mode == ToolSync && tool.Timed && tool.Timeout == 0:
 		return refuse(RuleMCPSyncTimeoutZero, "", "", fmt.Sprintf("the tool %s is sync and waits %s: a sync call waits for its run to return its output, and one waiting for nothing would answer before any run could end. Leave timeout out to wait the 120 seconds a sync call waits at most, or publish the tool as async, which returns the run identifier at once", tool.Name, tool.Timeout))
 	case tool.Mode == ToolSync && time.Duration(tool.Timeout) > toolTimeoutCeiling:

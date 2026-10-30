@@ -71,7 +71,7 @@ type pushed struct {
 	commands                         []command
 	reportStatus, quiet, sideband64k bool
 
-	// through is what made the push where it was not git: "mcp" for workflow.commit's, which the
+	// through is what made the push where it was not git: "mcp" for workflow_commit's, which the
 	// audit log says of the refs it moves and of a refusal, with the tool that made it.
 	through, tool string
 }

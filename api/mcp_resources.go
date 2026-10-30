@@ -16,32 +16,32 @@ import (
 // The user's server's resources: "Resources are read-only", a file in a workflow repository and a
 // run beside the language's pages and the schema parts, each "under its tool's permission". A read
 // is the route its tool makes, made as the caller as a tool's is (mcp_dispatch.go), so that a file
-// is read exactly as far as workflow.get reads its workflow and a run exactly as far as run.get
+// is read exactly as far as workflow_get reads its workflow and a run exactly as far as run_get
 // does; and a read the route refuses is the revision's resource not found, the same whether what it
 // names is absent or out of the caller's reach, since the route's 404 is already the same for both.
 
 // treeTemplate, runTemplate and artifactTemplate are the families of resource a caller's grants
-// open. A run's file keeps the URI its envelope names it by, agk://run/, so that what run.output
+// open. A run's file keeps the URI its envelope names it by, agk://run/, so that what run_output
 // answers is what a client reads, with nothing to rewrite.
 var (
 	treeTemplate = mcp.Template{
 		URITemplate: "agentiik://{ns}/{name}/tree/{ref}/{path}",
 		Name:        "tree",
 		Title:       "A file in a workflow repository",
-		Description: "A file of a workflow's repository at a branch, a tag or a commit, as workflow.get's reader reads it: text where it is text, its bytes where it is not. A ref holding a slash writes it as %2F.",
+		Description: "A file of a workflow's repository at a branch, a tag or a commit, as workflow_get's reader reads it: text where it is text, its bytes where it is not. A ref holding a slash writes it as %2F.",
 	}
 	runTemplate = mcp.Template{
 		URITemplate: "agentiik://run/{id}",
 		Name:        "run",
 		Title:       "A run",
-		Description: "A run as run.get answers it: its state, each step's verdict and why where the verdict alone does not say, what started it and whom it is attributed to, its inputs only to whoever holds run:read_data.",
+		Description: "A run as run_get answers it: its state, each step's verdict and why where the verdict alone does not say, what started it and whom it is attributed to, its inputs only to whoever holds run:read_data.",
 		MimeType:    "application/json",
 	}
 	artifactTemplate = mcp.Template{
 		URITemplate: "agk://run/{run}/{step}/{port}/{name}",
 		Name:        "artifact",
 		Title:       "A file a run wrote",
-		Description: "A file a run's step wrote, by the URI an envelope's files name it by, as run.artifact reads it: text where it is text, its bytes where they are not, typed as its envelope declares it. Up to 1 MiB; a file its workflow gave a fetch budget spends one fetch.",
+		Description: "A file a run's step wrote, by the URI an envelope's files name it by, as run_artifact reads it: text where it is text, its bytes where they are not, typed as its envelope declares it. Up to 1 MiB; a file its workflow gave a fetch budget spends one fetch.",
 	}
 )
 

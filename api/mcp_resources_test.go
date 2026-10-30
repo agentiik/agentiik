@@ -12,9 +12,9 @@ import (
 )
 
 // A file of a workflow's repository is a resource of the user's server, read as the caller through
-// the route workflow.get's reader reads the tree by: text where it is text, its bytes where they are
+// the route workflow_get's reader reads the tree by: text where it is text, its bytes where they are
 // not, at a branch, a branch holding a slash and a commit. A workflow nobody let the caller see is
-// answered as one that does not exist, and a run as run.get answers it.
+// answered as one that does not exist, and a run as run_get answers it.
 func TestAFileOfARepositoryIsAResource(t *testing.T) {
 	g := servingGit(t, owningGrants{granted: everyone().(granted)})
 	rt := g.h.(*api.Router)
@@ -90,7 +90,7 @@ func TestAFileOfARepositoryIsAResource(t *testing.T) {
 	}
 }
 
-// A run is a resource of the user's server, read as run.get answers it, and one the caller may not
+// A run is a resource of the user's server, read as run_get answers it, and one the caller may not
 // read is answered word for word as one nobody started.
 func TestARunIsAResource(t *testing.T) {
 	s := withSomeRuns(t)
@@ -110,7 +110,7 @@ func TestARunIsAResource(t *testing.T) {
 	c := res["contents"].([]any)[0].(map[string]any)
 	w, _ := call(t, rt, "GET", "/api/v1/runs/"+run, "alice", nil)
 	if c["mimeType"] != "application/json" || c["text"] != w.Body.String() {
-		t.Errorf("the run is read as %v, and run.get's route answers %s", c, w.Body)
+		t.Errorf("the run is read as %v, and run_get's route answers %s", c, w.Body)
 	}
 
 	_, _, hidden := called(t, rt, "bob", "resources/read", map[string]any{"uri": uri})
@@ -121,7 +121,7 @@ func TestARunIsAResource(t *testing.T) {
 	}
 }
 
-// A run's files are read through MCP by the URI their envelope names them by, with run.artifact or
+// A run's files are read through MCP by the URI their envelope names them by, with run_artifact or
 // as a resource, under run:read_data as the route: text as text, an image as an image and anything
 // else as an embedded resource, the bytes answered whatever the budget and never a presigned URL,
 // since "no credential crosses MCP". A budget is spent as any fetch spends it, a file above the
@@ -147,9 +147,9 @@ func TestARunsFilesAreReadThroughMCP(t *testing.T) {
 	}
 	read := func(as string, u agk.URI) map[string]any {
 		t.Helper()
-		_, res, rpcErr := called(t, rt, as, "tools/call", map[string]any{"name": "run.artifact", "arguments": map[string]any{"uri": u.String()}})
+		_, res, rpcErr := called(t, rt, as, "tools/call", map[string]any{"name": "run_artifact", "arguments": map[string]any{"uri": u.String()}})
 		if rpcErr != nil {
-			t.Fatalf("run.artifact of %s answered %v", u, rpcErr)
+			t.Fatalf("run_artifact of %s answered %v", u, rpcErr)
 		}
 		return res
 	}
