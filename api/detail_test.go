@@ -72,3 +72,37 @@ func TestARunSaysWhatItsStepsDeclareAndWhatItsTasksWereGiven(t *testing.T) {
 		t.Errorf("a principal holding run:read is not answered the image a step runs: %v", detail["steps"])
 	}
 }
+
+// A step refused before any task started has no attempt, no task and no log, and its reason is
+// answered with its verdict, to whoever holds run:read, since it names the rule and never a value
+// the step was handed; a step that gave none is answered without one.
+func TestARunSaysWhyAStepFailedBeforeAnyTask(t *testing.T) {
+	o := withOneRun(t)
+	conn := dbtest.Superuser(t, o.super)
+	const refused = "graph: step normalize: port orders: inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects"
+	if _, err := conn.Exec(t.Context(), `insert into steps (namespace, run_id, step) values ('finance', $1, 'normalize'), ('finance', $1, 'archive') on conflict do nothing`, o.run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(t.Context(), `update steps set state = 'failed', reason = $2 where run_id = $1 and step = 'normalize'`, o.run, refused); err != nil {
+		t.Fatal(err)
+	}
+
+	w, detail := call(t, o.servedTo(t, granted{"bruno": {{api.RunRead, api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}}}}), "GET", "/api/v1/runs/"+o.run, "bruno", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the run answered %d: %s", w.Code, w.Body)
+	}
+	for _, s := range detail["steps"].([]any) {
+		step := s.(map[string]any)
+		reason, answered := step["reason"]
+		switch step["step"] {
+		case "normalize":
+			if step["verdict"] != "failed" || reason != refused {
+				t.Errorf("the refused step is answered as %v", step)
+			}
+		default:
+			if answered {
+				t.Errorf("a step that gave no reason is answered the reason %v", reason)
+			}
+		}
+	}
+}

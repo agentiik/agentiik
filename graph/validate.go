@@ -38,6 +38,9 @@ func Check(wf *Workflow) error {
 		// scopes are known, because which roots a keyword may read depends on where
 		// the keyword sits and on the step's own fan_out.
 		checkExpressions,
+		// What the inputs keyword feeds a port, read once every expression it carries is
+		// known to compile, since a workflow input fed whole is told by its expression.
+		checkFedPorts,
 	} {
 		if err := check(wf); err != nil {
 			// A refusal no one place holds, a cycle or a published tool, is about the

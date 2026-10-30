@@ -627,6 +627,65 @@ func TestARunGoesFromTheFirstStepToATerminalState(t *testing.T) {
 	_ = outputs
 }
 
+// A step refused before any task started, its port fed what is no batch, fails with no attempt, no
+// task and no log, so the reason the evaluator gave is the one thing that says why: it is projected
+// onto the step's row with its verdict and answered in the run's detail, and the step its when
+// skipped says why too. The port is fed text an expression computes, which only the run can tell.
+func TestAStepRefusedBeforeAnyTaskSaysWhyInTheRunsDetail(t *testing.T) {
+	core, q, pool, super := decidingOn(t, strings.Replace(theWorkflow,
+		"orders: ${{ workflow.inputs.orders }}", "orders: ${{ workflow.inputs.orders[0].customer_id }}", 1))
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	if published := q.dispatched(); len(published) != 0 {
+		t.Fatalf("a step refused its input was handed out: %+v", published)
+	}
+	if got := stateOf(t, core); got != agk.Failed {
+		t.Fatalf("the run is %s", got)
+	}
+
+	const refused = "graph: step normalize: port orders: inputs feeds the port text: a port carries a batch of items, so the value is an object or a list of objects"
+	const skipped = "when [succeeded] does not admit normalize, which failed"
+	conn := dbtest.Superuser(t, super)
+	var stored, archived *string
+	if err := conn.QueryRow(t.Context(), `
+		select (select reason from steps where run_id = $1 and step = 'normalize'),
+		       (select reason from steps where run_id = $1 and step = 'archive')`, string(decidedRun)).
+		Scan(&stored, &archived); err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || *stored != refused || archived == nil || *archived != skipped {
+		t.Errorf("the rows hold the reasons %v and %v, want %q and %q", deref(stored), deref(archived), refused, skipped)
+	}
+
+	var detail db.RunDetail
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		var err error
+		detail, err = ns.RunDetail(ctx, decidedRun)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range detail.Steps {
+		want := map[agk.Step]string{"normalize": refused, "archive": skipped}[s.Step]
+		if s.Reason != want || (s.Step == "normalize" && (s.Verdict != agk.VerdictFailed || s.Attempts != 0)) {
+			t.Errorf("the detail answers %s %s after %d attempts for %q, want the reason %q", s.Step, s.Verdict, s.Attempts, s.Reason, want)
+		}
+	}
+	if len(detail.Steps) != 2 || len(detail.Tasks) != 0 {
+		t.Errorf("the detail answers %d steps and %d tasks, want two steps and no task", len(detail.Steps), len(detail.Tasks))
+	}
+}
+
+// deref writes a column that may be null as a test reads it.
+func deref(s *string) string {
+	if s == nil {
+		return "null"
+	}
+	return *s
+}
+
 // "Failover is a state resume, never a rebuild: the state lives in the database, not in the
 // process." So a controller that throws everything away and reads the run back gets the plan the
 // one that died would have got.

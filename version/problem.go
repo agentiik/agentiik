@@ -112,6 +112,7 @@ var expected = map[graph.Rule]string{
 	graph.RuleEdgePortNotDeclared:             "an output port the step it names declares",
 	graph.RuleStepOutputNotInManifest:         "only ports the brick manifest of the step's image declares",
 	graph.RuleStepInputPortNotInManifest:      "an input port the brick manifest of the step's image declares",
+	graph.RuleStepInputNotABatch:              "an object, which is one item, or a list of objects, one item each; a value that is neither written under a key of an object, { value: ... }",
 	graph.RuleOutputFromUnknownStep:           "a step this workflow declares, and one of its output ports",
 	graph.RuleSecretNotDeclared:               "a secret the workflow's secrets block lists",
 	graph.RuleScriptWithoutOutputs:            "an outputs list naming the ports the script writes, since no manifest says them",

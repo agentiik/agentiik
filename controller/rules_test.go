@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -700,6 +701,28 @@ func TestAnExitCodeIsRecordedWhereOneWasGiven(t *testing.T) {
 }
 
 func ptr(i int) *int { return &i }
+
+// The projection keeps why a step reached its verdict, where the evaluator said: a step refused
+// before any task started has no attempt, no task and no log, and its reason is all a run's detail
+// can say of it. A step that ran and ended as its tasks did gave none, and its row holds none.
+func TestTheProjectionKeepsWhyAStepEndedAsItDid(t *testing.T) {
+	at := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
+	refused := "graph: step normalize: port orders: inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects"
+	s := &graph.State{Steps: map[agk.Step]graph.StepState{
+		"normalize": {Verdict: agk.VerdictFailed, Since: at, Reason: refused},
+		"archive":   {Verdict: agk.VerdictSkipped, Since: at, Reason: "when [succeeded] does not admit normalize, which failed"},
+		"report":    {Verdict: agk.VerdictSucceeded, Since: at, Shards: []graph.ShardState{{Attempt: 1, Task: agk.TaskSucceeded, StartedAt: at}}},
+	}}
+	steps, _ := project(s)
+	got := map[agk.Step]string{}
+	for _, row := range steps {
+		got[row.Step] = row.Reason
+	}
+	want := map[agk.Step]string{"archive": "when [succeeded] does not admit normalize, which failed", "normalize": refused, "report": ""}
+	if !maps.Equal(got, want) {
+		t.Errorf("the projection holds the reasons %q, want %q", got, want)
+	}
+}
 
 // A further attempt waiting out its backoff is ready when the backoff ends, which is what its queue
 // wait is counted from; any other task is ready when its row is written, which the database says.

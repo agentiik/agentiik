@@ -966,14 +966,17 @@
           ]
         },
         "inputs": {
-          "description": "Feeds an input port from a workflow input or from an expression, creating no dependency on another step. It is how a step reads what the run was started with rather than what another step produced.",
+          "description": "Feeds an input port from a workflow input or from an expression, creating no dependency on another step. It is how a step reads what the run was started with rather than what another step produced. A port carries a batch of items, so what feeds it is an object, which is one item, or a list of objects, one item each. A number, a string or a boolean is no item: it is written under a key of an object, count: { value: \"${{ workflow.inputs.count }}\" }, since the key an item's data holds it under is the author's to choose, and validation refuses a literal that is no batch and a workflow input whose schema declares a scalar type. On a step that calls a workflow, it writes the called workflow's inputs instead, which take a value of any type.",
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/portName" },
           "additionalProperties": {
-            "description": "Expression, or literal value, feeding one input port.",
-            "examples": ["${{ workflow.inputs.orders }}"]
+            "description": "Expression, or literal value, feeding one input port: an object, which is one item, or a list of objects, a batch of them.",
+            "examples": ["${{ workflow.inputs.orders }}", { "value": "${{ workflow.inputs.count }}" }]
           },
-          "examples": [{ "orders": "${{ workflow.inputs.orders }}", "customers": "${{ workflow.inputs.customers }}" }]
+          "examples": [
+            { "orders": "${{ workflow.inputs.orders }}", "customers": "${{ workflow.inputs.customers }}" },
+            { "count": { "value": "${{ workflow.inputs.count }}" } }
+          ]
         },
         "outputs": {
           "description": "The output ports this step publishes. For a brick they must be a subset of the ports its manifest declares; a script has no manifest to read them from, so there they have to be written out. A declared port the container never writes publishes an empty envelope, which is not an error.",

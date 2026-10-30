@@ -6,6 +6,14 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The home's Server activity sets the tasks runners hold against the slots they offer, as `Tasks running`, and counts those waiting on their pool's queue apart, as `Tasks queued`; its chart draws both. `GET /api/v1/stats/activity` answers `tasks_held` and `tasks_queued`, and each bucket `tasks_held_max` and `tasks_queued_max`, from the instant a runner took a task, which `tasks.taken_at` keeps from this release (#930).
 - The user's server reads a run's files: `run.artifact` takes the `agk://run/` URI an envelope names a file by and answers text as text, an image as an image and any other file as an embedded resource, and the template `agk://run/{run}/{step}/{port}/{name}` reads the same, both under `run:read_data`. The API reads the object itself rather than answering a presigned URL, a fetch budget is spent as by any fetch, and a file above 1 MiB is refused with its size (#931).
+- A run's detail says why each step reached its verdict where the verdict alone does not: `GET /api/v1/runs/{id}`, and so `run.get`, answers `reason` on a step, which the controller now keeps on its row, and the console shows it in the step's pane. A step refused before any task started, its port fed what is no batch, said only `failed`, with no attempt, no task and no log (#933).
+- Validation refuses a value fed to an input port that the file shows is no batch, as `step-input-not-a-batch`: a number, a boolean or text written as it is, a list holding one, and a workflow input fed whole whose schema declares a scalar type, which every run refused to the step before any container started. The refusal says to write it under a key of an object, `count: { value: "${{ workflow.inputs.count }}" }`, and the run's own refusal names the value as the file does, `a number` rather than `a something the language does not write` (#934).
+- The fixture corpus, the language reference and the schema parts are agentiik/schemas at `017f268`, which describes a step's `reason`, says what a port takes and pins `step-input-not-a-batch`; `console/vendor/openapi.json` is copied from it and `schema.d.ts` regenerated.
+
+### Upgrading
+
+- Migration 0077 adds `steps.reason` and fills it in from the document of every run that has one, so that a run that failed before the upgrade says why after it.
+- A version stored before this release that feeds a port a scalar keeps rebuilding and running, its step failing as it did; a push of it, or `workflow.validate`, is refused.
 
 ## v0.7.1, 2026-10-30
 

@@ -1295,14 +1295,14 @@ func envelopeOf(run agk.RunID, step agk.Step, port agk.Port, v any, at time.Time
 		for i, elem := range value {
 			data, ok := elem.(map[string]any)
 			if !ok {
-				return agk.Envelope{}, fmt.Errorf("graph: step %s: port %s: inputs feeds the port a list whose entry %d is a %s: an item carries id, data and files, and data is an object", step, port, i, kindOf(elem))
+				return agk.Envelope{}, fmt.Errorf("graph: step %s: port %s: inputs feeds the port a list whose entry %d is %s: an item carries id, data and files, and data is an object", step, port, i, kindOf(elem))
 			}
 			items = append(items, agk.Item{ID: fedItemID(step, port, i), Data: data, Files: []agk.File{}})
 		}
 	case map[string]any:
 		items = []agk.Item{{ID: fedItemID(step, port, 0), Data: value, Files: []agk.File{}}}
 	default:
-		return agk.Envelope{}, fmt.Errorf("graph: step %s: port %s: inputs feeds the port a %s: a port carries a batch of items, so the value is an object or a list of objects", step, port, kindOf(v))
+		return agk.Envelope{}, fmt.Errorf("graph: step %s: port %s: inputs feeds the port %s: a port carries a batch of items, so the value is an object or a list of objects", step, port, kindOf(v))
 	}
 
 	envelope := agk.Envelope{

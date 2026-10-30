@@ -235,7 +235,7 @@ steps:
   a-script:
     image: example/brick:1
     inputs:
-      in: "a value"
+      in: { value: "a value" }
     script:
       - echo a script inside the brick's own image
     outputs: [out]

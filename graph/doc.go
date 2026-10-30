@@ -163,11 +163,6 @@
 // Parse and Load, so its params are compiled in the widest position and the rule that
 // item is read only under fan_out: item is left to Load, which has every block.
 //
-// What a port the inputs keyword feeds carries. A list is a batch of items and an object
-// is a batch of one, which is what a workflow input declared with an array schema and one
-// declared with an object schema each mean on a port; a scalar is refused, because
-// wrapping one would invent the key it sits under.
-//
 // The identity of an item on such a port. It is derived from the step, the port and the
 // rank rather than minted, because the evaluator has no identifier generator and because
 // a minted one would move the cache key of every step below it on every evaluation.
