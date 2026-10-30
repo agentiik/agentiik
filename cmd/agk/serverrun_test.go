@@ -295,6 +295,45 @@ func TestARunThatFailedOnAnInstallationExitsThree(t *testing.T) {
 	}
 }
 
+// refusedReason is what the evaluator says of a step whose port was fed what is no batch, which it
+// fails before any task starts.
+const refusedReason = "graph: step normalize: port orders: inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects"
+
+// A step refused before any task started has no task, no exit code and no log, and its reason is
+// what says why: the run names it as the step that failed, with no line sending the reader to a log
+// it never wrote, where it said that no step failed.
+func TestAStepRefusedBeforeAnyTaskIsReportedWithItsReason(t *testing.T) {
+	dir := repository(t)
+	refused := runReading(agk.Failed, agk.VerdictFailed)
+	refused.Steps[0].Reason = refusedReason
+	s := &standIn{readings: []db.RunDetail{refused}}
+	url := installationAt(t, s)
+
+	code, out, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
+	if code != exitNotSucceeded {
+		t.Fatalf("a run whose step was refused answered %d: %s%s", code, out, errs)
+	}
+	want := "monthly-invoicing failed: 1 step failed\nstep normalize: no exit code: failed: " + strings.TrimPrefix(refusedReason, "graph: ") + "\n"
+	if !strings.HasSuffix(errs, want) || strings.Contains(errs, "no step failed") || strings.Contains(errs, "agk logs") {
+		t.Errorf("the report of a run whose step was refused is:\n%s", errs)
+	}
+}
+
+// A step's reason goes with the failure of its task where it has one, said once for the step, as a
+// call's step names the run it called.
+func TestAFailedStepsReasonIsSaidWithItsTask(t *testing.T) {
+	dir := repository(t)
+	called := runReading(agk.Failed, agk.VerdictFailed, aTask(agk.TaskFailed, nil))
+	called.Steps[0].Reason = "the run 01M3CALLEDRUN0000000000000 it called, of finance/payroll, ended failed"
+	s := &standIn{readings: []db.RunDetail{called}}
+	url := installationAt(t, s)
+
+	_, _, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
+	if !strings.Contains(errs, "step normalize: no exit code: failed: "+called.Steps[0].Reason+"\n") || strings.Count(errs, called.Steps[0].Reason) != 1 || !strings.Contains(errs, "agk logs") {
+		t.Errorf("the report of a step failed with its reason is:\n%s", errs)
+	}
+}
+
 // Cancelled with nothing failed names what was stopped, as a local run does.
 func TestACancelledRunNamesWhatWasStopped(t *testing.T) {
 	dir := repository(t)

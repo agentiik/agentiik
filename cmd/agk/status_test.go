@@ -63,6 +63,33 @@ func TestAStatusSaysHowARunStands(t *testing.T) {
 	}
 }
 
+// A step's reason is said where the verdict alone does not say why: a skipped step's under it, and
+// a failed one's in its failure, a step refused before any task started being one with no task at
+// all, which read as no failure.
+func TestAStatusSaysWhyAStepReachedItsVerdict(t *testing.T) {
+	d := runReading(agk.Failed, agk.VerdictFailed)
+	d.Steps[0].Reason = refusedReason
+	d.Steps = append(d.Steps, db.StepSummary{Step: "archive", Verdict: agk.VerdictSkipped, Reason: "its when refused the upstream state failed"})
+	answer, _ := json.Marshal(d)
+
+	code, out, errs := askStatus(t, string(answer), aRun)
+	if code != exitSucceeded {
+		t.Fatalf("agk status answered %d: %s", code, errs)
+	}
+	reason := strings.TrimPrefix(refusedReason, "graph: ")
+	for _, want := range []string{
+		"normalize  failed\narchive    skipped\n           its when refused the upstream state failed\n",
+		"1 failure:\nstep normalize: no exit code: failed: " + reason + "\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("agk status does not say %q:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, reason) != 1 {
+		t.Errorf("agk status says the reason of a failed step %d times:\n%s", strings.Count(out, reason), out)
+	}
+}
+
 // A run refused at creation says why, "cancelled: " and the reason, the example the page gives: its
 // steps say nothing, since none ran.
 func TestAStatusOfARunRefusedAtCreationSaysWhy(t *testing.T) {

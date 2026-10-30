@@ -23,7 +23,8 @@ import (
 // It reads and decides nothing, so it leaves with 0 whatever state the run is in: a script that
 // waits on a run's verdict runs it with agk run, which exits 3 for one that did not succeed, or
 // reads the state out of -o json. A step reads as the narration names it, verdict then ports, with
-// the digest of each port beside its count, and the failures are the report agk run ends with.
+// the digest of each port beside its count, and why where the verdict alone does not say; and the
+// failures are the report agk run ends with, a failed step's reason among them.
 
 func status(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk status", "agk status <run> [--server <url>] [-o json] [-v]")
@@ -114,6 +115,11 @@ func describe(w io.Writer, d db.RunDetail, now time.Time, verbose bool) {
 			}
 		}
 		fmt.Fprintln(w, line)
+		if s.Reason != "" && s.Verdict != agk.VerdictFailed {
+			// Why it was skipped or cancelled, under it. A failed step's reason is in its
+			// failure, below, which a step refused before any task started is one of.
+			fmt.Fprintf(w, "%-*s  %s\n", width, "", trim(s.Reason))
+		}
 		if !verbose {
 			continue
 		}

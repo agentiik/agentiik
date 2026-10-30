@@ -340,7 +340,8 @@ func cancelled(state *graph.State) []string {
 	return out
 }
 
-// failure writes one failure: the step, the exit code, and what was refused, in that order.
+// failure writes one failure: the step, the exit code, and what was refused, in that order, and
+// the step's reason where it has one.
 //
 // That order is #voice and it is not negotiable here. Where no container ran there is no code
 // to name and the position reads "no exit code": the driver deliberately invents none, and a
@@ -364,6 +365,11 @@ func failure(w io.Writer, f local.Failure) {
 	line := fmt.Sprintf("%s: %s: %s", where, code, f.State)
 	if f.Refused != "" {
 		line += ": " + trim(f.Refused) + fmt.Sprintf(" (charged to %s)", f.Charge)
+	}
+	if f.Reason != "" {
+		// The step's own word, last: what the rule that failed it said, which for a step
+		// refused before any task started is all there is to say.
+		line += ": " + trim(f.Reason)
 	}
 	fmt.Fprintln(w, line)
 

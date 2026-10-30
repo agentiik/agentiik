@@ -10,8 +10,8 @@ import (
 	"github.com/agentiik/agentiik/graph"
 )
 
-// Failure is one task that ended badly, in the order a report names it: the step, the exit
-// code, and what was refused.
+// Failure is one task that ended badly, or a step that failed with none, in the order a report
+// names it: the step, the exit code, and what was refused.
 //
 // That order is #voice and it is the field order here, so a report is formatted out of the
 // struct rather than out of a string somebody assembled. What this type does not hold is
@@ -53,6 +53,14 @@ type Failure struct {
 	// opened one. The last lines of it belong in the report and reading them is
 	// cmd/agk's, because how many lines fit on a screen is not this package's business.
 	Log string
+
+	// Reason is the step's own word on why it failed, in the words of the rule that decided
+	// it, where its tasks do not say. A step refused before any task started, its port fed
+	// what is no batch or zipped with a batch of another length, has no shard, no exit code
+	// and no log, and is a failure of its own with Attempt 0 and State failed, its verdict
+	// spelled as a task's, so that a report never says no step failed of a run one failed. Beside a task's failure it is carried by the step's
+	// first, as a call's step names the run it called.
+	Reason string
 }
 
 // failures reads the failures of one run out of the state it ended in.
@@ -111,8 +119,24 @@ func failures(state *graph.State, g *graph.Graph, refused map[agk.TaskID]trouble
 			}
 			out = append(out, f)
 		}
+		if ss.Verdict == agk.VerdictFailed && ss.Reason != "" {
+			out = WithReason(out, name, ss.Reason)
+		}
 	}
 	return out
+}
+
+// WithReason gives the failures of a run a step's reason: to the first failure of the step's
+// tasks, and where none failed, as a failure of its own, at the end, which is where the step
+// comes in a report made in step order.
+func WithReason(failures []Failure, step agk.Step, reason string) []Failure {
+	for i := range failures {
+		if failures[i].Step == step {
+			failures[i].Reason = reason
+			return failures
+		}
+	}
+	return append(failures, Failure{Step: step, State: agk.TaskFailed, Reason: reason})
 }
 
 // failed says whether a task state is one a report names. Cancelled is not one of them: a
