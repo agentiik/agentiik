@@ -1656,7 +1656,7 @@ export interface paths {
         };
         /**
          * Read what the installation is doing
-         * @description Every namespace together, per bucket: the runs created by the state each is in now, and the most tasks in flight at once. Under now, as the request is answered: the runs queued, running and waiting, the tasks in flight, the slots the runners ready and heard from in the last 30 s offer, and those runners against the runners not revoked. Counts only, naming no run, workflow or namespace, so that an administrator who reads no namespace's runs sees how busy the installation is and not what it runs. Administrator only. Served at this path alone, so that a namespace named stats made before v0.3.0 reserved the word keeps every route it has.
+         * @description Every namespace together, per bucket: the runs created by the state each is in now, and the most tasks in flight at once, held by a runner and queued for one. Under now, as the request is answered: the runs queued, running and waiting, the tasks in flight, those runners hold and those queued for one, the slots the runners ready and heard from in the last 30 s offer, and those runners against the runners not revoked. Counts only, naming no run, workflow or namespace, so that an administrator who reads no namespace's runs sees how busy the installation is and not what it runs. Administrator only. Served at this path alone, so that a namespace named stats made before v0.3.0 reserved the word keeps every route it has.
          */
         get: operations["getActivityStatistics"];
         put?: never;
@@ -7667,7 +7667,9 @@ export interface components {
          *         "cancelled": 0,
          *         "timed_out": 0
          *       },
-         *       "tasks_in_flight_max": 14
+         *       "tasks_in_flight_max": 14,
+         *       "tasks_held_max": 12,
+         *       "tasks_queued_max": 4
          *     }
          * @example {
          *       "since": "2026-10-01T10:42:00Z",
@@ -7681,7 +7683,9 @@ export interface components {
          *         "cancelled": 0,
          *         "timed_out": 0
          *       },
-         *       "tasks_in_flight_max": 19
+         *       "tasks_in_flight_max": 19,
+         *       "tasks_held_max": 16,
+         *       "tasks_queued_max": 5
          *     }
          */
         statsActivityBucket: {
@@ -7749,6 +7753,16 @@ export interface components {
              * @example 14
              */
             tasks_in_flight_max: number;
+            /**
+             * @description The most of those a runner held at once in the bucket, from when one took the task to when it ended: what the slots of the ready runners are set against, since a runner takes no more than its concurrency. Read at its own highest, so it and tasks_queued_max add up to tasks_in_flight_max at no particular instant. A task a runner took before v0.7.2 counts as held from when it was handed out.
+             * @example 12
+             */
+            tasks_held_max: number;
+            /**
+             * @description The most of those waiting at once in the bucket on their pool's queue for a runner to take them, from when each was handed out to when a runner took it or it ended.
+             * @example 4
+             */
+            tasks_queued_max: number;
         };
         /**
          * What the installation is doing now
@@ -7761,6 +7775,8 @@ export interface components {
          *         "waiting": 1
          *       },
          *       "tasks_in_flight": 17,
+         *       "tasks_held": 14,
+         *       "tasks_queued": 3,
          *       "slots": 24,
          *       "runners_ready": 3,
          *       "runners": 4
@@ -7798,12 +7814,22 @@ export interface components {
                 waiting: number;
             };
             /**
-             * @description The tasks handed out, or on their way to a runner, and not yet ended.
+             * @description The tasks handed out, or on their way to a runner, and not yet ended: tasks_held and tasks_queued together.
              * @example 17
              */
             tasks_in_flight: number;
             /**
-             * @description The tasks the runners counted in runners_ready offer to run at once together: what tasks_in_flight is set against.
+             * @description The tasks in flight a runner has taken: bound to it by its redemption and not yet ended. A runner takes no more than its concurrency, so this is what slots is set against, and is above it only where a runner holding tasks is no longer counted among the ready, draining or not heard from, or reported fewer slots since it took them.
+             * @example 14
+             */
+            tasks_held: number;
+            /**
+             * @description The tasks in flight no runner has taken yet: on their pool's queue, waiting for a slot. A task waiting there is counted against its namespace's max_concurrent_tasks and its deadline all the same.
+             * @example 3
+             */
+            tasks_queued: number;
+            /**
+             * @description The tasks the runners counted in runners_ready offer to run at once together: what tasks_held is set against.
              * @example 24
              */
             slots: number;
@@ -7838,7 +7864,9 @@ export interface components {
          *             "cancelled": 0,
          *             "timed_out": 0
          *           },
-         *           "tasks_in_flight_max": 14
+         *           "tasks_in_flight_max": 14,
+         *           "tasks_held_max": 12,
+         *           "tasks_queued_max": 4
          *         },
          *         {
          *           "since": "2026-10-01T10:42:00Z",
@@ -7852,7 +7880,9 @@ export interface components {
          *             "cancelled": 0,
          *             "timed_out": 0
          *           },
-         *           "tasks_in_flight_max": 19
+         *           "tasks_in_flight_max": 19,
+         *           "tasks_held_max": 16,
+         *           "tasks_queued_max": 5
          *         }
          *       ],
          *       "now": {
@@ -7863,6 +7893,8 @@ export interface components {
          *           "waiting": 1
          *         },
          *         "tasks_in_flight": 17,
+         *         "tasks_held": 14,
+         *         "tasks_queued": 3,
          *         "slots": 24,
          *         "runners_ready": 3,
          *         "runners": 4
@@ -7901,7 +7933,9 @@ export interface components {
              *           "cancelled": 0,
              *           "timed_out": 0
              *         },
-             *         "tasks_in_flight_max": 14
+             *         "tasks_in_flight_max": 14,
+             *         "tasks_held_max": 12,
+             *         "tasks_queued_max": 4
              *       },
              *       {
              *         "since": "2026-10-01T10:42:00Z",
@@ -7915,7 +7949,9 @@ export interface components {
              *           "cancelled": 0,
              *           "timed_out": 0
              *         },
-             *         "tasks_in_flight_max": 19
+             *         "tasks_in_flight_max": 19,
+             *         "tasks_held_max": 16,
+             *         "tasks_queued_max": 5
              *       }
              *     ]
              */
@@ -7930,6 +7966,8 @@ export interface components {
              *         "waiting": 1
              *       },
              *       "tasks_in_flight": 17,
+             *       "tasks_held": 14,
+             *       "tasks_queued": 3,
              *       "slots": 24,
              *       "runners_ready": 3,
              *       "runners": 4
