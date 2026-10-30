@@ -365,6 +365,9 @@
               <span>{meaning.name}: {meaning.handling}</span>
             </p>
           {/if}
+          <!-- Why the step reached its verdict, where its tasks cannot say: a step refused before any
+               task started has no task, no exit code and no log, and this is all that tells why. -->
+          {#if step.reason}<p class="why" class:failed={step.verdict === "failed"}>{step.reason}</p>{/if}
 
           <dl class="header">
             {#if step.image}
@@ -794,6 +797,18 @@
 
   .exit span {
     color: var(--text);
+  }
+
+  /* The evaluator's sentence, kept whole and wrapped wherever the pane is narrow. A failure is
+     told in the failed ink, a skip or a cancellation in the muted one, since neither is wrong. */
+  .why {
+    margin: 0 0 calc(var(--unit) * 7);
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .why.failed {
+    color: var(--failed);
   }
 
   /* A table wider than its pane, on a phone, scrolls within it rather than being cut at its edge. */

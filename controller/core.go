@@ -880,7 +880,7 @@ func project(s *graph.State) ([]db.StepRow, []db.TaskRow) {
 
 	for _, name := range names {
 		st := s.Steps[name]
-		row := db.StepRow{Step: name, Verdict: st.Verdict}
+		row := db.StepRow{Step: name, Verdict: st.Verdict, Reason: st.Reason}
 		if st.Verdict.Terminal() {
 			row.FinishedAt = st.Since
 		}

@@ -443,6 +443,12 @@
           "manifest": "brick/valid/normalize.yaml"
         },
         {
+          "file": "workflow/invalid/step-input-not-a-batch.yaml",
+          "rule": "A step feeding an input port a value that is no batch. A port carries a batch of items, an object or a list of objects, and a workflow input whose schema declares an integer would be refused to the step on every run, before any container started.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
           "file": "workflow/invalid/output-from-unknown-step.yaml",
           "rule": "A workflow output taken from a step the workflow does not declare.",
           "refused_by": "validator",

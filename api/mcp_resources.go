@@ -34,7 +34,7 @@ var (
 		URITemplate: "agentiik://run/{id}",
 		Name:        "run",
 		Title:       "A run",
-		Description: "A run as run.get answers it: its state, each step's verdict, what started it and whom it is attributed to, its inputs only to whoever holds run:read_data.",
+		Description: "A run as run.get answers it: its state, each step's verdict and why where the verdict alone does not say, what started it and whom it is attributed to, its inputs only to whoever holds run:read_data.",
 		MimeType:    "application/json",
 	}
 	artifactTemplate = mcp.Template{

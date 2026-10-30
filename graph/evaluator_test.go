@@ -1152,6 +1152,44 @@ func unchanged(t *testing.T, e *Evaluator, r Result, what string) {
 
 // The one manifest these runs are held to: two output ports, one parameter, and no
 // required input, so that a workflow can feed what it likes.
+// A port fed what is no batch fails its step before any container starts, and the step says
+// why in its reason, which the run's detail answers: the value is no item, and an author reading
+// it is told what it is in the file's terms, a number where the input was written as one, rather
+// than the int64 an expression evaluates it to. Validation refuses what the file shows, so this is
+// what reaches a run: an input with no schema, fed a value the file cannot tell of.
+func TestAPortFedWhatIsNoBatchFailsItsStepSayingWhy(t *testing.T) {
+	doc := `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+inputs:
+  count: {}
+steps:
+  normalize:
+    image: ` + image + `
+    inputs:
+      orders: ${{ workflow.inputs.count }}
+    outputs: [ok]
+`
+	for _, c := range []struct {
+		value any
+		says  string
+	}{
+		{json.Number("3"), "inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects"},
+		{[]any{map[string]any{"id": "a"}, json.Number("2")}, "inputs feeds the port a list whose entry 1 is a number: an item carries id, data and files"},
+		{"three", "inputs feeds the port text: a port carries a batch of items"},
+	} {
+		e := started(t, doc, Options{Inputs: map[string]any{"count": c.value}})
+		if plan := next(t, e, runAt); len(plan.Start) != 0 {
+			t.Fatalf("fed %v, the plan starts %s, and nothing can start", c.value, starts(plan))
+		}
+		st := e.State().Steps["normalize"]
+		if st.Verdict != agk.VerdictFailed || !strings.Contains(st.Reason, c.says) {
+			t.Errorf("fed %v, normalize is %s for %q, want failed saying %q", c.value, st.Verdict, st.Reason, c.says)
+		}
+	}
+}
+
 const evaluatorManifest = `
 apiVersion: agentiik.dev/v1
 kind: Brick

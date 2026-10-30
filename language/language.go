@@ -23,9 +23,9 @@ import (
 )
 
 // Source is the commit of agentiik/schemas the files under reference/ and schemas/ were taken
-// from, the one its v0.7.0 is tagged at, as the fixtures are: the one sentence a person updating
-// them reads to know what they are, and the test holds the files to it no further than that.
-const Source = "agentiik/schemas@345c40bcfaa8a2b83a201ad53a457053dd8c2806"
+// from, the one the fixtures are taken from: the one sentence a person updating them reads to
+// know what they are, and the test holds the files to it no further than that.
+const Source = "agentiik/schemas@017f268ffd50a3d09096f23fbd48fefac3fdb37a"
 
 //go:embed reference schemas
 var files embed.FS

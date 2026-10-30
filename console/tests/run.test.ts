@@ -52,6 +52,14 @@ describe("the run inspector", () => {
     expect(screen.getByText("transient failure: retried as the step's policy says")).toBeTruthy();
   });
 
+  it("says why a step failed where no task can, refused before any started", async () => {
+    const s = scenario("alice");
+    const step = detail(s).steps.find((st) => st.step === "invoice")!;
+    step.reason = "graph: step invoice: port orders: inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects";
+    open(`/finance/runs/${failed}`, s);
+    expect(await screen.findByText(step.reason)).toBeTruthy();
+  });
+
   it("leaves out what a principal without run:read_data may not see, without a word of it", async () => {
     const s = scenario("alice");
     const me = s["GET /api/v1/me"]!.body as { permissions: Record<string, string[]> };

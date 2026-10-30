@@ -25,5 +25,6 @@ steps:
   reconcile:
     image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
     inputs:
-      period: ${{ workflow.inputs.period }}
+      period:
+        month: ${{ workflow.inputs.period }}
     outputs: [out]

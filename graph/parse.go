@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
@@ -2022,7 +2023,9 @@ func jsonLike(v any, where *valueAt) (any, error) {
 
 // kindOf says what a value is in the file's own terms, so that a refusal about the wrong
 // shape reads as the language and not as the reader: an author holding the file has
-// written a number, a list or a block, and has never written a json.Number.
+// written a number, a list or a block, and has never written a json.Number. An expression
+// evaluated in a run answers what the expression layer gives, an int64 or a float64 where
+// the file reads a number, and a timestamp or a duration the language's functions make.
 func kindOf(v any) string {
 	switch v.(type) {
 	case nil:
@@ -2031,8 +2034,12 @@ func kindOf(v any) string {
 		return "text"
 	case bool:
 		return "a boolean"
-	case json.Number:
+	case json.Number, int64, uint64, float64:
 		return "a number"
+	case time.Time:
+		return "a timestamp"
+	case time.Duration:
+		return "a duration"
 	case []any:
 		return "a list"
 	case map[string]any:

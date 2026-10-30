@@ -590,6 +590,11 @@ type StepRow struct {
 
 	StartedAt  time.Time
 	FinishedAt time.Time
+
+	// Reason is why the step reached its verdict, where the verdict alone does not say, as the
+	// evaluator wrote it: a step refused before any task started, skipped or cancelled. Empty on
+	// every other step, whose tasks say why.
+	Reason string
 }
 
 // TaskRow is one task as the projection holds it.
@@ -695,10 +700,10 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 
 	for _, s := range d.Steps {
 		if _, err := w.tx.Exec(ctx,
-			`update steps set state = $4, attempts = $5, started_at = coalesce(started_at, $6), finished_at = $7
+			`update steps set state = $4, attempts = $5, started_at = coalesce(started_at, $6), finished_at = $7, reason = $8
 			 where namespace = $1 and run_id = $2 and step = $3`,
 			d.Namespace, string(d.Run), string(s.Step), s.Verdict.String(), s.Attempts,
-			nilIfZero(s.StartedAt), nilIfZero(s.FinishedAt)); err != nil {
+			nilIfZero(s.StartedAt), nilIfZero(s.FinishedAt), nilIfEmpty(s.Reason)); err != nil {
 			return fmt.Errorf("db: step %s of run %s could not be written: %w", s.Step, d.Run, err)
 		}
 	}

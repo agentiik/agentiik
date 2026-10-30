@@ -626,3 +626,74 @@ func TestAUserOfV050KeepsTheNameTheyWereShownBy(t *testing.T) {
 		t.Errorf("the display name carol was given reads after the upgrade as %q, %v", kept, err)
 	}
 }
+
+// v071 is the last migration v0.7.1 carried.
+const v071 = "0075_oauth.sql"
+
+// A step a run of v0.7.1 refused before any task started kept why only in its run's document, and
+// the upgrade copies the reason onto its row, so that the run says after the upgrade what it could
+// not say before: the step refused, the step its when skipped, and nothing for a step that gave no
+// reason or a run never evaluated.
+func TestAStepOfV071SaysWhyAfterTheUpgrade(t *testing.T) {
+	super, role := migratedAt(t, v071)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	const failed, queued = "01M666MP4XXEG3E1HRR8KRE1C6", "01M666MP4XXEG3E1HRR8KRE1C7"
+	const refused = "graph: step seed: port in: inputs feeds the port a something the language does not write: a port carries a batch of items, so the value is an object or a list of objects"
+	document := `{"version": 1, "envelopes": [], "state": {"version": 1, "seq": 2, "steps": {
+		"seed": {"verdict": "failed", "since": "2026-10-30T09:00:00Z", "reason": "` + refused + `"},
+		"report": {"verdict": "skipped", "since": "2026-10-30T09:00:00Z", "reason": "when [succeeded] does not admit seed, which failed"},
+		"tidy": {"verdict": "succeeded", "since": "2026-10-30T09:00:00Z"}}}}`
+	for _, stmt := range []string{
+		`insert into namespaces (name) values ('finance')`,
+		`insert into workflows (namespace, name) values ('finance', 'seeded')`,
+		`insert into workflow_versions (namespace, workflow, commit, graph, author, created_at)
+		   values ('finance', 'seeded', 'a3f9c1e', '{}', 'alice', now())`,
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, evaluation) values
+		   ('finance', '` + failed + `', 'seeded', 'a3f9c1e', 'failed', 'manual', 'alice', '` + document + `'),
+		   ('finance', '` + queued + `', 'seeded', 'a3f9c1e', 'queued', 'manual', 'alice', null)`,
+		`insert into steps (namespace, run_id, step, state) values
+		   ('finance', '` + failed + `', 'seed', 'failed'), ('finance', '` + failed + `', 'report', 'skipped'),
+		   ('finance', '` + failed + `', 'tidy', 'succeeded'), ('finance', '` + queued + `', 'seed', 'pending')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("filling the database as v0.7.1 would have: %s", err)
+		}
+	}
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatalf("the upgrade was refused: %s", err)
+	}
+
+	rows, err := conn.Query(ctx, `select run_id::text || ' ' || step, coalesce(reason, 'null') from steps order by 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for rows.Next() {
+		var step, reason string
+		if err := rows.Scan(&step, &reason); err != nil {
+			t.Fatal(err)
+		}
+		got[step] = reason
+	}
+	rows.Close()
+	want := map[string]string{
+		failed + " seed":   refused,
+		failed + " report": "when [succeeded] does not admit seed, which failed",
+		failed + " tidy":   "null",
+		queued + " seed":   "null",
+	}
+	if len(got) != len(want) {
+		t.Errorf("the steps read %q after the upgrade, want %q", got, want)
+	}
+	for step, reason := range want {
+		if got[step] != reason {
+			t.Errorf("the step %s reads %q after the upgrade, want %q", step, got[step], reason)
+		}
+	}
+}

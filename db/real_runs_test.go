@@ -1,9 +1,11 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -159,6 +161,60 @@ func TestADecisionIsRefusedWhenTheRunHasMoved(t *testing.T) {
 	}
 	if tasks != 1 {
 		t.Errorf("after one accepted pass and one refused there are %d tasks", tasks)
+	}
+}
+
+// A step's reason is written with its verdict and read back in the run's detail: why a step failed
+// before any task started, which no task row and no log can say. A step that gave none reads none,
+// and is answered without the key.
+func TestAStepsReasonIsReadInTheRunsDetail(t *testing.T) {
+	pool, _ := created(t)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.CreateRun(ctx, aRun())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const refused = "graph: step normalize: port orders: inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects"
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		return w.SaveDecision(ctx, Decision{
+			Namespace: "finance", Run: theRun, Was: 0, Seq: 1,
+			Document: json.RawMessage(`{"version":1,"seq":1}`),
+			State:    agk.Failed, StartedAt: now, FinishedAt: now,
+			Steps: []StepRow{
+				{Step: "normalize", Verdict: agk.VerdictFailed, FinishedAt: now, Reason: refused},
+				{Step: "invoice", Verdict: agk.VerdictSkipped, FinishedAt: now, Reason: "when [succeeded] does not admit normalize, which failed"},
+				{Step: "archive", Verdict: agk.VerdictPending},
+			},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var d RunDetail
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		var err error
+		d, err = ns.RunDetail(ctx, theRun)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[agk.Step]string{}
+	for _, s := range d.Steps {
+		got[s.Step] = s.Reason
+	}
+	want := map[agk.Step]string{"normalize": refused, "invoice": "when [succeeded] does not admit normalize, which failed", "archive": ""}
+	if !maps.Equal(got, want) {
+		t.Errorf("the detail reads the reasons %q, want %q", got, want)
+	}
+	for _, s := range d.Steps {
+		answered, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if has := bytes.Contains(answered, []byte(`"reason"`)); has != (s.Reason != "") {
+			t.Errorf("the step %s is answered as %s", s.Step, answered)
+		}
 	}
 }
 

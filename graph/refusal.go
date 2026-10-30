@@ -42,6 +42,10 @@ const (
 	// "The runner mounts one directory per port the brick declares, and there is no
 	// directory for a port the manifest never named."
 	RuleStepInputPortNotInManifest Rule = "step-input-port-not-in-manifest"
+	// RuleStepInputNotABatch is a step feeding an input port a value the file shows is no
+	// batch, which a run refuses to the step before any container starts: "a port carries a
+	// batch of items", an object or a list of objects.
+	RuleStepInputNotABatch Rule = "step-input-not-a-batch"
 	// RuleOutputFromUnknownStep is a workflow output taken from a step the workflow
 	// does not declare.
 	RuleOutputFromUnknownStep Rule = "output-from-unknown-step"

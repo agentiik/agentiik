@@ -774,6 +774,10 @@ func (in *Installation) Start(workflow, commit string, inputs map[string]any) st
 type Run struct {
 	Run   string `json:"run"`
 	State string `json:"state"`
+	Steps []struct {
+		Step   string `json:"step"`
+		Reason string `json:"reason"`
+	} `json:"steps"`
 	Tasks []struct {
 		Task     string `json:"task"`
 		Step     string `json:"step"`
@@ -785,9 +789,8 @@ type Run struct {
 	// Answer is the whole of what the API answered, which a failure prints.
 	Answer json.RawMessage `json:"-"`
 
-	// Reasons are what the controller's evaluation says of each step it gave a reason for, by
-	// step, which a failure prints too: the API answers a verdict and not why, and a task that
-	// could not be built never reached a runner whose log would say.
+	// Reasons are the reason the API answers for each step it gives one, by step, which a failure
+	// prints too: a task that could not be built never reached a runner whose log would say.
 	Reasons map[string]string `json:"-"`
 }
 
@@ -816,34 +819,11 @@ func (in *Installation) Wait(run string, within time.Duration) Run {
 		}
 		return fmt.Errorf("it is %s: %s", r.State, body)
 	})
-	ended.Reasons = in.reasons(run)
-	return ended
-}
-
-// reasons reads the reason the controller's evaluation of run records for each step, as the
-// superuser, out of the document it keeps the evaluator's state in. A reading that fails is
-// itself the reason given, since it only ever explains a failure and never makes one.
-func (in *Installation) reasons(run string) map[string]string {
-	out := map[string]string{}
-	conn, err := pgx.Connect(in.ctx, in.superuser)
-	if err != nil {
-		return map[string]string{"": err.Error()}
-	}
-	defer conn.Close(context.WithoutCancel(in.ctx))
-	rows, err := conn.Query(in.ctx, `
-		select s.key, s.value->>'reason'
-		from runs r, jsonb_each(coalesce(r.evaluation->'state'->'steps', '{}'::jsonb)) s
-		where r.namespace = $1 and r.id = $2 and s.value->>'reason' is not null`, Namespace, run)
-	if err != nil {
-		return map[string]string{"": err.Error()}
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var step, reason string
-		if err := rows.Scan(&step, &reason); err != nil {
-			return map[string]string{"": err.Error()}
+	ended.Reasons = map[string]string{}
+	for _, s := range ended.Steps {
+		if s.Reason != "" {
+			ended.Reasons[s.Step] = s.Reason
 		}
-		out[step] = reason
 	}
-	return out
+	return ended
 }

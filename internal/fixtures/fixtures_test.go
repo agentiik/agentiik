@@ -209,12 +209,13 @@ func TestWorkflowsCarriesTheWholeCorpus(t *testing.T) {
 		}
 	}
 	// The corpus the release carries: thirteen documents that must be accepted and
-	// eighty that must be refused, of which eighteen are rules no JSON Schema can express
+	// eighty-one that must be refused, of which nineteen are rules no JSON Schema can express
 	// and the evaluator owns. The included file carrying mcp is the fragment group's now,
-	// since it is not an entry point, and a tool's description of white space alone, ASCII
-	// or Unicode, is two of the schema's refusals.
-	if valid != 13 || invalid != 80 || byValidator != 18 {
-		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 13, 80 and 18", valid, invalid, byValidator)
+	// since it is not an entry point, a tool's description of white space alone, ASCII
+	// or Unicode, is two of the schema's refusals, and a port fed a workflow input whose
+	// schema declares an integer is the validator's.
+	if valid != 13 || invalid != 81 || byValidator != 19 {
+		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 13, 81 and 19", valid, invalid, byValidator)
 	}
 }
 

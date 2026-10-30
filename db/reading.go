@@ -109,6 +109,12 @@ type StepSummary struct {
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
 
+	// Reason is why the step reached its verdict, in the words of the rule that decided it, where
+	// the verdict alone does not say: a step whose input port was fed what is no batch fails with no
+	// attempt, no task and no log, and this is all that says why. It names the rule and never a
+	// value the step was handed, so it is answered under run:read with the verdict.
+	Reason string `json:"reason,omitempty"`
+
 	// Ports are the envelope digests the step published, which is what the database keeps of
 	// them. Never the items.
 	Ports map[agk.Port]Envelope `json:"ports,omitempty"`
@@ -383,7 +389,7 @@ func (n *NS) includes(ctx context.Context, workflow, commit string) ([]RunInclud
 
 func (n *NS) steps(ctx context.Context, run agk.RunID) ([]StepSummary, error) {
 	rows, err := n.tx.Query(ctx, `
-		select step, state, attempts, started_at, finished_at, ports, envelopes_purged_at
+		select step, state, attempts, started_at, finished_at, coalesce(reason, ''), ports, envelopes_purged_at
 		from steps where namespace = $1 and run_id = $2 order by step`,
 		n.namespace, string(run))
 	if err != nil {
@@ -397,7 +403,7 @@ func (n *NS) steps(ctx context.Context, run agk.RunID) ([]StepSummary, error) {
 		var verdict string
 		var started, finished, purged *time.Time
 		var raw []byte
-		if err := rows.Scan(&s.Step, &verdict, &s.Attempts, &started, &finished, &raw, &purged); err != nil {
+		if err := rows.Scan(&s.Step, &verdict, &s.Attempts, &started, &finished, &s.Reason, &raw, &purged); err != nil {
 			return nil, err
 		}
 		if err := s.Verdict.UnmarshalText([]byte(verdict)); err != nil {

@@ -21101,7 +21101,7 @@
           "attempts"
         ],
         "additionalProperties": false,
-        "description": "One step of a run as a screen shows it: its verdict, how many attempts it took, when it ran, and the envelope each of its output ports published.",
+        "description": "One step of a run as a screen shows it: its verdict and, where the verdict alone does not say, why; how many attempts it took, when it ran, and the envelope each of its output ports published.",
         "examples": [
           {
             "step": "invoice",
@@ -21168,6 +21168,16 @@
             "description": "When it reached its verdict. Absent while it has none.",
             "examples": [
               "2026-10-01T05:42:55Z"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Why the step reached its verdict, in the words of the rule that decided it, where the verdict alone does not say: a step failed before any task started, since its input port was fed what is no batch, a merge could not be made or its if did not evaluate; a step skipped, naming the if that answered false or the upstream verdict its when does not admit; a step cancelled, naming what cancelled it. Absent on every other step, whose tasks and their logs say why it ended as it did. Answered under run:read, since it names the rule and never a value the step was handed.",
+            "examples": [
+              "graph: step seed: port in: inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects",
+              "when [succeeded] does not admit normalize, which failed",
+              "the run was cancelled before the step ended"
             ]
           },
           "ports": {
