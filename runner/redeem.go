@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/bus"
 )
@@ -24,7 +25,7 @@ import (
 // "A runner redeems before it acknowledges the message and pulls the image." The redemption is
 // the one exchange that turns the names a task message carries into what it deliberately does
 // not: a URL for each input envelope and each artifact it names, a URL for each file of the
-// tree, the secret values and one upload policy. The first answer binds the task to this runner,
+// tree, the secret values and one upload policy, and beside them the head of the task's run. The first answer binds the task to this runner,
 // so what the runner does next depends on which answer it got, and the page's table sets that out
 // status by status; NextAfter is that table.
 //
@@ -57,6 +58,23 @@ type Redemption struct {
 	Secrets []RedeemedSecret `json:"secrets"`
 	Tree    []TreeEntry      `json:"tree"`
 	Uploads Uploads          `json:"uploads"`
+
+	// Run is the head of the task's run, which the container is told in /agk/run.json. It is
+	// nil where the answer carries none, which is an API of the release before the one that
+	// answered it, and the container is then told what the task message names of the run and
+	// no more: what it tells a container decides nothing about the task, so an installation
+	// whose runners were upgraded before its API keeps running its tasks meanwhile.
+	Run *RedeemedRun `json:"run,omitempty"`
+}
+
+// RedeemedRun is what started the task's run, the principal it is attributed to and when it
+// was let in, under the names the run expression context gives them. The kind is read as text
+// and held to the seven by answers, so that a kind left out is refused rather than read as
+// manual, the zero of agk.TriggerKind.
+type RedeemedRun struct {
+	TriggerKind string `json:"trigger_kind"`
+	TriggeredBy string `json:"triggered_by"`
+	StartedAt   string `json:"started_at,omitempty"`
 }
 
 // RedeemedInput is one input port: where its envelope is fetched from, and every artifact that
@@ -358,7 +376,32 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 	if want := artifact.Prefix(m.Namespace); r.Uploads.KeyPrefix != want {
 		return fmt.Errorf("the upload policy writes under %q, and the task's namespace is written under %q", r.Uploads.KeyPrefix, want)
 	}
+
+	// The run's head, where there is one: a kind of the seven and an instant.
+	if r.Run != nil {
+		if _, err := r.Run.head(); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// head reads the run's head as the driver writes it to /agk/run.json, leaving out the parts the
+// task message names, which the caller fills in from the task.
+func (h RedeemedRun) head() (agk.Run, error) {
+	var run agk.Run
+	if err := run.Trigger.UnmarshalText([]byte(h.TriggerKind)); err != nil {
+		return agk.Run{}, fmt.Errorf("the redemption says the run was started by %w", err)
+	}
+	run.TriggeredBy = h.TriggeredBy
+	if h.StartedAt != "" {
+		at, err := time.Parse(time.RFC3339Nano, h.StartedAt)
+		if err != nil {
+			return agk.Run{}, fmt.Errorf("the redemption says the run started at %q, which is not an RFC 3339 instant", h.StartedAt)
+		}
+		run.StartedAt = at
+	}
+	return run, nil
 }
 
 // treeModePattern is the wire's grammar for a mode, octal with or without its leading zero.

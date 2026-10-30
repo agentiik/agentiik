@@ -102,6 +102,38 @@ func TestEveryValidTaskMessageWithItsRedemptionReadsBackAsATask(t *testing.T) {
 	}
 }
 
+// The head of the run a redemption answers reaches the driver as the task's run, completed with
+// what the message names of it, so that /agk/run.json says what started the run, on whose behalf
+// and when; and where the redemption answers none, no run is handed over, and the driver tells the
+// container what the task carries and no more.
+func TestTheRunARedemptionAnswersIsTheTasksRun(t *testing.T) {
+	s := newObjectStore(t)
+	m, r := s.taskFor(t, nil, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}}, nil)
+	r.Run = &RedeemedRun{TriggerKind: "webhook", TriggeredBy: "finance/agentiik", StartedAt: "2026-10-01T04:03:13Z"}
+	a, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Remove() })
+	want := agk.Run{
+		ID: storeRun, Workflow: "monthly-invoicing", Namespace: "finance", Commit: "a3f9c1e",
+		Trigger: agk.TriggerWebhook, TriggeredBy: "finance/agentiik", StartedAt: time.Date(2026, 10, 1, 4, 3, 13, 0, time.UTC),
+	}
+	if got := a.Sources.Run; !reflect.DeepEqual(got, want) {
+		t.Errorf("the task's run is %+v, want %+v", got, want)
+	}
+
+	r.Run = nil
+	b, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { b.Remove() })
+	if b.Sources.Run.ID != "" {
+		t.Errorf("a redemption answering no run handed over %+v", b.Sources.Run)
+	}
+}
+
 // The base64 value of the corpus decodes to the bytes it stands for, which is what a container
 // is given and what its log is masked against, and not to its text.
 func TestASecretIsDecodedFromTheEncodingItTravelledIn(t *testing.T) {

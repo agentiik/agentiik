@@ -124,6 +124,17 @@ type Redeemed struct {
 	// redemption hands out is minted to end with it: a URL that outlived the task it was
 	// fetched for would be the standing credential the grant exists to avoid.
 	ExpiresAt time.Time
+
+	// Trigger, TriggeredBy and StartedAt are the head of the run the task belongs to, as its
+	// row holds them: what started it, the principal it is attributed to, and when it was let
+	// in. The container is told them in /agk/run.json, and nothing on the way there holds
+	// them: the task message names the run and the version and no more, and a runner reads no
+	// run. Read off the run rather than written into the scope, unlike the version, because
+	// none of them changes once the run exists and none of them opens anything. TriggeredBy is
+	// empty and StartedAt zero where the row holds none.
+	Trigger     agk.TriggerKind
+	TriggeredBy string
+	StartedAt   time.Time
 }
 
 // ErrTaskHeld is a task another runner is already working on.
@@ -291,8 +302,10 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 	// Found by its hash as well as its task, because a task may have been issued several, one
 	// for every message prepared for it, and each redeems.
 	query := `
-		select g.namespace, g.expires_at, g.scope, t.idempotency_key, t.state, t.runner
+		select g.namespace, g.expires_at, g.scope, t.idempotency_key, t.state, t.runner,
+		       r.trigger, coalesce(r.triggered_by, ''), r.started_at
 		from task_grants g join tasks t on t.namespace = g.namespace and t.id = g.task_id
+		join runs r on r.namespace = t.namespace and r.id = t.run_id
 		where g.task_id = $1 and g.hash = $2`
 	if lock {
 		query += ` for update of t`
@@ -303,8 +316,10 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 	var key agk.TaskID
 	var state string
 	var holder *string
+	var trigger, by string
+	var started *time.Time
 	err := w.tx.QueryRow(ctx, query, id, token.Hash(clear)).
-		Scan(&namespace, &expires, &scope, &key, &state, &holder)
+		Scan(&namespace, &expires, &scope, &key, &state, &holder, &trigger, &by, &started)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Redeemed{}, ErrNoGrant
 	}
@@ -324,6 +339,10 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 	var where agk.TaskState
 	if err := where.UnmarshalText([]byte(state)); err != nil {
 		return Redeemed{}, fmt.Errorf("db: the task is in state %q: %w", state, err)
+	}
+	var kind agk.TriggerKind
+	if err := kind.UnmarshalText([]byte(trigger)); err != nil {
+		return Redeemed{}, fmt.Errorf("db: the task's run says it was started by %q: %w", trigger, err)
 	}
 
 	switch {
@@ -358,7 +377,11 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 	if err != nil {
 		return Redeemed{}, err
 	}
-	return Redeemed{Namespace: namespace, Storage: storage, Row: id, Task: key, Scope: scope, ExpiresAt: expires}, nil
+	got := Redeemed{Namespace: namespace, Storage: storage, Row: id, Task: key, Scope: scope, ExpiresAt: expires, Trigger: kind, TriggeredBy: by}
+	if started != nil {
+		got.StartedAt = *started
+	}
+	return got, nil
 }
 
 // mayTake holds a runner that would bind a task to what it may take: its standing first, then its

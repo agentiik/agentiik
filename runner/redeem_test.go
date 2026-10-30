@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/internal/fixtures"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -273,10 +275,13 @@ func TestARedemptionThatDoesNotAnswerTheMessageIsRefused(t *testing.T) {
 			below.Path += "/below"
 			r.Tree = append(r.Tree, below)
 		},
-		"a tree file relocated": func(r *Redemption) { r.Tree[0].To = "/etc/ssl/certs/internal-ca.pem" },
-		"a tree file by name":   func(r *Redemption) { r.Tree[0].SHA256 = "agentiik.yaml" },
-		"no upload policy":      func(r *Redemption) { r.Uploads.URL = "" },
-		"another namespace":     func(r *Redemption) { r.Uploads.KeyPrefix = "payroll/sha256/" },
+		"a tree file relocated":    func(r *Redemption) { r.Tree[0].To = "/etc/ssl/certs/internal-ca.pem" },
+		"a tree file by name":      func(r *Redemption) { r.Tree[0].SHA256 = "agentiik.yaml" },
+		"no upload policy":         func(r *Redemption) { r.Uploads.URL = "" },
+		"another namespace":        func(r *Redemption) { r.Uploads.KeyPrefix = "payroll/sha256/" },
+		"a run started by cron":    func(r *Redemption) { r.Run.TriggerKind = "cron" },
+		"a run started by no kind": func(r *Redemption) { r.Run.TriggerKind = "" },
+		"a run started yesterday":  func(r *Redemption) { r.Run.StartedAt = "yesterday" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := clone()
@@ -308,5 +313,30 @@ func TestARedemptionThatDoesNotAnswerTheMessageIsRefused(t *testing.T) {
 		if err := answering(pair.Response, m).answers(m); err == nil {
 			t.Errorf("%s is taken, and the corpus refuses it by %s", c.File, c.Rule)
 		}
+	}
+}
+
+// An API of the release before this one answers no run's head, and its answer is taken: what a
+// container is told of its run decides nothing about the task, so a runner upgraded before its API
+// keeps running tasks meanwhile, and the container is told what the task message names. A head
+// that is there is read as the run's.
+func TestARedemptionWithNoRunIsTakenAndOneWithARunIsRead(t *testing.T) {
+	var m bus.TaskMessage
+	readFixture(t, "fixtures/wire/valid/task-message.json", &m)
+	r := answering(redemptionFixture(t, "fixtures/wire/valid/grant-redemption.json"), m)
+	if r.Run == nil {
+		t.Fatal("the corpus's redemption carries no run")
+	}
+	head, err := r.Run.head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head.Trigger != agk.TriggerSchedule || head.TriggeredBy != "finance/agentiik" || !head.StartedAt.Equal(time.Date(2026, 9, 10, 6, 37, 0, 0, time.UTC)) {
+		t.Errorf("the head reads as %+v", head)
+	}
+
+	r.Run = nil
+	if err := r.answers(m); err != nil {
+		t.Errorf("an answer with no run is refused: %s", err)
 	}
 }

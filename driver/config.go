@@ -18,8 +18,8 @@ import (
 // Run would be the evaluator learning about grants, trees and sockets, which is the
 // thing graph/driver.go exists to prevent.
 //
-// Three of those are about the task after all where a server runs it: Store, Secrets and
-// Repo, which a runner has from the redemption of one task's grant. A runner gives them
+// Four of those are about the task after all where a server runs it: Store, Secrets, Repo
+// and Runs, which a runner has from the redemption of one task's grant. A runner gives them
 // per task, as Sources on the context of that task's Run through WithSources, and each
 // one given there answers in place of the hook of the same name here. agk run --local
 // gives none and is answered from these. Every other field is the machine's, and is
@@ -47,7 +47,8 @@ type Config struct {
 
 	// Runs answers with the run a task belongs to, which is what /agk/run.json
 	// carries. It is asked rather than carried on the Task because a run is one
-	// value shared by every task of it.
+	// value shared by every task of it. A server runner has no run to ask about,
+	// and gives each task's in Sources.Run, from its redemption.
 	Runs func(ctx context.Context, run agk.RunID) (agk.Run, error)
 
 	// Secrets is where a value comes from when the container is prepared. A server

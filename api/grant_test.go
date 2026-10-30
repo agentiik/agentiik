@@ -89,8 +89,8 @@ func withGrants(t *testing.T, secrets api.Secrets) grants {
 	g := grants{pool: pool, objects: objects, super: super}
 	g.recorded(t, "a3f9c1e", theTree())
 	for _, stmt := range []string{
-		`insert into runs (namespace, id, workflow, commit, trigger)
-		   values ('finance','` + grantRun + `','monthly-invoicing','a3f9c1e','manual')`,
+		`insert into runs (namespace, id, workflow, commit, trigger, triggered_by, started_at)
+		   values ('finance','` + grantRun + `','monthly-invoicing','a3f9c1e','schedule','finance/agentiik','2026-10-01T04:03:13.25Z')`,
 		`insert into steps (namespace, run_id, step) values ('finance','` + grantRun + `','render')`,
 		`insert into tasks (namespace, id, run_id, step, attempt, state)
 		   values ('finance','` + grantTaskRow + `','` + grantRun + `','render',1,'dispatched')`,
@@ -866,6 +866,36 @@ func TestARedemptionIsWhatTheWireDescribes(t *testing.T) {
 	// runner reading it strictly would refuse the document for.
 	if err := conforms(t, "/$defs/grantRedemption", map[string]any{"request": ask, "response": answer}); err != nil {
 		t.Errorf("the redemption is not what the wire describes: %s", err)
+	}
+}
+
+// The head of the task's run is answered with everything else, as the run's row holds it, since
+// nothing else that reaches a runner carries it and the container is told it in /agk/run.json:
+// what started the run, the principal it is attributed to, and when it was let in.
+func TestARedemptionAnswersTheHeadOfTheTasksRun(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	credential := g.joined(t)
+	clear, _, _ := g.dispatched(t, nil)
+
+	answer := g.redeemed(t, credential, asking(clear))
+	want := api.RunHead{TriggerKind: agk.TriggerSchedule, TriggeredBy: "finance/agentiik", StartedAt: "2026-10-01T04:03:13.25Z"}
+	if answer.Run != want {
+		t.Errorf("the run's head is answered as %+v, want %+v", answer.Run, want)
+	}
+
+	// A run whose row records no start, which no run a task was dispatched for is, is answered
+	// without one rather than with the year one.
+	conn := dbtest.Superuser(t, g.super)
+	if _, err := conn.Exec(t.Context(), `update runs set started_at = null where id = '`+grantRun+`'`); err != nil {
+		t.Fatal(err)
+	}
+	w, raw := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
+	if w.Code != http.StatusOK {
+		t.Fatalf("redeeming again answered %d: %s", w.Code, w.Body)
+	}
+	head, _ := raw["run"].(map[string]any)
+	if _, ok := head["started_at"]; ok || head["trigger_kind"] != "schedule" {
+		t.Errorf("the run's head is answered as %v", head)
 	}
 }
 

@@ -465,7 +465,7 @@ defaults:
 ```yaml
 defaults:
   before_script:
-  - apk add --no-cache jq curl
+  - export HOME=/tmp
 ```
 
 `/defaults/after_script`:

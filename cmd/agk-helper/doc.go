@@ -154,17 +154,16 @@
 // driver, so that the mount, the environment table and the collection are the real ones
 // rather than this package's reading of them.
 //
-// # Two things the page and the merged code disagree about, raised rather than patched
+// # What the page and the merged code settled
 //
-// The verb is spelled agk, and nothing puts /agk/bin on PATH. The environment table does not
-// name the variable and the driver does not set it, so a step written exactly as the page
-// writes it, agk items | jq -r '.data.vat_number', fails with "agk: not found" until either
-// the driver prepends /agk/bin to PATH for a script step or the page writes the path out.
-// Both are one line, and which of the two it is belongs to François; the real test here
-// carries the PATH line with that reason written beside it, so the documented spelling is
-// what is under test.
+// The verb is spelled agk, and a step writes it with no path, agk items | jq -r
+// '.data.vat_number', as the page does. The driver puts /agk/bin at the end of a script's search
+// path, as the first line of the program it composes, wherever it binds this program, so the
+// image's own commands come first and its PATH is kept rather than replaced (helperOnPath, in
+// driver/script.go, says why). The real test here writes the documented spelling and nothing
+// else.
 //
-// And the roadmap says this is mounted "into every container" while the driver binds it for a
+// The roadmap says this is mounted "into every container" while the driver binds it for a
 // script step alone. The driver's reading holds: the page's sentence lives in
 // #running-a-script-instead-of-a-brick, a brick is an image that honours the contract on its
 // own, and putting a binary of ours inside one would be an Agentiik library after all. That

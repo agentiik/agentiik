@@ -3,11 +3,13 @@ package driver
 import (
 	"context"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 )
 
 // Sources is what a runner knows about one task and a Config cannot hold: the store, the
-// secret values and the repository tree its grant redemption answered for that task alone.
+// secret values, the repository tree and the head of the run its grant redemption answered
+// for that task alone.
 //
 // A redemption is per task. It hands over "the repository tree at the commit, presigned URLs
 // to the input envelopes and artifacts, the secret values and one upload policy", and every
@@ -25,11 +27,11 @@ import (
 // which is the scope of one redemption, and agk run --local, which redeems nothing, passes
 // none and is answered from Config as it always was.
 //
-// Each field set here answers in place of the Config hook of the same name, for this task
-// only, the adoption of a container an earlier delivery left behind included; a field left
-// zero leaves that hook in force. A server runner therefore leaves Config.Store,
-// Config.Secrets and Config.Repo nil, so that a task whose Sources leaves one out has none,
-// rather than one meant for some other task.
+// Each field set here answers in place of the Config hook of the same name, Run in place of
+// Config.Runs, for this task only, the adoption of a container an earlier delivery left behind
+// included; a field left zero leaves that hook in force. A server runner therefore leaves
+// Config.Store, Config.Secrets, Config.Repo and Config.Runs nil, so that a task whose Sources
+// leaves one out has none, rather than one meant for some other task.
 type Sources struct {
 	// Store is the store of the task's namespace, opened on its redemption: the presigned
 	// URLs its inputs are read through and the upload policy its outputs are posted under.
@@ -51,6 +53,15 @@ type Sources struct {
 	// outside Repo and bound read-only where the redemption placed it. The redemption placed
 	// every file already, so nothing here reads a selector.
 	Bound []Bound
+
+	// Run is the run the task belongs to, written to /agk/run.json: what the task message
+	// names of it, and what started it, on whose behalf and when, which only the redemption
+	// answers. A runner holds no run source to ask, since the run is the controller's and a
+	// runner reads nothing but its grants, and a task carries no more of its run than
+	// AGK_RUN_ID and the version, so without this the container is told only those. A zero
+	// ID is none given, and a run whose ID is not the task's is refused, as a store of
+	// another namespace is.
+	Run agk.Run
 }
 
 // Bound is one file a step's files relocate: where it is on the host, and the absolute path in

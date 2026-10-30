@@ -76,7 +76,7 @@ func stageHeld(t *testing.T, r *runner, task graph.Task) (container, root string
 		given.Mounts = append(given.Mounts, mount)
 		t.Cleanup(func() { hold.release(context.Background()) })
 	}
-	entrypoint, cmd := scriptCommand(task, r.cfg.Policy.Shell)
+	entrypoint, cmd := scriptCommand(task, r.cfg.Policy.Shell, r.cfg.Policy.Helper != "")
 	config := containerConfig(task, task.Image, "65532:65532", environment(task, deadlineOf(task, time.Now())), entrypoint, cmd)
 	host, err := hostConfig(task, r.cfg.Policy, given, networkModeNone)
 	if err != nil {

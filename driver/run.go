@@ -176,8 +176,10 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 
 	// A brick is held to its manifest on a server, because the manifest is what says
 	// which account its container runs as: with none, it would run as the image's own,
-	// root included. An adopted container passed this when it was created, so the
-	// refusal is here, before the working directory, the network and the container.
+	// root included. A script step is the one that may run an image with none, and it
+	// runs as an account resolveImage settled, never root. An adopted container passed
+	// this when it was created, so the refusal is here, before the working directory,
+	// the network and the container.
 	if image.Manifest == nil && !isScript(t) && !d.cfg.Policy.RequireDigest.Lifted() {
 		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargeBrick,
 			"%s carries no %s, so nothing declares the account its container would run as: an image becomes a brick by carrying one, and a step that runs an image with none is a script step", image.Ref, brick.ManifestPath)
@@ -244,7 +246,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	}
 	defer d.removeNetwork(ctx, t, n)
 
-	entrypoint, cmd := scriptCommand(t, d.cfg.Policy.Shell)
+	entrypoint, cmd := scriptCommand(t, d.cfg.Policy.Shell, d.cfg.Policy.Helper != "")
 	config := containerConfig(t, image.Ref, image.User, environment(t, deadlineOf(t, dispatched)), entrypoint, cmd)
 	host, err := hostConfig(t, d.cfg.Policy, given, n.Mode)
 	if err != nil {
@@ -802,20 +804,35 @@ func (d *Docker) store(ctx context.Context, t graph.Task) (*artifact.Store, erro
 	return s, nil
 }
 
-// runOf is the run the task belongs to, which is what /agk/run.json carries.
-func (d *Docker) runOf(ctx context.Context, t graph.Task) (agk.Run, error) {
+// runOf is the run the task belongs to, which is what /agk/run.json carries: the one its
+// sources give, which is how a runner is told, or the one Config's run source answers, which
+// is how agk run --local is.
+func (d *Docker) runOf(ctx context.Context, t graph.Task) (runContext, error) {
+	if run := sourcesOf(ctx).Run; run.ID != "" {
+		// A run handed over is not asked for by the task's own identifier, as Config.Runs
+		// is, so it is held to it: a runner that paired a task with another task's run
+		// would tell a container it belongs to a run it is not part of, perhaps of another
+		// namespace and on behalf of somebody else.
+		if run.ID != t.Run {
+			return runContext{}, fault(t.Step, nil, ChargePlatform,
+				"the run this task was given is %s and the task is of run %s, and %s carries the run the task belongs to", run.ID, t.Run, RunPath)
+		}
+		return contextOf(run), nil
+	}
 	if d.cfg.Runs == nil {
-		// A driver with no run source still writes the file, out of what the
-		// task itself carries. The run is the same run either way; what is
-		// missing is the trigger and who asked, which no task carries.
-		return agk.Run{ID: t.Run, Workflow: t.Workflow, Namespace: t.Namespace, Commit: t.Commit}, nil
+		// A driver with no run source still writes the file, out of what the task
+		// itself carries. The run is the same run either way; what is missing is the
+		// trigger, who asked and when it started, which no task carries, and they are
+		// left out rather than written as zeros that read as a manual run started in
+		// the year one.
+		return runContext{ID: t.Run, Workflow: t.Workflow, Namespace: t.Namespace, Commit: t.Commit, State: agk.Running}, nil
 	}
 	run, err := d.cfg.Runs(ctx, t.Run)
 	if err != nil {
-		return agk.Run{}, fault(t.Step, ErrContractBroken, ChargePlatform,
+		return runContext{}, fault(t.Step, ErrContractBroken, ChargePlatform,
 			"run %s could not be read, and %s carries it: %v", t.Run, RunPath, err)
 	}
-	return run, nil
+	return contextOf(run), nil
 }
 
 // repo is the path of the workflow repository tree at the task's commit: the one its sources

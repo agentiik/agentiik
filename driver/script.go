@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"path"
 	"strings"
 
 	"github.com/agentiik/agentiik/agk"
@@ -84,12 +85,34 @@ func scriptShell(t graph.Task, policy []string) []string {
 // three containers and not three execs. Three containers lose /tmp between them, which
 // the documented example writes its intermediate results to, and three execs add a second
 // lifecycle to get wrong for no gain.
-func scriptCommand(t graph.Task, policy []string) (entrypoint, cmd []string) {
+//
+// helper says the static helper is bound at BinPath, which is where the policy names one:
+// helperBind binds it for every script step then, and for none otherwise.
+func scriptCommand(t graph.Task, policy []string, helper bool) (entrypoint, cmd []string) {
 	if !isScript(t) {
 		return nil, nil
 	}
-	return scriptShell(t, policy), []string{scriptProgram(t.BeforeScript, t.Script, t.AfterScript)}
+	return scriptShell(t, policy), []string{scriptProgram(helper, t.BeforeScript, t.Script, t.AfterScript)}
 }
+
+// helperOnPath is the program's first line where the helper is bound: its directory at the
+// end of the search path, so that a step written as the documentation writes it, agk items
+// piped into jq, finds the helper by the name it is spelled with.
+//
+// It is a line of the program and not a variable of the environment, because PATH written
+// into the container's environment replaces the image's rather than adding to it: the
+// daemon keeps the image's PATH only where the create names none, so the driver would have
+// to read the image's PATH out of its configuration and restate it, and a python image's
+// /usr/local/bin is not alpine's. The shell already holds the image's PATH when the program
+// starts, which is the one place the two can be joined without reading anything.
+//
+// At the end and not the front, so that the image's own commands win: the helper is named
+// agk, which is also the name of the command line, and an image carrying the command line to
+// drive an installation from a step means that one. The helper is a convenience, never a
+// requirement, and it does not get to shadow what the image chose to carry. ${PATH:+...}
+// keeps a shell started with -u, which the documentation's own example names, from failing
+// on an image that sets no PATH at all.
+var helperOnPath = `PATH="${PATH:+$PATH:}` + path.Dir(BinPath) + `"; export PATH`
 
 // scriptProgram writes the program the three keyword lists become.
 //
@@ -109,8 +132,12 @@ func scriptCommand(t graph.Task, policy []string) (entrypoint, cmd []string) {
 //
 // Commands are joined by newlines rather than by semicolons, because a command may end on
 // a comment and a semicolon after one is swallowed with it.
-func scriptProgram(before, script, after []string) string {
+func scriptProgram(helper bool, before, script, after []string) string {
 	var b strings.Builder
+	if helper {
+		// First, so that after_script, which runs from the trap, finds it too.
+		b.WriteString(helperOnPath + "\n")
+	}
 	if len(after) > 0 {
 		b.WriteString(afterFunc + "() {\n")
 		b.WriteString(statusVar + "=$?\n")
