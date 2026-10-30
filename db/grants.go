@@ -135,6 +135,11 @@ type Redeemed struct {
 	Trigger     agk.TriggerKind
 	TriggeredBy string
 	StartedAt   time.Time
+
+	// RunnerVersion is the agent version the redeeming runner last reported, at its join or
+	// its latest heartbeat, and empty where its row says none: what the API reads to know
+	// which answer that runner can read.
+	RunnerVersion string
 }
 
 // ErrTaskHeld is a task another runner is already working on.
@@ -303,7 +308,8 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 	// for every message prepared for it, and each redeems.
 	query := `
 		select g.namespace, g.expires_at, g.scope, t.idempotency_key, t.state, t.runner,
-		       r.trigger, coalesce(r.triggered_by, ''), r.started_at
+		       r.trigger, coalesce(r.triggered_by, ''), r.started_at,
+		       coalesce((select agent_version from runners where id = $3), '')
 		from task_grants g join tasks t on t.namespace = g.namespace and t.id = g.task_id
 		join runs r on r.namespace = t.namespace and r.id = t.run_id
 		where g.task_id = $1 and g.hash = $2`
@@ -316,10 +322,10 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 	var key agk.TaskID
 	var state string
 	var holder *string
-	var trigger, by string
+	var trigger, by, version string
 	var started *time.Time
-	err := w.tx.QueryRow(ctx, query, id, token.Hash(clear)).
-		Scan(&namespace, &expires, &scope, &key, &state, &holder, &trigger, &by, &started)
+	err := w.tx.QueryRow(ctx, query, id, token.Hash(clear), runner).
+		Scan(&namespace, &expires, &scope, &key, &state, &holder, &trigger, &by, &started, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Redeemed{}, ErrNoGrant
 	}
@@ -377,7 +383,7 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 	if err != nil {
 		return Redeemed{}, err
 	}
-	got := Redeemed{Namespace: namespace, Storage: storage, Row: id, Task: key, Scope: scope, ExpiresAt: expires, Trigger: kind, TriggeredBy: by}
+	got := Redeemed{Namespace: namespace, Storage: storage, Row: id, Task: key, Scope: scope, ExpiresAt: expires, Trigger: kind, TriggeredBy: by, RunnerVersion: version}
 	if started != nil {
 		got.StartedAt = *started
 	}

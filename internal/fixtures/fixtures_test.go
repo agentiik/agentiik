@@ -70,12 +70,12 @@ func TestGrantRedemptionsCarriesTheWholeCorpus(t *testing.T) {
 			t.Errorf("%s names no rule it is refused by", c.File)
 		}
 	}
-	// Two exchanges that must be accepted, one of them a secret mounted at a file name
-	// carrying a dot, and three that must be refused: a tree carrying a mode that is not octal,
-	// a secret mounted at the parent of /agk/secrets/, and a run's head that does not say what
-	// started the run.
-	if valid != 2 || invalid != 3 {
-		t.Fatalf("the corpus holds %d valid and %d invalid redemptions, want 2 and 3", valid, invalid)
+	// Three exchanges that must be accepted, one of them a secret mounted at a file name
+	// carrying a dot and one answering a runner before v0.7.2 with no run, and three that must
+	// be refused: a tree carrying a mode that is not octal, a secret mounted at the parent of
+	// /agk/secrets/, and a run's head that does not say what started the run.
+	if valid != 3 || invalid != 3 {
+		t.Fatalf("the corpus holds %d valid and %d invalid redemptions, want 3 and 3", valid, invalid)
 	}
 }
 
