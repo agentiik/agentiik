@@ -26,8 +26,8 @@ import (
 	"github.com/agentiik/agentiik/internal/tlsfloor"
 )
 
-// Resolving an image tag at its registry, for a writer who asks: POST /api/v1/{ns}/workflows/{name}/
-// images with resolve, which workflow_pin is.
+// Resolving an image tag at its registry, for a writer who asks: resolve, on
+// POST /api/v1/{ns}/workflows/{name}/images, which workflow_pin is.
 //
 // "agk push resolves each tag where the image is, on the pusher's own Docker daemon", and a client of
 // MCP has no daemon: it drafts a workflow naming python:3.13-alpine and is refused image-not-pinned
