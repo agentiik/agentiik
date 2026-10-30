@@ -303,10 +303,22 @@ func TestAClockADecisionSetsIsWaitedFor(t *testing.T) {
 // sweep, rather than a loop on one run.
 func TestAClockThatStaysDueIsLeftToTheSweep(t *testing.T) {
 	pool, _ := dbtest.Open(t)
-	stuck := time.Now().Add(200 * time.Millisecond)
-	_, wakes, stop := watchingClocks(t, pool, time.Hour, at(func() time.Time { return stuck }))
+	var mu sync.Mutex
+	var stuck time.Time
+	c, wakes, stop := watchingClocks(t, pool, time.Hour, at(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return stuck
+	}))
 	defer stop()
 	next(t, wakes, 10*time.Second, "the first sweep")
+	// Set once the first sweep has begun, so that the clock lies after it however long the
+	// watch took to start.
+	mu.Lock()
+	stuck = time.Now().Add(200 * time.Millisecond)
+	set := stuck
+	mu.Unlock()
+	c.clockSet(set)
 
 	if w := next(t, wakes, 10*time.Second, "the run due"); !w.Due {
 		t.Fatalf("the controller woke as %+v", w)
