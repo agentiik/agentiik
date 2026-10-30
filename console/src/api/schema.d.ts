@@ -8559,6 +8559,7 @@ export interface components {
          *       },
          *       "runner": "runner-dmz-02",
          *       "exit_code": 108,
+         *       "taken_at": "2026-10-01T05:42:21Z",
          *       "started_at": "2026-10-01T05:42:24Z",
          *       "finished_at": "2026-10-01T05:42:32Z",
          *       "inputs": {
@@ -8621,6 +8622,11 @@ export interface components {
              * @example 0
              */
             exit_code?: number;
+            /**
+             * @description When a runner took it, its redemption binding the task to that runner, which is what tells the two halves of dispatched apart: a dispatched task without it waits on its pool's queue until a runner with a free slot redeems it, and one with it is that runner's, pulling its image or running pre_task. Absent before a runner took it, for a cache hit or a call, which no runner holds, and on a task bound before v0.7.2 kept the instant, which runner still names. Answered under run:read with the state, since it is an instant and never a value the task was handed.
+             * @example 2026-10-01T05:42:21Z
+             */
+            taken_at?: components["schemas"]["timestamp"];
             /**
              * @description When its container started. Absent before.
              * @example 2026-10-01T05:42:24Z
