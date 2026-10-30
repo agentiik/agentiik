@@ -1,0 +1,27 @@
+# invalid: A step feeding an input port a value that is no batch. A port
+#   carries a batch of items, an object or a list of objects, and count is a
+#   workflow input whose schema declares an integer, which every run would
+#   refuse to the step before any container started. Written under a key of
+#   an object, count: { value: "${{ workflow.inputs.count }}" }, it is one
+#   item.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: seeded
+  namespace: finance
+
+inputs:
+  count:
+    schema: { type: integer, minimum: 1 }
+    required: true
+
+steps:
+  seed:
+    image: ghcr.io/acme/agk-seed@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    inputs:
+      count: ${{ workflow.inputs.count }}
+    outputs: [out]

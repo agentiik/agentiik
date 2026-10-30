@@ -3147,7 +3147,7 @@
     },
     "triggerKind": {
       "title": "Trigger kind",
-      "description": "What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it. mcp is a tool called through one of the caller's collections, from v0.7.0, and a run of it names the collection and the tool it was called as; workflow.run on the user's server starts a manual run, as the API's manual trigger does, since mcp names a call through a collection.",
+      "description": "What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it. mcp is a tool called through one of the caller's collections, from v0.7.0, and a run of it names the collection and the tool it was called as; workflow_run on the user's server starts a manual run, as the API's manual trigger does, since mcp names a call through a collection.",
       "type": "string",
       "enum": [
         "manual",
@@ -7426,7 +7426,7 @@
           }
         },
         {
-          "description": "A run called through a collection names the collection and the tool, and no other run does: workflow.run on the user's server starts a manual run, as the API's manual trigger does, so mcp is a call through a collection and nothing else.",
+          "description": "A run called through a collection names the collection and the tool, and no other run does: workflow_run on the user's server starts a manual run, as the API's manual trigger does, so mcp is a call through a collection and nothing else.",
           "if": {
             "properties": {
               "trigger_kind": {

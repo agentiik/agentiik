@@ -20,7 +20,7 @@ inputs:
 mcp:
   description: >
     Reconcile a whole month against the bank statements. Long running:
-    returns a run to follow with run.get.
+    returns a run to follow with run_get.
   mode: async
 
 steps:
