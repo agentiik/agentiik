@@ -42,4 +42,11 @@
 // Both are here, and the asymmetry is deliberate: a notification that never arrives costs
 // latency, and a sweep that never runs costs a run. So the sweep runs whether or not anything
 // was notified, and a controller that has just taken the term sweeps before it listens.
+//
+// A run's clock is the third thing, and neither covers it. A retry's backoff and a root timeout
+// are moments nothing notifies, since nothing happens at them but the moment, and a sweep every
+// ten seconds read a backoff of two seconds as anything up to twelve. So the watch also waits for
+// the earliest clock among the runs that have not ended, asked again after every pass and
+// whenever a decision sets one, and decides what is due when it comes round. The sweep is still
+// the guarantee: a clock that could not be read, or one nobody asked about, waits for it.
 package controller

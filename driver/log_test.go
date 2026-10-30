@@ -651,3 +651,118 @@ func TestTheLineSayingStandardOutputStoppedTakesNothingFromStandardError(t *test
 		t.Errorf("the log is reported truncated, and standard error is whole")
 	}
 }
+
+// The last lines of standard output, for a log that keeps standard error alone.
+
+// stderrBuffer is a sink that keeps standard error alone, as a runner's shipment does.
+type stderrBuffer struct{ bytes.Buffer }
+
+func (*stderrBuffer) Close() error      { return nil }
+func (*stderrBuffer) KeepsStderrAlone() {}
+
+// onStderr is what of a log a sink keeping standard error alone ships.
+func onStderr(lines []Line) []string {
+	var out []string
+	for _, l := range lines {
+		if l.Stream == Stderr {
+			out = append(out, l.Text)
+		}
+	}
+	return out
+}
+
+// Kept, the lines come after a note saying what they are, each marked as standard output, on the
+// one stream such a sink keeps, and masked as the rest of the log is.
+func TestTheLastLinesOfStandardOutputAreWrittenOnStandardErrorMarked(t *testing.T) {
+	var sink stderrBuffer
+	l := newLog(&sink, newMasker([]byte("s3cr3t-value")), logClock(), 0, 0, 0)
+
+	l.write(Stdout, []byte("checked 3 invoices\nposting with s3cr3t-value\n"))
+	l.write(Stderr, []byte("curl: (22) 503\n"))
+	l.write(Stdout, []byte("half a line"))
+	l.keepOutput()
+	if _, err := l.finish(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := onStderr(logLines(t, &sink.Buffer))
+	want := []string{
+		"curl: (22) 503",
+		notePrefix + `standard output did not become the step's result, so its 3 lines follow, each beginning "stdout: "`,
+		"stdout: checked 3 invoices",
+		"stdout: posting with " + maskToken,
+		"stdout: half a line",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("standard error reads\n%q\nwant\n%q", got, want)
+	}
+	if strings.Contains(sink.String(), "s3cr3t") {
+		t.Errorf("the value reached the sink: %s", sink.String())
+	}
+}
+
+// The last 200 lines and no more than 64 KiB of them: why a program stopped is at the end of what
+// it printed, and a script printing a great deal does not crowd out its standard error.
+func TestTheLinesKeptAreTheLastOnesWithinTheirBounds(t *testing.T) {
+	var sink stderrBuffer
+	l := newLog(&sink, nil, logClock(), 0, 0, 0)
+	for i := 1; i <= 250; i++ {
+		l.write(Stdout, fmt.Appendf(nil, "line %d\n", i))
+	}
+	l.keepOutput()
+	if _, err := l.finish(); err != nil {
+		t.Fatal(err)
+	}
+	got := onStderr(logLines(t, &sink.Buffer))
+	if len(got) != 201 || !strings.Contains(got[0], "the last 200 of its 250 lines") || got[1] != "stdout: line 51" || got[200] != "stdout: line 250" {
+		t.Errorf("wrote %d lines, from %q, %q to %q", len(got), got[0], got[1], got[len(got)-1])
+	}
+
+	sink.Reset()
+	l = newLog(&sink, nil, logClock(), 0, 0, 0)
+	long := strings.Repeat("x", 40<<10)
+	l.write(Stdout, []byte("first "+long+"\nsecond "+long+"\n"))
+	l.keepOutput()
+	if _, err := l.finish(); err != nil {
+		t.Fatal(err)
+	}
+	got = onStderr(logLines(t, &sink.Buffer))
+	if len(got) != 2 || !strings.Contains(got[0], "the last of its 2 lines follows") || !strings.HasPrefix(got[1], "stdout: second ") {
+		t.Errorf("two lines of 40 KiB kept as %d lines, the first %.80q", len(got), got[0])
+	}
+}
+
+// One account of how much of a log exists: the lines kept are counted by the caps on standard
+// error, as the driver's own lines are.
+func TestTheLinesKeptAreHeldToTheCapsOfTheLog(t *testing.T) {
+	var sink stderrBuffer
+	l := newLog(&sink, nil, logClock(), 0, 3, 0)
+	l.write(Stdout, []byte("one\ntwo\nthree\nfour\n"))
+	l.keepOutput()
+	ref, err := l.finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := onStderr(logLines(t, &sink.Buffer))
+	if len(got) != 4 || got[1] != "stdout: one" || got[2] != "stdout: two" || !strings.Contains(got[3], "3 lines") {
+		t.Errorf("standard error reads %q, want the note, two lines and the marker of the cap", got)
+	}
+	if !ref.Truncated {
+		t.Error("the log was cut by its cap and is not reported truncated")
+	}
+}
+
+// A sink that keeps every line, the file agk run --local writes, has standard output already,
+// where it was written, and is written nothing more.
+func TestALogKeepingEveryLineIsWrittenNoLinesOfStandardOutputAgain(t *testing.T) {
+	var sink bytes.Buffer
+	l := newLog(&sink, nil, logClock(), 0, 0, 0)
+	l.write(Stdout, []byte("checked 3 invoices\n"))
+	l.keepOutput()
+	if _, err := l.finish(); err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(logLines(t, &sink)); !slices.Equal(got, []string{"checked 3 invoices"}) {
+		t.Errorf("the log reads %q", got)
+	}
+}

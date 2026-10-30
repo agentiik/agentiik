@@ -263,6 +263,27 @@ func TestEveryShipmentIsTheWiresWithTheGrantInItsHeader(t *testing.T) {
 	}
 }
 
+// The shipment keeps standard error alone and says so, so that the driver writes into it, on
+// standard error and marked, the last lines of a script's standard output that did not become its
+// result. They are shipped as every line of standard error is, and standard output itself is not.
+func TestTheShipmentIsALogOfStandardErrorAlone(t *testing.T) {
+	logs := &fakeLogs{}
+	s := aShipment(t, logs, time.Second)
+	if _, ok := io.WriteCloser(s).(driver.StderrLog); !ok {
+		t.Fatal("the shipment does not say it keeps standard error alone, and a failed script's standard output would reach no log")
+	}
+	writes(t, s, driver.Stdout, "checked 3 invoices")
+	kept := []string{"curl: (22) 503", `driver: standard output did not become the step's result, so its one line follows, beginning "stdout: "`, "stdout: checked 3 invoices"}
+	writes(t, s, driver.Stderr, kept...)
+	s.Close()
+	if log := s.finish(false); log == nil || log.Lines != 3 {
+		t.Fatalf("the result's log is %+v", log)
+	}
+	if got := logs.texts(aKey); !slices.Equal(got, kept) {
+		t.Errorf("the API was shipped %q, want %q", got, kept)
+	}
+}
+
 // A running container's lines are shipped while it runs, not held until it exits.
 func TestLinesAreShippedWhileTheContainerRuns(t *testing.T) {
 	logs := &fakeLogs{}

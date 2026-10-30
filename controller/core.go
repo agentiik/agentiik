@@ -188,19 +188,26 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 // In a transaction of its own, and a failure of it is reported rather than returned. The runs a
 // sweep decides do not depend on it: a loss it could not write is found by the next sweep, and a
 // sweep that stopped at it would leave every run of the installation waiting on one statement.
+//
+// A run's clock coming round is a sweep without the silence: everything actionable is decided,
+// the run whose clock it was among them, and nothing is moved to lost. A silence is counted in
+// three heartbeat intervals and the sweep looks for one every ten seconds, so looking again at
+// every clock would find nothing the sweep does not, a moment sooner, at the price of a scan.
 func (co *Core) Wake(ctx context.Context, w Wake) error {
-	if !w.Swept {
+	if !w.Swept && !w.Due {
 		return co.Decide(ctx, w.Run)
 	}
 	now := co.now().UTC()
-	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, wide *db.Wide) error {
-		_, err := wide.Lost(ctx, now, 0)
-		return err
-	}); err != nil {
-		if errors.Is(err, db.ErrFenced) || ctx.Err() != nil {
+	if w.Swept {
+		if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, wide *db.Wide) error {
+			_, err := wide.Lost(ctx, now, 0)
 			return err
+		}); err != nil {
+			if errors.Is(err, db.ErrFenced) || ctx.Err() != nil {
+				return err
+			}
+			co.controller.report("", fmt.Errorf("controller: the sweep could not look for lost tasks: %w", err))
 		}
-		co.controller.report("", fmt.Errorf("controller: the sweep could not look for lost tasks: %w", err))
 	}
 	var runs []agk.RunID
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, wide *db.Wide) error {
@@ -223,6 +230,19 @@ func (co *Core) Wake(ctx context.Context, w Wake) error {
 		}
 	}
 	return nil
+}
+
+// NextWake is the earliest moment a run's clock comes round after after, zero where none does,
+// which is what Watch asks between two passes. Read through the fence as every read of the
+// controller's is: a former holder waiting on a clock would wake to decide what is no longer its.
+func (co *Core) NextWake(ctx context.Context, after time.Time) (time.Time, error) {
+	var at time.Time
+	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		at, err = w.NextWake(ctx, after)
+		return err
+	})
+	return at, err
 }
 
 // Decide takes one pass over one run.
@@ -391,6 +411,12 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		return err
 	}
 	plan.Start = within
+
+	// Whatever this pass writes of the run's clock is plan.Wake, and Watch is told once the
+	// pass is over, written or not: a pass Watch did not make, a result's, sets a clock nothing
+	// notifies, and a backoff would otherwise wait on the sweep after it. Told for a pass that
+	// failed too, since all Watch does with it is ask again.
+	defer co.controller.clockSet(plan.Wake)
 
 	state := ev.State()
 	doc, err := Elide(ctx, state, storageOf(e), co.objects)

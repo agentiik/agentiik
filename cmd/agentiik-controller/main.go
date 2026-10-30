@@ -505,12 +505,24 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 			if err == nil || errors.Is(err, db.ErrFenced) || ctx.Err() != nil {
 				return err
 			}
-			if w.Swept {
+			switch {
+			case w.Swept:
 				log.Warn("a sweep could not finish, and the next one comes round", "error", err)
-			} else {
+			case w.Due:
+				log.Warn("the runs whose clock came round could not be decided, and the next sweep comes round to them", "error", err)
+			default:
 				log.Warn("a run could not be decided, and the next sweep comes round to it", "run", w.Run, "error", err)
 			}
 			return nil
+		}, func(ctx context.Context, after time.Time) (time.Time, error) {
+			// A clock that could not be read is waited on by the sweep, as it was before
+			// anything waited on clocks: the sweep is the correctness guarantee.
+			at, err := core.NextWake(ctx, after)
+			if err == nil || errors.Is(err, db.ErrFenced) || ctx.Err() != nil {
+				return at, err
+			}
+			log.Warn("the next run due could not be read, and the sweep comes round to it", "error", err)
+			return time.Time{}, nil
 		})
 	}()
 

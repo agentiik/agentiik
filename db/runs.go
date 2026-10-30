@@ -1520,6 +1520,28 @@ func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.
 	return out, rows.Err()
 }
 
+// NextWake is the earliest moment a clock comes round after after, among the runs that have not
+// ended, and zero where none does: what the controller waits for beside a notification and the
+// sweep, so that a retry's backoff is decided at its instant rather than at the sweep after it.
+//
+// After, and not from, so that a run whose clock came round and stayed there, one a pass could
+// not decide, is not answered again the moment it was looked at: it is the sweep's, and the clock
+// waited for is the first one past it. One query however many runs there are, and the sweep's own
+// index answers it, since runs_actionable holds wake_at for every run that has not ended: the
+// earliest is its first entry past after.
+func (w *Wide) NextWake(ctx context.Context, after time.Time) (time.Time, error) {
+	var at *time.Time
+	if err := w.tx.QueryRow(ctx,
+		`select min(wake_at) from runs
+		 where state in ('queued', 'running', 'waiting') and wake_at > $1`, after).Scan(&at); err != nil {
+		return time.Time{}, fmt.Errorf("db: the next clock to come round could not be read: %w", err)
+	}
+	if at == nil {
+		return time.Time{}, nil
+	}
+	return at.UTC(), nil
+}
+
 // Unpublished names the tasks of one run whose messages never went.
 //
 // Pending or dispatched, because a task is dispatched in the evaluator's state the moment it is
