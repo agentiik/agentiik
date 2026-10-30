@@ -2274,6 +2274,47 @@
                   "key_prefix": "finance/sha256/"
                 }
               ]
+            },
+            "run": {
+              "type": "object",
+              "description": "The head of the run the task belongs to, which the container is told in /agk/run.json: what started it, the principal it is attributed to and when it was let in, under the names run.trigger_kind, run.triggered_by and run.started_at give them in an expression. The task message names the run and the version and no more of it, on purpose, since it waits on a queue, and a runner reads no run: it reads its grants, so this is the one place the rest reaches it. Nothing here is a credential, and nothing here is more than a step's expressions may already hand a container as a parameter, since the run root is available everywhere. A runner that was told none wrote zeros in their place, which read as a manual run, started in the year one, by nobody. It is left out for a runner that reports a release before v0.7.2 at its join or its latest heartbeat: such a runner reads this document strictly and would refuse a member it does not know, and an installation is upgraded in no order, with a runner on another host perhaps a release behind, so it is answered as it was before and its containers are told what the task message names of the run and no more.",
+              "required": [
+                "trigger_kind",
+                "triggered_by"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "trigger_kind": {
+                  "$ref": "#/$defs/triggerKind",
+                  "description": "What started the run, as the run records it.",
+                  "examples": [
+                    "schedule",
+                    "manual"
+                  ]
+                },
+                "triggered_by": {
+                  "$ref": "#/$defs/principalRef",
+                  "description": "The principal the run is attributed to: whoever asked for it, or the namespace's built-in identity for a schedule, a webhook or an event.",
+                  "examples": [
+                    "finance/agentiik",
+                    "alice"
+                  ]
+                },
+                "started_at": {
+                  "$ref": "#/$defs/timestamp",
+                  "description": "When the run was let in. Absent while a run is queued, as on the run record, which a run a task was dispatched for no longer is.",
+                  "examples": [
+                    "2026-09-10T06:37:00Z"
+                  ]
+                }
+              },
+              "examples": [
+                {
+                  "trigger_kind": "schedule",
+                  "triggered_by": "finance/agentiik",
+                  "started_at": "2026-09-10T06:37:00Z"
+                }
+              ]
             }
           },
           "examples": [
@@ -2322,6 +2363,11 @@
                   "x-amz-signature": "9d4b71e0c6a52f38"
                 },
                 "key_prefix": "finance/sha256/"
+              },
+              "run": {
+                "trigger_kind": "schedule",
+                "triggered_by": "finance/agentiik",
+                "started_at": "2026-09-10T06:37:00Z"
               }
             }
           ]
@@ -2373,6 +2419,11 @@
                 "x-amz-signature": "9d4b71e0c6a52f38"
               },
               "key_prefix": "finance/sha256/"
+            },
+            "run": {
+              "trigger_kind": "schedule",
+              "triggered_by": "finance/agentiik",
+              "started_at": "2026-09-10T06:37:00Z"
             }
           }
         }
