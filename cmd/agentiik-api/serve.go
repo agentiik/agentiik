@@ -237,7 +237,12 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 	if err != nil {
 		return nil, err
 	}
-	if err := pool.Current(ctx); err != nil {
+	// Before anything reads the schema: an updater that replaced this container alone ran no init.
+	ran, err := pool.CatchUp(ctx, s.Migration.ConnString(), s.Database.Role, string(s.Database.Password))
+	for _, name := range ran {
+		log.Info("applied a migration the database lacked", "migration", name, "as", s.Migration.Role)
+	}
+	if err != nil {
 		pool.Close()
 		return nil, err
 	}

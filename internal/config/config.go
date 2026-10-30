@@ -278,6 +278,10 @@ type API struct {
 	Database Database
 	Bus      Bus
 
+	// Migration is the connection the API applies the migrations its database lacks as before it
+	// serves, and has no URL where it has none, as ReadAPI reads it through migration.
+	Migration Database
+
 	// AccountSeed is the NATS account seed runner bus credentials are minted with.
 	AccountSeed Secret
 
@@ -335,6 +339,10 @@ type Controller struct {
 	Objects     string
 	MaxRequeues int
 	TaskCeiling time.Duration
+
+	// Migration is the connection the controller applies the migrations its database lacks as
+	// before it leads, and has no URL where it has none, as the API's.
+	Migration Database
 
 	// MaxCallDepth is how deep a chain of workflow: calls may go.
 	MaxCallDepth int
@@ -413,6 +421,7 @@ func ReadAPI(lookup Lookup) (API, error) {
 	r := newReader(lookup)
 	var c API
 	c.Database = r.database(DatabaseURL, DatabasePasswordFile, true)
+	c.Migration = r.migration(c.Database)
 	c.Bus = r.bus()
 	c.AccountSeed = r.accountSeed()
 	c.Objects = r.directory(ObjectsDir, "and it is the directory the built-in object store keeps every object in")
@@ -477,6 +486,7 @@ func ReadController(lookup Lookup) (Controller, error) {
 	}
 	var c Controller
 	c.Database = r.database(DatabaseURL, DatabasePasswordFile, true)
+	c.Migration = r.migration(c.Database)
 	c.Bus = r.bus()
 	c.Objects = r.directory(ObjectsDir, "and it is the directory the built-in object store keeps every object in, which the controller reads envelopes from and writes every task's inputs to")
 	c.MaxRequeues = r.maxRequeues()
@@ -1089,6 +1099,58 @@ func (r *reader) database(name, passwordFile string, needsRole bool) Database {
 		d.Password = password
 	}
 	return d
+}
+
+// superuser is the role initdb creates, which the postgres image names postgres unless
+// POSTGRES_USER says otherwise, and which the Compose installation's init migrates as.
+const superuser = "postgres"
+
+// migration reads the connection the API and the controller apply the migrations their database
+// lacks as before they start, given app, the connection they read the database with.
+//
+// Both refuse a database lacking a migration they carry, since every query they make is written
+// against the schema their migrations leave. init applies them at docker compose up, and migrate
+// where no init runs, but an installation upgraded by replacing the containers that run, as an
+// updater following latest does, runs neither: init has exited by then, so nothing replaces it, and
+// the API and the controller would refuse until a person ran it. Given a connection that may change
+// the schema, they apply what is lacking themselves and start.
+//
+// It is AGK_MIGRATE_DATABASE_URL where that is set, read as migrate reads it. Where it is not, it is
+// the superuser at the address of app, without a password, where that address is local sockets
+// alone: the connection init migrates as in the Compose installation, whose PostgreSQL trusts its
+// socket, and which a Compose file written before the API and the controller were given the variable
+// gives neither of them, though the updater keeps that file's environment. Anywhere else nothing is
+// guessed, nor where app names its role in a user parameter, which pgx would sign in as over the
+// superuser: the Database has no URL, and a database lacking a migration is refused as before.
+func (r *reader) migration(app Database) Database {
+	if _, set := r.value(MigrateDatabaseURL); set {
+		return r.database(MigrateDatabaseURL, MigrateDatabasePasswordFile, false)
+	}
+	if app.URL == "" {
+		return Database{}
+	}
+	params, ok := parameters(app.URL)
+	if !ok {
+		return Database{}
+	}
+	if _, named := params["user"]; named {
+		return Database{}
+	}
+	hosts, set := params["host"]
+	if !set {
+		return Database{}
+	}
+	for host := range strings.SplitSeq(hosts, ",") {
+		if !strings.HasPrefix(host, "/") {
+			return Database{}
+		}
+	}
+	u, err := url.Parse(app.URL)
+	if err != nil {
+		return Database{}
+	}
+	u.User = url.User(superuser)
+	return Database{URL: u.String(), Role: superuser}
 }
 
 // password reads the one line of the file a database's password is in, and is empty where no

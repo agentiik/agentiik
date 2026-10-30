@@ -31,8 +31,10 @@
 //
 // It reads its environment through config.ReadAPI, then parses the master key and checks the env
 // prefixes, which only the API may do; every setting that refuses the start is named on the same
-// start, and nothing is opened. It then opens the database as the application role, connects to the
-// bus with the control plane's credential, which creates the streams and every runner pool's
+// start, and nothing is opened. It then opens the database as the application role, applies the
+// migrations it lacks first as the role AGK_MIGRATE_DATABASE_URL names, or as postgres over the local
+// socket it connects through where that is unset, as config.ReadAPI reads it, refusing a database it
+// cannot bring up to date, connects to the bus with the control plane's credential, which creates the streams and every runner pool's
 // consumer, and serves every route built so far on AGK_LISTEN: runs and versions, cancelling a run,
 // a step's log stream, the secret declarations, the runners, their pools and join tokens, the bus
 // credential, the namespaces, the API tokens, and the built-in object store at /objects on

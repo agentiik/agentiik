@@ -20,7 +20,8 @@
 // # Configuration
 //
 // Only its environment, read by config.ReadController: the database it connects to as the
-// application role, the bus and the control plane's credential, the object-store directory,
+// application role, and the role it applies the migrations that database lacks as before it leads,
+// as the API does, the bus and the control plane's credential, the object-store directory,
 // AGK_MAX_REQUEUES, AGK_MAX_CALL_DEPTH, AGK_TASK_CEILING, the sink the audit log is exported to, which is the one
 // setting it starts without, saying so, where it answers its metrics, AGK_METRICS_LISTEN, with the
 // hash of the token a scrape bears in the file AGK_METRICS_TOKEN_FILE names, and AGK_OTLP_ENDPOINT,

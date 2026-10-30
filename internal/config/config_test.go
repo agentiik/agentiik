@@ -254,6 +254,10 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 	if api.Database != wantDatabase {
 		t.Errorf("the API's database reads %#v", api.Database)
 	}
+	wantAdmin := config.Database{URL: i.env[config.MigrateDatabaseURL], Role: "postgres", Password: config.Secret(i.adminPassword)}
+	if api.Migration != wantAdmin {
+		t.Errorf("the API migrates as %#v", api.Migration)
+	}
 	wantBus := config.Bus{URL: i.env[config.BusURL], JWT: i.busJWT, Seed: config.Secret(i.busSeed), Expires: i.busExpires, CredentialsFile: i.env[config.BusCredentialsFile]}
 	if api.Bus != wantBus {
 		t.Errorf("the API's bus reads %+v, and was written %+v", api.Bus, wantBus)
@@ -282,6 +286,7 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 	}
 	want := config.Controller{
 		Database: wantDatabase, Bus: wantBus, Objects: i.env[config.ObjectsDir], MaxRequeues: 1, TaskCeiling: 2 * time.Hour, MaxCallDepth: 4,
+		Migration:    wantAdmin,
 		Metrics:      config.Metrics{Listen: "10.0.0.5:9464", TokenHash: i.metricsToken},
 		OTLPEndpoint: "http://127.0.0.1:4318",
 	}
@@ -930,14 +935,14 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 		// opened, whatever it holds or wherever it is not. migrate alone asks for it, to import
 		// that hash once.
 		theAPI.name: {
-			config.MaxRequeues, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile,
+			config.MaxRequeues,
 			config.AuditExportURL, config.AuditExportTokenFile, config.MetricsListen, config.MetricsTokenFile,
 			config.OTLPEndpoint, config.OperatorTokenFile,
 		},
 		theController.name: {
 			config.PublicURL, config.PresignKeyFile, config.BusAccountSeedFile, config.OperatorTokenFile,
 			config.EnvPrefixes, config.Listen, config.JoinRotation, config.RevocationGrace,
-			config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile, config.Console, config.MCP,
+			config.Console, config.MCP,
 		},
 		// The object store's directory is migrate's too, since it reads the envelopes of the
 		// runs v0.2 finished there, to record the files they name.
