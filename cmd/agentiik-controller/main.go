@@ -165,7 +165,12 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		return ended(err)
 	}
 	defer pool.Close()
-	if err := pool.Current(work); err != nil {
+	// Before anything reads the schema: an updater that replaced this container alone ran no init.
+	ran, err := pool.CatchUp(work, c.Migration.ConnString(), c.Database.Role, string(c.Database.Password))
+	for _, name := range ran {
+		log.Info("applied a migration the database lacked", "migration", name, "as", c.Migration.Role)
+	}
+	if err != nil {
 		return ended(err)
 	}
 

@@ -159,6 +159,33 @@ func (p *Pool) Current(ctx context.Context) error {
 	return lacking(applied)
 }
 
+// CatchUp applies the migrations the database lacks before a program starts on it, as the
+// privileged connection admin addresses, provisioning role with password as Provision does, and
+// answers with what it applied. Where nothing is lacking it does nothing, and where admin is empty it
+// answers Current's refusal.
+//
+// It is for an installation upgraded by replacing the API and the controller alone, which runs no
+// init and no migrate before them. The privileged connection is opened only when a migration is
+// lacking and closed before the program goes on, so a program started on a current database never
+// holds one. The API and the controller starting together take turns on Provision's lock, and the
+// second finds nothing left to apply.
+func (p *Pool) CatchUp(ctx context.Context, admin, role, password string) ([]string, error) {
+	lacks := p.Current(ctx)
+	if lacks == nil || admin == "" {
+		return nil, lacks
+	}
+	conn, err := Connect(ctx, admin)
+	if err != nil {
+		return nil, fmt.Errorf("%w; applying them failed, since the role that may change the schema could not reach it: %w", lacks, err)
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+	ran, err := Provision(ctx, conn, role, password)
+	if err != nil {
+		return ran, fmt.Errorf("%w; applying them failed: %w", lacks, err)
+	}
+	return ran, p.Current(ctx)
+}
+
 // lacking refuses a record of applied migrations missing one Migrations carries.
 func lacking(applied []string) error {
 	all, err := Migrations()
@@ -179,8 +206,8 @@ func lacking(applied []string) error {
 	case 0:
 		return nil
 	case 1:
-		return fmt.Errorf("db: the database lacks %s, a migration this binary carries: run agentiik-api init, or agentiik-api migrate where no init runs, with this binary, then start it again", missing[0])
+		return fmt.Errorf("db: the database lacks %s, a migration this binary carries: run agentiik-api init, or agentiik-api migrate where no init runs, with this binary, then start it again, or give it AGK_MIGRATE_DATABASE_URL to apply them as it starts", missing[0])
 	default:
-		return fmt.Errorf("db: the database lacks %s and %d more of the migrations this binary carries: run agentiik-api init, or agentiik-api migrate where no init runs, with this binary, then start it again", missing[0], len(missing)-1)
+		return fmt.Errorf("db: the database lacks %s and %d more of the migrations this binary carries: run agentiik-api init, or agentiik-api migrate where no init runs, with this binary, then start it again, or give it AGK_MIGRATE_DATABASE_URL to apply them as it starts", missing[0], len(missing)-1)
 	}
 }
