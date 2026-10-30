@@ -6544,7 +6544,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 6
+          "tasks_in_flight_max": 6,
+          "tasks_held_max": 5,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:04:00Z",
@@ -6558,7 +6560,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 6
+          "tasks_in_flight_max": 6,
+          "tasks_held_max": 5,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:05:00Z",
@@ -6572,7 +6576,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 7
+          "tasks_in_flight_max": 7,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:06:00Z",
@@ -6586,7 +6592,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 7
+          "tasks_in_flight_max": 7,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:07:00Z",
@@ -6600,7 +6608,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 8
+          "tasks_in_flight_max": 8,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:08:00Z",
@@ -6614,7 +6624,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 8
+          "tasks_in_flight_max": 8,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:09:00Z",
@@ -6628,7 +6640,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:10:00Z",
@@ -6642,7 +6656,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:11:00Z",
@@ -6656,7 +6672,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:12:00Z",
@@ -6670,7 +6688,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:13:00Z",
@@ -6684,7 +6704,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:14:00Z",
@@ -6698,7 +6720,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:15:00Z",
@@ -6712,7 +6736,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:16:00Z",
@@ -6726,7 +6752,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:17:00Z",
@@ -6740,7 +6768,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 8
+          "tasks_in_flight_max": 8,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:18:00Z",
@@ -6754,7 +6784,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 8
+          "tasks_in_flight_max": 8,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:19:00Z",
@@ -6768,7 +6800,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 7
+          "tasks_in_flight_max": 7,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:20:00Z",
@@ -6782,7 +6816,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 7
+          "tasks_in_flight_max": 7,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:21:00Z",
@@ -6796,7 +6832,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 6
+          "tasks_in_flight_max": 6,
+          "tasks_held_max": 5,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:22:00Z",
@@ -6810,7 +6848,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 5
+          "tasks_in_flight_max": 5,
+          "tasks_held_max": 4,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:23:00Z",
@@ -6824,7 +6864,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 5
+          "tasks_in_flight_max": 5,
+          "tasks_held_max": 4,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:24:00Z",
@@ -6838,7 +6880,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 4
+          "tasks_in_flight_max": 4,
+          "tasks_held_max": 3,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:25:00Z",
@@ -6852,7 +6896,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 3
+          "tasks_in_flight_max": 3,
+          "tasks_held_max": 3,
+          "tasks_queued_max": 0
         },
         {
           "since": "2026-10-01T05:26:00Z",
@@ -6866,7 +6912,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 3
+          "tasks_in_flight_max": 3,
+          "tasks_held_max": 3,
+          "tasks_queued_max": 0
         },
         {
           "since": "2026-10-01T05:27:00Z",
@@ -6880,7 +6928,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 2
+          "tasks_in_flight_max": 2,
+          "tasks_held_max": 2,
+          "tasks_queued_max": 0
         },
         {
           "since": "2026-10-01T05:28:00Z",
@@ -6894,7 +6944,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 2
+          "tasks_in_flight_max": 2,
+          "tasks_held_max": 2,
+          "tasks_queued_max": 0
         },
         {
           "since": "2026-10-01T05:29:00Z",
@@ -6908,7 +6960,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 2
+          "tasks_in_flight_max": 2,
+          "tasks_held_max": 2,
+          "tasks_queued_max": 0
         },
         {
           "since": "2026-10-01T05:30:00Z",
@@ -6922,7 +6976,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 12
+          "tasks_in_flight_max": 12,
+          "tasks_held_max": 9,
+          "tasks_queued_max": 3
         },
         {
           "since": "2026-10-01T05:31:00Z",
@@ -6936,7 +6992,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 12
+          "tasks_in_flight_max": 12,
+          "tasks_held_max": 9,
+          "tasks_queued_max": 3
         },
         {
           "since": "2026-10-01T05:32:00Z",
@@ -6950,7 +7008,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 12
+          "tasks_in_flight_max": 12,
+          "tasks_held_max": 9,
+          "tasks_queued_max": 3
         },
         {
           "since": "2026-10-01T05:33:00Z",
@@ -6964,7 +7024,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 12
+          "tasks_in_flight_max": 12,
+          "tasks_held_max": 9,
+          "tasks_queued_max": 3
         },
         {
           "since": "2026-10-01T05:34:00Z",
@@ -6978,7 +7040,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 12
+          "tasks_in_flight_max": 12,
+          "tasks_held_max": 9,
+          "tasks_queued_max": 3
         },
         {
           "since": "2026-10-01T05:35:00Z",
@@ -6992,7 +7056,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 12
+          "tasks_in_flight_max": 12,
+          "tasks_held_max": 9,
+          "tasks_queued_max": 3
         },
         {
           "since": "2026-10-01T05:36:00Z",
@@ -7006,7 +7072,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 13
+          "tasks_in_flight_max": 13,
+          "tasks_held_max": 10,
+          "tasks_queued_max": 3
         },
         {
           "since": "2026-10-01T05:37:00Z",
@@ -7020,7 +7088,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 3
+          "tasks_in_flight_max": 3,
+          "tasks_held_max": 3,
+          "tasks_queued_max": 0
         },
         {
           "since": "2026-10-01T05:38:00Z",
@@ -7034,7 +7104,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 4
+          "tasks_in_flight_max": 4,
+          "tasks_held_max": 3,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:39:00Z",
@@ -7048,7 +7120,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 4
+          "tasks_in_flight_max": 4,
+          "tasks_held_max": 3,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:40:00Z",
@@ -7062,7 +7136,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 5
+          "tasks_in_flight_max": 5,
+          "tasks_held_max": 4,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:41:00Z",
@@ -7076,7 +7152,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 6
+          "tasks_in_flight_max": 6,
+          "tasks_held_max": 5,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:42:00Z",
@@ -7090,7 +7168,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 6
+          "tasks_in_flight_max": 6,
+          "tasks_held_max": 5,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:43:00Z",
@@ -7104,7 +7184,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 7
+          "tasks_in_flight_max": 7,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:44:00Z",
@@ -7118,7 +7200,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 8
+          "tasks_in_flight_max": 8,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:45:00Z",
@@ -7132,7 +7216,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 8
+          "tasks_in_flight_max": 8,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:46:00Z",
@@ -7146,7 +7232,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:47:00Z",
@@ -7160,7 +7248,9 @@
             "cancelled": 0,
             "timed_out": 1
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:48:00Z",
@@ -7174,7 +7264,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:49:00Z",
@@ -7188,7 +7280,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:50:00Z",
@@ -7202,7 +7296,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:51:00Z",
@@ -7216,7 +7312,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:52:00Z",
@@ -7230,7 +7328,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:53:00Z",
@@ -7244,7 +7344,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:54:00Z",
@@ -7258,7 +7360,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 9
+          "tasks_in_flight_max": 9,
+          "tasks_held_max": 7,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:55:00Z",
@@ -7272,7 +7376,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 8
+          "tasks_in_flight_max": 8,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:56:00Z",
@@ -7286,7 +7392,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 8
+          "tasks_in_flight_max": 8,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 2
         },
         {
           "since": "2026-10-01T05:57:00Z",
@@ -7300,7 +7408,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 7
+          "tasks_in_flight_max": 7,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:58:00Z",
@@ -7314,7 +7424,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 7
+          "tasks_in_flight_max": 7,
+          "tasks_held_max": 6,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T05:59:00Z",
@@ -7328,7 +7440,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 6
+          "tasks_in_flight_max": 6,
+          "tasks_held_max": 5,
+          "tasks_queued_max": 1
         },
         {
           "since": "2026-10-01T06:00:00Z",
@@ -7342,7 +7456,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 17
+          "tasks_in_flight_max": 17,
+          "tasks_held_max": 13,
+          "tasks_queued_max": 4
         },
         {
           "since": "2026-10-01T06:01:00Z",
@@ -7356,7 +7472,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 17
+          "tasks_in_flight_max": 17,
+          "tasks_held_max": 13,
+          "tasks_queued_max": 4
         },
         {
           "since": "2026-10-01T06:02:00Z",
@@ -7370,7 +7488,9 @@
             "cancelled": 0,
             "timed_out": 0
           },
-          "tasks_in_flight_max": 16
+          "tasks_in_flight_max": 16,
+          "tasks_held_max": 12,
+          "tasks_queued_max": 4
         }
       ],
       "now": {
@@ -7381,6 +7501,8 @@
           "waiting": 1
         },
         "tasks_in_flight": 17,
+        "tasks_held": 14,
+        "tasks_queued": 3,
         "slots": 24,
         "runners_ready": 3,
         "runners": 4

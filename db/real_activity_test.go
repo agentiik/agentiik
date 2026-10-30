@@ -17,7 +17,10 @@ import (
 // The seed's two runs, created now and queued, are what runs now. Laid out from t0: in finance a
 // run created at 10 s that succeeded and one at 70 s that failed; in team-ops one at 20 s that is
 // running. Tasks in flight: finance's from 5 to 50 and from 30 to 65, team-ops' from 40 still going,
-// so three at once in the first minute, two carried into the second, and one into the third. A
+// so three at once in the first minute, two carried into the second, and one into the third. The
+// first was taken by a runner at 15 and the second bound before taken_at was kept, so held from its
+// handing over at 30: two held at once in the first minute, one carried into the second. The third
+// waits on the bus still, queued with the first's first ten seconds: one at most in each minute. A
 // runner of lan joins and reports four slots, which it offers while heard from.
 func TestTheInstallationsActivityCountsEveryNamespaceTogether(t *testing.T) {
 	pool, super := joining(t)
@@ -45,21 +48,27 @@ func TestTheInstallationsActivityCountsEveryNamespaceTogether(t *testing.T) {
 		}
 	}
 	for i, task := range []struct {
-		namespace, run, state string
-		published, ended      int
+		namespace, run, state, runner string
+		published, taken, ended       int
 	}{
-		{"finance", financeRun, "succeeded", 5, 50},
-		{"finance", financeRun, "failed", 30, 65},
-		{"team-ops", opsRun, "running", 40, -1},
+		{"finance", financeRun, "succeeded", "lan-1", 5, 15, 50},
+		{"finance", financeRun, "failed", "lan-1", 30, -1, 65},
+		{"team-ops", opsRun, "dispatched", "", 40, -1, -1},
 	} {
-		var finished any
+		var finished, taken, runner any
 		if task.ended >= 0 {
 			finished = at(task.ended)
 		}
+		if task.taken >= 0 {
+			taken = at(task.taken)
+		}
+		if task.runner != "" {
+			runner = task.runner
+		}
 		if _, err := conn.Exec(t.Context(), `
-			insert into tasks (namespace, id, run_id, step, attempt, state, published_at, dispatched_at, finished_at)
-			values ($1, $2, $3, 'archive', $4, $5, $6, $6, $7)`,
-			task.namespace, fmt.Sprintf("01M2T%021d", i), task.run, i+2, task.state, at(task.published), finished); err != nil {
+			insert into tasks (namespace, id, run_id, step, attempt, state, published_at, dispatched_at, finished_at, runner, taken_at)
+			values ($1, $2, $3, 'archive', $4, $5, $6, $6, $7, $8, $9)`,
+			task.namespace, fmt.Sprintf("01M2T%021d", i), task.run, i+2, task.state, at(task.published), finished, runner, taken); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,9 +111,9 @@ func TestTheInstallationsActivityCountsEveryNamespaceTogether(t *testing.T) {
 		return all
 	}
 	want := []ActivityBucket{
-		{Runs: runs(map[string]int{"succeeded": 1, "running": 1}), TasksInFlightMax: 3},
-		{Runs: runs(map[string]int{"failed": 1}), TasksInFlightMax: 2},
-		{Runs: runs(nil), TasksInFlightMax: 1},
+		{Runs: runs(map[string]int{"succeeded": 1, "running": 1}), TasksInFlightMax: 3, TasksHeldMax: 2, TasksQueuedMax: 1},
+		{Runs: runs(map[string]int{"failed": 1}), TasksInFlightMax: 2, TasksHeldMax: 1, TasksQueuedMax: 1},
+		{Runs: runs(nil), TasksInFlightMax: 1, TasksQueuedMax: 1},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the activity counted\n%+v\nwant\n%+v", got, want)
@@ -113,8 +122,9 @@ func TestTheInstallationsActivityCountsEveryNamespaceTogether(t *testing.T) {
 	if !reflect.DeepEqual(now.Runs, map[string]int{"queued": 2, "running": 1, "waiting": 0}) {
 		t.Errorf("the runs not ended read %v, want the seed's two queued and team-ops' running", now.Runs)
 	}
-	if now.TasksInFlight != 1 || now.Slots != 4 || now.RunnersReady != 1 || now.Runners != 1 {
-		t.Errorf("now read %d tasks in flight, %d slots of %d runners ready of %d, want 1, 4, 1 and 1", now.TasksInFlight, now.Slots, now.RunnersReady, now.Runners)
+	if now.TasksInFlight != 1 || now.TasksHeld != 0 || now.TasksQueued != 1 || now.Slots != 4 || now.RunnersReady != 1 || now.Runners != 1 {
+		t.Errorf("now read %d tasks in flight, %d held and %d queued, %d slots of %d runners ready of %d, want 1, 0, 1, 4, 1 and 1",
+			now.TasksInFlight, now.TasksHeld, now.TasksQueued, now.Slots, now.RunnersReady, now.Runners)
 	}
 	if time.Since(now.At) > time.Minute {
 		t.Errorf("now was read at %s", now.At)

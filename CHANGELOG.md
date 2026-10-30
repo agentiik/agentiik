@@ -2,6 +2,10 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+- The home's Server activity sets the tasks runners hold against the slots they offer, as `Tasks running`, and counts those waiting on their pool's queue apart, as `Tasks queued`; its chart draws both. `GET /api/v1/stats/activity` answers `tasks_held` and `tasks_queued`, and each bucket `tasks_held_max` and `tasks_queued_max`, from the instant a runner took a task, which `tasks.taken_at` keeps from this release (#930).
+
 ## v0.7.1, 2026-10-30
 
 An installation an updater upgrades starts on its own: the API and the controller apply the migrations their database lacks before they start, rather than refusing until somebody runs `init` (#927).

@@ -16,6 +16,12 @@ type ActivityBucket struct {
 	// TasksInFlightMax is the most tasks on their way to a runner or at one and not yet ended at
 	// once in the bucket, every namespace together, as QuotaBucket's is for one.
 	TasksInFlightMax int
+
+	// TasksHeldMax is the most of those a runner held at once, from when one took the task to when
+	// it ended, and TasksQueuedMax the most waiting on the bus for a runner to take them. A runner
+	// takes no more than its slots, so the first is what the slots are set against; the two are
+	// each read at their own highest, and add up to TasksInFlightMax at no particular instant.
+	TasksHeldMax, TasksQueuedMax int
 }
 
 // Activity is what the installation is doing as it is read.
@@ -26,8 +32,9 @@ type Activity struct {
 	// Runs are the runs not ended, by state: queued, running and waiting.
 	Runs map[string]int
 
-	// TasksInFlight are the tasks handed to the bus and not yet ended.
-	TasksInFlight int
+	// TasksInFlight are the tasks handed to the bus and not yet ended: TasksHeld, those a runner
+	// took, and TasksQueued, those still waiting on the bus for one to.
+	TasksInFlight, TasksHeld, TasksQueued int
 
 	// Slots is what the ready runners offer together, and RunnersReady how many they are: ready,
 	// reporting themselves ready and heard from within LostAfter, which is what runner_capacity
@@ -89,9 +96,14 @@ func (w *Wide) ActivityStatistics(ctx context.Context, b Buckets) ([]ActivityBuc
 	// task is handed to the bus and falls where it ends, read at each bucket's highest and carried
 	// into the next. A task is counted from the range's start or its namespace's retention,
 	// whichever is later, so every instant counted falls in the range and the level starts at 0.
+	// And the same levels for the two parts of a task's flight, held from when a runner took it,
+	// and queued before: a task bound before taken_at was kept counts as held from its handing
+	// over, and an instant taken before it was handed over, on another clock, as taken then.
 	rows, err = w.tx.Query(ctx, `
-		with spans as (
-		  select greatest(t.published_at, $1::timestamptz, now() - make_interval(days => n.max_retention_days)) as began,
+		with tasks_in as (
+		  select greatest($1::timestamptz, now() - make_interval(days => n.max_retention_days)) as since,
+		         t.published_at as published,
+		         case when t.runner is not null then greatest(coalesce(t.taken_at, t.published_at), t.published_at) end as taken,
 		         coalesce(t.finished_at, case when t.state in ('succeeded', 'failed', 'lost', 'timed_out', 'cancelled')
 		                                      then t.published_at else now() end) as ended
 		  from tasks t
@@ -99,45 +111,63 @@ func (w *Wide) ActivityStatistics(ctx context.Context, b Buckets) ([]ActivityBuc
 		  where t.published_at is not null and t.published_at < $2
 		    and (t.finished_at is null or t.finished_at > $1)
 		),
+		spans as (
+		  select 'in_flight' as kind, greatest(published, since) as began, ended from tasks_in
+		  union all
+		  select 'held', greatest(taken, since), ended from tasks_in where taken is not null
+		  union all
+		  select 'queued', greatest(published, since), least(coalesce(taken, ended), ended) from tasks_in
+		),
 		changes as (
-		  select at, sum(d) as d from (
-		    select began as at, 1 as d from spans where ended > began
+		  select kind, at, sum(d) as d from (
+		    select kind, began as at, 1 as d from spans where ended > began
 		    union all
-		    select ended, -1 from spans where ended > began and ended < $2
+		    select kind, ended, -1 from spans where ended > began and ended < $2
 		  ) c
-		  group by at
+		  group by kind, at
 		),
 		levels as (
-		  select at, sum(d) over (order by at) as level from changes
+		  select kind, at, sum(d) over (partition by kind order by at) as level from changes
 		)
-		select `+bucket("at")+`, max(level), (array_agg(level order by at desc))[1]
+		select kind, `+bucket("at")+`, max(level), (array_agg(level order by at desc))[1]
 		from levels
-		group by 1
-		order by 1`, args...)
+		group by 1, 2
+		order by 1, 2`, args...)
 	if err != nil {
 		return nil, Activity{}, fmt.Errorf("db: the tasks in flight could not be counted: %w", err)
 	}
 	type read struct{ high, last int }
-	levels := map[int]read{}
+	levels := map[string]map[int]read{}
 	for rows.Next() {
+		var kind string
 		var i int
 		var high, last int64
-		if err := rows.Scan(&i, &high, &last); err != nil {
+		if err := rows.Scan(&kind, &i, &high, &last); err != nil {
 			rows.Close()
 			return nil, Activity{}, fmt.Errorf("db: the tasks in flight could not be counted: %w", err)
 		}
-		levels[i] = read{int(high), int(last)}
+		if levels[kind] == nil {
+			levels[kind] = map[int]read{}
+		}
+		levels[kind][i] = read{int(high), int(last)}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, Activity{}, fmt.Errorf("db: the tasks in flight could not be counted: %w", err)
 	}
-	carried := 0
-	for i := range out {
-		out[i].TasksInFlightMax = carried
-		if l, changed := levels[i]; changed {
-			out[i].TasksInFlightMax = max(carried, l.high)
-			carried = l.last
+	for kind, field := range map[string]func(*ActivityBucket) *int{
+		"in_flight": func(b *ActivityBucket) *int { return &b.TasksInFlightMax },
+		"held":      func(b *ActivityBucket) *int { return &b.TasksHeldMax },
+		"queued":    func(b *ActivityBucket) *int { return &b.TasksQueuedMax },
+	} {
+		carried := 0
+		for i := range out {
+			at := field(&out[i])
+			*at = carried
+			if l, changed := levels[kind][i]; changed {
+				*at = max(carried, l.high)
+				carried = l.last
+			}
 		}
 	}
 
@@ -147,21 +177,25 @@ func (w *Wide) ActivityStatistics(ctx context.Context, b Buckets) ([]ActivityBuc
 	}
 	if err := w.tx.QueryRow(ctx, `
 		select now(),
-		       (select count(*) from tasks
-		         where published_at is not null and finished_at is null
-		           and state not in ('succeeded', 'failed', 'lost', 'timed_out', 'cancelled')),
+		       t.held, t.queued,
 		       coalesce(sum(coalesce(r.concurrency, 0)) filter (where ready), 0),
 		       count(*) filter (where ready),
 		       count(*) filter (where r.state <> 'revoked')
-		from (select 1) one
+		from (select count(*) filter (where runner is not null) as held,
+		             count(*) filter (where runner is null) as queued
+		      from tasks
+		      where published_at is not null and finished_at is null
+		        and state not in ('succeeded', 'failed', 'lost', 'timed_out', 'cancelled')) t
 		left join lateral (
 		  select state, concurrency,
 		         state = 'ready' and coalesce(reported_state, 'ready') = 'ready'
 		           and coalesce(last_heartbeat_at, joined_at) > now() - interval '`+lostAfter+`' as ready
 		  from runners
-		) r on true`).Scan(&now.At, &now.TasksInFlight, &now.Slots, &now.RunnersReady, &now.Runners); err != nil {
+		) r on true
+		group by t.held, t.queued`).Scan(&now.At, &now.TasksHeld, &now.TasksQueued, &now.Slots, &now.RunnersReady, &now.Runners); err != nil {
 		return nil, Activity{}, fmt.Errorf("db: what the installation is doing could not be read: %w", err)
 	}
+	now.TasksInFlight = now.TasksHeld + now.TasksQueued
 	rows, err = w.tx.Query(ctx, `select state::text, count(*) from runs where state = any($1) group by 1`, unended)
 	if err != nil {
 		return nil, Activity{}, fmt.Errorf("db: the runs not ended could not be counted: %w", err)

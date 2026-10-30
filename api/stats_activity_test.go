@@ -30,11 +30,15 @@ func TestTheInstallationsActivityAnswersAdministratorsAlone(t *testing.T) {
 			Until            string         `json:"until"`
 			Runs             map[string]int `json:"runs"`
 			TasksInFlightMax int            `json:"tasks_in_flight_max"`
+			TasksHeldMax     int            `json:"tasks_held_max"`
+			TasksQueuedMax   int            `json:"tasks_queued_max"`
 		} `json:"buckets"`
 		Now struct {
 			At            string         `json:"at"`
 			Runs          map[string]int `json:"runs"`
 			TasksInFlight int            `json:"tasks_in_flight"`
+			TasksHeld     int            `json:"tasks_held"`
+			TasksQueued   int            `json:"tasks_queued"`
 			Slots         int64          `json:"slots"`
 			RunnersReady  int            `json:"runners_ready"`
 			Runners       int            `json:"runners"`
@@ -63,9 +67,9 @@ func TestTheInstallationsActivityAnswersAdministratorsAlone(t *testing.T) {
 	r.Header.Set("Accept", "text/csv")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
-	want := "since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,tasks_in_flight_max\r\n" +
-		"2026-09-30T06:00:00Z,2026-09-30T06:00:59.999999999Z,0,0,0,0,0,0,0,0\r\n" +
-		"2026-09-30T06:01:00Z,2026-09-30T06:01:59.999999999Z,0,0,0,0,0,0,0,0\r\n"
+	want := "since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,tasks_in_flight_max,tasks_held_max,tasks_queued_max\r\n" +
+		"2026-09-30T06:00:00Z,2026-09-30T06:00:59.999999999Z,0,0,0,0,0,0,0,0,0,0\r\n" +
+		"2026-09-30T06:01:00Z,2026-09-30T06:01:59.999999999Z,0,0,0,0,0,0,0,0,0,0\r\n"
 	if csv := rec.Body.String(); csv != want {
 		t.Errorf("the activity in CSV was answered\n%q\nwant\n%q", csv, want)
 	}

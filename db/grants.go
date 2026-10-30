@@ -241,7 +241,8 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 // rather than starting a container for it. A runner redeems before it acknowledges the message, so
 // this, and not the bus, is what decides whose a task is: the bus decides only who is handed it.
 // The binding is never released, because a task whose runner was lost is moved to lost and requeued
-// as a new row under the same key, with a grant of its own.
+// as a new row under the same key, with a grant of its own. Its instant is kept, the first
+// redemption's, as when the runner took the task, which the installation's activity counts by.
 //
 // A key may therefore have several rows, one per dispatch, and the rule is about the key: "the
 // runner refuses to start a container for a key that has already completed". The row is what is
@@ -260,8 +261,8 @@ func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner
 		return Redeemed{}, fmt.Errorf("db: the redemption could not be recorded: %w", err)
 	}
 	if _, err := w.tx.Exec(ctx,
-		`update tasks set runner = $3 where namespace = $1 and id = $2`,
-		got.Namespace, got.Row, runner); err != nil {
+		`update tasks set runner = $3, taken_at = coalesce(taken_at, $4) where namespace = $1 and id = $2`,
+		got.Namespace, got.Row, runner, now); err != nil {
 		return Redeemed{}, fmt.Errorf("db: the task could not be bound to its runner: %w", err)
 	}
 	return got, nil
