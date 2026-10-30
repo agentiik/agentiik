@@ -59,7 +59,7 @@ Every repository carries the same version, tagged at the same moment, released t
 | | |
 | --- | --- |
 | `agentiik` | The core in Go: graph evaluator, container driver, controller, HTTP API, runner, `agk`, and the web console in TypeScript, which the API serves. AGPL-3.0-or-later. |
-| `schemas` | The workflow, brick and envelope schemas, and the OpenAPI document. Every keyword carries a `description` and `examples`, and the build fails without them, because the language reference and `workflow.language` are generated from here. |
+| `schemas` | The workflow, brick and envelope schemas, and the OpenAPI document. Every keyword carries a `description` and `examples`, and the build fails without them, because the language reference and `workflow_language` are generated from here. |
 | `bricks`, `brick-sdk` | The standard catalog and the optional helpers. A brick is not a derivative work of the engine. |
 | `design`, `ios`, `android` | The tokens and the two mobile clients. |
 | `deploy`, `terraform-provider-agentiik` | Compose stacks and the provider. |
