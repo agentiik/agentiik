@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Agentiik API",
-    "version": "0.7.0",
+    "version": "0.7.1",
     "summary": "The identity and access routes of /api/v1: signing in and out, a password and a TOTP generator beside it, the authentication policy, the caller, users, groups, service accounts, namespaces, their quotas, secrets and variables, grants and API tokens; the runners and the audit log an administrator reads; the caller's collections; the workflow repositories, a workflow validated and committed without git among them; the runs listed, read, followed, cancelled and replayed; the statistics the console's charts read; and the OAuth 2.1 authorisation server that issues the tokens of /mcp and each collection.",
     "description": "One description of the access routes of /api/v1 for the three clients that speak them, agk, the console and the Terraform provider, so that none of them learns the API from another's code. It describes the access routes of v0.3.0, the workflow repository routes of v0.4.0, every route the web console of v0.6.0 reads and acts with, and the collections, the validation and the commit routes and the OAuth authorisation server of v0.7.0, and no other yet; tools/check.py holds its routes to the table at https://agentiik.github.io/docs#api and names every route of the table this document does not describe. Every record the API shares with the rest of the contract, a user, a grant, a token, a namespace, the policy, a repository, a version, a resolved graph, is a reference into wire.schema.json beside it rather than a copy, so that the two cannot drift; a consumer resolves the references relative to this document. What is defined here is what only a route carries: a request body, a list, a token shown once, Web Authentication's own JSON forms. Every body is JSON of at most 64 KiB, or of 8 MiB for a recording of image pins and brick manifests, which carries manifests whole; it is closed to fields the route does not read, save Web Authentication's own objects, which are the browser's to extend, and a route that reads no body refuses one sent. Every refusal is {\"error\"}, with the setting of the authentication policy beside it where one is the reason, and a namespace or a workflow the caller cannot see is refused as one that does not exist, so that no name can be learnt by asking."
   },
@@ -10158,7 +10158,7 @@
           "statistics"
         ],
         "summary": "Read what the installation is doing",
-        "description": "Every namespace together, per bucket: the runs created by the state each is in now, and the most tasks in flight at once. Under now, as the request is answered: the runs queued, running and waiting, the tasks in flight, the slots the runners ready and heard from in the last 30 s offer, and those runners against the runners not revoked. Counts only, naming no run, workflow or namespace, so that an administrator who reads no namespace's runs sees how busy the installation is and not what it runs. Administrator only. Served at this path alone, so that a namespace named stats made before v0.3.0 reserved the word keeps every route it has.",
+        "description": "Every namespace together, per bucket: the runs created by the state each is in now, and the most tasks in flight at once, held by a runner and queued for one. Under now, as the request is answered: the runs queued, running and waiting, the tasks in flight, those runners hold and those queued for one, the slots the runners ready and heard from in the last 30 s offer, and those runners against the runners not revoked. Counts only, naming no run, workflow or namespace, so that an administrator who reads no namespace's runs sees how busy the installation is and not what it runs. Administrator only. Served at this path alone, so that a namespace named stats made before v0.3.0 reserved the word keeps every route it has.",
         "externalDocs": {
           "description": "Where the documentation specifies it.",
           "url": "https://agentiik.github.io/docs#console-statistics"
@@ -10213,7 +10213,9 @@
                             "cancelled": 0,
                             "timed_out": 0
                           },
-                          "tasks_in_flight_max": 14
+                          "tasks_in_flight_max": 14,
+                          "tasks_held_max": 12,
+                          "tasks_queued_max": 4
                         },
                         {
                           "since": "2026-10-01T10:42:00Z",
@@ -10227,7 +10229,9 @@
                             "cancelled": 0,
                             "timed_out": 0
                           },
-                          "tasks_in_flight_max": 19
+                          "tasks_in_flight_max": 19,
+                          "tasks_held_max": 16,
+                          "tasks_queued_max": 5
                         }
                       ],
                       "now": {
@@ -10238,6 +10242,8 @@
                           "waiting": 1
                         },
                         "tasks_in_flight": 17,
+                        "tasks_held": 14,
+                        "tasks_queued": 3,
                         "slots": 24,
                         "runners_ready": 3,
                         "runners": 4
@@ -10251,13 +10257,13 @@
                   "type": "string",
                   "description": "The buckets to Accept: text/csv, RFC 4180 with a header row, one row a bucket and a column a figure, the runs a column a state. What is running now is not in the CSV, which is a table of buckets.",
                   "examples": [
-                    "since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,tasks_in_flight_max\r\n2026-10-01T10:41:00Z,2026-10-01T10:41:59.999999999Z,0,0,0,7,1,0,0,14\r\n2026-10-01T10:42:00Z,2026-10-01T10:42:59.999999999Z,1,3,1,2,0,0,0,19\r\n"
+                    "since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,tasks_in_flight_max,tasks_held_max,tasks_queued_max\r\n2026-10-01T10:41:00Z,2026-10-01T10:41:59.999999999Z,0,0,0,7,1,0,0,14,12,4\r\n2026-10-01T10:42:00Z,2026-10-01T10:42:59.999999999Z,1,3,1,2,0,0,0,19,16,5\r\n"
                   ]
                 },
                 "examples": {
                   "two minutes": {
                     "summary": "two buckets",
-                    "value": "since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,tasks_in_flight_max\r\n2026-10-01T10:41:00Z,2026-10-01T10:41:59.999999999Z,0,0,0,7,1,0,0,14\r\n2026-10-01T10:42:00Z,2026-10-01T10:42:59.999999999Z,1,3,1,2,0,0,0,19\r\n"
+                    "value": "since,until,queued,running,waiting,succeeded,failed,cancelled,timed_out,tasks_in_flight_max,tasks_held_max,tasks_queued_max\r\n2026-10-01T10:41:00Z,2026-10-01T10:41:59.999999999Z,0,0,0,7,1,0,0,14,12,4\r\n2026-10-01T10:42:00Z,2026-10-01T10:42:59.999999999Z,1,3,1,2,0,0,0,19,16,5\r\n"
                   }
                 }
               }
@@ -19914,7 +19920,9 @@
           "since",
           "until",
           "runs",
-          "tasks_in_flight_max"
+          "tasks_in_flight_max",
+          "tasks_held_max",
+          "tasks_queued_max"
         ],
         "description": "What every namespace together did in one bucket, in counts alone.",
         "properties": {
@@ -20022,6 +20030,22 @@
             "examples": [
               14
             ]
+          },
+          "tasks_held_max": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The most of those a runner held at once in the bucket, from when one took the task to when it ended: what the slots of the ready runners are set against, since a runner takes no more than its concurrency. Read at its own highest, so it and tasks_queued_max add up to tasks_in_flight_max at no particular instant. A task a runner took before v0.7.2 counts as held from when it was handed out.",
+            "examples": [
+              12
+            ]
+          },
+          "tasks_queued_max": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The most of those waiting at once in the bucket on their pool's queue for a runner to take them, from when each was handed out to when a runner took it or it ended.",
+            "examples": [
+              4
+            ]
           }
         },
         "examples": [
@@ -20037,7 +20061,9 @@
               "cancelled": 0,
               "timed_out": 0
             },
-            "tasks_in_flight_max": 14
+            "tasks_in_flight_max": 14,
+            "tasks_held_max": 12,
+            "tasks_queued_max": 4
           },
           {
             "since": "2026-10-01T10:42:00Z",
@@ -20051,7 +20077,9 @@
               "cancelled": 0,
               "timed_out": 0
             },
-            "tasks_in_flight_max": 19
+            "tasks_in_flight_max": 19,
+            "tasks_held_max": 16,
+            "tasks_queued_max": 5
           }
         ]
       },
@@ -20063,6 +20091,8 @@
           "at",
           "runs",
           "tasks_in_flight",
+          "tasks_held",
+          "tasks_queued",
           "slots",
           "runners_ready",
           "runners"
@@ -20122,15 +20152,31 @@
           "tasks_in_flight": {
             "type": "integer",
             "minimum": 0,
-            "description": "The tasks handed out, or on their way to a runner, and not yet ended.",
+            "description": "The tasks handed out, or on their way to a runner, and not yet ended: tasks_held and tasks_queued together.",
             "examples": [
               17
+            ]
+          },
+          "tasks_held": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The tasks in flight a runner has taken: bound to it by its redemption and not yet ended. A runner takes no more than its concurrency, so this is what slots is set against, and is above it only where a runner holding tasks is no longer counted among the ready, draining or not heard from, or reported fewer slots since it took them.",
+            "examples": [
+              14
+            ]
+          },
+          "tasks_queued": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The tasks in flight no runner has taken yet: on their pool's queue, waiting for a slot. A task waiting there is counted against its namespace's max_concurrent_tasks and its deadline all the same.",
+            "examples": [
+              3
             ]
           },
           "slots": {
             "type": "integer",
             "minimum": 0,
-            "description": "The tasks the runners counted in runners_ready offer to run at once together: what tasks_in_flight is set against.",
+            "description": "The tasks the runners counted in runners_ready offer to run at once together: what tasks_held is set against.",
             "examples": [
               24
             ]
@@ -20161,6 +20207,8 @@
               "waiting": 1
             },
             "tasks_in_flight": 17,
+            "tasks_held": 14,
+            "tasks_queued": 3,
             "slots": 24,
             "runners_ready": 3,
             "runners": 4
@@ -20227,7 +20275,9 @@
                     "cancelled": 0,
                     "timed_out": 0
                   },
-                  "tasks_in_flight_max": 14
+                  "tasks_in_flight_max": 14,
+                  "tasks_held_max": 12,
+                  "tasks_queued_max": 4
                 },
                 {
                   "since": "2026-10-01T10:42:00Z",
@@ -20241,7 +20291,9 @@
                     "cancelled": 0,
                     "timed_out": 0
                   },
-                  "tasks_in_flight_max": 19
+                  "tasks_in_flight_max": 19,
+                  "tasks_held_max": 16,
+                  "tasks_queued_max": 5
                 }
               ]
             ]
@@ -20258,6 +20310,8 @@
                   "waiting": 1
                 },
                 "tasks_in_flight": 17,
+                "tasks_held": 14,
+                "tasks_queued": 3,
                 "slots": 24,
                 "runners_ready": 3,
                 "runners": 4
@@ -20283,7 +20337,9 @@
                   "cancelled": 0,
                   "timed_out": 0
                 },
-                "tasks_in_flight_max": 14
+                "tasks_in_flight_max": 14,
+                "tasks_held_max": 12,
+                "tasks_queued_max": 4
               },
               {
                 "since": "2026-10-01T10:42:00Z",
@@ -20297,7 +20353,9 @@
                   "cancelled": 0,
                   "timed_out": 0
                 },
-                "tasks_in_flight_max": 19
+                "tasks_in_flight_max": 19,
+                "tasks_held_max": 16,
+                "tasks_queued_max": 5
               }
             ],
             "now": {
@@ -20308,6 +20366,8 @@
                 "waiting": 1
               },
               "tasks_in_flight": 17,
+              "tasks_held": 14,
+              "tasks_queued": 3,
               "slots": 24,
               "runners_ready": 3,
               "runners": 4
