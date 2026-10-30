@@ -2,6 +2,17 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+- A run's detail tells a dispatched task waiting on its pool's queue from one a runner took: `GET /api/v1/runs/{id}`, and so `run_get`, answers `taken_at` on a task, under `run:read`, and the console's step pane and `agk console` say a dispatched task nobody took is queued for a slot (#948).
+- `agk run` and `agk status` print why a step failed where its tasks do not say: a step refused before any task started, its port fed what is no batch, is reported as the step that failed with its `reason`, where the run said no step failed; a failed step's reason goes with its first task's failure, and `agk status` says a skipped or cancelled step's under it (#949).
+- A collection's sync call that fails names the step's `reason` beside its exit code, and one that succeeds embeds the files of the run it started after the envelope, as `run_artifact` answers them, under `workflow:run` alone: up to 1 MiB together, a fetch budget spent as by any fetch, and a file of another run, above the ceiling, expired or spent named with its size and why (#950).
+- The console's `openapi.json` is copied from agentiik/schemas#154, which describes `taken_at`, and `schema.d.ts` regenerated.
+
+### Upgrading
+
+- Nothing to do and no order to keep: `taken_at` is read from the column migration 0076 added in v0.7.2, and a task bound before then still names its runner, which says it is held.
+
 ## v0.7.2, 2026-10-30
 
 What running v0.7.1 through Claude Desktop found: the home's activity tells the tasks running from those queued, a client of MCP reads a run's files and calls every tool by a name it can take, a run says why a step failed, and a script step is told its run, finds `agk` and never runs as root.
