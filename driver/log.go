@@ -104,6 +104,26 @@ type LogRef struct {
 // prefix every error in this module already carries.
 const notePrefix = "driver: "
 
+// outputPrefix begins a line of standard output written into a log that keeps standard error
+// alone, which keepOutput writes. It is marked in the text, as the driver's own lines are,
+// because the text is all a line carries from here to whoever reads it: a log shipped to the API
+// is lines of text and their moments, and so is every reader of it.
+const outputPrefix = "stdout: "
+
+// The most of standard output keepOutput writes into a log that keeps standard error alone: the
+// last 200 lines, and of those no more than 64 KiB.
+//
+// The last, because why a program stopped is at the end of what it printed, a test runner's
+// summary or the command that failed. Two hundred lines hold a stack trace with room to spare,
+// and 64 KiB is the longest piece a line that never ends is written out in, so one such line
+// still fits. Both are small beside the caps of a log, a sixty-fourth of its bytes, so that a
+// script printing a great deal never crowds out what it wrote on standard error, and the whole
+// tail travels in the closing chunk of a shipment rather than holding the result back for more.
+const (
+	outputTailLines = 200
+	outputTailBytes = maxLineBytes
+)
+
 // maxLineBytes is where a line that never ends is written out in pieces.
 //
 // A line is the unit masking works on, so the whole of one is held in memory before
@@ -133,6 +153,11 @@ const maxLineBytes = 64 << 10
 // envelope may hold, which is all of it that could ever be a result, and at most as many
 // lines as the log may hold of standard error.
 //
+// A sink that keeps standard error alone, a runner's shipment, keeps none of standard output,
+// so the last lines of it are kept apart as they are written, masked, and keepOutput writes them
+// on standard error once the container has exited, where a script's standard output did not
+// become its result.
+//
 // It is guarded, because two goroutines reach it: the one demultiplexing the container's
 // streams, and the one that writes the driver's own lines about a deadline that fired or
 // an exit code charged to the runtime.
@@ -152,6 +177,14 @@ type taskLog struct {
 
 	// stderr and stdout are what each stream has put in so far, counted apart.
 	stderr, stdout counted
+
+	// alone says the sink keeps standard error alone, and tail is the last lines of standard
+	// output kept for it, tailBytes their bytes and written how many lines standard output
+	// wrote in all.
+	alone     bool
+	tail      []string
+	tailBytes int
+	written   int
 }
 
 // counted is what one stream has put in the log, and whether its bound has ended it there.
@@ -172,7 +205,8 @@ func newLog(w io.Writer, m *masker, now func() time.Time, maxBytes int64, maxLin
 	if now == nil {
 		now = time.Now
 	}
-	return &taskLog{w: w, mask: m, now: now, maxBytes: maxBytes, maxLines: maxLines, outBytes: outBytes}
+	_, alone := w.(StderrLog)
+	return &taskLog{w: w, mask: m, now: now, maxBytes: maxBytes, maxLines: maxLines, outBytes: outBytes, alone: alone}
 }
 
 // write takes what was read off one of the container's streams. It never returns an
@@ -225,6 +259,61 @@ func (l *taskLog) note(format string, args ...any) {
 	l.flush(Stderr)
 	for _, piece := range strings.Split(l.mask.maskString(fmt.Sprintf(format, args...)), "\n") {
 		l.emit(Stderr, notePrefix+strings.TrimSuffix(piece, "\r"))
+	}
+}
+
+// keepOutput writes the last lines of standard output on standard error, each beginning
+// outputPrefix and after a note of the driver's saying what they are, where the sink keeps
+// standard error alone. Its caller asks it where a script's standard output did not become its
+// result, once the container has exited and before the log is finished.
+//
+// They go on standard error because that is the one stream such a sink keeps, and they are
+// counted by its caps as the driver's own lines are: one account of how much of a log exists. A
+// sink that keeps every line has them already, where they were written, and is written nothing.
+func (l *taskLog) keepOutput() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.sealed || !l.alone {
+		return
+	}
+	// A last line the container left without a newline is among the last lines.
+	l.flush(Stdout)
+	if len(l.tail) == 0 {
+		return
+	}
+	l.flush(Stderr)
+	what := fmt.Sprintf("its %d lines follow, each", len(l.tail))
+	switch {
+	case l.written > len(l.tail) && len(l.tail) == 1:
+		what = fmt.Sprintf("the last of its %d lines follows,", l.written)
+	case l.written > len(l.tail):
+		what = fmt.Sprintf("the last %d of its %d lines follow, each", len(l.tail), l.written)
+	case len(l.tail) == 1:
+		what = "its one line follows,"
+	}
+	l.emit(Stderr, notePrefix+fmt.Sprintf("standard output did not become the step's result, so %s beginning %q", what, outputPrefix))
+	for _, text := range l.tail {
+		l.emit(Stderr, outputPrefix+text)
+	}
+	l.tail, l.tailBytes = nil, 0
+}
+
+// keep adds one line of standard output, masked, to the last lines kept for keepOutput, and lets
+// the oldest go past the bounds.
+func (l *taskLog) keep(text string) {
+	l.written++
+	if !l.alone {
+		return
+	}
+	text = cut(text, outputTailBytes)
+	l.tail = append(l.tail, text)
+	l.tailBytes += len(text)
+	for len(l.tail) > outputTailLines || l.tailBytes > outputTailBytes {
+		l.tailBytes -= len(l.tail[0])
+		l.tail = l.tail[1:]
 	}
 }
 
@@ -303,9 +392,12 @@ func (l *taskLog) text(b []byte) string {
 	return string(bytes.TrimSuffix(l.mask.mask(b), []byte("\r")))
 }
 
-// emit writes one line, unless its stream's bound has already ended it.
+// emit writes one line, unless its stream's bound has already ended it. A line of standard
+// output is kept for keepOutput first, whatever its own bound does with it, since the lines
+// kept are the last ones written and that bound keeps the first.
 func (l *taskLog) emit(s Stream, text string) {
 	if s == Stdout {
+		l.keep(text)
 		l.emitOutput(text)
 		return
 	}

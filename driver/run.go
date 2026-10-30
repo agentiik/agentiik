@@ -460,6 +460,11 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 			return graph.Result{}, d.refused(ctx, t, container, spent.usage(image), log, result, err)
 		}
 		result.Outputs, artifacts = got.Outputs, got.Artifacts
+		if !got.Stdout {
+			keepOutput(t, log)
+		}
+	} else {
+		keepOutput(t, log)
 	}
 
 	ref, logErr := log.finish()
@@ -478,6 +483,28 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 		ExitCode: &code, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt,
 	})
 	return result, nil
+}
+
+// keepOutput writes the last lines of a script's standard output into its log, where the log
+// keeps standard error alone and that output did not become the step's result: it failed, was
+// stopped or timed out, or wrote a port of its own.
+//
+// What it printed then is no result, and was printed for somebody to read, as standard error is,
+// so it goes where standard error goes, masked as standard error is. A script whose standard
+// output became its result keeps it out, since it is data then, which run:read_data reads and a
+// log's run:read does not; so does one whose outputs were refused after it exited 0, which never
+// gets here, since whether its output would have been the result is what the refused collection
+// did not get to say, and a log is no place to guess with data.
+//
+// A brick keeps its standard output out whatever became of it. The contract it was written to
+// says that diagnostics go to standard error and standard output is no log, and what a brick
+// prints there was not printed for one: a library's chatter, or a payload. A script is the
+// workflow's own commands, in the file whose author reads the log, where echo is how a command
+// says something.
+func keepOutput(t graph.Task, log *taskLog) {
+	if isScript(t) {
+		log.keepOutput()
+	}
 }
 
 // refused ends a task whose container exited 0 and whose outputs were not published, and

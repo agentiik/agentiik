@@ -110,6 +110,19 @@ type Logs interface {
 	OpenLog(ctx context.Context, task agk.TaskID) (io.WriteCloser, error)
 }
 
+// StderrLog is a sink OpenLog may answer that keeps the lines of standard error alone, which a
+// runner's shipment to the API is: the log a server serves is a container's standard error.
+//
+// Into one, the driver writes again, on standard error and once the container has exited, the
+// last lines of a script's standard output that did not become its result, each marked as
+// standard output, since such a sink would otherwise keep nothing of what the script printed. A
+// sink that keeps every line, the file agk run --local writes, holds them already where they were
+// written, and is written nothing more.
+type StderrLog interface {
+	io.WriteCloser
+	KeepsStderrAlone()
+}
+
 // now is the clock, or the real one.
 func (d *Docker) now() time.Time {
 	if d.cfg.Now != nil {

@@ -262,6 +262,11 @@ func (s *shipment) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// KeepsStderrAlone says the shipment is a driver.StderrLog: the lines it ships are standard
+// error's, and the driver writes there, at the end, what of a script's standard output it means
+// the log to keep.
+func (s *shipment) KeepsStderrAlone() {}
+
 // Close is the driver done with the log: the container has exited and its streams were read to
 // the end. The closing chunk is the carrier's to order, since only it knows whether the task ended
 // or the agent stopped under it, and a log closed then would refuse what a restarted agent ships of
@@ -283,7 +288,9 @@ func (s *shipment) Close() error {
 // so that a person running it locally reads what the container said in the order it said it, and
 // the wire takes one of them: "Standard error is the log because standard output belongs to the
 // result: a brick may write its out envelope there, and a stream that is sometimes a payload cannot
-// also be the diagnostic record." The driver's own notes are written on standard error.
+// also be the diagnostic record." The driver's own notes are written on standard error, and so are
+// the last lines of a script's standard output that did not become its result, each marked, which
+// the driver writes there again once the container has exited.
 func (s *shipment) keep(raw []byte) {
 	var l driver.Line
 	if err := json.Unmarshal(raw, &l); err != nil {

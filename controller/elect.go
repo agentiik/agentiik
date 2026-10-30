@@ -45,6 +45,10 @@ type Controller struct {
 	// test builds, and a test that had to read standard error to find out what happened is
 	// a test nobody writes.
 	Trouble func(run agk.RunID, err error)
+
+	// clocks is where a decision says it set a run's clock, for Watch to ask again for the
+	// earliest one. Buffered by one, since one signal waiting says all that many would.
+	clocks chan struct{}
 }
 
 // report says one thing, through whatever Trouble was given.
@@ -64,7 +68,7 @@ func New(pool *db.Pool, name string) (*Controller, error) {
 	if name == "" {
 		return nil, errors.New("controller: a controller with no name: two instances each believing they are active is exactly the moment somebody needs to tell them apart")
 	}
-	return &Controller{pool: pool, name: name, Poll: 2 * time.Second, Sweep: 10 * time.Second}, nil
+	return &Controller{pool: pool, name: name, Poll: 2 * time.Second, Sweep: 10 * time.Second, clocks: make(chan struct{}, 1)}, nil
 }
 
 // Name is what this instance is called.

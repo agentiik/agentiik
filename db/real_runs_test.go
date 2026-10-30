@@ -550,6 +550,65 @@ func TestTheSweepFindsWhatANotificationWouldHave(t *testing.T) {
 	}
 }
 
+// The next clock is the earliest among the runs that have not ended, past the moment it is asked
+// from: one already come round is the sweep's, and a finished run's clock waits on nothing.
+func TestTheNextClockIsTheEarliestOfTheRunsStillGoing(t *testing.T) {
+	pool, _ := created(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for _, r := range []struct {
+		wake  time.Duration
+		state agk.RunState
+	}{
+		{3 * time.Hour, agk.Running},
+		{time.Hour, agk.Waiting},
+		{-time.Minute, agk.Running},
+		{30 * time.Minute, agk.Succeeded},
+	} {
+		run := aRun()
+		run.ID = agk.NewRunID()
+		if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+			return ns.CreateRun(ctx, run)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		d := Decision{
+			Namespace: "finance", Run: run.ID, Was: 0, Seq: 1,
+			Document: json.RawMessage(`{"version":1}`), State: r.state, StartedAt: now,
+			WakeAt: now.Add(r.wake),
+		}
+		if r.state.Terminal() {
+			d.FinishedAt = now
+		}
+		if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			return w.SaveDecision(ctx, d)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	next := func(after time.Time) time.Time {
+		t.Helper()
+		var at time.Time
+		if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			var err error
+			at, err = w.NextWake(ctx, after)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	if got, want := next(now), now.Add(time.Hour); !got.Equal(want) {
+		t.Errorf("the next clock after now is %s, want the waiting run's, an hour on, %s", got, want)
+	}
+	if got, want := next(now.Add(time.Hour)), now.Add(3*time.Hour); !got.Equal(want) {
+		t.Errorf("the next clock after the waiting run's is %s, want the one after it, %s", got, want)
+	}
+	if got := next(now.Add(3 * time.Hour)); !got.IsZero() {
+		t.Errorf("past every clock, the next one is %s", got)
+	}
+}
+
 // A terminal run is not swept, however long ago its clock was. It also starts before the row
 // that records it was written, which is legitimate: the controller's clock and the database's
 // are two clocks and neither orders the other.

@@ -87,6 +87,10 @@ type collected struct {
 	// Artifacts are the artifacts this task put in the store, which is what the
 	// observer carries and graph.Result has nowhere to put.
 	Artifacts []agk.File
+
+	// Stdout says the script's standard output became the item on out, which keeps it out
+	// of a log that keeps standard error alone: it is data then.
+	Stdout bool
 }
 
 // collect reads back what one container produced: one envelope per declared port, the
@@ -163,7 +167,9 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 	// a script left are uploaded when there is an item to attach them to: a file
 	// nothing references is bytes no envelope addresses, and putting those in the
 	// store would fill it with artifacts nothing can ask for.
-	if _, declared := out[shorthandPort]; declared && isScript(c.Task) && c.Code == 0 && wroteNoItem(out) {
+	_, declared := out[shorthandPort]
+	shorthand := declared && isScript(c.Task) && c.Code == 0 && wroteNoItem(out)
+	if shorthand {
 		loose, err := c.publish(ctx, w, files)
 		if err != nil {
 			return collected{}, err
@@ -193,7 +199,7 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 	if err := w.commit(ctx, c.Task.Step); err != nil {
 		return collected{}, err
 	}
-	return collected{Outputs: out, Artifacts: produced(out, m)}, nil
+	return collected{Outputs: out, Artifacts: produced(out, m), Stdout: shorthand}, nil
 }
 
 // refuseLinkedDirs refuses a ports or files directory that is not one.

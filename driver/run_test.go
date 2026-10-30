@@ -1401,3 +1401,90 @@ func TestRecordedAnswersAsHoldWouldAndWritesNothing(t *testing.T) {
 		t.Errorf("a key that has completed answered %v", err)
 	}
 }
+
+// stderrSinkFor opens, for every task, a sink that keeps standard error alone, as a runner's
+// shipment does.
+type stderrSinkFor struct{ b *strings.Builder }
+
+func (s *stderrSinkFor) OpenLog(context.Context, agk.TaskID) (io.WriteCloser, error) {
+	return stderrOnly{nopCloser{s.b}}, nil
+}
+
+type stderrOnly struct{ nopCloser }
+
+func (stderrOnly) KeepsStderrAlone() {}
+
+// A script's standard output that did not become its result reaches a log that keeps standard
+// error alone: its last lines, marked, once the container has exited. A script whose standard
+// output is its result keeps it out, since it is data then, and so does a brick, whose contract
+// says standard output is no log; a log that keeps every line has it already.
+func TestAScriptsStandardOutputReachesItsLogWhereItIsNoResult(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	for _, c := range []struct {
+		name                        string
+		brick, port, stopped, local bool
+		code                        int
+		state                       agk.TaskState
+		kept                        bool
+	}{
+		{name: "a script that failed", code: 1, state: agk.TaskFailed, kept: true},
+		{name: "a script stopped at its deadline", stopped: true, code: 143, state: agk.TaskTimedOut, kept: true},
+		{name: "a script that wrote a port", port: true, state: agk.TaskSucceeded, kept: true},
+		{name: "a script whose standard output is its result", state: agk.TaskSucceeded},
+		{name: "a brick that failed", brick: true, code: 1, state: agk.TaskFailed},
+		{name: "a script that failed, logged where every line is kept", local: true, code: 1, state: agk.TaskFailed},
+	} {
+		var written strings.Builder
+		r := newRunner(t, oneImage(ref, goodManifest), func(ct dockertest.Container) (int, error) {
+			fmt.Fprintln(ct.Stdout, "checked 3 invoices")
+			fmt.Fprintln(ct.Stderr, "curl: (22) 503")
+			if c.port {
+				if err := wrote(ct, "out", agk.NewItem(map[string]any{"valid": true})); err != nil {
+					return 0, err
+				}
+			}
+			if c.stopped {
+				<-ct.Signalled()
+			}
+			return c.code, nil
+		})
+		if c.local {
+			r.cfg.Logs = &sinkFor{b: &written}
+		} else {
+			r.cfg.Logs = &stderrSinkFor{b: &written}
+		}
+		task := oneTask(ref)
+		if !c.brick {
+			task.Script = []string{"./check"}
+		}
+		if c.stopped {
+			task.Timeout = graph.Duration(100 * time.Millisecond)
+		}
+
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		result, err := r.Run(ctx, task)
+		cancel()
+		if err != nil {
+			t.Fatalf("%s: running: %s", c.name, err)
+		}
+		if result.State != c.state {
+			t.Fatalf("%s: the task reports %s, want %s", c.name, result.State, c.state)
+		}
+		var kept []string
+		for _, raw := range strings.Split(strings.TrimSpace(written.String()), "\n") {
+			var l Line
+			if err := json.Unmarshal([]byte(raw), &l); err != nil {
+				t.Fatalf("%s: the log is not one line of JSON a line: %s", c.name, raw)
+			}
+			if l.Stream == Stderr && strings.HasPrefix(l.Text, outputPrefix) {
+				kept = append(kept, l.Text)
+			}
+		}
+		if c.kept && !slices.Equal(kept, []string{"stdout: checked 3 invoices"}) {
+			t.Errorf("%s: standard error keeps %q of standard output, want its one line marked", c.name, kept)
+		}
+		if !c.kept && len(kept) > 0 {
+			t.Errorf("%s: standard error keeps %q of standard output, which is to be kept out", c.name, kept)
+		}
+	}
+}

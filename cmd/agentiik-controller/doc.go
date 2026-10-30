@@ -51,9 +51,9 @@
 // "Runs as several instances with one active at a time, elected by a session-level PostgreSQL
 // advisory lock." Every instance opens the database and the bus, then waits for the lock, so a
 // standby that could not reach either says so when it starts rather than when it is needed. The
-// one that holds the lock watches for runs and sweeps on its interval, and takes results off the
-// bus; the others try the lock on a loop and take over the instant it frees, which is the moment
-// the holder's session ends, however it ended.
+// one that holds the lock watches for runs, wakes at their clocks and sweeps on its interval, and
+// takes results off the bus; the others try the lock on a loop and take over the instant it frees,
+// which is the moment the holder's session ends, however it ended.
 //
 // Nothing a term does ends it but the fence, a stop, or the loss of what it stands on. A run that
 // could not be decided is reported and left to the next sweep, as the sweep already treats one,

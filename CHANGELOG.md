@@ -11,6 +11,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `run_cancel` takes `runs` and `workflow_run` takes `inputs_each`, up to 100 items each made as its own request of the route, as the caller, and answered in order; a quota reached stops the starts there, saying how many were not attempted (#941).
 - A run's input refused through MCP is said in its own sentence, no longer followed by a line sending the client to an empty topic of `workflow_language`.
 - The fixture corpus, the language reference, the schema parts and the console's `openapi.json` and schemas are agentiik/schemas `8634e6f`, its main branch, which describes `taken_at` and `resolve`, recorded in `internal/fixtures/testdata/SCHEMAS_COMMIT`, `fixtures.Commit` and `language.Source`, and `schema.d.ts` regenerated.
+- A run is decided when its clock comes round, a retry's backoff or its root timeout, rather than at the controller's next sweep, every 10 s: the leading controller also waits for the earliest `wake_at` among the runs that have not ended, read again after every pass and whenever a decision sets one, so `base: 2s` waits two seconds where it was measured waiting four to ten (#942).
+- A script step's standard output that did not become its result, because the script failed, was stopped, timed out or wrote a port, ends its log on a server: its last 200 lines, at most 64 KiB, each beginning `stdout: `, after a line of the driver's saying what they are, masked and capped as the log is. A script whose standard output is its result, and a brick, keep it out; `agk run --local` keeps it in place as before (#943).
 
 ### Upgrading
 
