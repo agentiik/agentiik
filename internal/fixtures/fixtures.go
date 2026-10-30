@@ -26,13 +26,13 @@ import (
 // Version is the agentiik/schemas release the tree under testdata says it is, as its index
 // writes it. The same value is written in testdata/SCHEMAS_VERSION, where a person updating the
 // corpus finds it, and a test holds the two together.
-const Version = "0.7.0"
+const Version = "0.7.1"
 
 // Commit is the agentiik/schemas commit the tree was taken from. Between two releases the
 // corpus still names the release it was last cut at, while its main branch already carries what
 // the next one decides, which the engine adopts before that release is tagged: the commit says
 // which tree it is. It is written in testdata/SCHEMAS_COMMIT, and a test holds the two together.
-const Commit = "345c40bcfaa8a2b83a201ad53a457053dd8c2806"
+const Commit = "f19a74c42c4f459a031cd1fc3531713c72370382"
 
 //go:embed testdata
 var vendored embed.FS
