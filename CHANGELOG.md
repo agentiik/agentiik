@@ -2,6 +2,19 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## v0.7.1, 2026-10-30
+
+An installation an updater upgrades starts on its own: the API and the controller apply the migrations their database lacks before they start, rather than refusing until somebody runs `init` (#927).
+
+### Upgrading
+
+- `agentiik-api serve` and `agentiik-controller` apply a migration their database lacks, under the lock `migrate` takes, as the role `AGK_MIGRATE_DATABASE_URL` names, and close that connection before they serve or lead. Where it is unset, they use `postgres` over the local socket `AGK_DATABASE_URL` names, which is what the Compose installation's `init` migrates as, so an installation still on a `compose.yaml` of v0.7.0 or before, which an updater such as Watchtower keeps, repairs itself when it pulls this release. Over a network nothing is guessed, and a database lacking a migration is refused as before, the refusal now naming `AGK_MIGRATE_DATABASE_URL`.
+
+### Tests
+
+- `db` catches up a database migrated through all but the last two migrations, and `internal/config` holds the API and the controller to the address they migrate as, for the variable, a socket, several sockets, a network address, a mixed one and a `user` parameter.
+- `internal/fixtures` vendors agentiik/schemas at its v0.7.1, whose `fixtures/index.json` names `0.7.1`.
+
 ## v0.7.0, 2026-10-30
 
 An agent can use it: the installation serves the Model Context Protocol, revision `2026-07-28`, from the API process itself, with no new component and no new port. At `/mcp` each principal has a server of their own, whose tools are the API's routes under the caller's own permissions: namespaces, grants, secrets, workflows and their versions, runs and their logs and outputs, the caller's collections, and `workflow.language`, `workflow.schema` and `workflow.validate`, which teach a client the language from the reference agentiik/schemas generates and hold a draft to the rules the push enforces, so that a client that has never seen Agentiik writes a valid workflow and commits it as a real git commit by its caller. A collection, at `/mcp/collections/{id}`, is a connector of a person's own: the workflows they choose, each one tool built from the `mcp` block its entry point declares, a call a run of theirs of trigger kind `mcp`, gated on `workflow:run` alone and revealing nothing of the tree. A client signs its person in through the installation, its own OAuth 2.1 authorisation server, or presents an ordinary API token. `agk language` reads the same reference in a terminal, and the web console shows a workflow's tool and the caller's collections. A v0.6.0 installation upgrades with v0.7.0's `compose.yaml` and its own `.env`, and nothing else.
