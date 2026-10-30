@@ -1116,7 +1116,7 @@ export interface paths {
         put?: never;
         /**
          * Create a workflow repository
-         * @description Creates an empty workflow repository in the namespace: no commit, its default branch unborn, so that git clone gives an empty repository and the first git push fills it. The body names it, and may name its default branch, main where it does not, and say whether that branch is protected, which it is not unless the body says protected: true. Requires workflow:write at namespace scope, as registering a version does: an editor creates the repository its first push needs, as a first agk push did before v0.4.0, and the platform tool workflow.create, which mirrors this route, requires the same. Audited as workflow.create in the namespace.
+         * @description Creates an empty workflow repository in the namespace: no commit, its default branch unborn, so that git clone gives an empty repository and the first git push fills it. The body names it, and may name its default branch, main where it does not, and say whether that branch is protected, which it is not unless the body says protected: true. Requires workflow:write at namespace scope, as registering a version does: an editor creates the repository its first push needs, as a first agk push did before v0.4.0, and the platform tool workflow_create, which mirrors this route, requires the same. Audited as workflow.create in the namespace.
          */
         post: operations["createWorkflow"];
         delete?: never;
@@ -1276,7 +1276,7 @@ export interface paths {
         put?: never;
         /**
          * Commit files onto a branch, as a push
-         * @description Publishes files: commits them onto a branch as the caller, and moves the branch as a git push of that commit would, so that whoever writes a file without git, the web console's editor and an MCP client's workflow.commit among them, makes a version exactly as a clone's push makes one. The files are written over the parent's tree, every other file of it kept as it is, a file it holds keeping its mode and a new one a plain file. The commit's author and committer are the caller: a user's name and email address, or their login at the installation's host where they have none, and a service account's name at the host. It is then received by the path a git push takes, git-receive-pack's, on the server's side: the pre-receive hook judges it, the grants it needs are a push's, workflow:write, grant:manage to move a protected default branch and secret:use where the version names a secret, the version is recorded, and the audit log records the ref it moved as ref.update, as it records any push's, and a refusal as push.refuse. A route with checks of its own would be a second way into a repository, to keep in step with the hook's; one that is a push has nothing of its own to keep in step. A file travels here as JSON text, so a binary file is pushed with git. Requires workflow:write.
+         * @description Publishes files: commits them onto a branch as the caller, and moves the branch as a git push of that commit would, so that whoever writes a file without git, the web console's editor and an MCP client's workflow_commit among them, makes a version exactly as a clone's push makes one. The files are written over the parent's tree, every other file of it kept as it is, a file it holds keeping its mode and a new one a plain file. The commit's author and committer are the caller: a user's name and email address, or their login at the installation's host where they have none, and a service account's name at the host. It is then received by the path a git push takes, git-receive-pack's, on the server's side: the pre-receive hook judges it, the grants it needs are a push's, workflow:write, grant:manage to move a protected default branch and secret:use where the version names a secret, the version is recorded, and the audit log records the ref it moved as ref.update, as it records any push's, and a refusal as push.refuse. A route with checks of its own would be a second way into a repository, to keep in step with the hook's; one that is a push has nothing of its own to keep in step. A file travels here as JSON text, so a binary file is pushed with git. Requires workflow:write.
          */
         post: operations["commitFiles"];
         delete?: never;
@@ -1301,7 +1301,7 @@ export interface paths {
         put?: never;
         /**
          * Judge a draft as a push would, committing nothing
-         * @description Judges files as the version they would make, and commits nothing. The files are laid over the tree of ref as POST /api/v1/{ns}/workflows/{name}/commits lays them over its parent, each path mapped to its text or to null to leave the file out, and the tree is judged by the pre-receive hook's own check, the one agk validate makes, against what the hook reaches: the repository's image pins and brick manifests, the libraries an include names, under the caller's workflow:read there, and the namespace's secret declarations. Includes and inheritance are resolved, the graph built, and cycles and ports checked against the manifests. It is workflow.validate, the only authority on whether a draft is legal, so that a client drafting a workflow, an MCP client or the console, asks the rules a push holds it to rather than a copy of them that would drift. secret:use is not asked, since it is the committer's and is asked when the commit is made, and nothing is audited, since a judgement is no act. Requires workflow:read: it writes nothing, and reads what reading the workflow reads.
+         * @description Judges files as the version they would make, and commits nothing. The files are laid over the tree of ref as POST /api/v1/{ns}/workflows/{name}/commits lays them over its parent, each path mapped to its text or to null to leave the file out, and the tree is judged by the pre-receive hook's own check, the one agk validate makes, against what the hook reaches: the repository's image pins and brick manifests, the libraries an include names, under the caller's workflow:read there, and the namespace's secret declarations. Includes and inheritance are resolved, the graph built, and cycles and ports checked against the manifests. It is workflow_validate, the only authority on whether a draft is legal, so that a client drafting a workflow, an MCP client or the console, asks the rules a push holds it to rather than a copy of them that would drift. secret:use is not asked, since it is the committer's and is asked when the commit is made, and nothing is audited, since a judgement is no act. Requires workflow:read: it writes nothing, and reads what reading the workflow reads.
          */
         post: operations["validateFiles"];
         delete?: never;
@@ -5265,7 +5265,7 @@ export interface components {
              */
             parent?: components["schemas"]["commit"];
             /**
-             * @description The commit's message, which git log shows beside it: one character at least that is not white space, as Unicode counts it. Written with one line feed ending it; the commit workflow.commit makes carries a Via: mcp trailer besides, so that git log says what arrived through MCP.
+             * @description The commit's message, which git log shows beside it: one character at least that is not white space, as Unicode counts it. Written with one line feed ending it; the commit workflow_commit makes carries a Via: mcp trailer besides, so that git log says what arrived through MCP.
              * @example Normalize with the pinned image
              * @example Add the reminder script
              */
@@ -5318,7 +5318,7 @@ export interface components {
         };
         /**
          * Hook refusal
-         * @description A version the pre-receive hook refused by one of the language's rules, told as every reader of a refusal is told it, agk validate and git's error stream alike: where it is, the rule, what is wrong, what was expected there and the topic of workflow.language that explains it. A person holding the file is sent to its line, a client holding the document as data to its node, and a model correcting a draft to the page that teaches what it got wrong, all from the one refusal, so that no reader is told something another is not. Nothing is written: a commit refused is recorded as a refused push, and a draft refused at POST /api/v1/{ns}/workflows/{name}/validate as nothing, since a judgement is no act.
+         * @description A version the pre-receive hook refused by one of the language's rules, told as every reader of a refusal is told it, agk validate and git's error stream alike: where it is, the rule, what is wrong, what was expected there and the topic of workflow_language that explains it. A person holding the file is sent to its line, a client holding the document as data to its node, and a model correcting a draft to the page that teaches what it got wrong, all from the one refusal, so that no reader is told something another is not. Nothing is written: a commit refused is recorded as a refused push, and a draft refused at POST /api/v1/{ns}/workflows/{name}/validate as nothing, since a judgement is no act.
          * @example {
          *       "error": "refused: image-not-pinned at agentiik.yaml:7:12",
          *       "file": "agentiik.yaml",
@@ -5388,7 +5388,7 @@ export interface components {
              */
             expected: string;
             /**
-             * @description The topic of workflow.language that covers the node, one of those language/topics.json names, so that a model told the refusal reads the page that teaches the fix. A string rather than an enumeration, since the topics are the generator's to name and a copy here would drift from them.
+             * @description The topic of workflow_language that covers the node, one of those language/topics.json names, so that a model told the refusal reads the page that teaches the fix. A string rather than an enumeration, since the topics are the generator's to name and a copy here would drift from them.
              * @example steps
              * @example repository
              */
@@ -12239,7 +12239,7 @@ export interface components {
         runState: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "timed_out";
         /**
          * Trigger kind
-         * @description What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it. mcp is a tool called through one of the caller's collections, from v0.7.0, and a run of it names the collection and the tool it was called as; workflow.run on the user's server starts a manual run, as the API's manual trigger does, since mcp names a call through a collection.
+         * @description What started a run, in the seven kinds the documentation's Triggers table names. The same string is run.trigger_kind in an expression, trigger_kind in the API and the kind agk prints, so that a run list filtered by it and a condition reading it agree. schedule, webhook and event are the kinds a workflow declares and nobody asks for, which is why a run of them is attributed to its namespace's built-in identity; manual, mcp, terraform and workflow are somebody asking, attributed to that principal. mcp and terraform are listed from the start although later releases start them, so that a client written against this one reads a run of either rather than refusing it. mcp is a tool called through one of the caller's collections, from v0.7.0, and a run of it names the collection and the tool it was called as; workflow_run on the user's server starts a manual run, as the API's manual trigger does, since mcp names a call through a collection.
          * @example schedule
          * @example manual
          * @example workflow

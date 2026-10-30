@@ -2053,7 +2053,7 @@
         },
         {
           "file": "wire/invalid/run-manual-naming-a-collection.json",
-          "rule": "A run a person asked for naming a collection. workflow.run on the user's server starts a manual run, so only a call through a collection names one.",
+          "rule": "A run a person asked for naming a collection. workflow_run on the user's server starts a manual run, so only a call through a collection names one.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs#collections"
         }
