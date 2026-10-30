@@ -264,6 +264,12 @@ func (m Model) runHeader(now time.Time) [][]part {
 			lines = append(lines, []part{{plain, "failed at " + where + ": "}, {failedText, exited(*t.ExitCode)}, {plain, fmt.Sprintf(", attempt %d", t.Attempt)}})
 			return lines
 		}
+		// A step refused before any task ran, its port fed what is no batch, has no exit code to
+		// show, and its reason is all that says why the run failed.
+		if s.Reason != "" {
+			lines = append(lines, []part{{plain, "failed at " + string(s.Step) + ": "}, {failedText, s.Reason}})
+			return lines
+		}
 	}
 	if r.Reason != "" {
 		lines = append(lines, []part{{failedText, r.Reason}})
@@ -327,6 +333,15 @@ func (m Model) stepLines(step string, now time.Time, width int) (lines [][]part,
 	lines = [][]part{{{strong, step}, {plain, "  "}, {verdictRole(s.Verdict), m.mark(s.Verdict == agk.VerdictRunning)}, {plain, " " + s.Verdict.String()}, {muted, "  " + took(s.StartedAt, s.FinishedAt, now)}}}
 	if s.Image != "" {
 		lines = append(lines, []part{{muted, "image   "}, {plain, s.Image}})
+	}
+	// Why the step reached its verdict, where the verdict alone does not say: a failure before any
+	// task, a skip by its if, a cancellation with its run. Red for a failure, as the run's line is.
+	if s.Reason != "" {
+		role := muted
+		if s.Verdict == agk.VerdictFailed {
+			role = failedText
+		}
+		lines = append(lines, []part{{muted, "reason  "}, {role, s.Reason}})
 	}
 	tasks := lastAttempts(m.run, step)
 	if of := shardsOf(tasks); of > 1 {

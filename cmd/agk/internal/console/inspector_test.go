@@ -219,3 +219,20 @@ func TestALongStringInAnEnvelopeIsKeptShort(t *testing.T) {
 		}
 	}
 }
+
+// A step refused before any task ran has no exit code to show: the header says where the run failed
+// with the step's reason, and the step says it beside its image.
+func TestTheInspectorSaysWhyAStepFailedBeforeAnyTask(t *testing.T) {
+	in := &installation{}
+	in.run = aFailedRun()
+	in.run.Tasks = in.run.Tasks[:1]
+	reason := "inputs feeds the port in a number: a port carries a batch of items, so the value is an object or a list of objects"
+	in.run.Steps[1] = db.StepSummary{Step: "invoice", Verdict: agk.VerdictFailed, Image: "ghcr.io/acme/agk-invoice@sha256:1ab74e", Reason: reason}
+	m := opened(t, in, Options{Run: failedRun}, 400, 40)
+	s := screen(m)
+	for _, want := range []string{"failed at invoice: " + reason, "reason  " + reason} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the inspector does not say %q:\n%s", want, s)
+		}
+	}
+}
