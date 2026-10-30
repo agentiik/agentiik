@@ -999,7 +999,8 @@ func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row
 // dispatch of the key. The runner reporting either is bound to the dispatch here, as a redemption
 // would have bound it, so that no other runner can report a second ending for it and no redemption
 // can follow. A dispatch somebody already holds keeps its holder, and the answer says who that is;
-// the row is locked by the update, so a redemption racing it binds first or finds it bound.
+// the row is locked by the update, so a redemption racing it binds first or finds it bound. The
+// runner took the dispatch as it ended it, and that instant is kept as a redemption's would be.
 //
 // It belongs in the transaction that writes the ending, and never in one of its own. Lost takes a
 // bound dispatch in flight for one a runner redeemed, so a binding committed without its ending
@@ -1011,7 +1012,8 @@ func (w *Wide) BindUnredeemed(ctx context.Context, namespace string, key agk.Tas
 	}
 	var holder string
 	err := w.tx.QueryRow(ctx,
-		`update tasks set runner = coalesce(runner, $4)
+		`update tasks set runner = coalesce(runner, $4),
+		                  taken_at = case when runner is null then now() else taken_at end
 		 where namespace = $1 and id = $2::text and idempotency_key = $3
 		 returning runner`,
 		namespace, row, string(key), runner).Scan(&holder)

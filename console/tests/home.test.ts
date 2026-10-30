@@ -164,7 +164,8 @@ describe("the home", () => {
     const figure = (label: string) => within(now).getByText(label).parentElement!.textContent;
     expect(figure("Runs running")).toBe("Runs running7");
     expect(figure("Runs waiting")).toMatch(/^Runs waiting\d+$/);
-    expect(figure("Tasks running")).toBe("Tasks running17 / 24");
+    expect(figure("Tasks running")).toBe("Tasks running14 / 24");
+    expect(figure("Tasks queued")).toBe("Tasks queued3");
     expect(figure("Runners ready")).toBe("Runners ready3 / 4");
     expect(within(installation).getByRole("figure")).toBeTruthy();
     const q = new URL(`http://x${asked.find((a) => a.startsWith("GET /api/v1/stats/activity"))!.slice(4)}`).searchParams;

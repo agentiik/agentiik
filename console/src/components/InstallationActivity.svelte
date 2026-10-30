@@ -60,7 +60,10 @@
       <li><span class="label">Runs running</span><span class="value term">{shown(now?.runs.running)}</span></li>
       <li><span class="label">Runs queued</span><span class="value term">{shown(now?.runs.queued)}</span></li>
       <li><span class="label">Runs waiting</span><span class="value term">{shown(now?.runs.waiting)}</span></li>
-      <li><span class="label">Tasks running</span><span class="value term" class:full={now !== undefined && now.slots > 0 && now.tasks_in_flight >= now.slots}>{now ? `${now.tasks_in_flight} / ${now.slots}` : "\u00a0"}</span></li>
+      <!-- The tasks runners hold against the slots they offer, which a runner never takes more than,
+           and apart from them those handed out that wait on their pool's queue for a slot. -->
+      <li><span class="label">Tasks running</span><span class="value term" class:full={now !== undefined && now.slots > 0 && now.tasks_held >= now.slots}>{now ? `${now.tasks_held} / ${now.slots}` : "\u00a0"}</span></li>
+      <li><span class="label">Tasks queued</span><span class="value term">{shown(now?.tasks_queued)}</span></li>
       <li><span class="label">Runners ready</span><span class="value term" class:failed={now !== undefined && now.runners > 0 && now.runners_ready === 0}>{now ? `${now.runners_ready} / ${now.runners}` : "\u00a0"}</span></li>
     </ul>
     {#if refused}<Problem explained={refused} onretry={read} />{/if}

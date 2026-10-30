@@ -156,6 +156,21 @@ func TestADispatchIsHeldByTheRunnerThatRedeemedIt(t *testing.T) {
 	if runner, err := heldBy(key, row); err != nil || runner != "runner-dmz-02" {
 		t.Errorf("a dispatch redeemed by runner-dmz-02 is held by %q, answering %v", runner, err)
 	}
+	// Taken when it was first redeemed: a runner that lost the answer redeems again, and took the
+	// task once.
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, key, "runner-dmz-02", now.Add(time.Minute))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var taken time.Time
+	if err := conn.QueryRow(ctx, `select taken_at from tasks where namespace = 'finance' and id = $1`, row).Scan(&taken); err != nil {
+		t.Fatal(err)
+	}
+	if !taken.Equal(now.Truncate(time.Microsecond)) {
+		t.Errorf("a dispatch redeemed at %s and again a minute later was taken at %s", now, taken)
+	}
 
 	for _, c := range []struct {
 		why string
@@ -241,6 +256,21 @@ func TestADispatchNobodyRedeemedIsBoundToTheFirstRunnerToEndIt(t *testing.T) {
 	}
 	if _, err := bind(second, unredeemed, "runner-dmz-03"); !errors.Is(err, ErrNoDispatch) {
 		t.Errorf("a dispatch named by the row of one task and the key of another answered %v", err)
+	}
+
+	// Each was taken once, when it was first bound: the redeemed one at its redemption, which a
+	// later ending leaves as it was, and the other as its first ending bound it.
+	for row, want := range map[string]func(time.Time) bool{
+		redeemed:   func(at time.Time) bool { return at.Equal(now.Truncate(time.Microsecond)) },
+		unredeemed: func(at time.Time) bool { return !at.IsZero() && time.Since(at) < time.Minute },
+	} {
+		var taken time.Time
+		if err := conn.QueryRow(ctx, `select taken_at from tasks where namespace = 'finance' and id = $1`, row).Scan(&taken); err != nil {
+			t.Fatal(err)
+		}
+		if !want(taken) {
+			t.Errorf("dispatch %s was taken at %s", row, taken)
+		}
 	}
 }
 

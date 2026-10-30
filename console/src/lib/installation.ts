@@ -15,7 +15,9 @@ export function hour(now: number): { from: string; to: string } {
 }
 
 // chartOf is the chart of the last hour: the runs created each minute as columns by where they
-// stand, those still going together, and the most tasks in flight at once as a line over them.
+// stand, those still going together, and over them the most tasks runners held at once, which the
+// capacity line is set against since a runner takes no more than its slots, and the most queued on
+// the bus for one, as two lines.
 export function chartOf(a: Activity): { since: string[]; series: Series[] } {
   const b = a.buckets;
   const going = b.map((x) => x.runs.queued + x.runs.running + x.runs.waiting);
@@ -27,7 +29,8 @@ export function chartOf(a: Activity): { since: string[]; series: Series[] } {
       { label: "timed_out", tone: "waiting", kind: "bars", values: b.map((x) => x.runs.timed_out) },
       { label: "cancelled", tone: "quiet", kind: "bars", values: b.map((x) => x.runs.cancelled) },
       { label: "running", tone: "running", kind: "bars", values: going },
-      { label: "tasks", tone: "accent", kind: "step", values: b.map((x) => x.tasks_in_flight_max) },
+      { label: "tasks running", tone: "accent", kind: "step", values: b.map((x) => x.tasks_held_max) },
+      { label: "tasks queued", tone: "accent-2", kind: "step", values: b.map((x) => x.tasks_queued_max) },
     ],
   };
 }

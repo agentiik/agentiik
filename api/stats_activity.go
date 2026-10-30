@@ -12,7 +12,7 @@ import (
 
 // activityStatistics answers GET /api/v1/stats/activity, to administrators alone: what every
 // namespace together did, bucket by bucket, the runs created by state and the most tasks in flight
-// at once, and what the installation is doing as it is asked, in JSON or, to Accept: text/csv, its
+// at once, held by a runner and queued for one, and what the installation is doing as it is asked, in JSON or, to Accept: text/csv, its
 // buckets in CSV. Counts alone, naming no run, workflow or namespace: an administrator holds no
 // run:read by being one, and what they watch here is how busy the installation is, not what it
 // runs.
@@ -50,12 +50,14 @@ func (s *RunnerAPI) activityStatistics(w http.ResponseWriter, r *http.Request, _
 		out.Buckets[i] = statsActivityBucket{
 			Since: stamp(since), Until: stamp(since.Add(rng.Buckets.Width - time.Nanosecond)),
 			Runs: runCounts(b.Runs), TasksInFlightMax: b.TasksInFlightMax,
+			TasksHeldMax: b.TasksHeldMax, TasksQueuedMax: b.TasksQueuedMax,
 		}
 	}
 	out.Now = statsActivityNow{
 		At:            stamp(now.At),
 		Runs:          statsUnended{Queued: now.Runs["queued"], Running: now.Runs["running"], Waiting: now.Runs["waiting"]},
-		TasksInFlight: now.TasksInFlight, Slots: now.Slots, RunnersReady: now.RunnersReady, Runners: now.Runners,
+		TasksInFlight: now.TasksInFlight, TasksHeld: now.TasksHeld, TasksQueued: now.TasksQueued,
+		Slots: now.Slots, RunnersReady: now.RunnersReady, Runners: now.Runners,
 	}
 
 	w.Header().Set("Vary", "Accept")
@@ -82,12 +84,16 @@ type statsActivityBucket struct {
 	Until            string         `json:"until"`
 	Runs             statsRunCounts `json:"runs"`
 	TasksInFlightMax int            `json:"tasks_in_flight_max"`
+	TasksHeldMax     int            `json:"tasks_held_max"`
+	TasksQueuedMax   int            `json:"tasks_queued_max"`
 }
 
 type statsActivityNow struct {
 	At            string       `json:"at"`
 	Runs          statsUnended `json:"runs"`
 	TasksInFlight int          `json:"tasks_in_flight"`
+	TasksHeld     int          `json:"tasks_held"`
+	TasksQueued   int          `json:"tasks_queued"`
 	Slots         int64        `json:"slots"`
 	RunnersReady  int          `json:"runners_ready"`
 	Runners       int          `json:"runners"`
@@ -107,11 +113,12 @@ func writeActivityCSV(w http.ResponseWriter, out statsActivity) {
 	c := csv.NewWriter(w)
 	c.UseCRLF = true
 	defer c.Flush()
-	c.Write([]string{"since", "until", "queued", "running", "waiting", "succeeded", "failed", "cancelled", "timed_out", "tasks_in_flight_max"})
+	c.Write([]string{"since", "until", "queued", "running", "waiting", "succeeded", "failed", "cancelled", "timed_out", "tasks_in_flight_max", "tasks_held_max", "tasks_queued_max"})
 	for _, b := range out.Buckets {
 		n := b.Runs
 		c.Write([]string{b.Since, b.Until,
 			strconv.Itoa(n.Queued), strconv.Itoa(n.Running), strconv.Itoa(n.Waiting), strconv.Itoa(n.Succeeded),
-			strconv.Itoa(n.Failed), strconv.Itoa(n.Cancelled), strconv.Itoa(n.TimedOut), strconv.Itoa(b.TasksInFlightMax)})
+			strconv.Itoa(n.Failed), strconv.Itoa(n.Cancelled), strconv.Itoa(n.TimedOut), strconv.Itoa(b.TasksInFlightMax),
+			strconv.Itoa(b.TasksHeldMax), strconv.Itoa(b.TasksQueuedMax)})
 	}
 }
