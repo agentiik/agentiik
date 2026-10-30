@@ -3,9 +3,12 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -644,7 +647,8 @@ func (c *Collections) awaited(ctx context.Context, namespace string, run agk.Run
 }
 
 // succeeded answers a run that ended well: its output's envelope as structuredContent, with the
-// envelope as text beside it, or where the tool returns no output, that the run succeeded.
+// envelope as text beside it and the files it names embedded after, or where the tool returns no
+// output, that the run succeeded.
 func (c *Collections) succeeded(ctx context.Context, namespace string, detail db.RunDetail, output string) (*mcp.CallResult, error) {
 	if output == "" {
 		return &mcp.CallResult{
@@ -680,13 +684,161 @@ func (c *Collections) succeeded(ctx context.Context, namespace string, detail db
 	if err := json.Unmarshal(text.Bytes(), &structured); err != nil {
 		return nil, err
 	}
-	return &mcp.CallResult{Content: []mcp.Content{mcp.Text(strings.TrimSpace(text.String()))}, StructuredContent: structured}, nil
+	content := append([]mcp.Content{mcp.Text(strings.TrimSpace(text.String()))}, c.embedded(ctx, namespace, detail.Run, e)...)
+	return &mcp.CallResult{Content: content, StructuredContent: structured}, nil
+}
+
+// embedded is the files an output's envelope names, as the content blocks that follow its text:
+// each file of the call's own run as run_artifact answers it, text as text, an image as an image
+// and any other file as an embedded resource, after a line naming it; and a line for each file not
+// embedded, by its URI and its size, saying why.
+//
+// The output of one's own call is answered under workflow:run, run:read_data not asked, and a file
+// it names is that output as much as an item's data is, or a call answers a model URIs no tool of
+// the collection reads. So the files are read here, as the envelope is, rather than through the
+// artifact route, which asks run:read_data; and they are read for the run the call started alone.
+// A file of another run, which a cache hit or a call carries into an output naming it, is named
+// and never read: the right a call answers under is over its own run, not over the one that made
+// the file, which may be of another workflow or another namespace.
+//
+// What a call answers lands in the model's context, as what run_artifact answers does, which holds
+// one file to mcpArtifactMost. A call embeds its files without the model asking for any, so the
+// ceiling holds them all together, in the order the envelope names them, and a file that would
+// carry them past it is named instead. A file with a fetch budget spends one, as any fetch does.
+func (c *Collections) embedded(ctx context.Context, namespace string, run agk.RunID, e agk.Envelope) []mcp.Content {
+	var blocks []mcp.Content
+	var notes []string
+	left := int64(mcpArtifactMost)
+	seen := map[agk.URI]bool{}
+	for _, item := range e.Items {
+		for _, f := range item.Files {
+			if seen[f.URI] {
+				continue
+			}
+			seen[f.URI] = true
+			if f.URI.Run != run {
+				notes = append(notes, fmt.Sprintf("%s, %d bytes, is a file of run %s, which this output names and this call did not make: run_artifact on the user's server reads it, under run:read_data.", f.URI, f.Size, f.URI.Run))
+				continue
+			}
+			var b []byte
+			var kind string
+			var err error
+			if f.Size > left {
+				// Said by the envelope as the reference says it, and nothing read to learn it.
+				err = &pastCeiling{size: f.Size}
+			} else {
+				b, kind, err = c.fetched(ctx, namespace, f.URI, left)
+			}
+			var large *pastCeiling
+			switch {
+			case errors.As(err, &large) && large.size > mcpArtifactMost:
+				notes = append(notes, fmt.Sprintf("%s, %d bytes, is above the %d bytes a call embeds, since what it answers lands in your context: it is fetched from GET /api/v1/artifacts/{uri} with an API token.", f.URI, large.size, mcpArtifactMost))
+			case errors.As(err, &large):
+				notes = append(notes, fmt.Sprintf("%s, %d bytes, would carry the files this call embeds past %d bytes together: run_artifact on the user's server reads it, under run:read_data.", f.URI, large.size, mcpArtifactMost))
+			case errors.Is(err, db.ErrGone):
+				notes = append(notes, fmt.Sprintf("%s, %d bytes, has expired or its fetches are spent: it existed, and is finished.", f.URI, f.Size))
+			case errors.Is(err, db.ErrInFlight):
+				notes = append(notes, fmt.Sprintf("%s, %d bytes, has every fetch left being served to somebody else, and one comes back if its transfer does not complete: run_artifact on the user's server reads it later, under run:read_data.", f.URI, f.Size))
+			case err != nil:
+				notes = append(notes, fmt.Sprintf("%s, %d bytes, could not be read.", f.URI, f.Size))
+			default:
+				left -= int64(len(b))
+				blocks = append(blocks, mcp.Text(fmt.Sprintf("%s, %s, %d bytes:", f.URI, kind, len(b))), fileBlock(f.URI.String(), kind, b))
+			}
+		}
+	}
+	if len(notes) > 0 {
+		blocks = append(blocks, mcp.Text("Not embedded:\n"+strings.Join(notes, "\n")))
+	}
+	return blocks
+}
+
+// pastCeiling is a file larger than what a call has left to embed, by its size.
+type pastCeiling struct{ size int64 }
+
+func (p *pastCeiling) Error() string { return fmt.Sprintf("the file is %d bytes", p.size) }
+
+// fetched reads one file of the call's own run whole, refused above most bytes, as the artifact
+// route answers a request through MCP: the bytes whatever the budget, of the media type its
+// reference declares, a fetch of a budget held before they are read, and spent once all of them
+// were and matched their digest or given back otherwise, on a context the call going away does
+// not cancel.
+func (c *Collections) fetched(ctx context.Context, namespace string, u agk.URI, most int64) ([]byte, string, error) {
+	if c.objects == nil {
+		return nil, "", errors.New("api: this installation has no object store attached, and an artifact is read from nowhere else")
+	}
+	var got db.Resolved
+	err := c.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		got, err = ns.Resolve(ctx, u)
+		return err
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if got.Size > most {
+		return nil, "", &pastCeiling{size: got.Size}
+	}
+	kind := "application/octet-stream"
+	if got.MediaType != "" {
+		kind = got.MediaType
+	}
+	if got.Budgeted {
+		var held time.Time
+		err := c.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
+			var err error
+			got, held, err = ns.Reserve(ctx, u, fetchHold)
+			return err
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		delivered := false
+		defer func() {
+			settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchSettling)
+			defer cancel()
+			c.pool.In(settle, namespace, func(ctx context.Context, ns *db.NS) error {
+				if delivered {
+					return ns.Delivered(ctx, u, held)
+				}
+				return ns.Release(ctx, u, held)
+			})
+		}()
+		b, err := c.read(ctx, got)
+		delivered = err == nil
+		return b, kind, err
+	}
+	b, err := c.read(ctx, got)
+	return b, kind, err
+}
+
+// read is the bytes behind a reference, refused where they are not all of what its digest names.
+func (c *Collections) read(ctx context.Context, got db.Resolved) ([]byte, error) {
+	rc, err := c.objects.Open(ctx, got.Key)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(io.LimitReader(rc, got.Size+1))
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(b)
+	if int64(len(b)) != got.Size || hex.EncodeToString(sum[:]) != got.Digest {
+		return nil, fmt.Errorf("api: %s is not the %d bytes its digest names", got.URI, got.Size)
+	}
+	return b, nil
 }
 
 // ended says why a run ended without succeeding, for the model that called it to correct itself:
 // "naming the failing step, its exit code and its message". The message is the end of the log of
-// the task the step failed by, as logs reads it, and the reason the run records where something
-// other than its workflow ended it.
+// the task the step failed by, as logs reads it, the step's reason as the run detail words it, and
+// the reason the run records where something other than its workflow ended it.
+//
+// The step's reason is said to whoever may call the tool, as its name and its exit code are: it
+// names the rule that failed the step and never a value the step was handed, and for a step refused
+// before any task started, its port fed what is no batch, it is all there is to say, with no exit
+// code and no log behind it. The log is the route's to give, which may refuse it.
 func ended(d db.RunDetail, logs failureLog) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Run %s of %s ended %s.", d.Run, d.Workflow, d.State)
@@ -703,6 +855,9 @@ func ended(d db.RunDetail, logs failureLog) string {
 			if logs != nil {
 				message = logs(d.Run, s.Step, t.Task)
 			}
+		}
+		if s.Reason != "" {
+			b.WriteString(": " + s.Reason)
 		}
 		b.WriteString(".")
 		break

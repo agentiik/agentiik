@@ -3,11 +3,15 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -1030,8 +1034,8 @@ func TestARunStillGoingWhenTheWaitEndsIsToldToBeFollowed(t *testing.T) {
 // "Sanitize tool outputs: secret masking, as in logs: a secret never appears in a result. Above a
 // size ceiling, the result is a reference to an artifact rather than the artifact." A sync call
 // answers the output's envelope as it was stored, which the driver masked before storing it, and
-// read under envelope_max_bytes: an item's files are the references the envelope holds, never their
-// bytes, whatever their size, so no second ceiling is invented.
+// read under envelope_max_bytes; a file it names above the 1 MiB a call embeds stays the reference
+// the envelope holds, named with its size after it.
 func TestASyncCallAnswersTheEnvelopeAsStored(t *testing.T) {
 	c := servingCollections(t)
 	id := c.made("alice", "back-office")
@@ -1058,14 +1062,30 @@ func TestASyncCallAnswersTheEnvelopeAsStored(t *testing.T) {
 	if expected, _ := json.Marshal(wanted); string(got) != string(expected) {
 		t.Errorf("the result is %s, and the envelope stored %s", got, expected)
 	}
-	if text := textOf(result); text != strings.TrimSpace(want.String()) || !strings.Contains(text, "agk://run/") || !strings.Contains(text, "[masked]") {
+	content := result["content"].([]any)
+	text, _ := content[0].(map[string]any)["text"].(string)
+	if text != strings.TrimSpace(want.String()) || !strings.Contains(text, "agk://run/") || !strings.Contains(text, "[masked]") {
 		t.Errorf("the result reads %q", text)
+	}
+	note := "Not embedded:\n" + envelope.Items[0].Files[0].URI.String() + ", 52428800 bytes, is above the 1048576 bytes a call embeds"
+	if said, _ := content[len(content)-1].(map[string]any)["text"].(string); len(content) != 2 || !strings.HasPrefix(said, note) {
+		t.Errorf("the file above the ceiling is told as %v", content)
 	}
 }
 
 // succeeding ends the run a tool call starts, as the controller would, its output invoices the
-// envelope it stores, which it answers once it is stored, and nothing where no run was started.
+// envelope it stores, which it answers once it is stored, and nothing where no run was started. Its
+// one item names a file of 50 MiB, which nothing stored.
 func (c *collected) succeeding() <-chan agk.Envelope {
+	return c.succeedingWith(func(run agk.RunID) ([]agk.File, error) {
+		uri, _ := agk.ParseURI("agk://run/" + string(run) + "/archive/ok/invoices.pdf")
+		return []agk.File{{Name: "invoices.pdf", URI: uri, MediaType: "application/pdf", Size: 50 << 20, SHA256: strings.Repeat("ab", 32)}}, nil
+	})
+}
+
+// succeedingWith is succeeding, its item naming the files files answers for the run, which it may
+// store first.
+func (c *collected) succeedingWith(files func(run agk.RunID) ([]agk.File, error)) <-chan agk.Envelope {
 	super := dbtest.Superuser(c.t, c.super)
 	stored := make(chan agk.Envelope, 1)
 	go func() {
@@ -1076,12 +1096,15 @@ func (c *collected) succeeding() <-chan agk.Envelope {
 			if err := super.QueryRow(context.Background(), `select id from runs where trigger = 'mcp' and state = 'queued'`).Scan(&run); err != nil {
 				continue
 			}
-			uri, _ := agk.ParseURI("agk://run/" + run + "/archive/ok/invoices.pdf")
+			named, err := files(agk.RunID(run))
+			if err != nil {
+				return
+			}
 			envelope := agk.Envelope{
 				Meta: agk.Meta{RunID: agk.RunID(run), Step: "archive", Port: "ok", Attempt: 1, Count: 1, ProducedAt: time.Now().UTC().Truncate(time.Millisecond)},
 				Items: []agk.Item{{
 					ID: "01JMZ8W4K7A1B2C3D4E5F6G7H8", Data: map[string]any{"total": 1290.5, "note": "the key was [masked]"},
-					Files: []agk.File{{Name: "invoices.pdf", URI: uri, MediaType: "application/pdf", Size: 50 << 20, SHA256: strings.Repeat("ab", 32)}},
+					Files: named,
 				}},
 			}
 			digest, size, err := artifact.PutEnvelope(context.Background(), c.objects, "finance", envelope)
@@ -1097,6 +1120,127 @@ func (c *collected) succeeding() <-chan agk.Envelope {
 		}
 	}()
 	return stored
+}
+
+// file stores content as a file of run's archive step on its port ok, as a runner's upload and the
+// controller's reference leave it, with a fetch budget where fetches is above 0, and answers the
+// file an envelope names it as.
+func (c *collected) file(run agk.RunID, name, kind string, fetches int, content []byte) (agk.File, error) {
+	sum := sha256.Sum256(content)
+	digest := hex.EncodeToString(sum[:])
+	if err := c.objects.Put(context.Background(), artifact.Key("finance", digest), bytes.NewReader(content)); err != nil {
+		return agk.File{}, err
+	}
+	u := agk.URI{Run: run, Step: "archive", Port: "ok", Name: name}
+	err := c.pool.In(context.Background(), "finance", func(ctx context.Context, ns *db.NS) error {
+		_, err := ns.WriteArtifact(ctx, db.Reference{URI: u, Digest: digest, Size: int64(len(content)), MediaType: kind, For: time.Hour, Fetches: fetches})
+		return err
+	})
+	return agk.File{Name: name, URI: u, MediaType: kind, Size: int64(len(content)), SHA256: digest}, err
+}
+
+// A sync call's files are its output as much as its items' data are, and the call returns them:
+// each file of the run it started is embedded after the envelope, as run_artifact answers it, a
+// line naming it before it, to a caller holding workflow:run and not run:read_data, which reading
+// the file again afterwards still asks; together they stay within the 1 MiB run_artifact holds one
+// file to, and a file that would carry them past it is named with its size; a file with a fetch
+// budget spends a fetch, here its last; and a file of another run the output names, as a cache hit
+// names the files of the run that made them, is named and never read.
+func TestASyncCallEmbedsTheFilesOfTheRunItStarted(t *testing.T) {
+	c := servingCollections(t)
+	id := c.made("alice", "back-office")
+	c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", map[string]any{})
+	path := "/mcp/collections/" + id
+
+	const other = agk.RunID("01M3B00000000000000000000Z")
+	super := dbtest.Superuser(t, c.super)
+	if _, err := super.Exec(t.Context(), `insert into runs (namespace, id, workflow, commit, trigger, state) values ('finance', $1, 'payroll', $2, 'manual', 'succeeded')`, string(other), c.head("payroll")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := super.Exec(t.Context(), `insert into steps (namespace, run_id, step, state) values ('finance', $1, 'archive', 'succeeded')`, string(other)); err != nil {
+		t.Fatal(err)
+	}
+	payroll, err := c.file(other, "payroll.txt", "text/plain", 0, []byte("the payroll's own figures"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR a chart")
+	var named []agk.File
+	stored := c.succeedingWith(func(run agk.RunID) ([]agk.File, error) {
+		for _, f := range []struct {
+			name, kind string
+			fetches    int
+			content    []byte
+		}{
+			{"summary.txt", "text/plain", 0, []byte("3 invoices, 1290.50 in all")},
+			{"chart.png", "image/png", 1, png},
+			{"first.csv", "text/csv", 0, bytes.Repeat([]byte("a"), 600<<10)},
+			{"second.csv", "text/csv", 0, bytes.Repeat([]byte("b"), 600<<10)},
+		} {
+			file, err := c.file(run, f.name, f.kind, f.fetches, f.content)
+			if err != nil {
+				return nil, err
+			}
+			named = append(named, file)
+		}
+		large, _ := agk.ParseURI("agk://run/" + string(run) + "/archive/ok/invoices.pdf")
+		named = append(named, payroll, agk.File{Name: "invoices.pdf", URI: large, MediaType: "application/pdf", Size: 50 << 20, SHA256: strings.Repeat("ab", 32)})
+		return named, nil
+	})
+	status, result, refusal := calledAt(t, c.rt, path, "alice", "tools/call", map[string]any{
+		"name": "create_invoices", "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
+	})
+	envelope, ok := <-stored
+	if !ok {
+		t.Fatal("no run was started to finish")
+	}
+	if status != http.StatusOK || refusal != nil || result["isError"] == true {
+		t.Fatalf("the call was answered %d %v %v", status, refusal, result)
+	}
+	conforming(t, c.rt, path, "create_invoices", result)
+
+	content := result["content"].([]any)
+	block := func(i int) map[string]any { return content[i].(map[string]any) }
+	if len(content) != 8 {
+		t.Fatalf("the call answered %d blocks: %v", len(content), content)
+	}
+	summary, chart, first, second := named[0], named[1], named[2], named[3]
+	for i, want := range []string{
+		summary.URI.String() + ", text/plain, 26 bytes:", "3 invoices, 1290.50 in all",
+		chart.URI.String() + ", image/png, " + strconv.Itoa(len(png)) + " bytes:", "",
+		first.URI.String() + ", text/csv, 614400 bytes:", strings.Repeat("a", 600<<10),
+	} {
+		if b := block(i + 1); want != "" && (b["type"] != "text" || b["text"] != want) {
+			t.Errorf("block %d is %.200v, and %.80q was expected", i+1, b, want)
+		}
+	}
+	if b := block(4); b["type"] != "image" || b["mimeType"] != "image/png" || b["data"] != base64.StdEncoding.EncodeToString(png) {
+		t.Errorf("the chart is answered as %v", b)
+	}
+	notes, _ := block(7)["text"].(string)
+	for _, want := range []string{
+		"Not embedded:\n",
+		second.URI.String() + ", 614400 bytes, would carry the files this call embeds past 1048576 bytes together",
+		payroll.URI.String() + ", 25 bytes, is a file of run " + string(other),
+		envelope.Items[0].Files[5].URI.String() + ", 52428800 bytes, is above the 1048576 bytes a call embeds",
+	} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("the notes do not say %q: %s", want, notes)
+		}
+	}
+	if said, _ := json.Marshal(result); strings.Contains(string(said), "the payroll's own figures") || strings.Contains(string(said), "bbbbbbbb") {
+		t.Errorf("the call answered the bytes of a file it may not embed: %.400s", said)
+	}
+
+	// The chart's one fetch is spent, and it is gone.
+	var collected string
+	if err := super.QueryRow(t.Context(), `select status from artifacts where run_id = $1 and name = 'chart.png'`, string(chart.URI.Run)).Scan(&collected); err != nil || collected != "collected" {
+		t.Errorf("the chart with one fetch is %s once embedded, answering %v", collected, err)
+	}
+	// What the call returned is no right to read the run's files afterwards.
+	if status, _ := c.ask("GET", "/api/v1/artifacts/"+url.PathEscape(summary.URI.String()), "alice", nil); status == http.StatusOK || status == http.StatusFound {
+		t.Errorf("the run's file is read afterwards under workflow:run, answering %d", status)
+	}
 }
 
 // joined is a runner of the pool dmz, joined to the installation with the runner routes beside the
@@ -1218,6 +1362,46 @@ func TestAFailedRunIsToldWithTheEndOfTheLogItFailedBy(t *testing.T) {
 	}
 }
 
+// A step refused before any task started, its port fed what is no batch, has no exit code and no
+// log, and its reason is what a failed call says of it, as the run detail words it, so that a model
+// knows what to correct rather than only that the step failed.
+func TestAFailedCallSaysWhyItsStepFailed(t *testing.T) {
+	c := servingCollections(t)
+	id := c.made("alice", "back-office")
+	c.ask("PUT", "/api/v1/me/collections/"+id+"/members/finance/monthly-invoicing", "alice", map[string]any{})
+
+	const reason = "graph: step normalize: port orders: inputs feeds the port a number: a port carries a batch of items, so the value is an object or a list of objects"
+	super := dbtest.Superuser(t, c.super)
+	ended := make(chan error, 1)
+	go func() {
+		for range 40 {
+			time.Sleep(50 * time.Millisecond)
+			tag, err := super.Exec(context.Background(),
+				`with ended as (update runs set state = 'failed', started_at = now(), finished_at = now()
+				                where trigger = 'mcp' and state = 'queued' returning namespace, id)
+				 update steps set state = 'failed', reason = $1 from ended
+				 where steps.namespace = ended.namespace and steps.run_id = ended.id and steps.step = 'normalize'`, reason)
+			if err != nil || tag.RowsAffected() > 0 {
+				ended <- err
+				return
+			}
+		}
+		ended <- errors.New("no run was started to fail")
+	}()
+	status, result, refusal := calledAt(t, c.rt, "/mcp/collections/"+id, "alice", "tools/call", map[string]any{
+		"name": "create_invoices", "arguments": map[string]any{"orders": []any{map[string]any{"order": "ORD-0001"}}},
+	})
+	if err := <-ended; err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK || refusal != nil || result["isError"] != true {
+		t.Fatalf("the call was answered %d %v %v", status, refusal, result)
+	}
+	if text := textOf(result); !strings.Contains(text, "Step normalize failed: "+reason+".") || strings.Contains(text, "exit code") || strings.Contains(text, "Its log ends") {
+		t.Errorf("a step refused before any task is told as %q", text)
+	}
+}
+
 // "Only an explicit deny removes, and it wins over any allow at any scope." A sync call returns the
 // output of the run it started under workflow:run alone, run:read_data not asked, and a caller
 // denied run:read_data on the workflow is answered as an async call answers, the run's identifier
@@ -1290,7 +1474,9 @@ func (c *collected) runs() []db.RunDetail {
 func textOf(result map[string]any) string {
 	var out []string
 	for _, c := range result["content"].([]any) {
-		out = append(out, c.(map[string]any)["text"].(string))
+		if text, ok := c.(map[string]any)["text"].(string); ok {
+			out = append(out, text)
+		}
 	}
 	return strings.Join(out, "\n")
 }
