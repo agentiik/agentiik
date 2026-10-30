@@ -17,7 +17,7 @@
 // The table is the one #command-line states, and it is data in this package rather than
 // prose, so the usage text and the dispatch cannot disagree.
 //
-//	agk language      the orientation, or one topic's page, as workflow.language answers
+//	agk language      the orientation, or one topic's page, as workflow_language answers
 //	                  it, from the reference package language carries
 //	agk validate      the YAML, the includes, the inheritance, the cycles, and the ports
 //	                  against the manifests of the referenced images

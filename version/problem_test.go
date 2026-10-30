@@ -83,7 +83,7 @@ func TestARefusalIsExplainedWithItsNodeAndItsTopic(t *testing.T) {
 		t.Errorf("the refusal is explained as %+v, and it is %+v", p, want)
 	}
 	lines := p.Lines()
-	if len(lines) != 4 || lines[0] != "agentiik.yaml:13:30: edge-port-not-declared" || !strings.HasPrefix(lines[2], "at /steps/load/needs/0/port, expected ") || lines[3] != "read workflow.language, topic needs" {
+	if len(lines) != 4 || lines[0] != "agentiik.yaml:13:30: edge-port-not-declared" || !strings.HasPrefix(lines[2], "at /steps/load/needs/0/port, expected ") || lines[3] != "read workflow_language, topic needs" {
 		t.Errorf("the problem reads %q", lines)
 	}
 

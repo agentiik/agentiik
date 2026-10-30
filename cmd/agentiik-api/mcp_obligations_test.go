@@ -27,10 +27,10 @@ func TestTheObligationsHoldOnBothServers(t *testing.T) {
 		t.Helper()
 		return x.mcpAskedAt(path, as, "tools/call", map[string]any{"name": name, "arguments": arguments})
 	}
-	made, _ := call(alice, "/mcp", "collection.create", map[string]any{"name": "payroll-desk"})
+	made, _ := call(alice, "/mcp", "collection_create", map[string]any{"name": "payroll-desk"})
 	collection := "/mcp/collections/" + made["structuredContent"].(map[string]any)["id"].(string)
-	if res, err := call(alice, "/mcp", "collection.add", map[string]any{"collection": made["structuredContent"].(map[string]any)["id"], "namespace": "finance", "workflow": "payroll"}); err != nil || res["isError"] == true {
-		t.Fatalf("collection.add answered %v %v", res, err)
+	if res, err := call(alice, "/mcp", "collection_add", map[string]any{"collection": made["structuredContent"].(map[string]any)["id"], "namespace": "finance", "workflow": "payroll"}); err != nil || res["isError"] == true {
+		t.Fatalf("collection_add answered %v %v", res, err)
 	}
 	runs := func() int {
 		t.Helper()
@@ -40,8 +40,8 @@ func TestTheObligationsHoldOnBothServers(t *testing.T) {
 
 	// Inputs validated: an argument off its schema is the protocol's error, and no run exists.
 	before := runs()
-	if _, err := call(alice, "/mcp", "workflow.run", map[string]any{"namespace": "finance", "workflow": "payroll", "inputs": "every order"}); err == nil || err.Code != mcp.CodeInvalidParams {
-		t.Errorf("workflow.run with inputs that are no object answered %v", err)
+	if _, err := call(alice, "/mcp", "workflow_run", map[string]any{"namespace": "finance", "workflow": "payroll", "inputs": "every order"}); err == nil || err.Code != mcp.CodeInvalidParams {
+		t.Errorf("workflow_run with inputs that are no object answered %v", err)
 	}
 	if _, err := call(alice, collection, "run_payroll", map[string]any{"orders": "every order"}); err == nil || err.Code != mcp.CodeInvalidParams {
 		t.Errorf("run_payroll with orders that are no array answered %v", err)
@@ -51,8 +51,8 @@ func TestTheObligationsHoldOnBothServers(t *testing.T) {
 	}
 
 	// Access controlled: a tool somebody may not use is absent, and a collection nobody else's.
-	if res, err := call(x.as["victor"], "/mcp", "workflow.run", map[string]any{"namespace": "finance", "workflow": "payroll"}); err == nil {
-		t.Errorf("a viewer called workflow.run and was answered %v", res)
+	if res, err := call(x.as["victor"], "/mcp", "workflow_run", map[string]any{"namespace": "finance", "workflow": "payroll"}); err == nil {
+		t.Errorf("a viewer called workflow_run and was answered %v", res)
 	}
 	if w := x.ask(t.Context(), "POST", collection, x.as["mallory"], `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`); w.Code != http.StatusNotFound {
 		t.Errorf("somebody else's request to the collection answered %d", w.Code)
@@ -69,17 +69,17 @@ func TestTheObligationsHoldOnBothServers(t *testing.T) {
 
 	// Rate limited: one more run fits in the hour, which the user's server starts, and then neither
 	// server starts another, each saying when one more fits.
-	if res, err := call(x.as["carol"], "/mcp", "namespace.quotas", map[string]any{"namespace": "finance", "quotas": map[string]any{"max_runs_per_hour": before + 1}}); err != nil || res["isError"] == true {
-		t.Fatalf("namespace.quotas answered %v %v", res, err)
+	if res, err := call(x.as["carol"], "/mcp", "namespace_quotas", map[string]any{"namespace": "finance", "quotas": map[string]any{"max_runs_per_hour": before + 1}}); err != nil || res["isError"] == true {
+		t.Fatalf("namespace_quotas answered %v %v", res, err)
 	}
-	started, err := call(alice, "/mcp", "workflow.run", map[string]any{"namespace": "finance", "workflow": "payroll", "inputs": map[string]any{"orders": []any{}}})
+	started, err := call(alice, "/mcp", "workflow_run", map[string]any{"namespace": "finance", "workflow": "payroll", "inputs": map[string]any{"orders": []any{}}})
 	if err != nil || started["isError"] == true {
 		t.Fatalf("the run that fits answered %v %v", started, err)
 	}
 	run, _ := started["structuredContent"].(map[string]any)["run"].(string)
-	for name, at := range map[string]string{"workflow.run": "/mcp", "run_payroll": collection} {
+	for name, at := range map[string]string{"workflow_run": "/mcp", "run_payroll": collection} {
 		arguments := map[string]any{"orders": []any{}}
-		if name == "workflow.run" {
+		if name == "workflow_run" {
 			arguments = map[string]any{"namespace": "finance", "workflow": "payroll", "inputs": arguments}
 		}
 		res, err := call(alice, at, name, arguments)
@@ -95,15 +95,15 @@ func TestTheObligationsHoldOnBothServers(t *testing.T) {
 	// Recorded, naming the principal and the tool: a grant, a secret declaration, a run started and
 	// one cancelled, each as an API route's act records it.
 	for name, arguments := range map[string]map[string]any{
-		"grant.create":   {"namespace": "finance", "workflow": "payroll", "principal": "victor", "role": "operator"},
-		"secret.declare": {"namespace": "finance", "name": "ledger-copy", "provider": "env", "path": ledgerVariable},
+		"grant_create":   {"namespace": "finance", "workflow": "payroll", "principal": "victor", "role": "operator"},
+		"secret_declare": {"namespace": "finance", "name": "ledger-copy", "provider": "env", "path": ledgerVariable},
 	} {
 		if res, err := call(alice, "/mcp", name, arguments); err != nil || res["isError"] == true {
 			t.Fatalf("%s answered %v %v", name, res, err)
 		}
 	}
-	if res, err := call(alice, "/mcp", "run.cancel", map[string]any{"run": run}); err != nil || res["isError"] == true {
-		t.Fatalf("run.cancel answered %v %v", res, err)
+	if res, err := call(alice, "/mcp", "run_cancel", map[string]any{"run": run}); err != nil || res["isError"] == true {
+		t.Fatalf("run_cancel answered %v %v", res, err)
 	}
 	var entries []audit.Entry
 	if err := x.in.pool.Installation(t.Context(), db.AuditLog, func(ctx context.Context, w *db.Wide) error {
@@ -124,8 +124,8 @@ func TestTheObligationsHoldOnBothServers(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"alice grant.create grant.create", "alice secret.write secret.declare", "alice run.trigger workflow.run",
-		"alice run.cancel run.cancel", "alice run.trigger run_payroll",
+		"alice grant.create grant_create", "alice secret.write secret_declare", "alice run.trigger workflow_run",
+		"alice run.cancel run_cancel", "alice run.trigger run_payroll",
 	} {
 		if !marked[want] {
 			t.Errorf("the audit log records no %q through MCP: %v", want, marked)

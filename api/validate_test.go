@@ -108,7 +108,7 @@ func TestADraftIsHeldToTheSecretDeclarationsOfAReaderOfTheNamespaceAlone(t *test
 		t.Errorf("a reader of the workflow alone is answered %d %v for a secret the namespace declares and %d %v for one it does not", declaredStatus, declared, undeclaredStatus, undeclared)
 	}
 
-	// workflow.validate is the route made as the caller, and answers each the same.
+	// workflow_validate is the route made as the caller, and answers each the same.
 	rt := g.h.(*api.Router)
 	if _, err := api.NewMCP(rt, api.MCPOptions{PublicURL: "https://agentiik.example.com"}); err != nil {
 		t.Fatal(err)
@@ -116,16 +116,16 @@ func TestADraftIsHeldToTheSecretDeclarationsOfAReaderOfTheNamespaceAlone(t *test
 	tool := func(who, secrets string) map[string]any {
 		args := naming(secrets)
 		args["namespace"], args["workflow"] = "finance", "monthly-invoicing"
-		_, res, rpcErr := called(t, rt, who, "tools/call", map[string]any{"name": "workflow.validate", "arguments": args})
+		_, res, rpcErr := called(t, rt, who, "tools/call", map[string]any{"name": "workflow_validate", "arguments": args})
 		if rpcErr != nil {
-			t.Fatalf("workflow.validate as %s is answered %v", who, rpcErr)
+			t.Fatalf("workflow_validate as %s is answered %v", who, rpcErr)
 		}
 		return res
 	}
 	if res := tool("bob", "ledger"); res["isError"] != true {
-		t.Errorf("workflow.validate as a reader of the namespace, of a draft naming a secret it does not declare, is answered %v", res)
+		t.Errorf("workflow_validate as a reader of the namespace, of a draft naming a secret it does not declare, is answered %v", res)
 	}
 	if res := tool("carol", "ledger"); res["isError"] == true {
-		t.Errorf("workflow.validate as a reader of the workflow alone, of a draft naming a secret the namespace does not declare, is answered %v", res)
+		t.Errorf("workflow_validate as a reader of the workflow alone, of a draft naming a secret the namespace does not declare, is answered %v", res)
 	}
 }

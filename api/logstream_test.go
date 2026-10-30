@@ -42,7 +42,7 @@ func (s *switchable) Allow(_ context.Context, who api.Principal, _ api.Permissio
 	return who == "alice" && !s.off.Load(), nil
 }
 
-// Owned says alice owns no namespace: run.logs, which mounting the user's server asks for, reads
+// Owned says alice owns no namespace: run_logs, which mounting the user's server asks for, reads
 // none.
 func (s *switchable) Owned(context.Context, api.Principal) ([]string, error) { return nil, nil }
 
@@ -764,7 +764,7 @@ func TestAChunkThatCannotBeReadBackIsAGap(t *testing.T) {
 	rd.expect(t, "dispatch_end", "")
 }
 
-// run.logs reads a step's log through the stream route, as every tool reads its route: every
+// run_logs reads a step's log through the stream route, as every tool reads its route: every
 // dispatch's lines in order, the last of them where fewer are asked for, a gap said where it was,
 // and a step still running answered with what it has written so far within a couple of seconds.
 // Its answer had no Flush, so the stream sent nothing past its headers and every log read as empty.
@@ -782,9 +782,9 @@ func TestRunLogsAnswersTheLinesAStepWrote(t *testing.T) {
 	logs := func(arguments map[string]any) ([]string, string) {
 		t.Helper()
 		arguments["run"], arguments["step"] = string(streamRun), "render"
-		_, result, err := called(t, s.handler.(*api.Router), "alice", "tools/call", map[string]any{"name": "run.logs", "arguments": arguments})
+		_, result, err := called(t, s.handler.(*api.Router), "alice", "tools/call", map[string]any{"name": "run_logs", "arguments": arguments})
 		if err != nil || result["isError"] == true {
-			t.Fatalf("run.logs answered %v %v", err, result)
+			t.Fatalf("run_logs answered %v %v", err, result)
 		}
 		structured, _ := result["structuredContent"].(map[string]any)
 		var lines []string

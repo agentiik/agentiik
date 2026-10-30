@@ -23,7 +23,7 @@ import (
 // asked when the commit is made". Nor are the declarations asked for anybody else, since "a grant
 // on one workflow shows none" of them, and a refusal naming the secrets a draft writes that the
 // namespace does not declare would tell which it does: such a draft is judged as if each were
-// declared, and the push holds the commit to them. It is workflow.validate, "the only authority on
+// declared, and the push holds the commit to them. It is workflow_validate, "the only authority on
 // whether a draft is legal", so that a client asks the rules a push is held to rather than a copy
 // of them.
 
@@ -143,7 +143,7 @@ func (s *Server) validate(r *http.Request, over Target, v validateRequest) (Vali
 	}
 	resolvers := s.resolvers(r, over)
 	resolvers.SecretUse = nil
-	// The declarations are shown to a reader of the namespace alone, as secret.list shows them, and
+	// The declarations are shown to a reader of the namespace alone, as secret_list shows them, and
 	// a refusal listing the names a draft writes that are not declared would show the rest to
 	// anybody guessing; the push asks secret:use, a namespace's grant alone, before it checks them.
 	declarations, err := Revealing(r)(ctx, Target{Namespace: over.Namespace})

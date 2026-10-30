@@ -192,7 +192,7 @@ func TestEveryToolOfTheUsersServerIsARouteAskedAsTheCaller(t *testing.T) {
 	files := map[string]any{"agentiik.yaml": toolDocument}
 	present := map[string]any{"namespace": "finance", "workflow": "monthly-invoicing", "run": run, "collection": collection, "step": "normalize", "files": files}
 	absent := map[string]any{"namespace": "nowhere", "workflow": "nothing", "run": "01M2ZZZZZZZZZZZZZZZZZZZZZZ", "collection": "01JR8V0000000000000000000A", "files": files}
-	answeredAlone := []string{"workflow.language", "workflow.schema"}
+	answeredAlone := []string{"workflow_language", "workflow_schema"}
 
 	// held holds what one call asked and requested to the rule: the call named, whose requests are
 	// made for through, and which makes none where it is answered alone.

@@ -102,8 +102,14 @@ type response struct {
 
 func served(t *testing.T, s *mcp.Server, r *http.Request) response {
 	t.Helper()
+	return servedFrom(t, s, r, surface())
+}
+
+// servedFrom is served answering from the surface given.
+func servedFrom(t *testing.T, s *mcp.Server, r *http.Request, from mcp.Surface) response {
+	t.Helper()
 	w := httptest.NewRecorder()
-	s.Serve(w, r, surface())
+	s.Serve(w, r, from)
 	var out response
 	if w.Body.Len() > 0 {
 		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
@@ -307,7 +313,7 @@ func TestACallIsTheToolsAnswer(t *testing.T) {
 		t.Errorf("a failure is answered %+v", got.Result)
 	}
 
-	refusedWith(t, "a tool nobody offered", served(t, server(true), request("tools/call", map[string]any{"name": "workflow.commit"})), http.StatusOK, mcp.CodeInvalidParams)
+	refusedWith(t, "a tool nobody offered", served(t, server(true), request("tools/call", map[string]any{"name": "workflow_commit"})), http.StatusOK, mcp.CodeInvalidParams)
 	refusedWith(t, "an argument the tool refuses", served(t, server(true), request("tools/call", map[string]any{"name": "c.refuses"})), http.StatusOK, mcp.CodeInvalidParams)
 	refusedWith(t, "arguments that are no object", served(t, server(true), request("tools/call", map[string]any{"name": "b.echo", "arguments": []int{1}})), http.StatusOK, mcp.CodeInvalidParams)
 
@@ -315,6 +321,31 @@ func TestACallIsTheToolsAnswer(t *testing.T) {
 	refusedWith(t, "a tool that broke", got, http.StatusOK, mcp.CodeInternalError)
 	if got.Error != nil && strings.Contains(got.Error.Message, "10.0.0.7") {
 		t.Errorf("a tool that broke told the client %q", got.Error.Message)
+	}
+}
+
+// A call by a name a tool went by before it was renamed is answered by that tool, which the list
+// names by its new name alone; the former name of a tool not offered is a name nobody offered, and
+// is refused by the name it was called by.
+func TestACallByAFormerNameIsAnsweredByTheRenamedTool(t *testing.T) {
+	renamed := surface()
+	renamed.Renamed = func(former string) string {
+		return map[string]string{"b-echo": "b.echo", "w-commit": "workflow_commit"}[former]
+	}
+	got := servedFrom(t, server(true), request("tools/call", map[string]any{"name": "b-echo", "arguments": map[string]any{"topic": "steps"}}), renamed)
+	b, _ := json.Marshal(got.Result["content"])
+	if got.status != http.StatusOK || string(b) != `[{"text":"{\"topic\":\"steps\"}","type":"text"}]` {
+		t.Errorf("a call by a former name answered %d %s %+v", got.status, b, got.Error)
+	}
+	got = servedFrom(t, server(true), request("tools/list", nil), renamed)
+	listed, _ := json.Marshal(got.Result["tools"])
+	if strings.Contains(string(listed), "b-echo") {
+		t.Errorf("the former name is listed: %s", listed)
+	}
+	got = servedFrom(t, server(true), request("tools/call", map[string]any{"name": "w-commit"}), renamed)
+	refusedWith(t, "the former name of a tool nobody offered", got, http.StatusOK, mcp.CodeInvalidParams)
+	if got.Error != nil && got.Error.Message != "Unknown tool: w-commit" {
+		t.Errorf("the former name of a tool nobody offered is refused as %q", got.Error.Message)
 	}
 }
 

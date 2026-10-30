@@ -43,7 +43,7 @@ import (
 
 // collectionInstructions is the discovery's orientation for a collection: what calling one of its
 // tools does, and where a run started by one is followed.
-const collectionInstructions = "Each tool runs a workflow of the installation as you, with its arguments as the workflow's inputs. A sync tool waits for the run and returns its output; an async tool returns the run's identifier at once, which the user's server's run.get follows."
+const collectionInstructions = "Each tool runs a workflow of the installation as you, with its arguments as the workflow's inputs. A sync tool waits for the run and returns its output; an async tool returns the run's identifier at once, which the user's server's run_get follows."
 
 // syncWaitCeiling is how long a sync call waits where its block writes no timeout: the ceiling
 // itself, "because clients time out".
@@ -117,7 +117,7 @@ func (m *MCP) serveCollection(w http.ResponseWriter, r *http.Request, caller Cal
 }
 
 // failureLog reads the end of the log a failed task wrote, for the collection's tool named, through
-// the log stream route as the caller of r, as run.logs reads a step's log (tailed): masked as its
+// the log stream route as the caller of r, as run_logs reads a step's log (tailed): masked as its
 // runner masked it, as every log is, and none of it to a caller the route refuses, one who may not
 // read the run's logs. A route that answers no stream, or a log that cannot be read, is no message.
 func (m *MCP) failureLog(r *http.Request, tool string) failureLog {
@@ -135,7 +135,7 @@ type failureLog func(run agk.RunID, step agk.Step, task agk.TaskID) []string
 
 // failureLines and failureMost are how much of a failed task's log its tool's error carries: its last
 // lines, where a brick says why it gave up, and of them at most about 2 KiB, enough for a model to
-// correct itself and little enough that a failure does not hand it the log, which run.logs reads.
+// correct itself and little enough that a failure does not hand it the log, which run_logs reads.
 const (
 	failureLines = 20
 	failureMost  = 2 << 10
@@ -562,7 +562,7 @@ func (c *Collections) call(ctx context.Context, caller Caller, collection string
 	run := started.Run
 	if block.Mode == graph.ToolAsync {
 		return &mcp.CallResult{
-			Content:           []mcp.Content{mcp.Text(fmt.Sprintf("Run %s of %s/%s started, at commit %s. Follow it with the user's server's run.get.", run, target.Namespace, target.Workflow, started.Commit))},
+			Content:           []mcp.Content{mcp.Text(fmt.Sprintf("Run %s of %s/%s started, at commit %s. Follow it with the user's server's run_get.", run, target.Namespace, target.Workflow, started.Commit))},
 			StructuredContent: map[string]any{"run": string(run), "state": agk.Queued.String(), "commit": started.Commit},
 		}, nil
 	}
@@ -597,7 +597,7 @@ func (c *Collections) call(ctx context.Context, caller Caller, collection string
 	}
 	// Still going when the wait is over: the run goes on, and the model is told how to follow it
 	// rather than told it failed.
-	return noOutput(fmt.Sprintf("Run %s of %s/%s is still %s after %s, the longest this call waits, and has not failed: it goes on. Follow it with the user's server's run.get rather than calling the tool again, which would start another run.", run, target.Namespace, target.Workflow, detail.State, wait)), nil
+	return noOutput(fmt.Sprintf("Run %s of %s/%s is still %s after %s, the longest this call waits, and has not failed: it goes on. Follow it with the user's server's run_get rather than calling the tool again, which would start another run.", run, target.Namespace, target.Workflow, detail.State, wait)), nil
 }
 
 // noOutput answers a sync call whose answer is not the output it returns: its text alone, as a

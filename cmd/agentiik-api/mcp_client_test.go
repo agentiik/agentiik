@@ -17,8 +17,8 @@ import (
 // publish; it validates before the workflow exists and is told so, creates it, and validates until
 // the draft passes, reading at each refusal the topic it names and correcting the line it points at,
 // the refusal saying where by a JSON Pointer and a line of the file. It commits the draft, naming no
-// parent, the repository being empty, and reads back the version it made. brick.list and brick.get
-// arrive with the catalog in v0.8.0, so the client drafts from workflow.language alone.
+// parent, the repository being empty, and reads back the version it made. brick_list and brick_get
+// arrive with the catalog in v0.8.0, so the client drafts from workflow_language alone.
 func TestAFreshClientWritesAWorkflowFromTheLanguageAlone(t *testing.T) {
 	x := someTenants(t)
 	server := httptest.NewServer(x.in.router)
@@ -40,13 +40,13 @@ func TestAFreshClientWritesAWorkflowFromTheLanguageAlone(t *testing.T) {
 
 	discovered := client.send("server/discover", nil)
 	instructions, _ := discovered.result["instructions"].(string)
-	for _, want := range []string{"agentiik.yaml", "workflow.language", "workflow.validate"} {
+	for _, want := range []string{"agentiik.yaml", "workflow_language", "workflow_validate"} {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("the instructions do not name %s: %q", want, instructions)
 		}
 	}
 	tools := client.listed()
-	for name, reads := range map[string]bool{"workflow.language": true, "workflow.validate": true, "workflow.get": true, "workflow.create": false, "workflow.commit": false} {
+	for name, reads := range map[string]bool{"workflow_language": true, "workflow_validate": true, "workflow_get": true, "workflow_create": false, "workflow_commit": false} {
 		tool := tools[name]
 		if tool == nil {
 			t.Fatalf("a fresh client is not offered %s: %v", name, tools)
@@ -57,7 +57,7 @@ func TestAFreshClientWritesAWorkflowFromTheLanguageAlone(t *testing.T) {
 	}
 
 	// The orientation carries a complete minimal workflow, which the client drafts from.
-	orientation := text(client.called(tools["workflow.language"], map[string]any{}))
+	orientation := text(client.called(tools["workflow_language"], map[string]any{}))
 	minimal := regexp.MustCompile("(?s)```yaml\n(.*?)```").FindStringSubmatch(orientation)
 	if minimal == nil {
 		t.Fatalf("the orientation carries no workflow to draft from:\n%s", orientation)
@@ -82,17 +82,17 @@ func TestAFreshClientWritesAWorkflowFromTheLanguageAlone(t *testing.T) {
 	}
 
 	// Validating and committing ask for a workflow that exists: validated first, it is not found.
-	if early := client.called(tools["workflow.validate"], where(map[string]any{"agentiik.yaml": draft})); !failed(early) || !strings.Contains(text(early), "no such repository") {
+	if early := client.called(tools["workflow_validate"], where(map[string]any{"agentiik.yaml": draft})); !failed(early) || !strings.Contains(text(early), "no such repository") {
 		t.Errorf("a draft of a workflow that does not exist was answered %v", early.result)
 	}
-	if made := client.called(tools["workflow.create"], map[string]any{"namespace": "finance", "name": "greeting"}); failed(made) {
-		t.Fatalf("workflow.create answered %s", text(made))
+	if made := client.called(tools["workflow_create"], map[string]any{"namespace": "finance", "name": "greeting"}); failed(made) {
+		t.Fatalf("workflow_create answered %s", text(made))
 	}
 
 	// Validated until it passes, each refusal read and the draft corrected where it points.
 	var refusals []string
 	for {
-		validated := client.called(tools["workflow.validate"], where(map[string]any{"agentiik.yaml": draft}))
+		validated := client.called(tools["workflow_validate"], where(map[string]any{"agentiik.yaml": draft}))
 		if !failed(validated) {
 			if valid, _ := structured(validated)["valid"].(bool); !valid {
 				t.Fatalf("validate answered %v", validated.result)
@@ -123,7 +123,7 @@ func TestAFreshClientWritesAWorkflowFromTheLanguageAlone(t *testing.T) {
 		if written := strings.Split(draft, "\n"); int(line) < 1 || int(line) > len(written) || written[int(line)-1] != m.wrong {
 			t.Errorf("the refusal at %s names line %v, and the mistake is on another", pointer, line)
 		}
-		if page := text(client.called(tools["workflow.language"], map[string]any{"topic": topic})); !strings.Contains(page, m.word) {
+		if page := text(client.called(tools["workflow_language"], map[string]any{"topic": topic})); !strings.Contains(page, m.word) {
 			t.Errorf("the topic %s the refusal at %s named says nothing of %s", topic, pointer, m.word)
 		}
 		refusals = append(refusals, pointer)
@@ -133,12 +133,12 @@ func TestAFreshClientWritesAWorkflowFromTheLanguageAlone(t *testing.T) {
 		t.Errorf("the draft passed after the refusals %v, and it carried %d mistakes", refusals, len(mistakes))
 	}
 
-	committed := client.called(tools["workflow.commit"], map[string]any{"namespace": "finance", "workflow": "greeting", "message": "A first workflow", "files": map[string]any{"agentiik.yaml": draft}})
+	committed := client.called(tools["workflow_commit"], map[string]any{"namespace": "finance", "workflow": "greeting", "message": "A first workflow", "files": map[string]any{"agentiik.yaml": draft}})
 	if failed(committed) {
-		t.Fatalf("workflow.commit answered %s", text(committed))
+		t.Fatalf("workflow_commit answered %s", text(committed))
 	}
 	commit, _ := structured(committed)["commit"].(string)
-	read := structured(client.called(tools["workflow.get"], map[string]any{"namespace": "finance", "workflow": "greeting"}))
+	read := structured(client.called(tools["workflow_get"], map[string]any{"namespace": "finance", "workflow": "greeting"}))
 	head := read["repository"].(map[string]any)["head"]
 	files, _ := read["files"].(map[string]any)
 	if commit == "" || head != commit || files["agentiik.yaml"] != draft {

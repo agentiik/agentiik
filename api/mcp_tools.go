@@ -131,11 +131,11 @@ func removes() *mcp.Annotations {
 
 // Pieces of the argument schemas, written once.
 const (
-	argNamespace = `"namespace":{"type":"string","description":"The namespace, as namespace.list names it."}`
+	argNamespace = `"namespace":{"type":"string","description":"The namespace, as namespace_list names it."}`
 	argWorkflow  = `"workflow":{"type":"string","description":"The workflow's name in the namespace."}`
-	argRun       = `"run":{"type":"string","description":"The run's identifier, as run.list or workflow.run answers it."}`
+	argRun       = `"run":{"type":"string","description":"The run's identifier, as run_list or workflow_run answers it."}`
 
-	argCollection = `"collection":{"type":"string","description":"The collection's identifier, as collection.list answers it."}`
+	argCollection = `"collection":{"type":"string","description":"The collection's identifier, as collection_list answers it."}`
 )
 
 // object is an arguments schema: the properties given, the ones required, and no other. A schema
@@ -160,13 +160,13 @@ func str(args map[string]any, key string) string {
 func userTools() []routed {
 	return []routed{
 		{
-			name: "namespace.list", title: "List namespaces",
+			name: "namespace_list", title: "List namespaces",
 			description: "The namespaces you hold a grant in, your personal one first, and every one for an administrator: each with its kind and its owner.",
 			input:       object(nil), annotations: reads(), offered: anybody,
 			request: func(map[string]any) (string, string, url.Values, any) { return "GET", "/api/v1/namespaces", nil, nil },
 		},
 		{
-			name: "namespace.get", title: "Get a namespace",
+			name: "namespace_get", title: "Get a namespace",
 			description: "One namespace: its kind, its owner, its quotas, and the names it held before it was renamed.",
 			input:       object([]string{"namespace"}, argNamespace), annotations: reads(), offered: anybody,
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -174,17 +174,17 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "namespace.create", title: "Create a namespace",
+			name: "namespace_create", title: "Create a namespace",
 			description: "Creates a shared namespace that you own. An administrator may name another owner, a user or group:NAME, and set its quotas; anybody else is refused either, and the namespace takes the installation's default quotas.",
 			input: object([]string{"name"},
 				`"name":{"type":"string","description":"The namespace's name: lowercase words joined by hyphens."}`,
 				`"owner":{"type":"string","description":"Another owner than yourself, a login or group:NAME. An administrator's alone."}`,
-				`"quotas":{"type":"object","description":"The namespace's quotas, as namespace.quotas sets them. An administrator's alone."}`),
+				`"quotas":{"type":"object","description":"The namespace's quotas, as namespace_quotas sets them. An administrator's alone."}`),
 			annotations: writes(), offered: anybody, person: true,
 			request: func(a map[string]any) (string, string, url.Values, any) { return "POST", "/api/v1/namespaces", nil, a },
 		},
 		{
-			name: "namespace.update", title: "Rename a namespace",
+			name: "namespace_update", title: "Rename a namespace",
 			description: "Renames a shared namespace you own. The old name stays its own as a former name, so that what was configured with it keeps reaching it.",
 			input:       object([]string{"namespace", "name"}, argNamespace, `"name":{"type":"string","description":"The new name."}`),
 			annotations: writes(), offered: managing,
@@ -193,7 +193,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "namespace.delete", title: "Remove a namespace",
+			name: "namespace_delete", title: "Remove a namespace",
 			description: "Removes a shared namespace you own that holds nothing: no workflow, run, secret, stored object or service account. One that holds something is refused, saying what.",
 			input:       object([]string{"namespace"}, argNamespace), annotations: removes(), offered: managing,
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -201,7 +201,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "namespace.quotas", title: "Set a namespace's quotas",
+			name: "namespace_quotas", title: "Set a namespace's quotas",
 			description: "Replaces a namespace's quotas and the runner pools it may use, whole: a bound left out is one removed. An administrator's alone.",
 			input:       object([]string{"namespace", "quotas"}, argNamespace, `"quotas":{"type":"object","description":"max_runs_per_hour, max_concurrent_tasks, max_artifact_bytes, max_run_duration, max_retention_days and allowed_runner_pools, as the API's quotas record names them."}`),
 			annotations: writes(), offered: administers,
@@ -210,13 +210,13 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "grant.list", title: "List grants",
+			name: "grant_list", title: "List grants",
 			description: "The grants and denies written on a namespace, or those that apply to one of its workflows where workflow is given, each with its identifier, principal, role or deny and expiry.",
 			input:       object([]string{"namespace"}, argNamespace, argWorkflow), annotations: reads(), offered: either(holds(GrantManage), administers),
 			request: func(a map[string]any) (string, string, url.Values, any) { return "GET", grantsPath(a), nil, nil },
 		},
 		{
-			name: "grant.create", title: "Share",
+			name: "grant_create", title: "Share",
 			description: "Shares a namespace, or one of its workflows where workflow is given, with a user, group:NAME or a service account NS/NAME: a role (viewer, operator, editor, owner), or a deny of one permission, with an optional expiry.",
 			input: object([]string{"namespace", "principal"}, argNamespace, argWorkflow,
 				`"principal":{"type":"string","description":"Who is granted: a login, group:NAME, or NS/NAME for a service account."}`,
@@ -229,8 +229,8 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "grant.revoke", title: "Revoke a grant",
-			description: "Revokes one grant or deny, by the identifier grant.list answers, written on the namespace or, where workflow is given, on that workflow. It applies from the next request.",
+			name: "grant_revoke", title: "Revoke a grant",
+			description: "Revokes one grant or deny, by the identifier grant_list answers, written on the namespace or, where workflow is given, on that workflow. It applies from the next request.",
 			input:       object([]string{"namespace", "id"}, argNamespace, argWorkflow, `"id":{"type":"string","description":"The grant's identifier."}`),
 			annotations: removes(), offered: either(holds(GrantManage), administers),
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -238,7 +238,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "secret.list", title: "List secret declarations",
+			name: "secret_list", title: "List secret declarations",
 			description: "A namespace's secret declarations: each secret's name, provider, path and the file a step is given it at. Never a value.",
 			input:       object([]string{"namespace"}, argNamespace), annotations: reads(), offered: holdsInNamespace(WorkflowRead),
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -246,7 +246,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "secret.declare", title: "Declare a secret",
+			name: "secret_declare", title: "Declare a secret",
 			description: "Declares a secret by the provider that keeps its value and the path it is read at there, or changes a declaration. It never takes a value: a builtin secret's value is written with the console, agk or the API, where the person writing it is the one holding it.",
 			input: object([]string{"namespace", "name", "provider"}, argNamespace,
 				`"name":{"type":"string","description":"The secret's name, as a workflow's secrets block names it."}`,
@@ -260,7 +260,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "secret.remove", title: "Remove a secret declaration",
+			name: "secret_remove", title: "Remove a secret declaration",
 			description: "Removes one secret's declaration, and a builtin secret's value with it. A workflow naming it is refused at its next push, and a run of it at its first redemption.",
 			input:       object([]string{"namespace", "name"}, argNamespace, `"name":{"type":"string","description":"The secret's name."}`),
 			annotations: removes(), offered: holdsInNamespace(SecretWrite),
@@ -269,7 +269,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "workflow.list", title: "List workflows",
+			name: "workflow_list", title: "List workflows",
 			description: "The workflows of a namespace whose runs you read, each with when it was created and its latest run.",
 			input:       object([]string{"namespace"}, argNamespace), annotations: reads(), offered: either(holds(WorkflowRead), holds(RunRead)),
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -277,8 +277,8 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "workflow.get", title: "Get a workflow",
-			description: "A workflow's entry point and the graph it resolves to at ref, a branch, a tag or a commit that is a version, the default branch's head where left out: files holds the text of agentiik.yaml, keyed by its path as workflow.validate and workflow.commit take files; graph the graph, includes resolved and images by digest; and version the version both are of, whose commit is the parent a workflow.commit of an edit names. Beside them, whatever ref names, the repository with its clone URL and a page of the default branch's history.",
+			name: "workflow_get", title: "Get a workflow",
+			description: "A workflow's entry point and the graph it resolves to at ref, a branch, a tag or a commit that is a version, the default branch's head where left out: files holds the text of agentiik.yaml, keyed by its path as workflow_validate and workflow_commit take files; graph the graph, includes resolved and images by digest; and version the version both are of, whose commit is the parent a workflow_commit of an edit names. Beside them, whatever ref names, the repository with its clone URL and a page of the default branch's history.",
 			input: object([]string{"namespace", "workflow"}, argNamespace, argWorkflow,
 				`"ref":{"type":"string","minLength":1,"description":"The branch, the tag or the version read: a branch or a tag by its short name or in full, refs/heads/NAME or refs/tags/NAME, or a commit of forty hexadecimal digits that is a version. The default branch's head where left out. A name a branch and a tag both hold is refused: write the one meant in full."}`),
 			annotations: reads(), offered: holds(WorkflowRead),
@@ -292,8 +292,8 @@ func userTools() []routed {
 			read: entryPointAt,
 		},
 		{
-			name: "workflow.create", title: "Create a workflow",
-			description: "Creates an empty workflow repository in a namespace, its default branch unborn: commit its first agentiik.yaml with workflow.commit, naming no parent.",
+			name: "workflow_create", title: "Create a workflow",
+			description: "Creates an empty workflow repository in a namespace, its default branch unborn: commit its first agentiik.yaml with workflow_commit, naming no parent.",
 			input: object([]string{"namespace", "name"}, argNamespace,
 				`"name":{"type":"string","description":"The workflow's name, which its repository and metadata.name carry."}`,
 				`"default_branch":{"type":"string","description":"Its default branch, main where left out."}`,
@@ -304,7 +304,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "workflow.update", title: "Change a workflow",
+			name: "workflow_update", title: "Change a workflow",
 			description: "Renames a workflow, moves it to another namespace, or names and protects its default branch: changes holds the fields to change, as the API's PATCH reads them.",
 			input: object([]string{"namespace", "workflow", "changes"}, argNamespace, argWorkflow,
 				`"changes":{"type":"object","description":"name to rename it; namespace to move it to another you own; default_branch and protected, under grant:manage.","properties":{"name":{"type":"string"},"namespace":{"type":"string"},"default_branch":{"type":"string"},"protected":{"type":"boolean"}},"additionalProperties":false,"minProperties":1}`),
@@ -314,7 +314,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "workflow.delete", title: "Delete a workflow",
+			name: "workflow_delete", title: "Delete a workflow",
 			description: "Deletes a workflow with its runs: its runs still going are cancelled and the data of every run expires at once.",
 			input:       object([]string{"namespace", "workflow"}, argNamespace, argWorkflow), annotations: removes(), offered: holds(WorkflowDelete),
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -322,8 +322,8 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "workflow.run", title: "Run a workflow",
-			description: "Starts a run of a workflow, at the head of its default branch, of the branch or tag ref names, or of a commit that is a version, with the inputs given, each held to its schema before the run exists. Follow it with run.get.",
+			name: "workflow_run", title: "Run a workflow",
+			description: "Starts a run of a workflow, at the head of its default branch, of the branch or tag ref names, or of a commit that is a version, with the inputs given, each held to its schema before the run exists. Follow it with run_get.",
 			input: object([]string{"namespace", "workflow"}, argNamespace, argWorkflow,
 				`"ref":{"type":"string","description":"A branch or a tag, the default branch where left out."}`,
 				`"commit":{"type":"string","description":"A commit that is a version, in place of ref."}`,
@@ -334,7 +334,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "run.list", title: "List runs",
+			name: "run_list", title: "List runs",
 			description: "The runs you read, newest first, narrowed to a namespace, a workflow or a state where given, each with what started it and how it ended.",
 			input: object(nil, argNamespace, argWorkflow,
 				`"state":{"type":"string","description":"queued, running, waiting, succeeded, failed, cancelled or timed_out."}`,
@@ -354,7 +354,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "run.get", title: "Get a run",
+			name: "run_get", title: "Get a run",
 			description: "A run's state and each step's verdict, with its reason where the verdict alone does not say why, a step refused before any task started among them, what started it and the principal it is attributed to; its inputs only to whoever holds run:read_data.",
 			input:       object([]string{"run"}, argRun), annotations: reads(), offered: holds(RunRead),
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -362,7 +362,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "run.logs", title: "Read a step's log",
+			name: "run_logs", title: "Read a step's log",
 			description: "The tail of a step's log, secrets masked, as its runner shipped it: up to the last lines asked for, 200 where left out. A step still running answers what it has written so far.",
 			input: object([]string{"run", "step"}, argRun,
 				`"step":{"type":"string","description":"The step's name."}`,
@@ -373,8 +373,8 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "run.output", title: "Read a run's output",
-			description: "One output of a finished run, its envelope as the workflow declares it; run.artifact reads a file it names. Requires run:read_data, which reading a run's data takes.",
+			name: "run_output", title: "Read a run's output",
+			description: "One output of a finished run, its envelope as the workflow declares it; run_artifact reads a file it names. Requires run:read_data, which reading a run's data takes.",
 			input:       object([]string{"run", "name"}, argRun, `"name":{"type":"string","description":"The output's name, as the workflow declares it."}`),
 			annotations: reads(), offered: holds(RunReadData),
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -382,8 +382,8 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "run.artifact", title: "Read a file a run wrote",
-			description: "One file a run's step wrote, by the agk://run/<run>/<step>/<port>/<name> URI an envelope's files name it by, in run.output or run.get: text as text, an image as an image, and any other file as an embedded resource of its media type. A file above 1 MiB is refused with its size, since what this answers lands in your context. A file its workflow gave a fetch budget spends one fetch, as any fetch does. Requires run:read_data, which reading a run's data takes.",
+			name: "run_artifact", title: "Read a file a run wrote",
+			description: "One file a run's step wrote, by the agk://run/<run>/<step>/<port>/<name> URI an envelope's files name it by, in run_output or run_get: text as text, an image as an image, and any other file as an embedded resource of its media type. A file above 1 MiB is refused with its size, since what this answers lands in your context. A file its workflow gave a fetch budget spends one fetch, as any fetch does. Requires run:read_data, which reading a run's data takes.",
 			input:       object([]string{"uri"}, `"uri":{"type":"string","description":"The file's URI, as an envelope's files name it: agk://run/<run>/<step>/<port>/<name>."}`),
 			annotations: fetches(), offered: holds(RunReadData),
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -397,7 +397,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "run.cancel", title: "Cancel a run",
+			name: "run_cancel", title: "Cancel a run",
 			description: "Asks for a run in flight to be cancelled, which the controller carries out: its steps under way end cancelled and those not reached pending.",
 			input:       object([]string{"run"}, argRun), annotations: writes(), offered: holds(WorkflowRun),
 			request: func(a map[string]any) (string, string, url.Values, any) {
@@ -405,7 +405,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "run.replay", title: "Replay a run",
+			name: "run_replay", title: "Replay a run",
 			description: "Starts a new run of the commit a run pinned, over the inputs it was started with, from the step named, reusing everything upstream of it.",
 			input:       object([]string{"run", "step"}, argRun, `"step":{"type":"string","description":"The step the replay starts from."}`),
 			annotations: writes(), offered: holds(WorkflowRun),
@@ -414,7 +414,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "collection.list", title: "List your collections",
+			name: "collection_list", title: "List your collections",
 			description: "Your collections, the connectors you assemble from workflows you may run, each one a tool: each with the URL a client is given, its members, and the tool each offers or why it offers none, no_mcp_block, not_runnable or tool_name_taken.",
 			input:       object(nil), annotations: reads(), offered: anybody,
 			own: true,
@@ -423,7 +423,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "collection.get", title: "Get a collection",
+			name: "collection_get", title: "Get a collection",
 			description: "One of your collections: its URL, its members and what each offers.",
 			input:       object([]string{"collection"}, argCollection), annotations: reads(), offered: anybody,
 			own: true,
@@ -432,8 +432,8 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "collection.create", title: "Create a collection",
-			description: "Makes a collection of yours, holding no workflow yet, and answers it with the URL to give a client. Add workflows to it with collection.add. A principal holds 50 collections at most.",
+			name: "collection_create", title: "Create a collection",
+			description: "Makes a collection of yours, holding no workflow yet, and answers it with the URL to give a client. Add workflows to it with collection_add. A principal holds 50 collections at most.",
 			input: object([]string{"name"},
 				`"name":{"type":"string","description":"The collection's name, unique among yours: letters, digits, hyphens and underscores."}`,
 				`"description":{"type":"string","maxLength":280,"description":"What the collection is for, one line."}`),
@@ -444,7 +444,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "collection.update", title: "Rename or describe a collection",
+			name: "collection_update", title: "Rename or describe a collection",
 			description: "Changes one of your collections' name, description or both. Its URL never changes, so every client configured with it keeps reaching it.",
 			input: object([]string{"collection"}, argCollection,
 				`"name":{"type":"string","description":"The new name."}`,
@@ -456,7 +456,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "collection.delete", title: "Delete a collection",
+			name: "collection_delete", title: "Delete a collection",
 			description: "Removes one of your collections: its URL answers 404 from the next request, and every client configured with it lists nothing. No workflow and no run changes.",
 			input:       object([]string{"collection"}, argCollection), annotations: removes(), offered: anybody,
 			own: true,
@@ -465,7 +465,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "collection.add", title: "Add a workflow to a collection",
+			name: "collection_add", title: "Add a workflow to a collection",
 			description: "Adds a workflow you may run to one of your collections, or changes how a member is read, written whole: ref, the branch or the tag it is read at, its default branch where left out, and as, the name its tool goes by, the one its mcp block gives where left out. A workflow whose entry point declares no mcp block is added and offers nothing until one does. A tool name another member gives is refused; as resolves it.",
 			input: object([]string{"collection", "namespace", "workflow"}, argCollection, argNamespace, argWorkflow,
 				`"ref":{"type":"string","description":"The branch or the tag the member is read at, never a commit."}`,
@@ -477,7 +477,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "collection.remove", title: "Take a workflow out of a collection",
+			name: "collection_remove", title: "Take a workflow out of a collection",
 			description: "Takes a workflow out of one of your collections: its tool leaves the next tools/list, and the workflow and its runs are untouched.",
 			input:       object([]string{"collection", "namespace", "workflow"}, argCollection, argNamespace, argWorkflow),
 			annotations: &mcp.Annotations{ReadOnlyHint: mcp.Hint(false), DestructiveHint: mcp.Hint(false), IdempotentHint: mcp.Hint(true), OpenWorldHint: mcp.Hint(false)},
@@ -488,7 +488,7 @@ func userTools() []routed {
 			},
 		},
 		{
-			name: "runner.list", title: "List runners",
+			name: "runner_list", title: "List runners",
 			description: "The runner inventory: each runner's pool, labels, capacity, last heartbeat and state. An administrator's alone.",
 			input:       object(nil), annotations: reads(), offered: administers,
 			request: func(map[string]any) (string, string, url.Values, any) { return "GET", "/api/v1/runners", nil, nil },
@@ -501,10 +501,10 @@ func workflowPath(a map[string]any) string {
 	return "/api/v1/" + segment(str(a, "namespace")) + "/workflows/" + segment(str(a, "workflow"))
 }
 
-// entryPoint is the file workflow.get answers the text of, at the root of the tree.
+// entryPoint is the file workflow_get answers the text of, at the root of the tree.
 const entryPoint = "agentiik.yaml"
 
-// entryPointAt is workflow.get's answer: the route's, with the entry point's text beside the graph.
+// entryPointAt is workflow_get's answer: the route's, with the entry point's text beside the graph.
 // The text is read through the tree route, which is the one answering a file's bytes, at the commit
 // the route answered as the version rather than at the ref asked, so that the text and the graph are
 // one version's even where the ref moved between the two requests. A repository with no version yet
@@ -568,7 +568,7 @@ func (m *MCP) tool(r *http.Request, t routed) mcp.Tool {
 				return nil, err
 			}
 			method, path, query, body := t.request(args)
-			if t.name == "run.logs" {
+			if t.name == "run_logs" {
 				return m.logTail(r, path, args)
 			}
 			a, err := m.dispatch(r, t.name, method, path, query, body)
@@ -631,7 +631,7 @@ func argumentsOf(t routed, arguments json.RawMessage) (map[string]any, error) {
 	return args, nil
 }
 
-// logTailWait is how long run.logs reads a step still running: what its runner shipped is sent at
+// logTailWait is how long run_logs reads a step still running: what its runner shipped is sent at
 // once, so the wait only lets a chunk on its way arrive, and a model asking for a log does not
 // wait on a step that may run for an hour.
 const logTailWait = 2 * time.Second
@@ -647,7 +647,7 @@ func (m *MCP) logTail(r *http.Request, path string, args map[string]any) (*mcp.C
 			most = int(v)
 		}
 	}
-	a, err := m.tailed(r, "run.logs", path, most, "")
+	a, err := m.tailed(r, "run_logs", path, most, "")
 	if err != nil {
 		return nil, err
 	}

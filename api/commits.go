@@ -150,7 +150,7 @@ func (s *Server) commitFiles(w http.ResponseWriter, r *http.Request, who Princip
 		fail(w, statusOf(err), err.Error())
 		return
 	}
-	// A commit workflow.commit makes is marked as arriving through MCP, in its message and in the
+	// A commit workflow_commit makes is marked as arriving through MCP, in its message and in the
 	// audit log: the route is the same, and what made the request is the MCP server.
 	via := ""
 	if _, ok := throughOf(r.Context()); ok {
@@ -174,7 +174,7 @@ type commitRefused struct {
 func (e *commitRefused) Error() string { return e.why }
 
 // commit makes the commit and pushes it, through says what made it where it was not the route
-// itself, workflow.commit's "mcp", which the commit's message and the audit log both carry.
+// itself, workflow_commit's "mcp", which the commit's message and the audit log both carry.
 func (s *Server) commit(r *http.Request, who Principal, over Target, c commitRequest, through string) (Committed, error) {
 	ctx := r.Context()
 	if strings.TrimSpace(c.Message) == "" {

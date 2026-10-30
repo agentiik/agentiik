@@ -348,7 +348,7 @@ const (
 // would be, bytes aside, and holds nothing, since nothing is fetched. A Range is not honoured: the
 // whole artifact is answered, which is the one transfer that can count. A budget is spent by a
 // session only from the public URL's pages, 403 otherwise before anything is held (Spends). A
-// request made through MCP, by run.artifact or a read of the artifact's resource, is answered the
+// request made through MCP, by run_artifact or a read of the artifact's resource, is answered the
 // bytes whatever the budget, up to mcpArtifactMost, and 413 above it.
 func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	u, err := agk.ParseURI(r.PathValue("uri"))
