@@ -2,7 +2,9 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
-## Unreleased
+## v0.7.3, 2026-10-31
+
+What running v0.7.2 through Claude Desktop found: a run tells a task waiting for a slot from one a runner took and says why a step failed wherever it is read, a retry starts at its clock, a failed script's output reaches its log, and a client of MCP pins an image and starts or cancels many runs in one call.
 
 - A run's detail tells a dispatched task waiting on its pool's queue from one a runner took: `GET /api/v1/runs/{id}`, and so `run_get`, answers `taken_at` on a task, under `run:read`, and the console's step pane and `agk console` say a dispatched task nobody took is queued for a slot (#948).
 - `agk run` and `agk status` print why a step failed where its tasks do not say: a step refused before any task started, its port fed what is no batch, is reported as the step that failed with its `reason`, where the run said no step failed; a failed step's reason goes with its first task's failure, and `agk status` says a skipped or cancelled step's under it (#949).
