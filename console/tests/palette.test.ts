@@ -67,7 +67,7 @@ describe("the palette's matching", () => {
 });
 
 describe("the palette", () => {
-  it("opens on : and on Search in the sidebar, and closes on esc", async () => {
+  it("opens on : and on Search at the top of the screen, and closes on esc", async () => {
     open("/finance/workflows");
     await screen.findByRole("link", { name: "monthly-invoicing" });
     await fireEvent.keyDown(window, { key: ":" });
