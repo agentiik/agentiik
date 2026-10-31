@@ -224,6 +224,8 @@
     font-family: var(--type-pageTitle-font);
     font-size: var(--type-pageTitle-size);
     font-weight: var(--type-pageTitle-weight);
+    font-stretch: var(--type-pageTitle-width);
+    letter-spacing: var(--type-pageTitle-tracking);
   }
 
   .wide {

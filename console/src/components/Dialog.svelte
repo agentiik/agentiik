@@ -84,22 +84,38 @@
     justify-content: center;
     padding: 12vh 16px 16px;
     overflow-y: auto;
-    background: color-mix(in srgb, var(--bg) 55%, transparent);
-    backdrop-filter: blur(1px);
+    background: var(--scrim);
   }
 
-  /* Lifted by its ground and its hairline, never a shadow, as every layer is: the backdrop already
-     sets it apart from the screen. */
+  /* Lifted above the screen by shadowFloat on the scrim. Its ground is the sheet's, never glass: a
+     dialog holds a form, and a blurred ground behind a field changes its words' contrast. */
   .dialog {
     max-width: 100%;
-    border: var(--border-hairline) solid var(--lineStrong);
-    border-radius: var(--radius-card);
+    border-radius: var(--radius-dialog);
     background: var(--surface);
+    box-shadow: var(--shadowFloat);
+    animation: arrive var(--motion-dur3) var(--motion-easeSpring);
   }
 
   .dialog:focus {
     outline: none;
   }
+
+  /* What floats arrives from slightly above, at motion.dur3 on the spring, and is there at once under
+     a reduced-motion preference. */
+  @keyframes arrive {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.98);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dialog {
+      animation: none;
+    }
+  }
+
 
   header {
     display: flex;

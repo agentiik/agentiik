@@ -129,8 +129,7 @@
     height: 100%;
     padding: 0 calc(var(--unit) * 5) calc(var(--unit) * 5);
     overflow-y: auto;
-    border-right: var(--border-hairline) solid var(--line);
-    background: var(--surface);
+    background: var(--bg);
   }
 
   .sidebar.folded {
@@ -213,9 +212,10 @@
   }
 
   .entry:hover {
-    background: var(--raised);
+    background: color-mix(in srgb, var(--raised) 55%, transparent);
     color: var(--text);
     text-decoration: none;
+    transition: background-color var(--motion-dur1) var(--motion-easeOut);
   }
 
   .entry kbd {
@@ -231,10 +231,13 @@
     text-align: center;
   }
 
+  /* The sidebar recedes behind the screen, its entries muted on the ground; the entry open is raised
+     above it as the sheet is, in text, rather than filled in the accent, which marks what acts. */
   .entry.open {
-    background: var(--accentDim);
-    color: var(--accent);
+    background: var(--raised);
+    color: var(--text);
     font-weight: var(--type-navigation-weightActive);
+    box-shadow: var(--shadowSheet);
   }
 
   .section {
