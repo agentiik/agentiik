@@ -41,10 +41,7 @@
     align-items: center;
     gap: calc(var(--unit) * 3);
     height: 22px;
-    padding: 0 calc(var(--unit) * 4);
-    /* No outline is drawn, but the hairline's room is kept, so that the word sits on the baseline it
-       had in an outlined pill and a line holding a pill stays a whole number of pixels high. */
-    border: var(--border-hairline) solid transparent;
+    padding: 0 calc(var(--unit) * 5) 0 calc(var(--unit) * 4);
     border-radius: var(--radius-pill);
     font-size: 12.5px;
     font-weight: 500;
@@ -52,12 +49,17 @@
     white-space: nowrap;
   }
 
+  /* The pill's baseline is its first item's, the dot's, so the dot keeps the 8px box it has always
+     had and draws 6px inside a transparent border: a smaller box would move every line holding a
+     pill by half a pixel. */
   .dot {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
+    border: 1px solid transparent;
     border-radius: var(--radius-round);
     flex: none;
     background: currentColor;
+    background-clip: padding-box;
   }
 
   .dot.hollow {
