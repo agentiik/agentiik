@@ -54,6 +54,11 @@
     return { tasks, of, ended };
   }
 
+  // flows answers whether an edge is carrying items now: its run running, its port having published
+  // some and the step it arrives at running on them. It alone of the edges moves, and stops when its
+  // run ends, as the Design system chapter's Motion has it.
+  const flows = (e: { from: { step: string; port: string }; to: { step: string } }) =>
+    run?.state === "running" && (items(e.from.step, e.from.port) ?? 0) > 0 && stepOf(e.to.step)?.verdict === "running";
   const called = (name: string) => run?.tasks.find((t) => t.step === name && t.called)?.called;
 </script>
 
@@ -67,7 +72,7 @@
               {#if c.path}<path class="edge data" d={c.path} />{/if}
             {/each}
             {#each laid.edges as e (`${e.from.step}.${e.from.port}>${e.to.step}.${e.to.port}`)}
-              <path class="edge {e.kind}" d={e.path} />
+              <path class="edge {e.kind}" class:flowing={flows(e)} d={e.path} />
             {/each}
             {#each laid.outputs as c (c.name)}
               {#if c.path}<path class="edge {c.from?.port === 'error' ? 'error' : c.from?.port === 'rejected' ? 'rejected' : 'data'}" d={c.path} />{/if}
@@ -121,7 +126,7 @@
               {#if sh}
                 <span class="shards" aria-label="{sh.ended} of {sh.of} shards ended">
                   {#each sh.tasks as t (t.task)}<span class="cell {t.state}" title="shard {t.shard?.index}: {t.state}"></span>{/each}
-                  <span class="bar"><span class="fill" style:width="{(sh.ended / sh.of) * 100}%"></span></span>
+                  <span class="bar"><span class="fill" class:going={st?.verdict === "running"} style:width="{(sh.ended / sh.of) * 100}%"></span></span>
                   <span class="term muted">{sh.ended} of {sh.of}</span>
                 </span>
               {:else if child}
@@ -204,6 +209,25 @@
 
   .edge.error {
     stroke: var(--failed);
+  }
+
+  /* Items on their way: the dashes run along the edge from the port they leave. */
+  .edge.flowing {
+    stroke: var(--succeeded);
+    stroke-dasharray: 4 5;
+    animation: flow 1.2s linear infinite;
+  }
+
+  @keyframes flow {
+    to {
+      stroke-dashoffset: -18;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .edge.flowing {
+      animation: none;
+    }
   }
 
   .layer {
@@ -359,6 +383,33 @@
     display: block;
     height: 100%;
     background: var(--succeeded);
+  }
+
+  /* A fan-out still running sweeps its bar, as a running step's segment does. */
+  .fill.going {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .fill.going::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--raised) 60%, transparent), transparent);
+    transform: translateX(-100%);
+    animation: sweep 1.8s var(--motion-easeOut) infinite;
+  }
+
+  @keyframes sweep {
+    to {
+      transform: translateX(100%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fill.going::after {
+      animation: none;
+    }
   }
 
   .port {
