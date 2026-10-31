@@ -230,10 +230,10 @@
     align-items: flex-start;
     justify-content: center;
     padding: 12vh 16px 16px;
-    background: color-mix(in srgb, var(--bg) 55%, transparent);
-    backdrop-filter: blur(1px);
+    background: var(--scrim);
   }
 
+  /* The one layer drawn in glass at full strength: it floats above everything, on the scrim. */
   .palette {
     display: flex;
     flex-direction: column;
@@ -241,14 +241,32 @@
     max-width: 100%;
     max-height: 70vh;
     overflow: hidden;
-    border: var(--border-hairline) solid var(--lineStrong);
-    border-radius: var(--radius-card);
-    background: var(--surface);
+    border-radius: var(--radius-dialog);
+    background: var(--glass);
+    backdrop-filter: blur(22px) saturate(1.5);
+    box-shadow: var(--shadowFloat);
+    animation: arrive var(--motion-dur3) var(--motion-easeSpring);
   }
 
   .palette:focus {
     outline: none;
   }
+
+  /* What floats arrives from slightly above, at motion.dur3 on the spring, and is there at once under
+     a reduced-motion preference. */
+  @keyframes arrive {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.98);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .palette {
+      animation: none;
+    }
+  }
+
 
   .typed {
     display: flex;

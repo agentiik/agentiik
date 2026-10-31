@@ -113,9 +113,10 @@
     margin: 0;
     padding: calc(var(--unit) * 3);
     overflow: visible;
-    border: var(--border-hairline) solid var(--lineStrong);
     border-radius: var(--radius-card);
-    background: var(--raised);
+    background: var(--glass);
+    backdrop-filter: blur(14px) saturate(1.4);
+    box-shadow: var(--shadowFloat);
     color: var(--text);
   }
 </style>

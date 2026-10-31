@@ -30,20 +30,21 @@
 </section>
 
 <style>
-  /* A pane is a card: its title and what it counts on a row of their own above a hairline, rather than
-     set into the border as agk console sets them, which a browser has no need to save the room of. */
+  /* A pane is a tile of raised on the screen's sheet, ringed in line rather than bordered, so that the
+     ring takes no room: its title and what it counts on a row of their own, rather than set into the
+     border as agk console sets them, which a browser has no need to save the room of. */
   .pane {
     position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    border: var(--border-hairline) solid var(--line);
-    border-radius: var(--radius-card);
-    background: var(--surface);
+    border-radius: var(--radius-pane);
+    background: var(--raised);
+    box-shadow: 0 0 0 var(--border-hairline) var(--line);
   }
 
   .pane.focused {
-    border-color: var(--accentLine);
+    box-shadow: 0 0 0 var(--border-hairline) var(--accent);
   }
 
   /* The title and what the pane counts read along one baseline, set in two sizes as they are, and the
@@ -58,7 +59,6 @@
     gap: calc(var(--unit) * 6);
     min-height: 46px;
     padding: 0 var(--padding-panel) 0 calc(var(--padding-panel) + 2px);
-    box-shadow: inset 0 calc(-1 * var(--border-hairline)) 0 var(--line);
   }
 
   /* A pane with nothing to say above its content, a list under its screen's own head, draws no row. */

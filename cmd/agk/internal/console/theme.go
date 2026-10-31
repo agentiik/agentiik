@@ -171,9 +171,9 @@ func (t theme) style(selected bool, r role) lipgloss.Style {
 	s := lipgloss.NewStyle()
 	switch {
 	case selected && t.painted():
-		// accentDim's nearest of the 256 is a grey a step or two from the ground's on either ground,
-		// which no eye tells from it, so the 256 fill the selection with accentLine's, the first
-		// blue of the cube that still carries the text.
+		// accentDim's nearest of the 256 is the light ground's own white, which no eye tells from it,
+		// so the 256 fill the selection with accentLine's on both grounds, 60 dark and 153 light,
+		// each still carrying the text at 4.5:1.
 		fill := "accentDim"
 		if t.depth == twoFiftySix {
 			fill = "accentLine"

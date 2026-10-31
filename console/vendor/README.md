@@ -7,7 +7,7 @@ Each file is copied as its repository publishes it and never edited here. A new 
 | `openapi.json`, `wire.schema.json` | `agentiik/schemas`, the document the console's client is generated from and the schema its records refer to, taken at `v0.7.3`, which describes a task's `taken_at` and `resolve` on the images route | `v0.7.3` |
 | `envelope.schema.json` | `agentiik/schemas`, the schema the envelopes the console reads refer to, taken from the same commit | `v0.7.3` |
 | `workflow.schema.json` | `agentiik/schemas`, the schema a workflow file is held to, which the console checks `agentiik.yaml` against before anything is sent (`src/lib/workflow-check.ts`), taken from the same commit | `v0.7.3` |
-| `tokens.css` | `agentiik/design`, the tokens `tools/build.py` generates from `tokens.json` | `v0.7.0` |
-| `tokens.json` | `agentiik/design`, the token file itself, which `agk console`'s palette is generated from (`cmd/agk/internal/console/palette.go`), so that the terminal and the browser are drawn from one copy at one version | `v0.7.0` |
+| `tokens.css` | `agentiik/design`, the tokens `tools/build.py` generates from `tokens.json`, taken from the branch of agentiik/design#45, which redraws them calmer, until `v0.8.0` is tagged | `calmer-tokens` |
+| `tokens.json` | `agentiik/design`, the token file itself, which `agk console`'s palette is generated from (`cmd/agk/internal/console/palette.go`), so that the terminal and the browser are drawn from one copy at one version, taken from the same branch | `calmer-tokens` |
 | `icons/` | `agentiik/design`, the icon set and its index | `v0.7.0` |
-| `../public/mark.svg` | `agentiik/design`, `mark/mark-square-light.svg`, the favicon | `v0.7.0` |
+| `../public/mark.svg` | `agentiik/design`, `mark/mark-square-light.svg`, the favicon, taken from the same branch | `calmer-tokens` |

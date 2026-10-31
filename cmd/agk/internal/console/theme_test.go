@@ -47,10 +47,10 @@ func TestEachDepthDrawsTheStatesAsTheTableSays(t *testing.T) {
 		ground      string
 		noGroundSet bool
 	}{
-		{theme{depth: trueColour}, "38;2;104;174;245", "48;2;18;18;18", false},
-		{theme{depth: trueColour, light: true}, "38;2;1;93;162", "48;2;241;241;241", false},
-		{theme{depth: twoFiftySix}, "38;5;75", "48;5;233", false},
-		{theme{depth: twoFiftySix, light: true}, "38;5;25", "48;5;255", false},
+		{theme{depth: trueColour}, "38;2;121;169;255", "48;2;13;14;17", false},
+		{theme{depth: trueColour, light: true}, "38;2;25;87;210", "48;2;240;242;247", false},
+		{theme{depth: twoFiftySix}, "38;5;111", "48;5;233", false},
+		{theme{depth: twoFiftySix, light: true}, "38;5;26", "48;5;255", false},
 		{theme{depth: sixteen}, "34", "", true},
 		{theme{depth: noColour}, "", "", true},
 	} {
@@ -88,11 +88,11 @@ func TestWithoutColourFaintAndReverseStillMark(t *testing.T) {
 // The selection is the accent's dim fill in true colour, and accentLine's nearest at 256, since
 // accentDim's is a grey beside the ground's.
 func TestTheSelectionIsSeenAtEveryDepth(t *testing.T) {
-	if got := (theme{depth: trueColour}).line(true, 2, part{plain, "ab"}); !strings.Contains(got, "48;2;15;43;70") {
+	if got := (theme{depth: trueColour}).line(true, 2, part{plain, "ab"}); !strings.Contains(got, "48;2;23;42;78") {
 		t.Errorf("the selection in true colour is drawn %q", got)
 	}
 	dark, light := (theme{depth: twoFiftySix}).line(true, 2, part{plain, "ab"}), (theme{depth: twoFiftySix, light: true}).line(true, 2, part{plain, "ab"})
-	if !strings.Contains(dark, "48;5;24") || !strings.Contains(light, "48;5;153") {
+	if !strings.Contains(dark, "48;5;60") || !strings.Contains(light, "48;5;153") {
 		t.Errorf("the selection at 256 is drawn %q dark and %q light", dark, light)
 	}
 }
@@ -113,7 +113,7 @@ func TestTheGroundFollowsTheTerminalsAnswer(t *testing.T) {
 	}
 	var tm tea.Model = m
 	tm, _ = tm.Update(light)
-	if !tm.(Model).light || !strings.Contains(tm.(Model).screen(), "48;2;241;241;241") {
+	if !tm.(Model).light || !strings.Contains(tm.(Model).screen(), "48;2;240;242;247") {
 		t.Error("a light background does not draw the light ground")
 	}
 
@@ -124,7 +124,7 @@ func TestTheGroundFollowsTheTerminalsAnswer(t *testing.T) {
 	}
 
 	tm, _ = tea.Model(m).Update(dark)
-	if tm.(Model).light || !strings.Contains(tm.(Model).screen(), "48;2;18;18;18") {
+	if tm.(Model).light || !strings.Contains(tm.(Model).screen(), "48;2;13;14;17") {
 		t.Error("a dark background does not draw the dark ground")
 	}
 }

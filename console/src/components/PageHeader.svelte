@@ -82,6 +82,8 @@
     font-family: var(--type-pageTitle-font);
     font-size: var(--type-pageTitle-size);
     font-weight: var(--type-pageTitle-weight);
+    font-stretch: var(--type-pageTitle-width);
+    letter-spacing: var(--type-pageTitle-tracking);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -90,6 +92,8 @@
     font-family: var(--type-identifier-font);
     font-size: 18px;
     font-weight: 500;
+    font-stretch: normal;
+    letter-spacing: 0;
   }
 
   .count {
