@@ -268,14 +268,14 @@
 {:else if session.me}
   <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer} style:--elsewhere="{banner}px">
     <div class="side" inert={viewport.narrow && !drawer}>
-      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} oncreate={session.me.user ? () => (creating = true) : undefined} onsearch={() => (searching = true)} />
+      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} oncreate={session.me.user ? () => (creating = true) : undefined} />
     </div>
     {#if viewport.narrow && drawer}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="scrim" onclick={() => (drawer = false)}></div>
     {/if}
     <main class="screen">
-      <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
+      <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} onsearch={() => (searching = true)} />
       {#key screen}
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
         {#await screens.WorkflowStatistics() then { default: WorkflowStatistics }}<WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} settles={settles(session.me, route.namespace, route.workflow)} />{:catch}<Unloaded />{/await}

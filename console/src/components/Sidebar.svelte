@@ -28,7 +28,6 @@
     onsignout,
     ondismiss,
     oncreate,
-    onsearch,
   }: {
     me: Me;
     namespaces: Namespace[];
@@ -43,7 +42,6 @@
     onsignout: () => void;
     ondismiss: (id: string) => void;
     oncreate?: () => void;
-    onsearch?: () => void;
   } = $props();
 
   const home = { kind: "landing" as const };
@@ -68,13 +66,6 @@
         <Icon name="control-home" /><span class="label">Home</span>
       </a>
     </li>
-    {#if onsearch}
-      <li>
-        <button class="entry" onclick={onsearch} title={folded ? "Search" : undefined}>
-          <Icon name="control-search" /><span class="label">Search</span>{#if !folded}<kbd>:</kbd>{/if}
-        </button>
-      </li>
-    {/if}
     <li><Notifications {me} {folded} {ondismiss} /></li>
   </ul>
 
@@ -216,19 +207,6 @@
     color: var(--text);
     text-decoration: none;
     transition: background-color var(--motion-dur1) var(--motion-easeOut);
-  }
-
-  .entry kbd {
-    min-width: 18px;
-    margin-left: auto;
-    padding: 0 calc(var(--unit) * 2);
-    border: var(--border-hairline) solid var(--line);
-    border-radius: var(--radius-chip);
-    color: var(--faint);
-    font-family: var(--type-identifier-font);
-    font-size: var(--type-identifier-size-min);
-    line-height: 18px;
-    text-align: center;
   }
 
   /* The sidebar recedes behind the screen, its entries muted on the ground; the entry open is raised
