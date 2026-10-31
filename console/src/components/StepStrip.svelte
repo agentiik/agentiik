@@ -59,8 +59,33 @@
     background: var(--failed);
   }
 
+  /* A running step's segment sweeps, so that a strip still in progress is told from one that ended
+     on running's colour. */
   .segment.running {
+    position: relative;
+    overflow: hidden;
     background: var(--running);
+  }
+
+  .segment.running::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--raised) 60%, transparent), transparent);
+    transform: translateX(-100%);
+    animation: sweep 1.8s var(--motion-easeOut) infinite;
+  }
+
+  @keyframes sweep {
+    to {
+      transform: translateX(100%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .segment.running::after {
+      animation: none;
+    }
   }
 
   .segment.unreached,
