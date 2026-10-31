@@ -4,17 +4,19 @@
   import { trailOf } from "../lib/trail";
   import Icon from "./Icon.svelte";
 
-  // The line above the screen's own head: where the screen is, as a trail of links back up to the
-  // home. It is the screen's first line rather than a bar of its own, so that it takes no room the
-  // screen could use; the caller and their notifications are in the sidebar.
+  // The sheet's top row: where the screen is, as a trail of links back up to the home, and the search
+  // field that opens the palette as : does, at the top of every screen since the mouse comes first.
+  // The caller and their notifications are in the sidebar.
   let {
     route,
     place,
     onmenu,
+    onsearch,
   }: {
     route: Route;
     place: Place;
     onmenu?: () => void;
+    onsearch?: () => void;
   } = $props();
 
   // The trail: each step a link but the last, which is where the screen is.
@@ -22,9 +24,9 @@
 
 </script>
 
-<!-- The home's trail would be its own name and nothing above it, so the home has none; on a phone the
-     bar is still drawn, holding the way to the navigation. -->
-{#if route.kind !== "landing" || onmenu}
+<!-- The home's trail would be its own name and nothing above it, so the home has none; the bar is still
+     drawn, holding the search field and, on a phone, the way to the navigation. -->
+{#if route.kind !== "landing" || onmenu || onsearch}
 <header class="bar">
   {#if onmenu}
     <button class="menu-button" aria-label="Open the navigation" onclick={onmenu}><Icon name="control-sidebar" size={18} /></button>
@@ -44,6 +46,9 @@
       {/each}
     </ol>
   </nav>
+  {/if}
+  {#if onsearch}
+    <button class="search" aria-label="Search" onclick={onsearch}><Icon name="control-search" /><span class="label">Search</span><kbd>:</kbd></button>
   {/if}
 </header>
 {/if}
@@ -68,12 +73,50 @@
     background: var(--raised);
   }
 
+  /* The bar is the sheet's first row, drawn up into the sheet's own top padding. */
   .bar {
     display: flex;
     align-items: center;
     gap: calc(var(--unit) * 5);
-    height: 32px;
-    margin: 0 0 calc(var(--unit) * 6);
+    height: var(--bar-keyLine);
+    margin: calc(-1 * (var(--padding-page) + 6px)) 0 calc(var(--unit) * 4);
+  }
+
+  .search {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: calc(var(--unit) * 4);
+    width: 240px;
+    height: var(--control-height);
+    margin-left: auto;
+    padding: 0 calc(var(--unit) * 3) 0 calc(var(--unit) * 5);
+    border: none;
+    border-radius: var(--radius-control);
+    background: var(--bg);
+    color: var(--faint);
+    font-family: var(--type-control-font);
+    font-size: var(--type-control-size);
+    cursor: pointer;
+    transition: color var(--motion-dur1) var(--motion-easeOut);
+  }
+
+  .search:hover {
+    color: var(--muted);
+  }
+
+  .search kbd {
+    min-width: 18px;
+    margin-left: auto;
+    padding: 0 calc(var(--unit) * 2);
+    border-radius: var(--radius-chip);
+    background: var(--raised);
+    box-shadow: 0 0 0 var(--border-hairline) var(--lineStrong);
+    color: var(--muted);
+    font-family: var(--type-identifier-font);
+    font-size: var(--type-identifier-size-min);
+    line-height: 18px;
+    text-align: center;
   }
 
   /* On a phone the bar runs from one edge of the window to the other and stays at the top as the
@@ -96,6 +139,19 @@
     }
 
     .trail li:last-child .sep {
+      display: none;
+    }
+
+    /* A phone has no : to press and no room for the word: the field is its icon. */
+    .search {
+      width: 36px;
+      padding: 0;
+      justify-content: center;
+      background: none;
+    }
+
+    .search .label,
+    .search kbd {
       display: none;
     }
   }

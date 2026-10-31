@@ -86,19 +86,22 @@ test.describe("the design system, as drawn", () => {
     expect(found).toEqual([]);
   });
 
-  // The lineStrong token: "the pill of a faint state, queued, skipped or cancelled, which is sunken
-  // inside", as design/specimen.html draws it for every client to check itself against.
-  test("a faint state's pill is sunken inside a lineStrong outline", async ({ page }) => {
+  // A faint state, queued, skipped or cancelled: "muted on sunken", its dot hollow, as
+  // design/specimen.html draws it for every client to check itself against.
+  test("a faint state's pill is muted on sunken with a hollow dot", async ({ page }) => {
     await opened(page, "/finance/workflows/monthly-invoicing/runs?span=all");
     const sunken = await token(page, "sunken", "background-color");
-    const lineStrong = await token(page, "lineStrong", "border-top-color");
+    const muted = await token(page, "muted", "color");
     const pills = await page.locator(".pill").evaluateAll((all) =>
       all
         .filter((p) => ["queued", "skipped", "cancelled"].includes(p.textContent?.trim() ?? ""))
-        .map((p) => ({ state: p.textContent?.trim(), ground: getComputedStyle(p).backgroundColor, outline: getComputedStyle(p).borderTopColor })),
+        .map((p) => {
+          const dot = p.querySelector(".dot");
+          return { state: p.textContent?.trim(), ground: getComputedStyle(p).backgroundColor, ink: getComputedStyle(p).color, dot: dot ? getComputedStyle(dot).backgroundColor : "" };
+        }),
     );
     expect(pills.map((p) => p.state)).toEqual(expect.arrayContaining(["queued", "cancelled"]));
-    expect(pills.filter((p) => p.ground !== sunken || p.outline !== lineStrong)).toEqual([]);
+    expect(pills.filter((p) => p.ground !== sunken || p.ink !== muted || p.dot !== "rgba(0, 0, 0, 0)")).toEqual([]);
   });
 });
 

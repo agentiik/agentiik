@@ -428,8 +428,10 @@
   .who h1 {
     margin: 0;
     font-family: var(--type-pageTitle-font);
-    font-size: 22px;
+    font-size: var(--type-pageTitle-size);
     font-weight: var(--type-pageTitle-weight);
+    font-stretch: var(--type-pageTitle-width);
+    letter-spacing: var(--type-pageTitle-tracking);
     --leading: 1.25;
   }
 
@@ -535,24 +537,25 @@
      its size and its name, and colour is kept for a state that asks for the caller, a failure or a
      run waiting. The hairlines are the strip's own ground showing between the counts, so that
      they follow the counts however they wrap. */
+  /* The four counts are tiles of one grid with the panes below them, each raised and ringed as a pane
+     is, rather than cells of one bordered strip. */
   .cards {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--border-hairline);
+    gap: calc(var(--unit) * 6);
     margin: 0;
     padding: 0;
-    overflow: hidden;
-    border: var(--border-hairline) solid var(--line);
-    border-radius: var(--radius-card);
-    background: var(--line);
     list-style: none;
   }
 
   .cards li {
     display: flex;
     flex-direction: column;
-    padding: calc(var(--unit) * 5) calc(var(--unit) * 6);
-    background: var(--surface);
+    min-width: 0;
+    padding: calc(var(--unit) * 6) calc(var(--unit) * 7);
+    border-radius: var(--radius-pane);
+    background: var(--raised);
+    box-shadow: 0 0 0 var(--border-hairline) var(--line);
   }
 
   .cards .label {
@@ -562,9 +565,12 @@
   }
 
   .cards .value {
-    font-size: 28px;
-    font-weight: 600;
-    line-height: 36px;
+    font-family: var(--type-metric-font);
+    font-size: var(--type-metric-size);
+    font-weight: var(--type-metric-weight);
+    font-stretch: var(--type-metric-width);
+    letter-spacing: var(--type-metric-tracking);
+    line-height: 40px;
   }
 
   .cards .value.failed {
@@ -718,8 +724,9 @@
   }
 
   .tab[aria-pressed="true"] {
-    border-color: var(--accentLine);
+    border-color: transparent;
     background: var(--accentDim);
+    box-shadow: 0 0 0 var(--border-hairline) var(--accentLine);
     color: var(--accent);
   }
 

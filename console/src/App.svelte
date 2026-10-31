@@ -268,14 +268,14 @@
 {:else if session.me}
   <div class="frame" class:folded class:narrow={viewport.narrow} class:drawn={drawer} style:--elsewhere="{banner}px">
     <div class="side" inert={viewport.narrow && !drawer}>
-      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} oncreate={session.me.user ? () => (creating = true) : undefined} onsearch={() => (searching = true)} />
+      <Sidebar me={session.me} namespaces={session.namespaces} namespace={context} shown={listed} {route} {place} {folded} foldable={!viewport.compact} onfold={foldSidebar} {version} onsignout={() => session.signOut()} ondismiss={(id) => session.dismiss(id)} oncreate={session.me.user ? () => (creating = true) : undefined} />
     </div>
     {#if viewport.narrow && drawer}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="scrim" onclick={() => (drawer = false)}></div>
     {/if}
     <main class="screen">
-      <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} />
+      <TopBar {route} {place} onmenu={viewport.narrow ? () => (drawer = true) : undefined} onsearch={() => (searching = true)} />
       {#key screen}
       {#if route.kind === "namespace" && route.workflow && workflowStatistics}
         {#await screens.WorkflowStatistics() then { default: WorkflowStatistics }}<WorkflowStatistics {api} {place} namespace={route.namespace} workflow={route.workflow} graph={holds(session.me, "workflow:read", route.namespace, route.workflow)} settles={settles(session.me, route.namespace, route.workflow)} />{:catch}<Unloaded />{/await}
@@ -358,20 +358,17 @@
     grid-area: screen;
   }
 
-  .side.blank {
-    border-right: var(--border-hairline) solid var(--line);
-    background: var(--surface);
-  }
-
-  /* A screen's content is at most 1280px wide, centred in the room the sidebar leaves: wider, a
-     table's line runs further than the eye follows from a name to its last cell, and a wide window
-     shows the same page with more margin. */
+  /* The screen is a sheet raised above the ground the sidebar lies on, 8px from the window's edges
+     and from the sidebar. Its content is at most 1280px wide, centred in the sheet: wider, a table's
+     line runs further than the eye follows from a name to its last cell, and a wide window shows the
+     same page with more margin, the sheet still filling it. */
   .screen {
-    justify-self: center;
-    width: 100%;
-    max-width: calc(1280px + 2 * (var(--padding-page) + 6px));
     min-width: 0;
-    padding: calc(var(--padding-page) + 6px) calc(var(--padding-page) + 6px) calc(var(--padding-page) + 12px);
+    margin: 8px 8px 8px 0;
+    padding: calc(var(--padding-page) + 6px) max(calc(var(--padding-page) + 6px), calc((100% - 1280px) / 2)) calc(var(--padding-page) + 12px);
+    border-radius: var(--radius-sheet);
+    background: var(--surface);
+    box-shadow: var(--shadowSheet);
   }
 
   /* A screen whose last block takes the height the window has left, a workflow's graph beside its
@@ -417,12 +414,16 @@
     position: fixed;
     inset: var(--elsewhere, 0px) 0 0;
     z-index: 55;
-    background: color-mix(in srgb, var(--bg) 55%, transparent);
+    background: var(--scrim);
   }
 
+  /* Under 760px the sheet is the window: no margin, no corners and nothing to be raised above. */
   @media (max-width: 759px) {
     .screen {
+      margin: 0;
       padding: 16px 16px 24px;
+      border-radius: 0;
+      box-shadow: none;
     }
 
     .alone {

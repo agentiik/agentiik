@@ -1,8 +1,8 @@
 <script lang="ts">
-  // A state, as every screen of the console draws it: an outlined pill with a dot and the state's own
-  // word, so that no state is told by its colour alone. queued, skipped and cancelled are faint rather
-  // than a colour of the ramp, since nothing is happening to them; running turns its dot into a ring
-  // that spins while the console is live.
+  // A state, as every screen of the console draws it: a soft round pill, a pale fill of its hue with a
+  // dot and the state's own word, so that no state is told by its colour alone. queued, skipped and
+  // cancelled are muted on sunken with a hollow dot rather than a colour of the ramp, since nothing is
+  // happening to them; running's dot breathes while the console is live, the one state that moves.
   //
   // A step's verdict and a task's state are drawn the same way, in the same words the API writes:
   // dispatched and publishing are a task on its way, and lost is one the infrastructure lost. So is a
@@ -31,11 +31,7 @@
 </script>
 
 <span class="pill {tone}">
-  {#if going}
-    <span class="ring" class:spinning={live} aria-hidden="true"></span>
-  {:else}
-    <span class="dot" class:hollow={state === "cancelled" || state === "skipped"} aria-hidden="true"></span>
-  {/if}
+  <span class="dot" class:hollow={tone === "quiet"} class:breathing={going && live} aria-hidden="true"></span>
   <span class="word">{state}</span>
 </span>
 
@@ -45,8 +41,7 @@
     align-items: center;
     gap: calc(var(--unit) * 3);
     height: 22px;
-    padding: 0 calc(var(--unit) * 4) 0 calc(var(--unit) * 4);
-    border: var(--border-hairline) solid;
+    padding: 0 calc(var(--unit) * 5) 0 calc(var(--unit) * 4);
     border-radius: var(--radius-pill);
     font-size: 12.5px;
     font-weight: 500;
@@ -54,40 +49,42 @@
     white-space: nowrap;
   }
 
-  .dot,
-  .ring {
+  /* The pill's baseline is its first item's, the dot's, so the dot keeps the 8px box it has always
+     had and draws 6px inside a transparent border: a smaller box would move every line holding a
+     pill by half a pixel. */
+  .dot {
     width: 8px;
     height: 8px;
+    border: 1px solid transparent;
     border-radius: var(--radius-round);
     flex: none;
-  }
-
-  .dot {
     background: currentColor;
+    background-clip: padding-box;
   }
 
   .dot.hollow {
     background: transparent;
-    border: 1.5px solid currentColor;
+    box-shadow: inset 0 0 0 1.5px currentColor;
   }
 
-  .ring {
-    border: 1.5px solid currentColor;
-    border-right-color: transparent;
+  /* A ring that grows from the dot and fades, once every 1.6s: slow enough to read as breathing
+     rather than as an alarm, and drawn outside the pill's box, so that nothing beside it moves. */
+  .dot.breathing {
+    animation: breathe 1.6s var(--motion-easeOut) infinite;
   }
 
-  .ring.spinning {
-    animation: spin 0.9s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
+  @keyframes breathe {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
+    }
+    70%,
+    100% {
+      box-shadow: 0 0 0 6px transparent;
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .ring.spinning {
+    .dot.breathing {
       animation: none;
     }
   }
@@ -95,32 +92,27 @@
   .succeeded {
     color: var(--succeeded);
     background: var(--succeededFill);
-    border-color: var(--succeededLine);
   }
 
   .running {
     color: var(--running);
     background: var(--accentDim);
-    border-color: var(--accentLine);
   }
 
   .waiting {
     color: var(--waiting);
     background: var(--waitingFill);
-    border-color: var(--waitingLine);
   }
 
   .failed {
     color: var(--failed);
     background: var(--failedFill);
-    border-color: var(--failedLine);
   }
 
-  /* A faint state is sunken inside its outline, as the design system's specimen draws it: nothing is
-     happening to it, so it sits below the ground rather than on it. */
+  /* A faint state is muted on sunken: nothing is happening to it, so it sits below the ground rather
+     than on it, and its dot is hollow. */
   .quiet {
-    color: var(--faint);
+    color: var(--muted);
     background: var(--sunken);
-    border-color: var(--lineStrong);
   }
 </style>
