@@ -41,7 +41,10 @@
     align-items: center;
     gap: calc(var(--unit) * 3);
     height: 22px;
-    padding: 0 calc(var(--unit) * 5) 0 calc(var(--unit) * 4);
+    padding: 0 calc(var(--unit) * 4);
+    /* No outline is drawn, but the hairline's room is kept, so that the word sits on the baseline it
+       had in an outlined pill and a line holding a pill stays a whole number of pixels high. */
+    border: var(--border-hairline) solid transparent;
     border-radius: var(--radius-pill);
     font-size: 12.5px;
     font-weight: 500;
