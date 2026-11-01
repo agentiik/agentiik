@@ -1,0 +1,35 @@
+# The manifest the runner reads at /agk/brick.yaml: what the brick is called, its ports, its
+# parameters and the account it runs as. https://agentiik.github.io/docs#brick-manifest
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: {{name}}
+  version: 0.1.0
+  summary: Labels every item it is given.
+
+spec:
+  inputs:
+    in:
+      schema: { type: object }
+
+  outputs:
+    out:
+      schema: { type: object }
+
+  params:
+    label:
+      type: string
+      required: true
+      description: The label written into every item's data.
+      examples: [january]
+
+  runtime:
+    network: none
+    streaming: false
+    user: "65532:65532"
+
+  resources:
+    cpu: "0.25"
+    memory: 64Mi
+    pids: 32

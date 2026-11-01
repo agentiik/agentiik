@@ -183,7 +183,7 @@
 //	                 and the installation it last signed in to
 //	tokens.go        agk token create, list and revoke
 //	serviceaccounts.go  agk service-account create, list and delete
-//	absent.go        brick init, which waits, refusing by name
+//	brickinit.go     brick init, writing the template of a language from internal/templates
 //	workflow.go      the one place a workflow is read, so validate and run cannot
 //	                 disagree about what is valid
 //	inputs.go        --input, --input-file, --inputs, through package schema and nothing

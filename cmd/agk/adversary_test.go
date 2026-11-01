@@ -43,10 +43,12 @@ func TestNoRefusalSaysThereIsNoASomething(t *testing.T) {
 	// account verbs, which create, list and remove what the tokens are minted for, the verbs
 	// that say who may do what, since grants could be written and read, and login and logout,
 	// since an installation signs a person in, console, which draws over the routes the web
-	// console reads, and language, which prints the reference the binary carries.
+	// console reads, language, which prints the reference the binary carries, and brick init,
+	// since brick-sdk's templates are embedded in the binary.
 	for _, verb := range []string{
 		"token create", "token list", "token revoke", "service-account create", "service-account list",
 		"service-account delete", "share", "grants", "whoami", "login", "logout", "console", "language",
+		"brick init",
 	} {
 		built[verb] = true
 	}

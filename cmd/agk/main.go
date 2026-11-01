@@ -77,10 +77,6 @@ type command struct {
 // commands is the table of #command-line, in the order the documentation writes it, with
 // each effect in the documentation's own words.
 //
-// One of these, brick init, waits for templates released elsewhere, and refuses naming what is
-// missing, because a verb the documentation lists and the binary does not know is a binary that
-// looks broken.
-//
 // The row for agk run is added by run.go, the file that implements it beside
 // cmd/agk/internal/local, and it goes between graph and push, which is where the documentation
 // writes it.
@@ -121,7 +117,7 @@ var commands = []command{
 	{"logs", "Follows the logs of a run.", logs},
 	{"status", "Shows how a run on an installation stands: its state, each step's, the envelope digests and what failed.", status},
 	{"console", "Opens the console in the terminal, full screen, over the routes the web console reads. Not on a terminal, it prints the view once as plain lines.", consoleVerb},
-	{"brick init", "Scaffolds a brick in a chosen language, with its manifest and test harness.", absent("brick init", "there are no brick templates here", "They are released from agentiik/bricks")},
+	{"brick init", "Scaffolds a brick in a chosen language, with its manifest and test harness.", brickInit},
 	{"brick test", "Runs the brick against a set of sample envelopes and compares against expected outputs.", brickTest},
 }
 
