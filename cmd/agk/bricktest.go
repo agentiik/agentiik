@@ -275,7 +275,10 @@ func runCase(ctx context.Context, e Env, d *driver.Docker, store *artifact.Store
 		// posture its manifest asks for. egress is refused by the driver until the
 		// proxy exists, which a case naming it will be told.
 		Network: posture(c.Manifest.Spec.Runtime.Network),
-		Timeout: graph.Duration(caseTimeout),
+		// And the resources it declares, so that a manifest asking for less than its brick
+		// uses fails its own cases rather than a step's first large batch.
+		Resources: graph.Resources(c.Manifest.Spec.Resources),
+		Timeout:   graph.Duration(caseTimeout),
 	}
 
 	result, err := d.Run(ctx, task)
