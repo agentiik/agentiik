@@ -381,8 +381,9 @@
     margin-bottom: calc(var(--unit) * 6);
     padding: calc(var(--unit) * 5) calc(var(--unit) * 7);
     border-radius: var(--radius-innerPanel);
+    --ring: color-mix(in srgb, var(--failed) 30%, transparent);
     background: color-mix(in srgb, var(--failedFill) 55%, transparent);
-    box-shadow: inset 0 0 0 var(--border-hairline) color-mix(in srgb, var(--failed) 30%, transparent);
+    box-shadow: inset 0 0 0 var(--border-hairline) var(--ring);
   }
 
   .attention header {
