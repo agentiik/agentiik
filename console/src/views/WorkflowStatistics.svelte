@@ -336,7 +336,7 @@
 
   .figures {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: calc(var(--unit) * 7);
     margin: 0 0 calc(var(--unit) * 12);
   }
@@ -357,9 +357,16 @@
     margin: calc(var(--unit) * 2) 0 0;
   }
 
+  /* A headline figure, in the metric role as the home's counts are. A figure that is words, "none
+     ended", wraps between them rather than leaving its tile, which is 200px at least for "99.9%" and
+     its change to sit on one line. */
   .value {
-    font-size: 22px;
-    font-weight: 600;
+    font-family: var(--type-metric-font);
+    font-size: var(--type-metric-size);
+    font-weight: var(--type-metric-weight);
+    font-stretch: var(--type-metric-width);
+    letter-spacing: var(--type-metric-tracking);
+    line-height: 40px;
   }
 
   .change {
