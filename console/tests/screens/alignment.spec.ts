@@ -64,7 +64,9 @@ for (const [who, paths] of Object.entries(screens)) {
     for (const theme of themes) {
       for (const width of widths) {
         test(`line up at ${width}px in the ${theme} theme`, async ({ browser }) => {
-          const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme, deviceScaleFactor: 1, locale: "en-GB", timezoneId: "UTC" });
+          // Measured at rest: a dialog or the palette arrives on a spring that overshoots its size
+          // for a few frames, and a field measured then is 32.01px rather than 32.
+          const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme, reducedMotion: "reduce", deviceScaleFactor: 1, locale: "en-GB", timezoneId: "UTC" });
           const found: (Finding & { path: string })[] = [];
           for (const path of paths) {
             const page = await context.newPage();
