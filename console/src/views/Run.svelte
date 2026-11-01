@@ -645,6 +645,12 @@
     grid-template-columns: minmax(0, 7fr) minmax(0, 6fr);
   }
 
+  /* The graph is held to a height that leaves its timeline in the window under it, the graph scrolling
+     inside its box where it is taller, as the graph view's does past its own height. */
+  .columns.drawn :global(.canvas .scroll) {
+    max-height: 420px;
+  }
+
   .steps {
     margin: 0;
     padding: 0;
