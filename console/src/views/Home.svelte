@@ -8,7 +8,7 @@
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import { added, boundsOf, dayOf, failures, grid, lastWeek, months, said, shades, together, total, weeks, yearOf, type RunsSeries, type Square } from "../lib/activity";
-  import { clock, took } from "../lib/format";
+  import { byDay as runsByDay, clock, took } from "../lib/format";
   import { useKeys } from "../lib/keys.svelte";
   import { holdsSomewhereIn, ordered } from "../lib/permissions";
   import { useLive } from "../lib/live.svelte";
@@ -187,22 +187,7 @@
   const runRoute = (r: Run) => runAt(r.namespace, r.workflow, r.run);
   const runsOf = (ns: string) => ({ kind: "namespace" as const, namespace: ns, view: "workflows" as const });
   // The latest runs by the day they were made on, where the reader is, each day as a person names it.
-  const byDay = $derived.by(() => {
-    const groups: { day: string; name: string; runs: Run[] }[] = [];
-    for (const r of recent.slice(0, 10)) {
-      const day = new Date(r.created_at).toDateString();
-      const last = groups.at(-1);
-      if (last?.day === day) last.runs.push(r);
-      else groups.push({ day, name: dayName(r.created_at), runs: [r] });
-    }
-    return groups;
-  });
-  function dayName(at: string): string {
-    const day = new Date(at).toDateString();
-    if (day === new Date(now).toDateString()) return "Today";
-    if (day === new Date(now - 86_400_000).toDateString()) return "Yesterday";
-    return new Date(at).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
-  }
+  const byDay = $derived(runsByDay(recent.slice(0, 10), now));
   // The time of day of a run listed under its day.
   const timeOf = (r: Run) => clock(r.created_at, Date.parse(r.created_at));
   const lasted = (r: Run) => (r.started_at ? took(Math.max(0, (r.finished_at ? Date.parse(r.finished_at) : now) - Date.parse(r.started_at))) : "");

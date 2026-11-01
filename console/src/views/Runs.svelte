@@ -9,7 +9,7 @@
   import Pane from "../components/Pane.svelte";
   import StatePill from "../components/StatePill.svelte";
   import StepStrip from "../components/StepStrip.svelte";
-  import { between, clock, took } from "../lib/format";
+  import { between, byDay, clock, took } from "../lib/format";
   import { moved, useKeys } from "../lib/keys.svelte";
   import { useLive } from "../lib/live.svelte";
   import { holds } from "../lib/permissions";
@@ -205,7 +205,11 @@
       </tr>
     </thead>
     <tbody bind:this={body}>
-      {#each list.runs as r (r.run)}
+      {#each byDay(list.runs, now) as g (g.day)}
+        <!-- The runs by the day they were made on, as the home lists them, so that each row says
+             only the time of day and a page of runs reads as days rather than as dates. -->
+        <tr class="day"><th colspan="8" scope="colgroup">{g.name}</th></tr>
+      {#each g.runs as r (r.run)}
         <tr data-run={r.run} class:chosen={r.run === selected} aria-selected={r.run === selected} onclick={() => (selected = r.run)}>
           <td><StatePill state={r.state} {live} /></td>
           <td class="code id"><a href={place.href(opened(r))} onclick={follow(place, opened(r))}>{r.run}</a></td>
@@ -213,9 +217,10 @@
           <td class="trigger" title={r.from ? `called by run ${r.from.run} at step ${r.from.step}` : undefined}><Icon name="trigger-{r.trigger_kind}" size={14} /><span class="term">{r.trigger_kind}</span></td>
           <td><StepStrip steps={r.steps ?? []} {now} /></td>
           <td class="term by">{r.triggered_by}</td>
-          <td><time class="term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, now)}</time></td>
+          <td><time class="term" datetime={r.created_at} title={r.created_at}>{clock(r.created_at, Date.parse(r.created_at))}</time></td>
           <td class="number term" class:going={r.state === "running"}>{duration(r)}</td>
         </tr>
+      {/each}
       {:else}
         {#if !list.reading && !list.refused}
           <tr><td class="empty" colspan="8">No runs</td></tr>
@@ -370,12 +375,14 @@
     outline-offset: 1px;
   }
 
+  /* What needs somebody is a tile of its own, ringed in the failed hue on a paler fill of it, as a
+     state's pill is: the word says what it is, and no stripe or solid fill shouts it. */
   .attention {
     margin-bottom: calc(var(--unit) * 6);
     padding: calc(var(--unit) * 5) calc(var(--unit) * 7);
-    border-left: 3px solid var(--failed);
     border-radius: var(--radius-innerPanel);
-    background: var(--failedFill);
+    background: color-mix(in srgb, var(--failedFill) 55%, transparent);
+    box-shadow: inset 0 0 0 var(--border-hairline) color-mix(in srgb, var(--failed) 30%, transparent);
   }
 
   .attention header {
@@ -443,7 +450,14 @@
     white-space: nowrap;
   }
 
-  tbody tr:hover,
+  /* A day's name heads its runs, in the column heads' type, set apart by the space above it. */
+  tbody tr.day th {
+    height: calc(var(--row-header) + var(--unit) * 4);
+    padding-top: calc(var(--unit) * 4);
+    vertical-align: bottom;
+  }
+
+  tbody tr:not(.day):hover,
   tbody tr.chosen {
     background: var(--raised);
   }

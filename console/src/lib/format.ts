@@ -50,3 +50,24 @@ export function clock(at: string, now: number): string {
   }
   return `${when.getFullYear()}-${two(when.getMonth() + 1)}-${two(when.getDate())} ${time}`;
 }
+
+// dayName is the day an instant falls on, where the reader is, as a person names it: today,
+// yesterday, and otherwise the weekday and the date. Runs listed by day are listed under it.
+export function dayName(at: string, now: number): string {
+  const day = new Date(at).toDateString();
+  if (day === new Date(now).toDateString()) return "Today";
+  if (day === new Date(now - 86_400_000).toDateString()) return "Yesterday";
+  return new Date(at).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+}
+
+// byDay parts runs, newest first, by the day they were made on, each day named as dayName names it.
+export function byDay<T extends { created_at: string }>(runs: T[], now: number): { day: string; name: string; runs: T[] }[] {
+  const groups: { day: string; name: string; runs: T[] }[] = [];
+  for (const r of runs) {
+    const day = new Date(r.created_at).toDateString();
+    const last = groups.at(-1);
+    if (last?.day === day) last.runs.push(r);
+    else groups.push({ day, name: dayName(r.created_at, now), runs: [r] });
+  }
+  return groups;
+}
