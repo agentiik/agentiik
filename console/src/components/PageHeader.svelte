@@ -51,10 +51,6 @@
     margin: 0 0 calc(var(--unit) * 9);
   }
 
-  .page.tabbed {
-    border-bottom: var(--border-hairline) solid var(--line);
-  }
-
   /* In a window too narrow for both, what can be done goes under the title rather than over it. */
   .row {
     display: flex;
@@ -158,14 +154,16 @@
     display: none;
   }
 
+  /* A screen's views are chips, round as a state's pill is, rather than tabs over a rule: hairlines
+     part a list's rows and nothing else. */
   .tab {
     display: inline-flex;
     align-items: center;
     gap: calc(var(--unit) * 3);
-    height: 40px;
-    padding: 0 calc(var(--unit) * 5);
+    height: var(--control-height);
+    padding: 0 calc(var(--unit) * 6);
     border: none;
-    border-bottom: 2px solid transparent;
+    border-radius: var(--radius-round);
     background: none;
     color: var(--muted);
     font-family: var(--type-navigation-font);
@@ -176,16 +174,18 @@
   }
 
   .tab:hover {
+    background: var(--sunken);
     color: var(--text);
     text-decoration: none;
   }
 
-  /* The tab chosen is marked by its colour and its underline alone, never by a heavier weight, which
-     would widen it and move every tab after it. */
+  /* The view chosen is marked by its ground and its colour alone, never by a heavier weight, which
+     would widen it and move every chip after it. */
   .tab[aria-current="page"],
   .tab[aria-pressed="true"] {
-    border-bottom-color: var(--accent);
-    color: var(--text);
+    background: var(--accentDim);
+    box-shadow: inset 0 0 0 var(--border-hairline) var(--accentLine);
+    color: var(--accent);
   }
 
   .badge {
