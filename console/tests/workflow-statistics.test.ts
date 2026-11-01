@@ -53,7 +53,8 @@ describe("a workflow's figures", () => {
 
   it("end with the step's throughput where it fans out, and its p95 where it does not", () => {
     const fan: StepSeries = { step: "invoice", overall: { since: "", until: "", attempts: 90, exit_codes: [], items_per_minute: 212 }, previous_overall: { since: "", until: "", attempts: 80, exit_codes: [], items_per_minute: 178 } };
-    expect(figures(runs, fan, true).at(-1)).toEqual({ label: "invoice throughput", value: "212 items/min", change: "+19%", aside: "while its shards run" });
+    expect(figures(runs, fan, true).at(-1)).toEqual({ label: "invoice throughput", value: "212",
+      unit: "items/min", change: "+19%", aside: "while its shards run" });
     const one: StepSeries = { step: "normalize", overall: { since: "", until: "", attempts: 21, exit_codes: [], duration_ms: { p50: 1150, p95: 1800, p99: 2050 } } };
     expect(figures(runs, one, false).at(-1)).toMatchObject({ label: "normalize, p95", value: "1s", aside: "p50 1s, 21 attempts" });
   });

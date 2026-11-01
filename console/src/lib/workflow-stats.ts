@@ -28,7 +28,9 @@ export function created(c: Counts): number {
 
 // A figure along the top of the page: its value, its change since the span before where the page
 // compares, and a line under it saying what it is made of.
-export type Figure = { label: string; value: string; change?: string; aside: string };
+// A figure's unit, where it has one that is a word, is set apart from its value, smaller, so that
+// the value alone takes the headline size and "208 items/min" holds on one line of its tile.
+export type Figure = { label: string; value: string; unit?: string; change?: string; aside: string };
 
 const minus = "−";
 
@@ -100,7 +102,8 @@ export function figures(runs: RunsSeries, step: StepSeries | undefined, compare:
     if (o.items_per_minute !== undefined) {
       out.push({
         label: `${step.step} throughput`,
-        value: `${count(o.items_per_minute)} items/min`,
+        value: count(o.items_per_minute),
+        unit: "items/min",
         change: was?.items_per_minute ? percent(o.items_per_minute, was.items_per_minute) : undefined,
         aside: "while its shards run",
       });

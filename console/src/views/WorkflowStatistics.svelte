@@ -206,7 +206,7 @@
         <div class="figure">
           <dt>{f.label}</dt>
           <dd>
-            <span class="value term">{f.value}</span>
+            <span class="value term">{f.value}</span>{#if f.unit}<span class="unit">{f.unit}</span>{/if}
             {#if f.change}<span class="change term" title="against the span before">{f.change}</span>{/if}
           </dd>
           <dd class="aside muted">{f.aside}</dd>
@@ -367,6 +367,12 @@
     font-stretch: var(--type-metric-width);
     letter-spacing: var(--type-metric-tracking);
     line-height: 40px;
+  }
+
+  .unit {
+    margin-left: calc(var(--unit) * 2);
+    color: var(--muted);
+    font-size: var(--type-control-size);
   }
 
   .change {
