@@ -61,6 +61,14 @@ describe("the run inspector", () => {
     expect(screen.getByText("transient failure: retried as the step's policy says")).toBeTruthy();
   });
 
+  it("draws the run on the graph of the version it ran, and each attempt on its timeline", async () => {
+    open(`/finance/runs/${failed}`);
+    expect(await screen.findByRole("button", { name: "Step invoice, brick, failed" })).toBeTruthy();
+    const timeline = screen.getByRole("region", { name: "Timeline" });
+    expect(timeline.querySelectorAll(".span")).toHaveLength(3);
+    expect(timeline.querySelector(".span.retried")?.getAttribute("title")).toBe("invoice, attempt 1: failed, 33s");
+  });
+
   it("says why a step failed where no task can, refused before any started", async () => {
     const s = scenario("alice");
     const step = detail(s).steps.find((st) => st.step === "invoice")!;

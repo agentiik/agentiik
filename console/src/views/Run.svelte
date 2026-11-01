@@ -7,6 +7,9 @@
   import type { API, Me } from "../api/client";
   import CompareWith from "../components/CompareWith.svelte";
   import EnvelopePane from "../components/EnvelopePane.svelte";
+  import GraphCanvas from "../components/GraphCanvas.svelte";
+  import Timeline from "../components/Timeline.svelte";
+  import { layout, type Graph } from "../lib/graph";
   import Icon from "../components/Icon.svelte";
   import LogPane from "../components/LogPane.svelte";
   import Pane from "../components/Pane.svelte";
@@ -25,7 +28,8 @@
   import { lastAttempt, queued, RunReader, tasksOf, type EnvelopeReference, type TaskSummary } from "../lib/run.svelte";
   import { sentence } from "../lib/signin";
 
-  // The run inspector: one run, each step's verdict and shards on the left, and on the right the step
+  // The run inspector: one run, its graph on the left with each step's verdict and shards laid over it
+  // and the time each attempt took under it, and on the right the step
   // chosen, its tasks, the exit code of the one chosen and what it means, the envelopes its ports
   // published and were handed, by digest, size and item count, and the log of the task chosen. What
   // an envelope holds is envelope contents, which run:read_data guards, and a principal without it
@@ -76,6 +80,28 @@
     const named = place.query.get("task");
     return tasks.find((t) => t.task === named) ?? tasks.find((t) => t.state === "failed" || t.state === "timed_out" || t.state === "lost") ?? tasks[0];
   });
+
+  // The graph of the version the run ran, read once for its commit, where the caller may read the
+  // workflow: run:read alone shows each step in a list, as the graph's boxes would, since the graph
+  // is the workflow's and what reading a run grants does not reach it.
+  const version = $derived(run && here && holds(me, "workflow:read", run.namespace, run.workflow) ? { ns: run.namespace, name: run.workflow, ref: run.commit } : null);
+  const versionKey = $derived(version ? `${version.ns}\u0000${version.name}\u0000${version.ref}` : "");
+  let graph = $state<Graph | null>(null);
+  $effect(() => {
+    const key = versionKey;
+    const v = untrack(() => version);
+    graph = null;
+    if (!key || !v) return;
+    let current = true;
+    untrack(async () => {
+      const { data } = await api.GET("/api/v1/{ns}/workflows/{name}", { params: { path: { ns: v.ns, name: v.name }, query: { ref: v.ref } } });
+      if (current && data?.graph) graph = data.graph;
+    });
+    return () => {
+      current = false;
+    };
+  });
+  const laid = $derived(graph ? layout(graph) : null);
 
   const readsData = $derived(run ? holds(me, "run:read_data", run.namespace, run.workflow) : false);
   const mayRun = $derived(run ? holds(me, "workflow:run", run.namespace, run.workflow) : false);
@@ -303,8 +329,11 @@
       </ol>
     </Pane>
 
-    <div class="columns">
+    <div class="columns" class:drawn={graph && laid}>
       <Pane title="Steps" aside={String(run.steps.length)}>
+        {#if graph && laid}
+          <GraphCanvas {graph} {laid} {run} selected={chosenStep} onselect={(s) => choose({ step: s })} />
+        {:else}
         <ul class="steps">
           {#each run.steps as s (s.step)}
             {@const cells = lastAttempt(run, s.step)}
@@ -329,6 +358,8 @@
             </li>
           {/each}
         </ul>
+        {/if}
+        <Timeline {run} {now} chosen={chosenStep} onselect={(s) => choose({ step: s })} />
         {#if run.outputs && Object.keys(run.outputs).length > 0}
           <h3>Workflow outputs</h3>
           <div class="scroll">
@@ -607,6 +638,11 @@
     grid-template-columns: 380px minmax(0, 1fr);
     gap: calc(var(--unit) * 7);
     align-items: start;
+  }
+
+  /* With its graph, the run's side takes the larger share, which a graph needs more than a list. */
+  .columns.drawn {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 6fr);
   }
 
   .steps {
@@ -924,7 +960,8 @@
 
   /* Under 1100px, where the sidebar folds, the two columns go one above the other. */
   @media (max-width: 1099px) {
-    .columns {
+    .columns,
+    .columns.drawn {
       grid-template-columns: minmax(0, 1fr);
     }
   }
