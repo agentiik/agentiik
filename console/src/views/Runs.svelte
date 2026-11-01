@@ -450,11 +450,14 @@
     white-space: nowrap;
   }
 
-  /* A day's name heads its runs, in the column heads' type, set apart by the space above it. */
+  /* A day's name heads its runs, in the column heads' type, the days after the first set apart by
+     the space above them. */
   tbody tr.day th {
-    height: calc(var(--row-header) + var(--unit) * 4);
-    padding-top: calc(var(--unit) * 4);
     vertical-align: bottom;
+  }
+
+  tbody tr.day:not(:first-child) th {
+    height: calc(var(--row-header) + var(--unit) * 6);
   }
 
   tbody tr:not(.day):hover,
