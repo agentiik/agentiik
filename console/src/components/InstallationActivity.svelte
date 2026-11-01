@@ -87,7 +87,7 @@
 <style>
   .now {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(152px, 1fr));
     gap: calc(var(--unit) * 6);
     margin: 0 0 calc(var(--unit) * 8);
     padding: 0;
@@ -106,11 +106,16 @@
     font-weight: 500;
   }
 
+  /* A headline figure, in the metric role as the home's counts are; a column is 152px at least so
+     that "128 / 256" holds on one line at that size. */
   .value {
-    min-height: 32px;
-    font-size: 24px;
-    font-weight: 600;
-    line-height: 32px;
+    min-height: 40px;
+    font-family: var(--type-metric-font);
+    font-size: var(--type-metric-size);
+    font-weight: var(--type-metric-weight);
+    font-stretch: var(--type-metric-width);
+    letter-spacing: var(--type-metric-tracking);
+    line-height: 40px;
   }
 
   .value.full {
